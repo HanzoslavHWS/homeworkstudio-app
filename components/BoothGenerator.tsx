@@ -1,34 +1,61 @@
 "use client";
 
 import {
-  useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { boothTypes } from "../data/booths";
 import { componentCatalog, placeComponent } from "../data/components";
 import { fairs } from "../data/fairs";
+import {
+  DEFAULT_REALIZATION_PROFILE_ID,
+  realizationProfiles,
+} from "../data/realizationProfiles";
 import type {
   Currency,
+  Notes,
   PlacedComponent,
   ProjectType,
   RotationControlMode,
 } from "../domain/models";
-import { applySnap as snapPlacement, isPlacementValid } from "../geometry/placement";
+import { getVisiblePlanConstructionParts } from "../domain/construction";
+import { isObjectLocked, toggleUserLock } from "../domain/locking";
+import {
+  createEmptyNotes,
+  notesForEntity,
+  updateEntityNotes,
+  updateNotes,
+  type NoteField,
+  type NotesByEntityId,
+} from "../domain/notes";
+import { toggleVisibility } from "../domain/visibility";
+import {
+  applySnap as snapPlacement,
+  isPlacementValid,
+  tryMoveComponent,
+} from "../geometry/placement";
 import { quickRotation, rotationForMode } from "../geometry/rotation";
+import { useBoothViewport } from "../hooks/useBoothViewport";
 import { AppSidebar } from "./AppSidebar";
 import { StepHeader } from "./StepHeader";
 import { ComponentLibrary } from "./configurator/ComponentLibrary";
+import { ConfiguratorHelp } from "./configurator/ConfiguratorHelp";
+import { NotesEditor } from "./configurator/NotesEditor";
+import { CoordinateInput } from "./configurator/CoordinateInput";
 import { PricingBar } from "./configurator/PricingBar";
 import { RotationNavigator } from "./configurator/RotationNavigator";
 import { ScenePanel } from "./configurator/ScenePanel";
+import { ViewportToolbar } from "./configurator/ViewportToolbar";
 
 export default function BoothGenerator() {
-  const canvasRef =
-    useRef<HTMLDivElement | null>(null);
-
   const [step, setStep] =
     useState(1);
+
+  const [isSidebarCollapsed, setIsSidebarCollapsed] =
+    useState(false);
+
+  const [isHelpOpen, setIsHelpOpen] =
+    useState(false);
 
   const [type, setType] =
     useState<ProjectType>("typovy");
@@ -44,6 +71,21 @@ export default function BoothGenerator() {
 
   const [currency, setCurrency] =
     useState<Currency>("CZK");
+
+  const [realizationProfileId, setRealizationProfileId] =
+    useState(DEFAULT_REALIZATION_PROFILE_ID);
+
+  const [projectNotes, setProjectNotes] =
+    useState<Notes>(() => createEmptyNotes());
+
+  const [isProjectNotesOpen, setIsProjectNotesOpen] =
+    useState(false);
+
+  const [assemblyNotes, setAssemblyNotes] =
+    useState<Notes>(() => createEmptyNotes());
+
+  const [constructionNotes, setConstructionNotes] =
+    useState<NotesByEntityId>({});
 
   const [
     selectedBoothId,
@@ -71,6 +113,16 @@ export default function BoothGenerator() {
   ] = useState<string | null>(null);
 
   const [
+    constructionUserLocks,
+    setConstructionUserLocks,
+  ] = useState<Record<string, boolean>>({});
+
+  const [
+    constructionVisibility,
+    setConstructionVisibility,
+  ] = useState<Record<string, boolean>>({});
+
+  const [
     draggingComponentId,
     setDraggingComponentId,
   ] = useState<string | null>(null);
@@ -89,6 +141,14 @@ export default function BoothGenerator() {
       (fair) =>
         fair.id === fairId
     );
+
+  const selectedRealizationProfile = realizationProfiles.find(
+    (profile) => profile.id === realizationProfileId,
+  );
+
+  const hasProjectNotes = Boolean(
+    projectNotes.internalNote.trim() || projectNotes.customerNote.trim(),
+  );
 
   const selectedBooth =
     boothTypes.find(
@@ -110,6 +170,84 @@ export default function BoothGenerator() {
         component.id ===
         selectedComponentId
     );
+
+  const selectedPlacedComponentLocked =
+    selectedPlacedComponent
+      ? isObjectLocked(selectedPlacedComponent)
+      : false;
+
+  const selectedConstructionPart =
+    selectedConstructionPartId && selectedConstructionPartId !== "assembly"
+      ? selectedBooth?.constructionParts.find(
+          (part) => part.id === selectedConstructionPartId,
+        )
+      : undefined;
+
+  const selectedConstructionName =
+    selectedConstructionPartId === "assembly"
+      ? selectedBooth?.name
+      : selectedConstructionPart?.name;
+
+  const selectedConstructionLayer =
+    selectedConstructionPartId === "assembly"
+      ? "Sestava"
+      : selectedConstructionPart?.planViewType === "overhead"
+        ? "Horní konstrukce"
+        : "Konstrukce u podlahy";
+
+  const selectedConstructionLocked =
+    selectedConstructionPartId === "assembly"
+      ? Boolean(
+          selectedBooth &&
+            (selectedBooth.systemLocked ||
+              (constructionUserLocks.assembly ?? selectedBooth.userLocked)),
+        )
+      : Boolean(
+          selectedConstructionPart &&
+            (selectedConstructionPart.systemLocked ||
+              (constructionUserLocks[selectedConstructionPart.id] ??
+                selectedConstructionPart.userLocked)),
+        );
+
+  const selectedConstructionNotes =
+    selectedConstructionPartId === "assembly"
+      ? assemblyNotes
+      : selectedConstructionPartId
+        ? notesForEntity(constructionNotes, selectedConstructionPartId)
+        : undefined;
+
+  const constructionAssemblyVisible = selectedBooth
+    ? (constructionVisibility.assembly ?? selectedBooth.visible)
+    : true;
+
+  const visibleOverheadParts = selectedBooth
+    ? getVisiblePlanConstructionParts(
+        selectedBooth,
+        "overhead",
+        constructionVisibility,
+        constructionAssemblyVisible,
+      )
+    : [];
+
+  function isConstructionPartVisible(partId: string) {
+    if (!selectedBooth || !constructionAssemblyVisible) {
+      return false;
+    }
+
+    const part = selectedBooth.constructionParts.find(
+      (constructionPart) => constructionPart.id === partId
+    );
+
+    return part
+      ? (constructionVisibility[partId] ?? part.visible)
+      : true;
+  }
+
+  const boothViewport = useBoothViewport({
+    worldWidthMm: selectedBooth?.widthMm ?? 2000,
+    worldHeightMm: selectedBooth?.depthMm ?? 2000,
+    enabled: step === 3 && Boolean(selectedBooth),
+  });
 
   const canOpenConfigurator =
     Boolean(
@@ -158,8 +296,22 @@ export default function BoothGenerator() {
     setPlacedComponents([]);
     setSelectedComponentId(null);
     setSelectedConstructionPartId(null);
+    setConstructionUserLocks({});
+    setConstructionVisibility({});
+    setAssemblyNotes(createEmptyNotes());
+    setConstructionNotes({});
 
     setEditorMessage("");
+  }
+
+  function handleVariantSelect(variantId: string) {
+    if (variantId === selectedVariantId) {
+      return;
+    }
+
+    setSelectedVariantId(variantId);
+    setAssemblyNotes(createEmptyNotes());
+    setConstructionNotes({});
   }
 
   function startNewProject() {
@@ -172,6 +324,11 @@ export default function BoothGenerator() {
     setContact("");
 
     setCurrency("CZK");
+    setRealizationProfileId(DEFAULT_REALIZATION_PROFILE_ID);
+    setProjectNotes(createEmptyNotes());
+    setIsProjectNotesOpen(false);
+    setAssemblyNotes(createEmptyNotes());
+    setConstructionNotes({});
 
     setSelectedBoothId("");
     setSelectedVariantId("");
@@ -179,6 +336,8 @@ export default function BoothGenerator() {
     setPlacedComponents([]);
     setSelectedComponentId(null);
     setSelectedConstructionPartId(null);
+    setConstructionUserLocks({});
+    setConstructionVisibility({});
 
     setDraggingComponentId(null);
 
@@ -267,12 +426,29 @@ export default function BoothGenerator() {
     event: ReactPointerEvent<HTMLButtonElement>,
     componentId: string
   ) {
+    if (
+      event.button !== 0 ||
+      boothViewport.isSpacePressed
+    ) {
+      return;
+    }
+
+    const component = placedComponents.find(
+      (item) => item.id === componentId
+    );
+
     event.stopPropagation();
 
     setSelectedComponentId(
       componentId
     );
     setSelectedConstructionPartId(null);
+
+    if (!component || isObjectLocked(component)) {
+      setDraggingComponentId(null);
+      setEditorMessage("");
+      return;
+    }
 
     setDraggingComponentId(
       componentId
@@ -292,7 +468,6 @@ export default function BoothGenerator() {
     if (
       draggingComponentId !==
         componentId ||
-      !canvasRef.current ||
       !selectedBooth?.widthMm ||
       !selectedBooth.depthMm
     ) {
@@ -310,75 +485,47 @@ export default function BoothGenerator() {
       return;
     }
 
-    const rect =
-      canvasRef.current.getBoundingClientRect();
+    if (isObjectLocked(component)) {
+      setDraggingComponentId(null);
+      return;
+    }
 
-    const pointerX =
-      (
-        (
-          event.clientX -
-          rect.left
-        ) /
-        rect.width
-      ) *
-      selectedBooth.widthMm;
+    const pointer = boothViewport.clientToWorld(
+      event.clientX,
+      event.clientY
+    );
 
-    const pointerY =
-      (
-        (
-          event.clientY -
-          rect.top
-        ) /
-        rect.height
-      ) *
-      selectedBooth.depthMm;
+    if (!pointer) {
+      return;
+    }
 
     const snapped =
       applySnap(
         component,
 
-        pointerX,
-        pointerY,
+        pointer.x,
+        pointer.y,
 
         component.rotationDeg
       );
 
-    /*
-      1. Zkusíme normální pohyb.
-    */
-
-    if (
-      isPositionValid(
-        component,
-
-        snapped.x,
-        snapped.y,
-
-        component.rotationDeg
-      )
-    ) {
-      setPlacedComponents(
-        (items) =>
-          items.map(
-            (item) =>
-              item.id ===
-              componentId
-                ? {
-                    ...item,
-
-                    xMm:
-                      Math.round(
-                        snapped.x
-                      ),
-
-                    yMm:
-                      Math.round(
-                        snapped.y
-                      ),
-                  }
-                : item
-          )
+    const moveComponent = (movedComponent: PlacedComponent) => {
+      setPlacedComponents((items) =>
+        items.map((item) =>
+          item.id === componentId ? movedComponent : item
+        )
       );
+    };
+
+    const directMove = tryMoveComponent(
+      selectedBooth,
+      component,
+      Math.round(snapped.x),
+      Math.round(snapped.y),
+    );
+
+    if (directMove.accepted) {
+      moveComponent(directMove.component);
 
       setEditorMessage("");
 
@@ -390,33 +537,15 @@ export default function BoothGenerator() {
       zkusíme sklouznout pouze po X.
     */
 
-    if (
-      isPositionValid(
-        component,
+    const xOnlyMove = tryMoveComponent(
+      selectedBooth,
+      component,
+      Math.round(snapped.x),
+      component.yMm,
+    );
 
-        snapped.x,
-        component.yMm,
-
-        component.rotationDeg
-      )
-    ) {
-      setPlacedComponents(
-        (items) =>
-          items.map(
-            (item) =>
-              item.id ===
-              componentId
-                ? {
-                    ...item,
-
-                    xMm:
-                      Math.round(
-                        snapped.x
-                      ),
-                  }
-                : item
-          )
-      );
+    if (xOnlyMove.accepted) {
+      moveComponent(xOnlyMove.component);
 
       setEditorMessage(
         "Konstrukce blokuje pohyb v ose Y."
@@ -429,33 +558,15 @@ export default function BoothGenerator() {
       3. Potom pouze Y.
     */
 
-    if (
-      isPositionValid(
-        component,
+    const yOnlyMove = tryMoveComponent(
+      selectedBooth,
+      component,
+      component.xMm,
+      Math.round(snapped.y),
+    );
 
-        component.xMm,
-        snapped.y,
-
-        component.rotationDeg
-      )
-    ) {
-      setPlacedComponents(
-        (items) =>
-          items.map(
-            (item) =>
-              item.id ===
-              componentId
-                ? {
-                    ...item,
-
-                    yMm:
-                      Math.round(
-                        snapped.y
-                      ),
-                  }
-                : item
-          )
-      );
+    if (yOnlyMove.accepted) {
+      moveComponent(yOnlyMove.component);
 
       setEditorMessage(
         "Konstrukce blokuje pohyb v ose X."
@@ -491,6 +602,20 @@ export default function BoothGenerator() {
     }
   }
 
+  function handleViewportPointerDown(
+    event: ReactPointerEvent<HTMLDivElement>
+  ) {
+    if (boothViewport.startPan(event)) {
+      return;
+    }
+
+    if (event.button === 0) {
+      setSelectedComponentId(null);
+      setSelectedConstructionPartId(null);
+      setEditorMessage("");
+    }
+  }
+
   /* ================================================= */
   /* ROTATION                                         */
   /* ================================================= */
@@ -498,7 +623,10 @@ export default function BoothGenerator() {
   function setSelectedRotation(
     requestedAngle: number
   ) {
-    if (!selectedPlacedComponent) {
+    if (
+      !selectedPlacedComponent ||
+      isObjectLocked(selectedPlacedComponent)
+    ) {
       return;
     }
 
@@ -543,7 +671,10 @@ export default function BoothGenerator() {
   function setSelectedQuickRotation(
     requestedAngle: number
   ) {
-    if (!selectedPlacedComponent) {
+    if (
+      !selectedPlacedComponent ||
+      isObjectLocked(selectedPlacedComponent)
+    ) {
       return;
     }
 
@@ -589,6 +720,7 @@ export default function BoothGenerator() {
   ) {
     if (
       !selectedPlacedComponent ||
+      isObjectLocked(selectedPlacedComponent) ||
       selectedPlacedComponent.rotation.locked ||
       (mode === "free" &&
         !selectedPlacedComponent.rotation.allowFreeRotation)
@@ -613,7 +745,8 @@ export default function BoothGenerator() {
 
   function duplicateSelectedComponent() {
     if (
-      !selectedPlacedComponent
+      !selectedPlacedComponent ||
+      isObjectLocked(selectedPlacedComponent)
     ) {
       return;
     }
@@ -693,7 +826,8 @@ export default function BoothGenerator() {
 
   function deleteSelectedComponent() {
     if (
-      !selectedComponentId
+      !selectedComponentId ||
+      selectedPlacedComponentLocked
     ) {
       return;
     }
@@ -714,6 +848,40 @@ export default function BoothGenerator() {
     setEditorMessage("");
   }
 
+  function commitSelectedCoordinate(
+    axis: "x" | "y",
+    valueMm: number,
+  ): boolean {
+    if (!selectedBooth || !selectedPlacedComponent) {
+      return false;
+    }
+
+    const move = tryMoveComponent(
+      selectedBooth,
+      selectedPlacedComponent,
+      axis === "x" ? valueMm : selectedPlacedComponent.xMm,
+      axis === "y" ? valueMm : selectedPlacedComponent.yMm,
+    );
+
+    if (!move.accepted) {
+      setEditorMessage(
+        move.reason === "locked"
+          ? "Objekt je zamčený a jeho pozici nelze změnit."
+          : "Neplatná pozice – objekt zůstává na původním místě.",
+      );
+      return false;
+    }
+
+    setPlacedComponents((items) =>
+      items.map((item) =>
+        item.id === move.component.id ? move.component : item
+      )
+    );
+    setEditorMessage("");
+
+    return true;
+  }
+
   function selectSceneComponent(componentId: string) {
     setSelectedComponentId(componentId);
     setSelectedConstructionPartId(null);
@@ -726,10 +894,120 @@ export default function BoothGenerator() {
     setEditorMessage("");
   }
 
+  function toggleComponentLock(componentId: string) {
+    setPlacedComponents((items) =>
+      items.map((item) =>
+        item.id === componentId
+          ? toggleUserLock(item)
+          : item
+      )
+    );
+  }
+
+  function toggleComponentVisibility(componentId: string) {
+    setPlacedComponents((items) =>
+      items.map((item) =>
+        item.id === componentId
+          ? toggleVisibility(item)
+          : item
+      )
+    );
+  }
+
+  function updateSelectedComponentNote(
+    field: NoteField,
+    value: string,
+  ) {
+    if (!selectedComponentId) {
+      return;
+    }
+
+    setPlacedComponents((items) =>
+      items.map((item) =>
+        item.id === selectedComponentId
+          ? { ...item, ...updateNotes(item, field, value) }
+          : item
+      )
+    );
+  }
+
+  function updateProjectNote(field: NoteField, value: string) {
+    setProjectNotes((notes) => updateNotes(notes, field, value));
+  }
+
+  function updateSelectedConstructionNote(
+    field: NoteField,
+    value: string,
+  ) {
+    if (selectedConstructionPartId === "assembly") {
+      setAssemblyNotes((notes) => updateNotes(notes, field, value));
+      return;
+    }
+
+    if (selectedConstructionPartId) {
+      setConstructionNotes((notesById) =>
+        updateEntityNotes(
+          notesById,
+          selectedConstructionPartId,
+          field,
+          value,
+        )
+      );
+    }
+  }
+
+  function toggleConstructionLock(partId: string) {
+    if (!selectedBooth) {
+      return;
+    }
+
+    const lockDefinition =
+      partId === "assembly"
+        ? selectedBooth
+        : selectedBooth.constructionParts.find(
+            (part) => part.id === partId
+          );
+
+    if (!lockDefinition || lockDefinition.systemLocked) {
+      return;
+    }
+
+    setConstructionUserLocks((locks) => ({
+      ...locks,
+      [partId]: !(locks[partId] ?? lockDefinition.userLocked),
+    }));
+  }
+
+  function toggleConstructionVisibility(partId: string) {
+    if (!selectedBooth) {
+      return;
+    }
+
+    const definition =
+      partId === "assembly"
+        ? selectedBooth
+        : selectedBooth.constructionParts.find(
+            (part) => part.id === partId
+          );
+
+    if (!definition) {
+      return;
+    }
+
+    setConstructionVisibility((visibility) => ({
+      ...visibility,
+      [partId]: !(visibility[partId] ?? definition.visible),
+    }));
+  }
+
   function resetConfigurator() {
     setPlacedComponents([]);
     setSelectedComponentId(null);
     setSelectedConstructionPartId(null);
+    setConstructionUserLocks({});
+    setConstructionVisibility({});
+    setAssemblyNotes(createEmptyNotes());
+    setConstructionNotes({});
 
     setEditorMessage("");
   }
@@ -739,12 +1017,24 @@ export default function BoothGenerator() {
   /* ================================================= */
 
   return (
-    <main className="shell">
+    <main
+      className={
+        isSidebarCollapsed
+          ? "shell sidebarCollapsed"
+          : "shell"
+      }
+    >
       {/* ================================================= */}
       {/* SIDEBAR                                         */}
       {/* ================================================= */}
 
-      <AppSidebar onStartNewProject={startNewProject} />
+      <AppSidebar
+        collapsed={isSidebarCollapsed}
+        onToggleCollapsed={() =>
+          setIsSidebarCollapsed((collapsed) => !collapsed)
+        }
+        onStartNewProject={startNewProject}
+      />
 
       {/* ================================================= */}
       {/* MAIN                                            */}
@@ -917,6 +1207,58 @@ export default function BoothGenerator() {
                         placeholder="Jméno / e-mail"
                       />
                     </label>
+                  </div>
+
+                  <label className="realizationField">
+                    <span>Realizačka</span>
+                    <select
+                      value={realizationProfileId}
+                      onChange={(event) =>
+                        setRealizationProfileId(event.target.value)
+                      }
+                    >
+                      {realizationProfiles.map((profile) => (
+                        <option key={profile.id} value={profile.id}>
+                          {profile.name}
+                        </option>
+                      ))}
+                    </select>
+                    <small>
+                      Ovlivní pouze budoucí výrobní a exportní rozměry.
+                    </small>
+                  </label>
+
+                  <div className="projectNotesDisclosure">
+                    <button
+                      type="button"
+                      className="projectNotesToggle"
+                      aria-expanded={isProjectNotesOpen}
+                      onClick={() => setIsProjectNotesOpen((open) => !open)}
+                    >
+                      <span>Poznámky k projektu</span>
+
+                      <span className="projectNotesToggleMeta">
+                        {hasProjectNotes && (
+                          <span className="projectNotesStatus">Vyplněno</span>
+                        )}
+                        <span
+                          className={
+                            isProjectNotesOpen
+                              ? "projectNotesChevron open"
+                              : "projectNotesChevron"
+                          }
+                          aria-hidden="true"
+                        />
+                      </span>
+                    </button>
+
+                    {isProjectNotesOpen && (
+                      <NotesEditor
+                        notes={projectNotes}
+                        className="projectNotesEditor"
+                        onChange={updateProjectNote}
+                      />
+                    )}
                   </div>
 
                   <div className="currencySection">
@@ -1435,7 +1777,7 @@ export default function BoothGenerator() {
                                     : "variantCard"
                                 }
                                 onClick={() =>
-                                  setSelectedVariantId(
+                                  handleVariantSelect(
                                     variant.id
                                   )
                                 }
@@ -1673,8 +2015,37 @@ export default function BoothGenerator() {
                       <span className="collisionOn">
                         KOLIZE ON
                       </span>
+
+                      <button
+                        type="button"
+                        className={
+                          isHelpOpen
+                            ? "helpToggleButton active"
+                            : "helpToggleButton"
+                        }
+                        onClick={() =>
+                          setIsHelpOpen((open) => !open)
+                        }
+                        aria-expanded={isHelpOpen}
+                        aria-controls="configurator-help"
+                      >
+                        ? Ovládání
+                      </button>
+
+                      <ViewportToolbar
+                        zoomPercent={boothViewport.zoomPercent}
+                        onZoomOut={boothViewport.zoomOut}
+                        onZoomIn={boothViewport.zoomIn}
+                        onFit={boothViewport.fitToBooth}
+                        onReset={boothViewport.resetZoom}
+                      />
                     </div>
                   </div>
+
+                  <ConfiguratorHelp
+                    open={isHelpOpen}
+                    onClose={() => setIsHelpOpen(false)}
+                  />
 
                   {/* OBJECT NAVIGATOR */}
 
@@ -1731,6 +2102,7 @@ export default function BoothGenerator() {
 
                         <RotationNavigator
                           component={selectedPlacedComponent}
+                          interactionLocked={selectedPlacedComponentLocked}
                           onQuickAngle={setSelectedQuickRotation}
                           onRotationChange={setSelectedRotation}
                           onModeChange={setSelectedRotationMode}
@@ -1740,6 +2112,7 @@ export default function BoothGenerator() {
 
                         <div className="navigatorActions">
                           <button
+                            disabled={selectedPlacedComponentLocked}
                             onClick={
                               duplicateSelectedComponent
                             }
@@ -1749,6 +2122,7 @@ export default function BoothGenerator() {
 
                           <button
                             className="deleteNavigatorButton"
+                            disabled={selectedPlacedComponentLocked}
                             onClick={
                               deleteSelectedComponent
                             }
@@ -1778,6 +2152,28 @@ export default function BoothGenerator() {
                   )}
 
                   <div className="canvasArea">
+                    <div
+                      ref={boothViewport.viewportRef}
+                      className={
+                        boothViewport.isPanning
+                          ? "boothViewport panning"
+                          : boothViewport.isSpacePressed
+                            ? "boothViewport panReady"
+                            : "boothViewport"
+                      }
+                      onPointerDown={handleViewportPointerDown}
+                      onPointerMove={boothViewport.movePan}
+                      onPointerUp={boothViewport.endPan}
+                      onPointerCancel={boothViewport.endPan}
+                    >
+                      <div
+                        className="viewportStage"
+                        style={{
+                          width: `${selectedBooth.widthMm * boothViewport.pixelsPerMm}px`,
+                          height: `${selectedBooth.depthMm * boothViewport.pixelsPerMm}px`,
+                          transform: `translate(${boothViewport.transform.pan.x}px, ${boothViewport.transform.pan.y}px) scale(${boothViewport.transform.zoom})`,
+                        }}
+                      >
                     <div className="dimensionTop">
                       <span>
                         {
@@ -1797,25 +2193,13 @@ export default function BoothGenerator() {
                     </div>
 
                     <div
-                      ref={canvasRef}
                       className={
-                        selectedConstructionPartId === "assembly" ||
-                        selectedConstructionPartId === "collar"
+                        selectedConstructionPartId === "assembly"
                           ? "boothCanvas constructionSelected"
                           : "boothCanvas"
                       }
                       style={{
                         aspectRatio: `${selectedBooth.widthMm} / ${selectedBooth.depthMm}`,
-                      }}
-                      onPointerDown={() => {
-                        setSelectedComponentId(
-                          null
-                        );
-                        setSelectedConstructionPartId(null);
-
-                        setEditorMessage(
-                          ""
-                        );
                       }}
                     >
                       {/* CARPET */}
@@ -1829,43 +2213,49 @@ export default function BoothGenerator() {
                       {/* FIXED CONSTRUCTION */}
 
                       {selectedBooth.id ===
-                        "koje-2x2" && (
+                        "koje-2x2" && constructionAssemblyVisible && (
                         <>
-                          <div
-                            className={
-                              selectedConstructionPartId === "back-wall"
-                                ? "fixedWall backFixedWall selectedConstruction"
-                                : "fixedWall backFixedWall"
-                            }
-                          >
-                            <span>
-                              2000
-                            </span>
-                          </div>
+                          {isConstructionPartVisible("back-wall") && (
+                            <div
+                              className={
+                                selectedConstructionPartId === "back-wall"
+                                  ? "fixedWall backFixedWall selectedConstruction"
+                                  : "fixedWall backFixedWall"
+                              }
+                            >
+                              <span>
+                                2000
+                              </span>
+                            </div>
+                          )}
 
-                          <div
-                            className={
-                              selectedConstructionPartId === "left-wall"
-                                ? "fixedWall leftFixedWall selectedConstruction"
-                                : "fixedWall leftFixedWall"
-                            }
-                          >
-                            <span>
-                              1000
-                            </span>
-                          </div>
+                          {isConstructionPartVisible("left-wall") && (
+                            <div
+                              className={
+                                selectedConstructionPartId === "left-wall"
+                                  ? "fixedWall leftFixedWall selectedConstruction"
+                                  : "fixedWall leftFixedWall"
+                              }
+                            >
+                              <span>
+                                1000
+                              </span>
+                            </div>
+                          )}
 
-                          <div
-                            className={
-                              selectedConstructionPartId === "right-wall"
-                                ? "fixedWall rightFixedWall selectedConstruction"
-                                : "fixedWall rightFixedWall"
-                            }
-                          >
-                            <span>
-                              1000
-                            </span>
-                          </div>
+                          {isConstructionPartVisible("right-wall") && (
+                            <div
+                              className={
+                                selectedConstructionPartId === "right-wall"
+                                  ? "fixedWall rightFixedWall selectedConstruction"
+                                  : "fixedWall rightFixedWall"
+                              }
+                            >
+                              <span>
+                                1000
+                              </span>
+                            </div>
+                          )}
 
                           <div className="cornerProfile profileTopLeft" />
                           <div className="cornerProfile profileTopCenter" />
@@ -1875,10 +2265,40 @@ export default function BoothGenerator() {
                         </>
                       )}
 
+                      {/* OVERHEAD CONSTRUCTION */}
+
+                      {visibleOverheadParts.flatMap((part) =>
+                        (part.planRects ?? []).map((rect) => (
+                          <div
+                            key={`${part.id}-${rect.id}`}
+                            className={[
+                              "overheadConstruction",
+                              `overheadConstruction-${part.renderStyle2D}`,
+                              selectedConstructionPartId === part.id
+                                ? "selectedConstruction"
+                                : "",
+                            ]
+                              .filter(Boolean)
+                              .join(" ")}
+                            style={{
+                              left: `${(rect.x / selectedBooth.widthMm!) * 100}%`,
+                              top: `${(rect.y / selectedBooth.depthMm!) * 100}%`,
+                              width: `${(rect.width / selectedBooth.widthMm!) * 100}%`,
+                              height: `${(rect.height / selectedBooth.depthMm!) * 100}%`,
+                            }}
+                            aria-hidden="true"
+                          />
+                        )),
+                      )}
+
                       {/* COMPONENTS */}
 
                       {placedComponents.map(
                         (item) => {
+                          if (!item.visible) {
+                            return null;
+                          }
+
                           const selected =
                             item.id ===
                             selectedComponentId;
@@ -1899,6 +2319,10 @@ export default function BoothGenerator() {
 
                                 selected
                                   ? "selected"
+                                  : "",
+
+                                isObjectLocked(item)
+                                  ? "locked"
                                   : "",
                               ]
                                 .filter(
@@ -1985,26 +2409,9 @@ export default function BoothGenerator() {
                         }
                       )}
                     </div>
-
-                    <div className="canvasLegend">
-                      <div>
-                        <span className="legendBox legendConstruction" />
-
-                        Konstrukce – blokuje pohyb
-                      </div>
-
-                      <div>
-                        <span className="legendBox legendComponent" />
-
-                        Mobiliář
-                      </div>
-
-                      <div>
-                        <span className="legendBox legendSelected" />
-
-                        Vybraný objekt
                       </div>
                     </div>
+
                   </div>
                 </section>
 
@@ -2021,119 +2428,85 @@ export default function BoothGenerator() {
                     </strong>
                   </div>
 
+                  <div className="propertySection">
+                    <span className="propertySectionTitle">
+                      PROJEKT
+                    </span>
+
+                    <div className="propertyRow">
+                      <span>Veletrh</span>
+                      <strong>{selectedFair?.name || "—"}</strong>
+                    </div>
+
+                    <div className="propertyRow">
+                      <span>Firma / vystavovatel</span>
+                      <strong>{company || "—"}</strong>
+                    </div>
+
+                    <div className="propertyRow">
+                      <span>Kontakt</span>
+                      <strong>{contact || "—"}</strong>
+                    </div>
+
+                    <div className="propertyRow">
+                      <span>Typ stánku</span>
+                      <strong>{selectedBooth.name}</strong>
+                    </div>
+
+                    {selectedVariant && (
+                      <div className="propertyRow">
+                        <span>Varianta</span>
+                        <strong>{selectedVariant.name}</strong>
+                      </div>
+                    )}
+
+                    <div className="propertyRow">
+                      <span>Ceník</span>
+                      <strong>{selectedFair?.priceList || "—"}</strong>
+                    </div>
+
+                    <div className="propertyRow">
+                      <span>Měna</span>
+                      <strong>{currency}</strong>
+                    </div>
+
+                    <div className="propertyRow">
+                      <span>Realizačka</span>
+                      <strong>{selectedRealizationProfile?.name || "—"}</strong>
+                    </div>
+
+                    <div className="propertyRow">
+                      <span>Cena konstrukce</span>
+                      <strong>
+                        {selectedBooth.pricing.mode === "fixed"
+                          ? "Fixní typovka"
+                          : "Dle konfigurace"}
+                      </strong>
+                    </div>
+
+                    <NotesEditor
+                      title="Poznámky projektu"
+                      notes={projectNotes}
+                      className="projectInspectorNotes inspectorNotes"
+                      onChange={updateProjectNote}
+                    />
+                  </div>
+
                   <ScenePanel
                     booth={selectedBooth}
                     variant={selectedVariant}
                     components={placedComponents}
+                    constructionUserLocks={constructionUserLocks}
+                    constructionVisibility={constructionVisibility}
                     selectedComponentId={selectedComponentId}
                     selectedConstructionPartId={selectedConstructionPartId}
                     onSelectComponent={selectSceneComponent}
                     onSelectConstructionPart={selectConstructionPart}
+                    onToggleComponentLock={toggleComponentLock}
+                    onToggleConstructionLock={toggleConstructionLock}
+                    onToggleComponentVisibility={toggleComponentVisibility}
+                    onToggleConstructionVisibility={toggleConstructionVisibility}
                   />
-
-                  <div className="propertySection">
-                    <div className="propertyRow">
-                      <span>
-                        Veletrh
-                      </span>
-
-                      <strong>
-                        {selectedFair?.name ||
-                          "—"}
-                      </strong>
-                    </div>
-
-                    <div className="propertyRow">
-                      <span>
-                        Firma
-                      </span>
-
-                      <strong>
-                        {company ||
-                          "—"}
-                      </strong>
-                    </div>
-
-                    <div className="propertyRow">
-                      <span>
-                        Konstrukce
-                      </span>
-
-                      <strong>
-                        {
-                          selectedBooth.code
-                        }
-                      </strong>
-                    </div>
-
-                    <div className="propertyRow">
-                      <span>
-                        Měna
-                      </span>
-
-                      <strong>
-                        {
-                          currency
-                        }
-                      </strong>
-                    </div>
-                  </div>
-
-                  <div className="propertySection">
-                    <span className="propertySectionTitle">
-                      KONSTRUKCE
-                    </span>
-
-                    <div className="propertyRow">
-                      <span>
-                        Plocha
-                      </span>
-
-                      <strong>
-                        2000 × 2000 mm
-                      </strong>
-                    </div>
-
-                    <div className="propertyRow">
-                      <span>
-                        Výška
-                      </span>
-
-                      <strong>
-                        2500 mm
-                      </strong>
-                    </div>
-
-                    <div className="propertyRow">
-                      <span>
-                        Límec
-                      </span>
-
-                      <strong>
-                        300 mm
-                      </strong>
-                    </div>
-
-                    <div className="propertyRow">
-                      <span>
-                        Octanorm
-                      </span>
-
-                      <strong>
-                        80 mm
-                      </strong>
-                    </div>
-
-                    <div className="propertyRow">
-                      <span>
-                        Kolize
-                      </span>
-
-                      <strong className="statusEnabled">
-                        Aktivní
-                      </strong>
-                    </div>
-                  </div>
 
                   <div className="propertySection">
                     <span className="propertySectionTitle">
@@ -2143,89 +2516,101 @@ export default function BoothGenerator() {
                     {selectedPlacedComponent ? (
                       <>
                         <div className="selectedComponentCard">
-                          <span>
-                            {
-                              selectedPlacedComponent.name
-                            }
-                          </span>
+                          <span>Mobiliář</span>
+                          <strong>{selectedPlacedComponent.name}</strong>
+                        </div>
 
+                        <div className="inspectorGroup">
+                          <span className="inspectorGroupTitle">Pozice</span>
+                          <div className="coordinateGrid">
+                            <CoordinateInput
+                              axis="X"
+                              value={selectedPlacedComponent.xMm}
+                              disabled={selectedPlacedComponentLocked}
+                              onCommit={(value) =>
+                                commitSelectedCoordinate("x", value)
+                              }
+                            />
+
+                            <CoordinateInput
+                              axis="Y"
+                              value={selectedPlacedComponent.yMm}
+                              disabled={selectedPlacedComponentLocked}
+                              onCommit={(value) =>
+                                commitSelectedCoordinate("y", value)
+                              }
+                            />
+                          </div>
+                        </div>
+
+                        <div className="inspectorGroup">
+                          <span className="inspectorGroupTitle">Rotace</span>
+                          <div className="inspectorCompactRows">
+                            <div>
+                              <span>Úhel</span>
+                              <strong>{selectedPlacedComponent.rotationDeg}°</strong>
+                            </div>
+                            <div>
+                              <span>Režim</span>
+                              <strong>
+                                {selectedPlacedComponent.rotation.locked
+                                  ? "Zamčená"
+                                  : selectedPlacedComponent.rotationMode === "free"
+                                    ? "Volná 360°"
+                                    : `Rychlé po ${selectedPlacedComponent.rotation.snapStep}°`}
+                              </strong>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="inspectorGroup">
+                          <div className="inspectorGroupHeader">
+                            <span className="inspectorGroupTitle">Rozměry</span>
+                            <span className="inspectorCapability">
+                              {selectedPlacedComponent.resizable
+                                ? "Upravitelné"
+                                : "Pevné 1:1"}
+                            </span>
+                          </div>
+                          <div className="inspectorDimensionGrid">
+                            <div>
+                              <span>Šířka</span>
+                              <strong>{selectedPlacedComponent.widthMm} mm</strong>
+                            </div>
+                            <div>
+                              <span>Hloubka</span>
+                              <strong>{selectedPlacedComponent.depthMm} mm</strong>
+                            </div>
+                            {selectedPlacedComponent.heightMm !== undefined && (
+                              <div>
+                                <span>Výška</span>
+                                <strong>{selectedPlacedComponent.heightMm} mm</strong>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="inspectorStatusRow">
+                          <span>Zámek</span>
                           <strong>
-                            {
-                              selectedPlacedComponent.widthMm
-                            }{" "}
-                            ×{" "}
-                            {
-                              selectedPlacedComponent.depthMm
-                            }{" "}
-                            mm
+                            {selectedPlacedComponent.systemLocked
+                              ? "Systémový"
+                              : selectedPlacedComponent.userLocked
+                                ? "Uživatelský"
+                                : "Odemčeno"}
                           </strong>
                         </div>
 
-                        <div className="propertyRow">
-                          <span>
-                            X – střed
-                          </span>
-
-                          <strong>
-                            {
-                              selectedPlacedComponent.xMm
-                            }{" "}
-                            mm
-                          </strong>
-                        </div>
-
-                        <div className="propertyRow">
-                          <span>
-                            Y – střed
-                          </span>
-
-                          <strong>
-                            {
-                              selectedPlacedComponent.yMm
-                            }{" "}
-                            mm
-                          </strong>
-                        </div>
-
-                        <div className="propertyRow">
-                          <span>
-                            Rotace
-                          </span>
-
-                          <strong>
-                            {
-                              selectedPlacedComponent.rotationDeg
-                            }
-                            °
-                          </strong>
-                        </div>
-
-                        <div className="propertyRow">
-                          <span>
-                            Režim
-                          </span>
-
-                          <strong>
-                            {selectedPlacedComponent.rotation.locked
-                              ? "Zamčená"
-                              : selectedPlacedComponent.rotationMode === "free"
-                                ? "Volná 360°"
-                                : `Rychlé po ${selectedPlacedComponent.rotation.snapStep}°`}
-                          </strong>
-                        </div>
-
-                        <div className="propertyRow">
-                          <span>
-                            Cenová skupina
-                          </span>
-
-                          <strong>
-                            Mobiliář
-                          </strong>
-                        </div>
+                        <NotesEditor
+                          title="Poznámky"
+                          notes={selectedPlacedComponent}
+                          className="inspectorGroup inspectorNotes"
+                          onChange={updateSelectedComponentNote}
+                        />
 
                         <button
                           className="inspectorDelete"
+                          disabled={selectedPlacedComponentLocked}
                           onClick={
                             deleteSelectedComponent
                           }
@@ -2233,9 +2618,50 @@ export default function BoothGenerator() {
                           Smazat objekt
                         </button>
                       </>
+                    ) : selectedConstructionName ? (
+                      <>
+                        <div className="selectedComponentCard">
+                          <span>{selectedConstructionLayer}</span>
+                          <strong>{selectedConstructionName}</strong>
+                        </div>
+
+                        <div className="propertyRow">
+                          <span>Vrstva</span>
+                          <strong>{selectedConstructionLayer}</strong>
+                        </div>
+
+                        {selectedConstructionPart && (
+                          <div className="propertyRow">
+                            <span>2D kolize</span>
+                            <strong>
+                              {selectedConstructionPart.collision2D
+                                ? "Aktivní"
+                                : "Bez kolize"}
+                            </strong>
+                          </div>
+                        )}
+
+                        <div className="propertyRow">
+                          <span>Zámek</span>
+                          <strong>
+                            {selectedConstructionLocked
+                              ? "Zamčeno"
+                              : "Odemčeno"}
+                          </strong>
+                        </div>
+
+                        {selectedConstructionNotes && (
+                          <NotesEditor
+                            title="Poznámky"
+                            notes={selectedConstructionNotes}
+                            className="inspectorGroup inspectorNotes"
+                            onChange={updateSelectedConstructionNote}
+                          />
+                        )}
+                      </>
                     ) : (
                       <p className="emptyInspector">
-                        Klikni na mobiliář v půdorysu.
+                        Vyber objekt v půdorysu nebo ve Scéně.
                       </p>
                     )}
                   </div>

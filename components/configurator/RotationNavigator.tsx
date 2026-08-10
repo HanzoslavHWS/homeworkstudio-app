@@ -2,6 +2,7 @@ import type { PlacedComponent, RotationControlMode } from "../../domain/models";
 
 type RotationNavigatorProps = {
   component: PlacedComponent;
+  interactionLocked: boolean;
   onQuickAngle: (angle: number) => void;
   onRotationChange: (angle: number) => void;
   onModeChange: (mode: RotationControlMode) => void;
@@ -9,6 +10,7 @@ type RotationNavigatorProps = {
 
 export function RotationNavigator({
   component,
+  interactionLocked,
   onQuickAngle,
   onRotationChange,
   onModeChange,
@@ -22,8 +24,10 @@ export function RotationNavigator({
         <strong>{component.rotationDeg}°</strong>
       </div>
 
-      {rotation.locked ? (
-        <div className="rotationLocked">Rotace zamčena</div>
+      {interactionLocked || rotation.locked ? (
+        <div className="rotationLocked">
+          {interactionLocked ? "Objekt je zamčený" : "Rotace zamčena"}
+        </div>
       ) : (
         <>
           <div className="stepRotation quickAngles">

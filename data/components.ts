@@ -2,6 +2,7 @@ import type {
   ComponentDefinition,
   PlacedComponent,
 } from "../domain/models.ts";
+import { createEmptyNotes } from "../domain/notes.ts";
 
 export const componentCatalog = {
   cabinet: {
@@ -11,7 +12,12 @@ export const componentCatalog = {
     sceneLabel: "Skříňka",
     widthMm: 800,
     depthMm: 400,
+    resizable: false,
+    productionProfiles: {},
     frontDirectionDeg: 0,
+    systemLocked: false,
+    userLocked: false,
+    visible: true,
     rotation: {
       defaultMode: "snap",
       snapStep: 45,
@@ -27,7 +33,12 @@ export const componentCatalog = {
     sceneLabel: "Židle",
     widthMm: 450,
     depthMm: 500,
+    resizable: false,
+    productionProfiles: {},
     frontDirectionDeg: 0,
+    systemLocked: false,
+    userLocked: false,
+    visible: true,
     rotation: {
       defaultMode: "free",
       snapStep: 45,
@@ -51,11 +62,18 @@ export function placeComponent(
     name: definition.name,
     widthMm: definition.widthMm,
     depthMm: definition.depthMm,
+    heightMm: definition.heightMm,
+    resizable: definition.resizable,
+    productionProfiles: definition.productionProfiles,
+    ...createEmptyNotes(),
     xMm,
     yMm,
     rotationDeg: 0,
     rotationMode: definition.rotation.defaultMode,
     rotation: definition.rotation,
+    systemLocked: definition.systemLocked,
+    userLocked: definition.userLocked,
+    visible: definition.visible,
     frontDirectionDeg: definition.frontDirectionDeg,
     sceneLabel: definition.sceneLabel,
     assets: definition.assets,

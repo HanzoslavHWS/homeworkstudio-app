@@ -3,7 +3,15 @@ import type {
   PlacedComponent,
   Placement,
 } from "../domain/models.ts";
+import { isObjectLocked } from "../domain/locking.ts";
 import { getBounds, getRotatedCorners, polygonsOverlap, rectToPoints } from "./polygons.ts";
+import { get2DCollisionObstacles } from "./construction.ts";
+
+export type ComponentMoveResult = Readonly<{
+  accepted: boolean;
+  component: PlacedComponent;
+  reason?: "locked" | "invalid-position";
+}>;
 
 export function isPlacementValid(
   booth: BoothType,
@@ -34,9 +42,41 @@ export function isPlacementValid(
     return false;
   }
 
-  return booth.collisionObstacles.every(
+  return get2DCollisionObstacles(booth).every(
     (obstacle) => !polygonsOverlap(footprint, rectToPoints(obstacle)),
   );
+}
+
+export function tryMoveComponent(
+  booth: BoothType,
+  component: PlacedComponent,
+  xMm: number,
+  yMm: number,
+): ComponentMoveResult {
+  if (isObjectLocked(component)) {
+    return { accepted: false, component, reason: "locked" };
+  }
+
+  if (
+    !Number.isFinite(xMm) ||
+    !Number.isFinite(yMm) ||
+    !isPlacementValid(booth, component, {
+      x: xMm,
+      y: yMm,
+      rotationDeg: component.rotationDeg,
+    })
+  ) {
+    return { accepted: false, component, reason: "invalid-position" };
+  }
+
+  if (component.xMm === xMm && component.yMm === yMm) {
+    return { accepted: true, component };
+  }
+
+  return {
+    accepted: true,
+    component: { ...component, xMm, yMm },
+  };
 }
 
 export function applySnap(
