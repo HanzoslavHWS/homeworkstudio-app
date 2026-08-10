@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "node --no-warnings --test tests/component-placement.test.ts tests/construction.test.ts tests/geometry.test.ts tests/locking.test.ts tests/notes.test.ts tests/pricing.test.ts tests/project-data.test.ts tests/viewport.test.ts tests/visibility.test.ts",
+    "test": "node --no-warnings --test tests/auth.test.ts tests/cad3d.test.ts tests/component-placement.test.ts tests/construction.test.ts tests/geometry.test.ts tests/locking.test.ts tests/notes.test.ts tests/pricing.test.ts tests/project-data.test.ts tests/viewport.test.ts tests/visibility.test.ts",
     "typecheck": "tsc --noEmit --incremental false",
     "dev": "next dev",
     "build": "next build",
@@ -24,12 +24,14 @@
   "dependencies": {
     "next": "^16.3.0",
     "react": "^19.2.8",
-    "react-dom": "^19.2.8"
+    "react-dom": "^19.2.8",
+    "three": "^0.185.1"
   },
   "devDependencies": {
     "@types/node": "^26.1.2",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
+    "@types/three": "^0.185.4",
     "typescript": "^7.0.2"
   }
 }

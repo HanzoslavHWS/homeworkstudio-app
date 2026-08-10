@@ -1,11 +1,12 @@
+import { componentCatalogItems } from "../../data/components";
+import type { ComponentDefinition } from "../../domain/models";
+
 type ComponentLibraryProps = {
-  onAddCabinet: () => void;
-  onAddChair: () => void;
+  onAddComponent: (definition: ComponentDefinition) => void;
 };
 
 export function ComponentLibrary({
-  onAddCabinet,
-  onAddChair,
+  onAddComponent,
 }: ComponentLibraryProps) {
   return (
     <aside className="componentLibrary">
@@ -15,30 +16,40 @@ export function ComponentLibrary({
       </div>
 
       <div className="librarySection">
-        <span className="libraryTitle">TEST MOBILIÁŘE</span>
+        <span className="libraryTitle">MOBILIÁŘ</span>
 
-        <button className="libraryItem" onClick={onAddCabinet}>
-          <span className="libraryItemIcon cabinetIcon">▭</span>
-          <span className="libraryItemText">
-            <strong>Skříňka</strong>
-            <small>800 × 400 mm</small>
-            <em>rotace po 90°</em>
-          </span>
-          <span className="libraryAdd">+</span>
-        </button>
-
-        <button className="libraryItem" onClick={onAddChair}>
-          <span className="libraryItemIcon chairIcon">◇</span>
-          <span className="libraryItemText">
-            <strong>Židle</strong>
-            <small>450 × 500 mm</small>
-            <em>volná rotace</em>
-          </span>
-          <span className="libraryAdd">+</span>
-        </button>
+        {componentCatalogItems.map((definition) => (
+          <button
+            key={definition.id}
+            className="libraryItem"
+            onClick={() => onAddComponent(definition)}
+          >
+            <span
+              className={
+                definition.type === "chair"
+                  ? "libraryItemIcon chairIcon"
+                  : "libraryItemIcon cabinetIcon"
+              }
+            >
+              {definition.type === "chair" ? "◇" : "▭"}
+            </span>
+            <span className="libraryItemText">
+              <strong>{definition.name}</strong>
+              <small>
+                {definition.widthMm} × {definition.depthMm} mm
+              </small>
+              <em>
+                {definition.assets?.models3d?.length
+                  ? "CAD model 1:1"
+                  : "2D testovací prvek"}
+              </em>
+            </span>
+            <span className="libraryAdd">+</span>
+          </button>
+        ))}
 
         <p className="libraryHint">
-          Zatím testujeme ovládání. Později sem připojíme přesné CAD komponenty 1:1.
+          Položky s CAD modelem používají stejné projektové souřadnice v 2D i 3D.
         </p>
       </div>
 

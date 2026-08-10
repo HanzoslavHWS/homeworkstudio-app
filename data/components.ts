@@ -9,6 +9,7 @@ export const componentCatalog = {
     id: "test-cabinet-800x400",
     type: "cabinet",
     name: "Testovací skříňka",
+    category: "cabinets",
     sceneLabel: "Skříňka",
     widthMm: 800,
     depthMm: 400,
@@ -27,12 +28,14 @@ export const componentCatalog = {
     },
   },
   chair: {
-    id: "test-chair-450x500",
+    id: "chair-basic",
     type: "chair",
-    name: "Testovací židle",
+    name: "Židle",
+    category: "chairs",
     sceneLabel: "Židle",
-    widthMm: 450,
-    depthMm: 500,
+    widthMm: 535,
+    depthMm: 592,
+    heightMm: 795,
     resizable: false,
     productionProfiles: {},
     frontDirectionDeg: 0,
@@ -46,8 +49,26 @@ export const componentCatalog = {
       allowFreeRotation: true,
       locked: false,
     },
+    assets: {
+      sourceId: "chair-basic",
+      scale: 1,
+      unit: "mm",
+      models3d: [
+        {
+          id: "chair-basic-model",
+          url: "/models/chairs/zidle.glb",
+          role: "component",
+          unit: "mm",
+          axisSystem: "x-right-y-depth-z-up",
+          anchor: "footprint-center-floor",
+        },
+      ],
+    },
   },
 } satisfies Record<string, ComponentDefinition>;
+
+export const componentCatalogItems: readonly ComponentDefinition[] =
+  Object.values(componentCatalog);
 
 export function placeComponent(
   definition: ComponentDefinition,
@@ -60,6 +81,7 @@ export function placeComponent(
     definitionId: definition.id,
     type: definition.type,
     name: definition.name,
+    category: definition.category,
     widthMm: definition.widthMm,
     depthMm: definition.depthMm,
     heightMm: definition.heightMm,

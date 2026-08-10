@@ -106,6 +106,15 @@ export const boothTypes: readonly BoothType[] = [
       sourceId: "booth-koje-2x2",
       scale: 1,
       unit: "mm",
+      models3d: [
+        {
+          id: "koje-2x2-master",
+          url: "/models/booths/koje-2x2/master.glb",
+          role: "master-reference",
+          unit: "mm",
+          axisSystem: "x-right-y-depth-z-up",
+        },
+      ],
     },
   },
   {

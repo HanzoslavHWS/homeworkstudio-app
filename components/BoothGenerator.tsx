@@ -5,7 +5,7 @@ import {
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { boothTypes } from "../data/booths";
-import { componentCatalog, placeComponent } from "../data/components";
+import { placeComponent } from "../data/components";
 import { fairs } from "../data/fairs";
 import {
   DEFAULT_REALIZATION_PROFILE_ID,
@@ -13,12 +13,13 @@ import {
 } from "../data/realizationProfiles";
 import type {
   Currency,
+  ComponentDefinition,
   Notes,
   PlacedComponent,
   ProjectType,
   RotationControlMode,
 } from "../domain/models";
-import { getVisiblePlanConstructionParts } from "../domain/construction";
+import { getMasterReferenceModel } from "../domain/cad3d";
 import { isObjectLocked, toggleUserLock } from "../domain/locking";
 import {
   createEmptyNotes,
@@ -39,6 +40,8 @@ import { useBoothViewport } from "../hooks/useBoothViewport";
 import { AppSidebar } from "./AppSidebar";
 import { StepHeader } from "./StepHeader";
 import { ComponentLibrary } from "./configurator/ComponentLibrary";
+import { BoothCadViewer } from "./configurator/BoothCadViewer";
+import { BoothCadPlanView } from "./configurator/BoothCadPlanView";
 import { ConfiguratorHelp } from "./configurator/ConfiguratorHelp";
 import { NotesEditor } from "./configurator/NotesEditor";
 import { CoordinateInput } from "./configurator/CoordinateInput";
@@ -56,6 +59,9 @@ export default function BoothGenerator() {
 
   const [isHelpOpen, setIsHelpOpen] =
     useState(false);
+
+  const [editorView, setEditorView] =
+    useState<"2d" | "3d">("2d");
 
   const [type, setType] =
     useState<ProjectType>("typovy");
@@ -157,6 +163,10 @@ export default function BoothGenerator() {
         selectedBoothId
     );
 
+  const selectedBoothMasterModel = getMasterReferenceModel(
+    selectedBooth?.assets,
+  );
+
   const selectedVariant =
     selectedBooth?.variants.find(
       (variant) =>
@@ -220,29 +230,6 @@ export default function BoothGenerator() {
     ? (constructionVisibility.assembly ?? selectedBooth.visible)
     : true;
 
-  const visibleOverheadParts = selectedBooth
-    ? getVisiblePlanConstructionParts(
-        selectedBooth,
-        "overhead",
-        constructionVisibility,
-        constructionAssemblyVisible,
-      )
-    : [];
-
-  function isConstructionPartVisible(partId: string) {
-    if (!selectedBooth || !constructionAssemblyVisible) {
-      return false;
-    }
-
-    const part = selectedBooth.constructionParts.find(
-      (constructionPart) => constructionPart.id === partId
-    );
-
-    return part
-      ? (constructionVisibility[partId] ?? part.visible)
-      : true;
-  }
-
   const boothViewport = useBoothViewport({
     worldWidthMm: selectedBooth?.widthMm ?? 2000,
     worldHeightMm: selectedBooth?.depthMm ?? 2000,
@@ -292,6 +279,7 @@ export default function BoothGenerator() {
     );
 
     setSelectedVariantId("");
+    setEditorView("2d");
 
     setPlacedComponents([]);
     setSelectedComponentId(null);
@@ -318,6 +306,7 @@ export default function BoothGenerator() {
     setStep(1);
 
     setType("typovy");
+    setEditorView("2d");
 
     setFairId("");
     setCompany("");
@@ -390,30 +379,16 @@ export default function BoothGenerator() {
   /* ADD COMPONENTS                                   */
   /* ================================================= */
 
-  function addCabinet() {
-    const cabinet = placeComponent(
-      componentCatalog.cabinet,
-      "cabinet-" + Date.now(),
-      1000,
-      1350
-    );
-
-    setPlacedComponents((items) => [...items, cabinet]);
-    setSelectedComponentId(cabinet.id);
-    setSelectedConstructionPartId(null);
-    setEditorMessage("");
-  }
-
-  function addChair() {
-    const chair = placeComponent(
-      componentCatalog.chair,
-      "chair-" + Date.now(),
+  function addComponent(definition: ComponentDefinition) {
+    const component = placeComponent(
+      definition,
+      `${definition.type}-${Date.now()}`,
       1000,
       1500
     );
 
-    setPlacedComponents((items) => [...items, chair]);
-    setSelectedComponentId(chair.id);
+    setPlacedComponents((items) => [...items, component]);
+    setSelectedComponentId(component.id);
     setSelectedConstructionPartId(null);
     setEditorMessage("");
   }
@@ -1949,13 +1924,28 @@ export default function BoothGenerator() {
 
                 <div className="configuratorHeaderActions">
                   <div className="viewSwitch">
-                    <button className="viewButton active">
+                    <button
+                      type="button"
+                      className={
+                        editorView === "2d"
+                          ? "viewButton active"
+                          : "viewButton"
+                      }
+                      aria-pressed={editorView === "2d"}
+                      onClick={() => setEditorView("2d")}
+                    >
                       2D
                     </button>
 
                     <button
-                      className="viewButton"
-                      disabled
+                      type="button"
+                      className={
+                        editorView === "3d"
+                          ? "viewButton active"
+                          : "viewButton"
+                      }
+                      aria-pressed={editorView === "3d"}
+                      onClick={() => setEditorView("3d")}
                     >
                       3D
                     </button>
@@ -1978,8 +1968,7 @@ export default function BoothGenerator() {
                 {/* COMPONENT LIBRARY */}
 
                 <ComponentLibrary
-                  onAddCabinet={addCabinet}
-                  onAddChair={addChair}
+                  onAddComponent={addComponent}
                 />
 
                 {/* PLAN */}
@@ -2210,86 +2199,15 @@ export default function BoothGenerator() {
                         </span>
                       </div>
 
-                      {/* FIXED CONSTRUCTION */}
+                      {/* CAD-DERIVED CONSTRUCTION PLAN */}
 
-                      {selectedBooth.id ===
-                        "koje-2x2" && constructionAssemblyVisible && (
-                        <>
-                          {isConstructionPartVisible("back-wall") && (
-                            <div
-                              className={
-                                selectedConstructionPartId === "back-wall"
-                                  ? "fixedWall backFixedWall selectedConstruction"
-                                  : "fixedWall backFixedWall"
-                              }
-                            >
-                              <span>
-                                2000
-                              </span>
-                            </div>
-                          )}
-
-                          {isConstructionPartVisible("left-wall") && (
-                            <div
-                              className={
-                                selectedConstructionPartId === "left-wall"
-                                  ? "fixedWall leftFixedWall selectedConstruction"
-                                  : "fixedWall leftFixedWall"
-                              }
-                            >
-                              <span>
-                                1000
-                              </span>
-                            </div>
-                          )}
-
-                          {isConstructionPartVisible("right-wall") && (
-                            <div
-                              className={
-                                selectedConstructionPartId === "right-wall"
-                                  ? "fixedWall rightFixedWall selectedConstruction"
-                                  : "fixedWall rightFixedWall"
-                              }
-                            >
-                              <span>
-                                1000
-                              </span>
-                            </div>
-                          )}
-
-                          <div className="cornerProfile profileTopLeft" />
-                          <div className="cornerProfile profileTopCenter" />
-                          <div className="cornerProfile profileTopRight" />
-                          <div className="cornerProfile profileLeftEnd" />
-                          <div className="cornerProfile profileRightEnd" />
-                        </>
-                      )}
-
-                      {/* OVERHEAD CONSTRUCTION */}
-
-                      {visibleOverheadParts.flatMap((part) =>
-                        (part.planRects ?? []).map((rect) => (
-                          <div
-                            key={`${part.id}-${rect.id}`}
-                            className={[
-                              "overheadConstruction",
-                              `overheadConstruction-${part.renderStyle2D}`,
-                              selectedConstructionPartId === part.id
-                                ? "selectedConstruction"
-                                : "",
-                            ]
-                              .filter(Boolean)
-                              .join(" ")}
-                            style={{
-                              left: `${(rect.x / selectedBooth.widthMm!) * 100}%`,
-                              top: `${(rect.y / selectedBooth.depthMm!) * 100}%`,
-                              width: `${(rect.width / selectedBooth.widthMm!) * 100}%`,
-                              height: `${(rect.height / selectedBooth.depthMm!) * 100}%`,
-                            }}
-                            aria-hidden="true"
-                          />
-                        )),
-                      )}
+                      <BoothCadPlanView
+                        asset={selectedBoothMasterModel}
+                        footprintWidthMm={selectedBooth.widthMm}
+                        footprintDepthMm={selectedBooth.depthMm}
+                        visible={constructionAssemblyVisible}
+                        selected={selectedConstructionPartId !== null}
+                      />
 
                       {/* COMPONENTS */}
 
@@ -2413,6 +2331,25 @@ export default function BoothGenerator() {
                     </div>
 
                   </div>
+
+                  {editorView === "3d" && (
+                    <div className="cadViewerMode">
+                      <div className="cadModeHeader">
+                        <div>
+                          <span>3D / CAD MASTER</span>
+                          <strong>{selectedBooth.name}</strong>
+                        </div>
+                        <span>REFERENČNÍ MODEL · BEZ EDITACE</span>
+                      </div>
+
+                      <BoothCadViewer
+                        asset={selectedBoothMasterModel}
+                        footprintWidthMm={selectedBooth.widthMm}
+                        footprintDepthMm={selectedBooth.depthMm}
+                        components={placedComponents}
+                      />
+                    </div>
+                  )}
                 </section>
 
                 {/* PROPERTIES */}

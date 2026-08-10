@@ -83,12 +83,28 @@ export type BoothVariant = Readonly<{
   name: string;
 }>;
 
+export type CadAxisSystem = "x-right-y-depth-z-up";
+export type CadModelRole =
+  | "master-reference"
+  | "construction-part"
+  | "component";
+
+export type CadModelAsset = Readonly<{
+  id: string;
+  url: string;
+  role: CadModelRole;
+  unit: "mm";
+  axisSystem: CadAxisSystem;
+  anchor?: "cad-origin" | "footprint-center-floor";
+}>;
+
 export type AssetReference = Readonly<{
   /** Stable external identifier used when the placeholder is replaced 1:1. */
   sourceId: string;
   revision?: string;
   cad2dUrl?: string;
   model3dUrl?: string;
+  models3d?: readonly CadModelAsset[];
   scale: 1;
   unit: "mm";
 }>;
@@ -127,6 +143,7 @@ export type ComponentDefinition = Readonly<{
   id: string;
   type: string;
   name: string;
+  category: string;
   /** Canonical nominal CAD dimensions used by editor, snap and collision. */
   widthMm: number;
   depthMm: number;
@@ -147,6 +164,7 @@ export type PlacedComponent = Notes & {
   definitionId: string;
   type: string;
   name: string;
+  category: string;
   /** Instance CAD geometry; realization profiles never mutate these values. */
   widthMm: number;
   depthMm: number;
