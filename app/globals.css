@@ -2053,6 +2053,7 @@ select:focus {
 
 .freeRotation button,
 .stepRotation button,
+.rotationModeSwitch button,
 .navigatorActions button {
   min-height: 31px;
 
@@ -2071,6 +2072,7 @@ select:focus {
 
 .freeRotation button:hover,
 .stepRotation button:hover,
+.rotationModeSwitch button:hover,
 .navigatorActions button:hover {
   border-color: #888b8e;
 }
@@ -2113,6 +2115,46 @@ select:focus {
 
   background: #18191b;
   color: white;
+}
+
+.quickAngles {
+  grid-template-columns:
+    repeat(8, minmax(28px, 1fr));
+
+  margin-bottom: 6px;
+}
+
+.rotationModeSwitch {
+  display: flex;
+
+  gap: 5px;
+
+  margin-bottom: 6px;
+}
+
+.rotationModeSwitch button {
+  min-height: 25px;
+
+  padding: 0 9px;
+}
+
+.rotationModeSwitch button.active {
+  border-color: #18191b;
+
+  background: #18191b;
+  color: white;
+}
+
+.rotationLocked {
+  padding: 8px 10px;
+
+  border: 1px solid #e1e2e3;
+
+  border-radius: 6px;
+
+  color: #929598;
+
+  font-size: 8px;
 }
 
 .navigatorActions {
@@ -2275,6 +2317,20 @@ select:focus {
 
   font-size: 7px;
   font-weight: 700;
+}
+
+.boothCanvas.constructionSelected {
+  box-shadow:
+    0 0 0 3px rgba(24, 25, 27, 0.2),
+    0 18px 60px rgba(0, 0, 0, 0.07);
+}
+
+.fixedWall.selectedConstruction {
+  z-index: 9;
+
+  box-shadow:
+    inset 0 0 0 2px white,
+    0 0 0 2px #18191b;
 }
 
 .backFixedWall {
@@ -2640,6 +2696,67 @@ select:focus {
   padding: 17px;
 
   border-bottom: 1px solid #ededee;
+}
+
+.scenePanel {
+  padding: 17px;
+
+  border-bottom: 1px solid #ededee;
+}
+
+.sceneGroup {
+  display: flex;
+  flex-direction: column;
+
+  gap: 4px;
+
+  margin-top: 11px;
+}
+
+.sceneGroup > strong {
+  margin-bottom: 2px;
+
+  color: #484b4e;
+
+  font-size: 9px;
+}
+
+.sceneItem {
+  min-height: 28px;
+
+  padding: 5px 8px;
+
+  border: 1px solid transparent;
+
+  border-radius: 5px;
+
+  background: #f7f8f8;
+  color: #777b7e;
+
+  font-size: 8px;
+
+  text-align: left;
+
+  cursor: pointer;
+}
+
+.sceneItem:hover {
+  border-color: #cfd1d2;
+}
+
+.sceneItem.active {
+  border-color: #18191b;
+
+  background: #18191b;
+  color: white;
+}
+
+.sceneEmpty {
+  padding: 6px 8px;
+
+  color: #a0a3a6;
+
+  font-size: 8px;
 }
 
 .propertySectionTitle {

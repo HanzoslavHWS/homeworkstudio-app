@@ -1,0 +1,141 @@
+import type { BoothType, CollisionRect } from "../domain/models.ts";
+import { pricingPolicyFor } from "../domain/pricing.ts";
+
+const lockedConstructionRotation = {
+  defaultMode: "snap",
+  snapStep: 90,
+  quickAngles: [0, 90, 180, 270],
+  allowFreeRotation: false,
+  locked: true,
+} as const;
+
+export const koje2x2CollisionWalls: readonly CollisionRect[] = [
+  { id: "back-wall", x: 0, y: 0, width: 2000, height: 80 },
+  { id: "left-wall", x: 0, y: 0, width: 80, height: 1000 },
+  { id: "right-wall", x: 1920, y: 0, width: 80, height: 1000 },
+];
+
+export const boothTypes: readonly BoothType[] = [
+  {
+    id: "koje-2x2",
+    code: "K2",
+    name: "Koje 2 × 2 m",
+    description: "Základní otevřená veletržní koje.",
+    projectType: "typovy",
+    size: "2 × 2 m",
+    area: "4 m²",
+    widthMm: 2000,
+    depthMm: 2000,
+    heightMm: 2500,
+    collarHeightMm: 300,
+    profileWidthMm: 80,
+    configReady: true,
+    variants: [],
+    constructionParts: [
+      {
+        id: "back-wall",
+        name: "Zadní stěna",
+        collisionObstacleId: "back-wall",
+        rotation: lockedConstructionRotation,
+      },
+      {
+        id: "left-wall",
+        name: "Levý bok",
+        collisionObstacleId: "left-wall",
+        rotation: lockedConstructionRotation,
+      },
+      {
+        id: "right-wall",
+        name: "Pravý bok",
+        collisionObstacleId: "right-wall",
+        rotation: lockedConstructionRotation,
+      },
+      {
+        id: "collar",
+        name: "Límec",
+        rotation: lockedConstructionRotation,
+      },
+    ],
+    collisionObstacles: koje2x2CollisionWalls,
+    pricing: pricingPolicyFor("typovy"),
+    assets: {
+      sourceId: "booth-koje-2x2",
+      scale: 1,
+      unit: "mm",
+    },
+  },
+  {
+    id: "koje-3x2",
+    code: "K3",
+    name: "Koje 3 × 2 m",
+    description: "Základní otevřená veletržní koje.",
+    projectType: "typovy",
+    size: "3 × 2 m",
+    area: "6 m²",
+    widthMm: null,
+    depthMm: null,
+    heightMm: null,
+    collarHeightMm: null,
+    profileWidthMm: null,
+    configReady: false,
+    variants: [],
+    constructionParts: [],
+    collisionObstacles: [],
+    pricing: pricingPolicyFor("typovy"),
+  },
+  {
+    id: "t4",
+    code: "T4",
+    name: "Typový stánek T4",
+    description: "Typová konstrukce T4 se čtyřmi variantami.",
+    projectType: "typovy",
+    size: "T4",
+    area: "—",
+    widthMm: null,
+    depthMm: null,
+    heightMm: null,
+    collarHeightMm: null,
+    profileWidthMm: null,
+    configReady: false,
+    variants: [1, 2, 3, 4].map((number) => ({
+      id: `t4-v${number}`,
+      name: `Varianta ${number}`,
+    })),
+    constructionParts: [],
+    collisionObstacles: [],
+    pricing: pricingPolicyFor("typovy"),
+  },
+  {
+    id: "t6",
+    code: "T6",
+    name: "Typový stánek T6",
+    description: "Typová konstrukce T6 se čtyřmi variantami.",
+    projectType: "typovy",
+    size: "T6",
+    area: "—",
+    widthMm: null,
+    depthMm: null,
+    heightMm: null,
+    collarHeightMm: null,
+    profileWidthMm: null,
+    configReady: false,
+    variants: [1, 2, 3, 4].map((number) => ({
+      id: `t6-v${number}`,
+      name: `Varianta ${number}`,
+    })),
+    constructionParts: [],
+    collisionObstacles: [],
+    pricing: pricingPolicyFor("typovy"),
+  },
+];
+
+/** Base shape for future atypical booths; dimensions and obstacles are project data. */
+export function createCustomBooth(
+  booth: Omit<BoothType, "projectType" | "pricing">,
+): BoothType {
+  return {
+    ...booth,
+    projectType: "individualni",
+    pricing: pricingPolicyFor("individualni"),
+  };
+}

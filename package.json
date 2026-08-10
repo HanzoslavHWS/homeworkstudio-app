@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "node --no-warnings --test tests/geometry.test.ts tests/pricing.test.ts",
+    "typecheck": "tsc --noEmit --incremental false",
     "dev": "next dev",
     "build": "next build",
     "start": "next start"
