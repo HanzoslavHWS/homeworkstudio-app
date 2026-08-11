@@ -3,6 +3,87 @@ export type Currency = "CZK" | "EUR";
 export type RotationControlMode = "free" | "snap";
 export type PlanViewType = "ground" | "overhead";
 export type PlanRenderStyle2D = "solid" | "dashed" | "hatched";
+export type SceneLayer =
+  | "furniture"
+  | "electrical"
+  | "water"
+  | "waste"
+  | "annotations";
+
+export type MaterialRole =
+  | "OCTANORM_WHITE"
+  | "OCTANORM_BLACK"
+  | "PANEL_WHITE"
+  | "PRINT_SURFACE"
+  | "METAL"
+  | "FABRIC"
+  | "CARPET";
+
+export type NominalDimensions = Readonly<{
+  widthMm: number;
+  depthMm: number;
+  heightMm: number;
+}>;
+
+export type FinishVariant = Readonly<{
+  id: string;
+  code: string;
+  name: string;
+  swatchColor?: string;
+  textureUrl?: string;
+  materialRole: MaterialRole;
+  active: boolean;
+  pricingUnit?: "piece" | "square-meter" | "fixed";
+  pricingEntries?: readonly PricingEntry[];
+}>;
+
+export type CatalogCategory = Readonly<{
+  id: string;
+  name: string;
+  active: boolean;
+  order?: number;
+}>;
+
+export type PartRole =
+  | "frame"
+  | "panel"
+  | "print_surface"
+  | "post"
+  | "fascia"
+  | "furniture_body";
+
+export type PrintSurface = Readonly<{
+  id: string;
+  name: string;
+  widthMm: number;
+  heightMm: number;
+  nodeName?: string;
+  materialRole?: MaterialRole;
+  orientation?: "portrait" | "landscape" | "custom";
+  active: boolean;
+  allowanceLinearMeters?: number;
+}>;
+
+export type BoothPackageItem = Readonly<{
+  id: string;
+  kind: "floor-finish" | "construction" | "print-allowance";
+  name: string;
+  quantity: number;
+  unit: "ks" | "m²" | "bm";
+  includedInBasePrice: true;
+  catalogItemId?: string;
+  finishId?: string;
+  printSurfaceId?: string;
+}>;
+
+export type PartDefinition = Readonly<{
+  id: string;
+  nodeName: string;
+  role: PartRole;
+  printable: boolean;
+  materialRole?: MaterialRole;
+  printSurfaceId?: string;
+}>;
 
 export type RealizationProfile = Readonly<{
   id: string;
@@ -81,6 +162,8 @@ export type Fair = Readonly<{
 export type BoothVariant = Readonly<{
   id: string;
   name: string;
+  configurationBoothId?: string;
+  assetSourceBoothId?: string;
 }>;
 
 export type CadAxisSystem = "x-right-y-depth-z-up";
@@ -126,6 +209,8 @@ export type BoothType = Readonly<{
   widthMm: number | null;
   depthMm: number | null;
   heightMm: number | null;
+  nominalDimensions?: NominalDimensions;
+  cadDimensions?: ComponentDimensions;
   collarHeightMm: number | null;
   profileWidthMm: number | null;
   configReady: boolean;
@@ -137,13 +222,64 @@ export type BoothType = Readonly<{
   collisionObstacles: readonly CollisionRect[];
   pricing: ConstructionPricingPolicy;
   assets?: AssetReference;
+  internalCode?: string;
+  thumbnailUrl?: string;
+  active?: boolean;
+  defaultViews?: readonly CameraViewDefinition[];
+  pricingEntries?: readonly PricingEntry[];
+  parts?: readonly BoothPartReference[];
+  category?: string;
+  photoUrl?: string;
+  modelUrl?: string;
+  sketchupUrl?: string;
+  printable?: boolean;
+  printSurfaces?: readonly PrintSurface[];
+  partDefinitions?: readonly PartDefinition[];
+  finishVariants?: readonly FinishVariant[];
+  carpetVariants?: readonly FinishVariant[];
+  packageContents?: readonly BoothPackageItem[];
+  defaultCarpetFinishId?: string;
+  graphicsRequired?: boolean;
+  vatRatePercent?: number;
+}>;
+
+export type Vector3Tuple = readonly [number, number, number];
+
+export type CameraViewDefinition = Readonly<{
+  id: string;
+  name: string;
+  position: Vector3Tuple;
+  target: Vector3Tuple;
+  fov?: number;
+}>;
+
+export type BoothPartReference = Readonly<{
+  id: string;
+  catalogItemId: string;
+  quantity: number;
+}>;
+
+export type PricingEntry = Readonly<{
+  id: string;
+  itemId: string;
+  exhibitionId?: string;
+  realizationCompanyId?: string;
+  priceListId?: string;
+  currency: Currency;
+  salePrice?: number;
+  purchasePrice?: number;
+  validFrom?: string;
+  validTo?: string;
 }>;
 
 export type ComponentDefinition = Readonly<{
   id: string;
+  internalCode?: string;
+  officialName?: string;
   type: string;
   name: string;
   category: string;
+  description?: string;
   /** Canonical nominal CAD dimensions used by editor, snap and collision. */
   widthMm: number;
   depthMm: number;
@@ -157,6 +293,28 @@ export type ComponentDefinition = Readonly<{
   frontDirectionDeg?: number;
   sceneLabel: string;
   assets?: AssetReference;
+  modelUrl?: string;
+  thumbnailUrl?: string;
+  photoUrl?: string;
+  sketchupUrl?: string;
+  footprint2D?: Readonly<{
+    shape: "rectangle" | "circle" | "symbol";
+    symbol?: string;
+  }>;
+  showIn2D?: boolean;
+  showIn3D?: boolean;
+  sceneLayer?: SceneLayer;
+  printable?: boolean;
+  printWidthMm?: number;
+  printHeightMm?: number;
+  unit?: string;
+  active?: boolean;
+  pricingEntries?: readonly PricingEntry[];
+  printSurfaces?: readonly PrintSurface[];
+  partDefinitions?: readonly PartDefinition[];
+  finishVariants?: readonly FinishVariant[];
+  catalogItemType?: "physical" | "service";
+  vatRatePercent?: number;
 }>;
 
 export type PlacedComponent = Notes & {
@@ -182,6 +340,9 @@ export type PlacedComponent = Notes & {
   frontDirectionDeg?: number;
   sceneLabel: string;
   assets?: AssetReference;
+  showIn2D: boolean;
+  showIn3D: boolean;
+  sceneLayer: SceneLayer;
 };
 
 export type Placement = Readonly<{

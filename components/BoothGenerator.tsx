@@ -1,12 +1,15 @@
 "use client";
 
 import {
+  useEffect,
+  useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import { boothTypes } from "../data/booths";
-import { placeComponent } from "../data/components";
+import { componentCatalogItems, placeComponent } from "../data/components";
 import { fairs } from "../data/fairs";
+import { exhibitions, priceLists } from "../data/organizations";
 import {
   DEFAULT_REALIZATION_PROFILE_ID,
   realizationProfiles,
@@ -19,6 +22,44 @@ import type {
   ProjectType,
   RotationControlMode,
 } from "../domain/models";
+import type {
+  GraphicFileReference,
+  GeneratedPlanOutput,
+  ImportedOrder,
+  CommunicationLanguage,
+  ProjectMode,
+  ProjectRecord,
+  ProjectStage,
+  ProjectStatus,
+  SavedCameraView,
+  TechnicalRequirements,
+  VisualizationItem,
+} from "../domain/project";
+import {
+  createDefaultTechnicalRequirements,
+  createProjectRecord,
+} from "../domain/project";
+import { calculateOrderInventory } from "../domain/order";
+import { LocalProjectRepository, type ProjectRepository } from "../domain/repository";
+import { LocalEventRepository, type EventRepository } from "../domain/eventRepository";
+import { saveCameraView } from "../domain/workflow";
+import type { Exhibition, PriceList } from "../domain/organizations";
+import {
+  carpetFinishVariants,
+  constructionFinishVariants,
+  selectedFinish,
+} from "../domain/finishes";
+import {
+  createCustomDimension,
+  dimensionDisplayLabel,
+  type CustomDimension,
+  type ProjectAnnotation,
+} from "../domain/spatialAnnotations";
+import {
+  planView180ToWorld,
+  worldRotationToPlanView180,
+  worldToPlanView180,
+} from "../domain/planView";
 import { getMasterReferenceModel } from "../domain/cad3d";
 import { isObjectLocked, toggleUserLock } from "../domain/locking";
 import {
@@ -49,16 +90,87 @@ import { PricingBar } from "./configurator/PricingBar";
 import { RotationNavigator } from "./configurator/RotationNavigator";
 import { ScenePanel } from "./configurator/ScenePanel";
 import { ViewportToolbar } from "./configurator/ViewportToolbar";
+import { OrderImportPanel } from "./workflow/OrderImportPanel";
+import { TechnicalRequirementsEditor } from "./workflow/TechnicalRequirementsEditor";
+import {
+  BoothCatalogPage,
+  ComponentCatalogPage,
+  ProjectsPage,
+} from "./workflow/AdminPages";
+import {
+  ExportStep,
+  SummaryStep,
+  VisualizationStep,
+} from "./workflow/WorkflowSteps";
+import {
+  EventLogo,
+  EventsPage,
+  PriceListsPage,
+} from "./workflow/CatalogManagementPages";
 
 export default function BoothGenerator() {
+  const repositoryRef = useRef<ProjectRepository | null>(null);
+  const eventRepositoryRef = useRef<EventRepository | null>(null);
+  const [workspaceSection, setWorkspaceSection] = useState<
+    "project" | "projects" | "booths" | "components" | "events" | "priceLists"
+  >("project");
+  const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
+  const [eventsHydrated, setEventsHydrated] = useState(false);
+  const [eventDirty, setEventDirty] = useState(false);
+  const [adminPriceLists, setAdminPriceLists] = useState<PriceList[]>([...priceLists]);
   const [step, setStep] =
     useState(1);
+
+  const [projectId, setProjectId] = useState("");
+  const [projectName, setProjectName] = useState("Nový projekt");
+  const [boothNumber, setBoothNumber] = useState("");
+  const [projectMode, setProjectMode] = useState<ProjectMode>("proposal");
+  const [projectStatus, setProjectStatus] = useState<ProjectStatus>("draft");
+  const [projectStage, setProjectStage] = useState<ProjectStage>("quote");
+  const [communicationLanguage, setCommunicationLanguage] =
+    useState<CommunicationLanguage>("cs");
+  const [waitingForCustomer, setWaitingForCustomer] = useState(false);
+  const [requiresAction, setRequiresAction] = useState(false);
+  const [projectCreatedAt, setProjectCreatedAt] = useState("");
+  const [technicalRequirements, setTechnicalRequirements] =
+    useState<TechnicalRequirements>(() => createDefaultTechnicalRequirements());
+  const [importedOrder, setImportedOrder] = useState<ImportedOrder | undefined>();
+  const [savedViews, setSavedViews] = useState<SavedCameraView[]>([]);
+  const [visualizations, setVisualizations] = useState<VisualizationItem[]>([]);
+  const [generatedPlanOutputs, setGeneratedPlanOutputs] =
+    useState<GeneratedPlanOutput[]>([]);
+  const [selectedOutputIds, setSelectedOutputIds] = useState<string[]>([]);
+  const [selectedEventDocumentIds, setSelectedEventDocumentIds] =
+    useState<string[]>([]);
+  const [selectedVisualizationViewIds, setSelectedVisualizationViewIds] = useState<string[]>([]);
+  const [visualizationPurpose, setVisualizationPurpose] = useState<"working" | "presentation">("working");
+  const [visualization2DLayers, setVisualization2DLayers] = useState<string[]>(["booth", "furniture", "annotations"]);
+  const [graphicsFiles, setGraphicsFiles] = useState<GraphicFileReference[]>([]);
+  const [carpetFinishId, setCarpetFinishId] = useState("carpet-grey");
+  const [constructionFinishId, setConstructionFinishId] =
+    useState("construction-white");
+  const [annotations, setAnnotations] = useState<ProjectAnnotation[]>([]);
+  const [customDimensions, setCustomDimensions] = useState<CustomDimension[]>([]);
+  const [editorTool, setEditorTool] =
+    useState<"select" | "annotation" | "measure">("select");
+  const [pendingMeasurePoint, setPendingMeasurePoint] = useState<{
+    x: number;
+    y: number;
+  } | null>(null);
+  const [measureHoverPoint, setMeasureHoverPoint] = useState<{ x: number; y: number } | null>(null);
+  const [draggingAnnotationId, setDraggingAnnotationId] =
+    useState<string | null>(null);
+  const [showPlanDimensions, setShowPlanDimensions] = useState(false);
+  const temporaryGraphicFilesRef = useRef(new Map<string, File>());
+  const [savedProjects, setSavedProjects] = useState<ProjectRecord[]>([]);
+  const [saveStatus, setSaveStatus] = useState("");
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] =
     useState(false);
 
   const [isHelpOpen, setIsHelpOpen] =
     useState(false);
+  const [isProjectInspectorOpen, setIsProjectInspectorOpen] = useState(false);
 
   const [editorView, setEditorView] =
     useState<"2d" | "3d">("2d");
@@ -72,8 +184,10 @@ export default function BoothGenerator() {
   const [company, setCompany] =
     useState("");
 
-  const [contact, setContact] =
+  const [contactName, setContactName] =
     useState("");
+  const [contactPhone, setContactPhone] = useState("");
+  const [contactEmail, setContactEmail] = useState("");
 
   const [currency, setCurrency] =
     useState<Currency>("CZK");
@@ -138,15 +252,69 @@ export default function BoothGenerator() {
     setEditorMessage,
   ] = useState("");
 
+  useEffect(() => {
+    const repository = new LocalProjectRepository(window.localStorage);
+    repositoryRef.current = repository;
+    repository.list().then((projects) => setSavedProjects([...projects]));
+    const eventRepository = new LocalEventRepository(window.localStorage, exhibitions);
+    eventRepositoryRef.current = eventRepository;
+    eventRepository.list().then((events) => {
+      setAdminEvents([...events]);
+      setEventsHydrated(true);
+    });
+  }, []);
+
+  useEffect(() => {
+    const cancelTool = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || editorTool === "select") return;
+      setEditorTool("select");
+      setPendingMeasurePoint(null);
+      setMeasureHoverPoint(null);
+      setEditorMessage("");
+    };
+    window.addEventListener("keydown", cancelTool);
+    return () => window.removeEventListener("keydown", cancelTool);
+  }, [editorTool]);
+
+  function confirmLeaveEvent(): boolean {
+    return !eventDirty || window.confirm("Máte neuložené změny. Opravdu chcete pokračovat?");
+  }
+
+  function navigateWorkspace(section: typeof workspaceSection) {
+    if (workspaceSection === "events" && section !== "events" && !confirmLeaveEvent()) return;
+    if (workspaceSection === "events" && section !== "events" && eventDirty) {
+      eventRepositoryRef.current?.list().then((events) => setAdminEvents([...events]));
+      setEventDirty(false);
+    }
+    setWorkspaceSection(section);
+    if (section === "projects") {
+      repositoryRef.current?.list().then((projects) => setSavedProjects([...projects]));
+    }
+  }
+
   /* ================================================= */
   /* DERIVED                                          */
   /* ================================================= */
 
+  const selectedExhibition = adminEvents.find((event) => event.id === fairId);
   const selectedFair =
-    fairs.find(
-      (fair) =>
-        fair.id === fairId
-    );
+    fairs.find((fair) => fair.id === fairId) ??
+    (selectedExhibition
+      ? {
+          id: selectedExhibition.id,
+          name: selectedExhibition.name,
+          priceList:
+            adminPriceLists.find(
+              (list) => list.id === selectedExhibition.defaultPriceListId,
+            )?.name ??
+            adminPriceLists.find((list) =>
+              selectedExhibition.priceListIds.includes(list.id),
+            )?.name ??
+            "Bez přiřazeného ceníku",
+          defaultCurrency: selectedExhibition.defaultCurrency,
+          logo: selectedExhibition.logoUrl,
+        }
+      : undefined);
 
   const selectedRealizationProfile = realizationProfiles.find(
     (profile) => profile.id === realizationProfileId,
@@ -247,6 +415,136 @@ export default function BoothGenerator() {
         )
     );
 
+  const orderInventory = calculateOrderInventory(
+    importedOrder,
+    placedComponents,
+  );
+  const selectedCarpetFinish = selectedFinish(
+    selectedBooth?.carpetVariants ?? carpetFinishVariants,
+    carpetFinishId,
+  );
+  const selectedConstructionFinish = selectedFinish(
+    selectedBooth?.finishVariants ?? constructionFinishVariants,
+    constructionFinishId,
+  );
+
+  const workflowStep = step <= 2 ? 1 : step - 1;
+
+  const workflowProject = {
+    id: projectId,
+    name: projectName,
+    fairName: selectedFair?.name ?? "—",
+    event: selectedExhibition,
+    company,
+    contact: { name: contactName, phone: contactPhone, email: contactEmail },
+    boothNumber,
+    mode: projectMode,
+    stage: projectStage,
+    communicationLanguage,
+    waitingForCustomer,
+    requiresAction,
+    realizationName: selectedRealizationProfile?.name ?? "—",
+    currency,
+    booth: selectedBooth,
+    sceneObjects: placedComponents,
+    requirements: technicalRequirements,
+    order: importedOrder,
+    inventory: orderInventory,
+    savedViews,
+    visualizations,
+    generatedPlanOutputs,
+    selectedOutputIds,
+    selectedEventDocumentIds,
+    selectedVisualizationViewIds,
+    visualizationPurpose,
+    visualization2DLayers,
+    graphicsFiles,
+    annotations,
+    customDimensions,
+    carpetFinishId,
+    constructionFinishId,
+    internalNote: projectNotes.internalNote,
+  };
+
+  function addTemporaryGraphics(files: FileList) {
+    const additions: GraphicFileReference[] = [];
+    Array.from(files).forEach((file) => {
+      const id = `graphic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      temporaryGraphicFilesRef.current.set(id, file);
+      additions.push({
+        id,
+        name: file.name,
+        size: file.size,
+        mimeType: file.type,
+        availability: "temporary-session",
+      });
+    });
+    setGraphicsFiles((current) => [...current, ...additions]);
+  }
+
+  function removeTemporaryGraphic(id: string) {
+    temporaryGraphicFilesRef.current.delete(id);
+    setGraphicsFiles((current) => current.filter((file) => file.id !== id));
+  }
+
+  function pointFromPlanPointer(
+    event: Pick<ReactPointerEvent<HTMLElement>, "clientX" | "clientY">,
+    element: HTMLElement,
+  ) {
+    if (!selectedBooth?.widthMm || !selectedBooth.depthMm) return null;
+    const canvas = element.closest(".boothCanvas") as HTMLElement | null;
+    if (!canvas) return null;
+    const rect = canvas.getBoundingClientRect();
+    const display = {
+      x: Math.max(0, Math.min(selectedBooth.widthMm, ((event.clientX - rect.left) / rect.width) * selectedBooth.widthMm)),
+      y: Math.max(0, Math.min(selectedBooth.depthMm, ((event.clientY - rect.top) / rect.height) * selectedBooth.depthMm)),
+    };
+    const world = planView180ToWorld(display, selectedBooth.widthMm, selectedBooth.depthMm);
+    return { x: Math.round(world.x / 40) * 40, y: Math.round(world.y / 40) * 40 };
+  }
+
+  function handlePlanToolPointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (editorTool === "select") return;
+    if ((event.target as HTMLElement).closest(".placedComponent,.planAnnotation,.customDimensionLabel")) return;
+    const point = pointFromPlanPointer(event, event.currentTarget);
+    if (!point) return;
+    if (editorTool === "annotation") {
+      const text = window.prompt("Text poznámky");
+      if (text?.trim()) {
+        setAnnotations((items) => [...items, { id: `annotation-${Date.now()}`, text: text.trim(), position: point, visible: true, textSize: "medium", createdAt: new Date().toISOString() }]);
+      }
+      setEditorTool("select");
+      return;
+    }
+    if (!pendingMeasurePoint) {
+      setPendingMeasurePoint(point);
+      setMeasureHoverPoint(point);
+      setEditorMessage("Klikněte na druhý bod");
+    } else {
+      setCustomDimensions((items) => [...items, createCustomDimension(`dimension-${Date.now()}`, pendingMeasurePoint, point)]);
+      setPendingMeasurePoint(null);
+      setMeasureHoverPoint(null);
+      setEditorTool("select");
+      setEditorMessage("");
+    }
+  }
+
+  function handlePlanToolPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (editorTool !== "measure") return;
+    const point = pointFromPlanPointer(event, event.currentTarget);
+    if (point) setMeasureHoverPoint(point);
+  }
+
+  function handleAnnotationPointerMove(
+    event: ReactPointerEvent<HTMLElement>,
+    annotationId: string,
+  ) {
+    if (draggingAnnotationId !== annotationId) return;
+    const point = pointFromPlanPointer(event, event.currentTarget);
+    if (!point) return;
+    setAnnotations((items) => items.map((item) => item.id === annotationId ? { ...item, position: point } : item));
+  }
+
   /* ================================================= */
   /* PROJECT                                          */
   /* ================================================= */
@@ -256,16 +554,15 @@ export default function BoothGenerator() {
   ) {
     setFairId(id);
 
-    const fair =
-      fairs.find(
-        (item) =>
-          item.id === id
-      );
+    const fair = adminEvents.find((item) => item.id === id);
 
     if (fair) {
       setCurrency(
         fair.defaultCurrency
       );
+      if (fair.realizationCompanyId) {
+        setRealizationProfileId(fair.realizationCompanyId);
+      }
     } else {
       setCurrency("CZK");
     }
@@ -274,6 +571,7 @@ export default function BoothGenerator() {
   function handleBoothSelect(
     boothId: string
   ) {
+    const booth = boothTypes.find((item) => item.id === boothId);
     setSelectedBoothId(
       boothId
     );
@@ -286,8 +584,21 @@ export default function BoothGenerator() {
     setSelectedConstructionPartId(null);
     setConstructionUserLocks({});
     setConstructionVisibility({});
+    setCarpetFinishId(
+      booth?.defaultCarpetFinishId ??
+      (booth?.carpetVariants?.some((finish) => finish.id === "carpet-grey")
+        ? "carpet-grey"
+        : "none")
+    );
+    setConstructionFinishId("construction-white");
     setAssemblyNotes(createEmptyNotes());
     setConstructionNotes({});
+    if (booth?.graphicsRequired) {
+      setTechnicalRequirements((requirements) => ({
+        ...requirements,
+        graphics: { status: "inquire", note: "Požadujeme zaslání grafických / tiskových dat pro límec." },
+      }));
+    }
 
     setEditorMessage("");
   }
@@ -303,14 +614,52 @@ export default function BoothGenerator() {
   }
 
   function startNewProject() {
+    if (workspaceSection === "events" && !confirmLeaveEvent()) return;
+    if (workspaceSection === "events" && eventDirty) {
+      eventRepositoryRef.current?.list().then((events) => setAdminEvents([...events]));
+      setEventDirty(false);
+    }
+    setWorkspaceSection("project");
     setStep(1);
+
+    setProjectId("");
+    setProjectName("Nový projekt");
+    setBoothNumber("");
+    setProjectMode("proposal");
+    setProjectStatus("draft");
+    setProjectStage("quote");
+    setCommunicationLanguage("cs");
+    setWaitingForCustomer(false);
+    setRequiresAction(false);
+    setProjectCreatedAt("");
+    setTechnicalRequirements(createDefaultTechnicalRequirements());
+    setImportedOrder(undefined);
+    setSavedViews([]);
+    setVisualizations([]);
+    setGeneratedPlanOutputs([]);
+    setSelectedOutputIds([]);
+    setSelectedEventDocumentIds([]);
+    setSelectedVisualizationViewIds([]);
+    setVisualizationPurpose("working");
+    setVisualization2DLayers(["booth", "furniture", "annotations"]);
+    setGraphicsFiles([]);
+    setCarpetFinishId("carpet-grey");
+    setConstructionFinishId("construction-white");
+    setAnnotations([]);
+    setCustomDimensions([]);
+    setEditorTool("select");
+    setPendingMeasurePoint(null);
+    temporaryGraphicFilesRef.current.clear();
+    setSaveStatus("");
 
     setType("typovy");
     setEditorView("2d");
 
     setFairId("");
     setCompany("");
-    setContact("");
+    setContactName("");
+    setContactPhone("");
+    setContactEmail("");
 
     setCurrency("CZK");
     setRealizationProfileId(DEFAULT_REALIZATION_PROFILE_ID);
@@ -331,6 +680,136 @@ export default function BoothGenerator() {
     setDraggingComponentId(null);
 
     setEditorMessage("");
+  }
+
+  function projectSnapshot(id = projectId || crypto.randomUUID()): ProjectRecord {
+    const now = new Date().toISOString();
+    return createProjectRecord({
+      id,
+      name: projectName,
+      fairId,
+      company,
+      contact: {
+        name: contactName,
+        phone: contactPhone,
+        email: contactEmail,
+      },
+      boothNumber,
+      boothId: selectedBoothId,
+      variantId: selectedVariantId,
+      realizationProfileId,
+      communicationLanguage,
+      currency,
+      createdAt: projectCreatedAt || now,
+      modifiedAt: now,
+      status: projectStatus,
+      stage: projectStage,
+      waitingForCustomer,
+      requiresAction,
+      mode: projectMode,
+      projectType: type,
+      notes: projectNotes,
+      assemblyNotes,
+      constructionNotes,
+      constructionUserLocks,
+      constructionVisibility,
+      technicalRequirements,
+      importedOrder,
+      sceneObjects: placedComponents,
+      savedViews,
+      visualizations,
+      generatedPlanOutputs,
+      selectedOutputIds,
+      selectedEventDocumentIds,
+      selectedVisualizationViewIds,
+      visualizationPurpose,
+      visualization2DLayers,
+      graphicsFiles,
+      carpetFinishId,
+      constructionFinishId,
+      annotations,
+      customDimensions,
+    }, now);
+  }
+
+  async function saveProject() {
+    const repository = repositoryRef.current;
+    if (!repository) return;
+    const snapshot = projectSnapshot();
+    setProjectId(snapshot.id);
+    setProjectCreatedAt(snapshot.createdAt);
+    await repository.save(snapshot);
+    setSavedProjects([...(await repository.list())]);
+    setSaveStatus("Uloženo");
+    window.setTimeout(() => setSaveStatus(""), 1400);
+  }
+
+  function openProject(project: ProjectRecord) {
+    setProjectId(project.id);
+    setProjectName(project.name);
+    setFairId(project.fairId);
+    setCompany(project.company);
+    setContactName(project.contact.name);
+    setContactPhone(project.contact.phone);
+    setContactEmail(project.contact.email);
+    setBoothNumber(project.boothNumber);
+    setSelectedBoothId(project.boothId);
+    setSelectedVariantId(project.variantId);
+    setRealizationProfileId(project.realizationProfileId);
+    setCommunicationLanguage(project.communicationLanguage);
+    setCurrency(project.currency);
+    setProjectCreatedAt(project.createdAt);
+    setProjectStatus(project.status);
+    setProjectStage(project.stage);
+    setWaitingForCustomer(project.waitingForCustomer);
+    setRequiresAction(project.requiresAction);
+    setProjectMode(project.mode);
+    setType(project.projectType);
+    setProjectNotes(project.notes);
+    setAssemblyNotes(project.assemblyNotes);
+    setConstructionNotes({ ...project.constructionNotes });
+    setConstructionUserLocks({ ...project.constructionUserLocks });
+    setConstructionVisibility({ ...project.constructionVisibility });
+    setTechnicalRequirements(project.technicalRequirements);
+    setImportedOrder(project.importedOrder);
+    setPlacedComponents([...project.sceneObjects]);
+    setSavedViews([...project.savedViews]);
+    setVisualizations([...project.visualizations]);
+    setGeneratedPlanOutputs([...project.generatedPlanOutputs]);
+    setSelectedOutputIds([...project.selectedOutputIds]);
+    setSelectedEventDocumentIds([...project.selectedEventDocumentIds]);
+    setSelectedVisualizationViewIds([...project.selectedVisualizationViewIds]);
+    setVisualizationPurpose(project.visualizationPurpose);
+    setVisualization2DLayers([...project.visualization2DLayers]);
+    setGraphicsFiles([...project.graphicsFiles]);
+    setCarpetFinishId(project.carpetFinishId);
+    setConstructionFinishId(project.constructionFinishId);
+    setAnnotations([...project.annotations]);
+    setCustomDimensions([...project.customDimensions]);
+    temporaryGraphicFilesRef.current.clear();
+    setSelectedComponentId(null);
+    setSelectedConstructionPartId(null);
+    setWorkspaceSection("project");
+    setStep(project.boothId ? 3 : 1);
+  }
+
+  async function deleteProject(projectToDeleteId: string) {
+    const repository = repositoryRef.current;
+    if (!repository) return;
+    await repository.delete(projectToDeleteId);
+    setSavedProjects([...(await repository.list())]);
+  }
+
+  function selectWorkflowStep(target: number) {
+    if (workspaceSection === "events" && !confirmLeaveEvent()) return;
+    if (workspaceSection === "events" && eventDirty) {
+      eventRepositoryRef.current?.list().then((events) => setAdminEvents([...events]));
+      setEventDirty(false);
+    }
+    setWorkspaceSection("project");
+    if (target === 1) setStep(1);
+    else if (target === 2) setStep(selectedBooth?.configReady ? 3 : 2);
+    else setStep(target + 1);
   }
 
   /* ================================================= */
@@ -403,7 +882,8 @@ export default function BoothGenerator() {
   ) {
     if (
       event.button !== 0 ||
-      boothViewport.isSpacePressed
+      boothViewport.isSpacePressed ||
+      editorTool !== "select"
     ) {
       return;
     }
@@ -465,14 +945,20 @@ export default function BoothGenerator() {
       return;
     }
 
-    const pointer = boothViewport.clientToWorld(
+    const displayPointer = boothViewport.clientToWorld(
       event.clientX,
       event.clientY
     );
 
-    if (!pointer) {
+    if (!displayPointer) {
       return;
     }
+
+    const pointer = planView180ToWorld(
+      displayPointer,
+      selectedBooth.widthMm,
+      selectedBooth.depthMm,
+    );
 
     const snapped =
       applySnap(
@@ -583,6 +1069,8 @@ export default function BoothGenerator() {
     if (boothViewport.startPan(event)) {
       return;
     }
+
+    if (editorTool !== "select") return;
 
     if (event.button === 0) {
       setSelectedComponentId(null);
@@ -1009,6 +1497,8 @@ export default function BoothGenerator() {
           setIsSidebarCollapsed((collapsed) => !collapsed)
         }
         onStartNewProject={startNewProject}
+        activeSection={workspaceSection}
+        onNavigate={navigateWorkspace}
       />
 
       {/* ================================================= */}
@@ -1020,13 +1510,55 @@ export default function BoothGenerator() {
         {/* TOPBAR                                         */}
         {/* ================================================= */}
 
-        <StepHeader currentStep={step} />
+        <StepHeader
+          currentStep={workflowStep}
+          onStepSelect={selectWorkflowStep}
+          onSave={workspaceSection === "project" ? saveProject : undefined}
+          saveStatus={saveStatus}
+        />
+
+        {workspaceSection === "projects" && (
+          <ProjectsPage
+            projects={savedProjects}
+            fairName={(id) => adminEvents.find((event) => event.id === id)?.name ?? id}
+            boothName={(id) => boothTypes.find((booth) => booth.id === id)?.name ?? ""}
+            onOpen={openProject}
+            onDelete={deleteProject}
+            onNew={startNewProject}
+          />
+        )}
+
+        {workspaceSection === "booths" && <BoothCatalogPage booths={boothTypes} />}
+
+        {workspaceSection === "components" && (
+          <ComponentCatalogPage items={componentCatalogItems} />
+        )}
+
+        {workspaceSection === "events" && eventsHydrated && (
+          <EventsPage
+            events={adminEvents}
+            priceLists={adminPriceLists}
+            onChange={setAdminEvents}
+            onDirtyChange={setEventDirty}
+            onSave={async (event) => {
+              await eventRepositoryRef.current?.save(event);
+              setAdminEvents((events) => events.map((item) => item.id === event.id ? event : item));
+            }}
+          />
+        )}
+
+        {workspaceSection === "priceLists" && (
+          <PriceListsPage
+            priceLists={adminPriceLists}
+            onChange={setAdminPriceLists}
+          />
+        )}
 
         {/* ================================================= */}
         {/* STEP 1                                          */}
         {/* ================================================= */}
 
-        {step === 1 && (
+        {workspaceSection === "project" && step === 1 && (
           <div className="page">
             <div className="pageIntro">
               <div>
@@ -1093,7 +1625,7 @@ export default function BoothGenerator() {
                         Vyber veletrh
                       </option>
 
-                      {fairs.map(
+                      {adminEvents.filter((event) => event.active).map(
                         (fair) => (
                           <option
                             key={
@@ -1150,6 +1682,44 @@ export default function BoothGenerator() {
                     </div>
                   )}
 
+                  {selectedExhibition && (
+                    <div className="projectEventCard">
+                      <EventLogo event={selectedExhibition} compact />
+                      <div>
+                        <span>VÝSTAVA / EVENT</span>
+                        <strong>{selectedExhibition.name}</strong>
+                        <small>
+                          {selectedExhibition.venue || "Místo neuvedeno"}
+                          {selectedExhibition.eventFrom || selectedExhibition.eventTo
+                            ? ` · ${selectedExhibition.eventFrom || "?"}–${selectedExhibition.eventTo || "?"}`
+                            : ""}
+                        </small>
+                        {selectedExhibition.importantInfo && (
+                          <p>{selectedExhibition.importantInfo}</p>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div className="twoColumns">
+                    <label>
+                      <span>Název projektu</span>
+                      <input
+                        value={projectName}
+                        onChange={(event) => setProjectName(event.target.value)}
+                        placeholder="Interní název projektu"
+                      />
+                    </label>
+                    <label>
+                      <span>Číslo / označení stánku</span>
+                      <input
+                        value={boothNumber}
+                        onChange={(event) => setBoothNumber(event.target.value)}
+                        placeholder="Např. Hala 2 / B14"
+                      />
+                    </label>
+                  </div>
+
                   <div className="twoColumns">
                     <label>
                       <span>
@@ -1167,21 +1737,67 @@ export default function BoothGenerator() {
                       />
                     </label>
 
-                    <label>
-                      <span>
-                        Kontakt
-                      </span>
+                    <label><span>Kontaktní osoba</span><input value={contactName} onChange={(event) => setContactName(event.target.value)} placeholder="Jméno" /></label>
+                  </div>
 
-                      <input
-                        value={contact}
+                  <div className="twoColumns">
+                    <label><span>Telefon</span><input type="tel" value={contactPhone} onChange={(event) => setContactPhone(event.target.value)} placeholder="+420…" /></label>
+                    <label><span>E-mail</span><input type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} placeholder="kontakt@firma.cz" /></label>
+                  </div>
+
+                  <div className="twoColumns">
+                    <label>
+                      <span>Režim projektu</span>
+                      <select
+                        value={projectMode}
+                        onChange={(event) => setProjectMode(event.target.value as ProjectMode)}
+                      >
+                        <option value="proposal">Návrh / kalkulace</option>
+                        <option value="order">Objednávka</option>
+                        <option value="production">Realizace / hotová zakázka</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Jazyk komunikace</span>
+                      <select
+                        value={communicationLanguage}
                         onChange={(event) =>
-                          setContact(
-                            event.target.value
+                          setCommunicationLanguage(
+                            event.target.value as CommunicationLanguage,
                           )
                         }
-                        placeholder="Jméno / e-mail"
-                      />
+                      >
+                        <option value="cs">Čeština</option>
+                        <option value="en">English</option>
+                      </select>
                     </label>
+                  </div>
+
+                  <div className="twoColumns">
+                    <label>
+                      <span>Stav zakázky</span>
+                      <select
+                        value={projectStage}
+                        onChange={(event) => setProjectStage(event.target.value as ProjectStage)}
+                      >
+                        <option value="quote">Nabídka / Kalkulace</option>
+                        <option value="design">Návrh</option>
+                        <option value="approved">Odsouhlaseno</option>
+                        <option value="done">Hotovo</option>
+                      </select>
+                    </label>
+                    <label>
+                      <span>Měna</span>
+                      <select value={currency} onChange={(event) => setCurrency(event.target.value as Currency)}>
+                        <option value="CZK">CZK</option>
+                        <option value="EUR">EUR</option>
+                      </select>
+                    </label>
+                  </div>
+
+                  <div className="projectFlags">
+                    <label><input type="checkbox" checked={waitingForCustomer} onChange={(event) => setWaitingForCustomer(event.target.checked)} /> Čeká na zákazníka</label>
+                    <label><input type="checkbox" checked={requiresAction} onChange={(event) => setRequiresAction(event.target.checked)} /> Vyžaduje naši akci</label>
                   </div>
 
                   <label className="realizationField">
@@ -1235,6 +1851,19 @@ export default function BoothGenerator() {
                       />
                     )}
                   </div>
+
+                  <section className="projectFormSection">
+                    <span className="fieldTitle">TECHNICKÉ POŽADAVKY</span>
+                    <TechnicalRequirementsEditor
+                      value={technicalRequirements}
+                      onChange={setTechnicalRequirements}
+                    />
+                  </section>
+
+                  <OrderImportPanel
+                    order={importedOrder}
+                    onChange={setImportedOrder}
+                  />
 
                   <div className="currencySection">
                     <span className="fieldTitle">
@@ -1505,7 +2134,7 @@ export default function BoothGenerator() {
         {/* STEP 2                                          */}
         {/* ================================================= */}
 
-        {step === 2 && (
+        {workspaceSection === "project" && step === 2 && (
           <div className="page">
             <button
               className="back"
@@ -1642,10 +2271,14 @@ export default function BoothGenerator() {
                             )}
 
                             <div className="constructionPreview">
-                              <div className="constructionShape">
-                                <span className="constructionWallTop" />
-                                <span className="constructionWallLeft" />
-                              </div>
+                              {booth.thumbnailUrl ? (
+                                <img src={booth.thumbnailUrl} alt={`Náhled ${booth.name}`} />
+                              ) : (
+                                <div className="constructionShape">
+                                  <span className="constructionWallTop" />
+                                  <span className="constructionWallLeft" />
+                                </div>
+                              )}
                             </div>
 
                             <div className="boothTypeContent">
@@ -1893,7 +2526,7 @@ export default function BoothGenerator() {
         {/* STEP 3                                          */}
         {/* ================================================= */}
 
-        {step === 3 &&
+        {workspaceSection === "project" && step === 3 &&
           selectedBooth &&
           selectedBooth.widthMm &&
           selectedBooth.depthMm && (
@@ -1923,34 +2556,6 @@ export default function BoothGenerator() {
                 </div>
 
                 <div className="configuratorHeaderActions">
-                  <div className="viewSwitch">
-                    <button
-                      type="button"
-                      className={
-                        editorView === "2d"
-                          ? "viewButton active"
-                          : "viewButton"
-                      }
-                      aria-pressed={editorView === "2d"}
-                      onClick={() => setEditorView("2d")}
-                    >
-                      2D
-                    </button>
-
-                    <button
-                      type="button"
-                      className={
-                        editorView === "3d"
-                          ? "viewButton active"
-                          : "viewButton"
-                      }
-                      aria-pressed={editorView === "3d"}
-                      onClick={() => setEditorView("3d")}
-                    >
-                      3D
-                    </button>
-                  </div>
-
                   <button
                     className="lightButton"
                     onClick={
@@ -1969,6 +2574,7 @@ export default function BoothGenerator() {
 
                 <ComponentLibrary
                   onAddComponent={addComponent}
+                  inventory={orderInventory}
                 />
 
                 {/* PLAN */}
@@ -1982,17 +2588,33 @@ export default function BoothGenerator() {
 
                       <strong>
                         {
-                          selectedBooth.widthMm
+                          selectedBooth.nominalDimensions?.widthMm ?? selectedBooth.widthMm
                         }{" "}
                         ×{" "}
                         {
-                          selectedBooth.depthMm
+                          selectedBooth.nominalDimensions?.depthMm ?? selectedBooth.depthMm
                         }{" "}
                         mm
                       </strong>
                     </div>
 
                     <div className="planToolbarInfo">
+                      <div className="viewSwitch compactViewSwitch">
+                        <button
+                          type="button"
+                          className={editorView === "2d" ? "viewButton active" : "viewButton"}
+                          onClick={() => setEditorView("2d")}
+                        >
+                          2D
+                        </button>
+                        <button
+                          type="button"
+                          className={editorView === "3d" ? "viewButton active" : "viewButton"}
+                          onClick={() => setEditorView("3d")}
+                        >
+                          3D
+                        </button>
+                      </div>
                       <span>
                         GRID 250 mm
                       </span>
@@ -2004,6 +2626,19 @@ export default function BoothGenerator() {
                       <span className="collisionOn">
                         KOLIZE ON
                       </span>
+
+                      {editorView === "2d" && <div className="planToolButtons">
+                        <button type="button" className={editorTool === "annotation" ? "active" : ""} onClick={() => { const active = editorTool !== "annotation"; setEditorTool(active ? "annotation" : "select"); setPendingMeasurePoint(null); setMeasureHoverPoint(null); setEditorMessage(active ? "Klikněte do plánu pro vložení poznámky" : ""); }}>
+                          + Poznámka
+                        </button>
+                        <button type="button" className={editorTool === "measure" ? "active" : ""} onClick={() => { const active = editorTool !== "measure"; setEditorTool(active ? "measure" : "select"); setPendingMeasurePoint(null); setMeasureHoverPoint(null); setEditorMessage(active ? "Klikněte na první bod" : ""); }}>
+                          Změřit vzdálenost
+                        </button>
+                        {editorTool !== "select" && <button type="button" onClick={() => { setEditorTool("select"); setPendingMeasurePoint(null); setMeasureHoverPoint(null); setEditorMessage(""); }}>Zrušit</button>}
+                        <button type="button" className={showPlanDimensions ? "active" : ""} onClick={() => setShowPlanDimensions((visible) => !visible)}>
+                          Kóty
+                        </button>
+                      </div>}
 
                       <button
                         type="button"
@@ -2163,39 +2798,46 @@ export default function BoothGenerator() {
                           transform: `translate(${boothViewport.transform.pan.x}px, ${boothViewport.transform.pan.y}px) scale(${boothViewport.transform.zoom})`,
                         }}
                       >
-                    <div className="dimensionTop">
+                    {showPlanDimensions && <div className="dimensionTop">
                       <span>
                         {
-                          selectedBooth.widthMm
+                          selectedBooth.nominalDimensions?.widthMm ?? selectedBooth.widthMm
                         }{" "}
                         mm
                       </span>
-                    </div>
+                    </div>}
 
-                    <div className="dimensionLeft">
+                    {showPlanDimensions && selectedBooth.nominalDimensions && <div className="dimensionHeight">
+                      <span>VÝŠKA {selectedBooth.nominalDimensions.heightMm} mm</span>
+                    </div>}
+
+                    {showPlanDimensions && <div className="dimensionLeft">
                       <span>
                         {
-                          selectedBooth.depthMm
+                          selectedBooth.nominalDimensions?.depthMm ?? selectedBooth.depthMm
                         }{" "}
                         mm
                       </span>
-                    </div>
+                    </div>}
 
                     <div
                       className={
-                        selectedConstructionPartId === "assembly"
-                          ? "boothCanvas constructionSelected"
-                          : "boothCanvas"
+                        ["boothCanvas", "planViewRotated", selectedConstructionPartId === "assembly" ? "constructionSelected" : "", editorTool === "measure" ? "measurementActive" : ""].filter(Boolean).join(" ")
                       }
                       style={{
                         aspectRatio: `${selectedBooth.widthMm} / ${selectedBooth.depthMm}`,
                       }}
+                      onPointerDown={handlePlanToolPointerDown}
+                      onPointerMove={handlePlanToolPointerMove}
                     >
                       {/* CARPET */}
 
-                      <div className="carpetLayer">
+                      <div
+                        className={`carpetLayer ${carpetFinishId === "none" ? "noCarpet" : ""}`}
+                        style={carpetFinishId === "none" ? undefined : { backgroundColor: selectedCarpetFinish?.swatchColor }}
+                      >
                         <span className="carpetLabel">
-                          KOBEREC 2000 × 2000
+                          {carpetFinishId === "none" ? "BEZ KOBERCE" : `KOBEREC · ${selectedCarpetFinish?.name ?? "—"}`}
                         </span>
                       </div>
 
@@ -2207,13 +2849,20 @@ export default function BoothGenerator() {
                         footprintDepthMm={selectedBooth.depthMm}
                         visible={constructionAssemblyVisible}
                         selected={selectedConstructionPartId !== null}
+                        rotateView180
                       />
+
+                      {editorTool === "measure" && measureHoverPoint && (() => {
+                        const hover = worldToPlanView180(measureHoverPoint, selectedBooth.widthMm!, selectedBooth.depthMm!);
+                        const start = pendingMeasurePoint ? worldToPlanView180(pendingMeasurePoint, selectedBooth.widthMm!, selectedBooth.depthMm!) : null;
+                        return <div className="measurementPreview" aria-hidden="true"><svg viewBox={`0 0 ${selectedBooth.widthMm} ${selectedBooth.depthMm}`} preserveAspectRatio="none">{start && <line x1={start.x} y1={start.y} x2={hover.x} y2={hover.y} />}<circle cx={hover.x} cy={hover.y} r="24" />{start && <circle cx={start.x} cy={start.y} r="18" />}</svg></div>;
+                      })()}
 
                       {/* COMPONENTS */}
 
                       {placedComponents.map(
                         (item) => {
-                          if (!item.visible) {
+                          if (!item.visible || !item.showIn2D) {
                             return null;
                           }
 
@@ -2230,10 +2879,11 @@ export default function BoothGenerator() {
                               className={[
                                 "placedComponent",
 
-                                item.type ===
-                                "chair"
-                                  ? "chairComponent"
-                                  : "cabinetComponent",
+                                item.sceneLayer !== "furniture"
+                                  ? `technicalComponent ${item.sceneLayer}`
+                                  : item.type === "chair"
+                                    ? "chairComponent"
+                                    : "cabinetComponent",
 
                                 selected
                                   ? "selected"
@@ -2250,17 +2900,9 @@ export default function BoothGenerator() {
                                   " "
                                 )}
                               style={{
-                                left: `${
-                                  (item.xMm /
-                                    selectedBooth.widthMm!) *
-                                  100
-                                }%`,
+                                left: `${(worldToPlanView180({ x: item.xMm, y: item.yMm }, selectedBooth.widthMm!, selectedBooth.depthMm!).x / selectedBooth.widthMm!) * 100}%`,
 
-                                top: `${
-                                  (item.yMm /
-                                    selectedBooth.depthMm!) *
-                                  100
-                                }%`,
+                                top: `${(worldToPlanView180({ x: item.xMm, y: item.yMm }, selectedBooth.widthMm!, selectedBooth.depthMm!).y / selectedBooth.depthMm!) * 100}%`,
 
                                 width: `${
                                   (item.widthMm /
@@ -2274,7 +2916,7 @@ export default function BoothGenerator() {
                                   100
                                 }%`,
 
-                                transform: `translate(-50%, -50%) rotate(${item.rotationDeg}deg)`,
+                                transform: `translate(-50%, -50%) rotate(${worldRotationToPlanView180(item.rotationDeg)}deg)`,
                               }}
                               onPointerDown={(
                                 event
@@ -2308,9 +2950,11 @@ export default function BoothGenerator() {
                               )}
 
                               <span className="placedComponentName">
-                                {
-                                  item.name
-                                }
+                                {item.sceneLayer !== "furniture"
+                                  ? componentCatalogItems.find(
+                                      (definition) => definition.id === item.definitionId,
+                                    )?.footprint2D?.symbol ?? item.name
+                                  : item.name}
                               </span>
 
                               <small>
@@ -2326,6 +2970,38 @@ export default function BoothGenerator() {
                           );
                         }
                       )}
+
+                      {showPlanDimensions && customDimensions.filter((dimension) => dimension.visible).map((dimension) => {
+                        const start = worldToPlanView180(dimension.start, selectedBooth.widthMm!, selectedBooth.depthMm!);
+                        const end = worldToPlanView180(dimension.end, selectedBooth.widthMm!, selectedBooth.depthMm!);
+                        const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+                        return <div className="customDimension" key={dimension.id}>
+                          <svg viewBox={`0 0 ${selectedBooth.widthMm} ${selectedBooth.depthMm}`} preserveAspectRatio="none"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /><circle cx={start.x} cy={start.y} r="18" /><circle cx={end.x} cy={end.y} r="18" /></svg>
+                          <button type="button" className="customDimensionLabel" style={{ left: `${midpoint.x / selectedBooth.widthMm! * 100}%`, top: `${midpoint.y / selectedBooth.depthMm! * 100}%` }} onDoubleClick={() => { const label = window.prompt("Zobrazený text kóty", dimension.displayLabel ?? ""); if (label !== null) setCustomDimensions((items) => items.map((item) => item.id === dimension.id ? { ...item, displayLabel: label || undefined } : item)); }}>
+                            {dimensionDisplayLabel(dimension)}
+                            <i onClick={(event) => { event.stopPropagation(); setCustomDimensions((items) => items.filter((item) => item.id !== dimension.id)); }}>×</i>
+                          </button>
+                        </div>;
+                      })}
+
+                      {annotations.filter((annotation) => annotation.visible).map((annotation) => {
+                        const point = worldToPlanView180(annotation.position, selectedBooth.widthMm!, selectedBooth.depthMm!);
+                        return <div
+                          key={annotation.id}
+                          role="button"
+                          tabIndex={0}
+                          className={`planAnnotation ${annotation.textSize ?? "medium"}`}
+                          style={{ left: `${point.x / selectedBooth.widthMm! * 100}%`, top: `${point.y / selectedBooth.depthMm! * 100}%` }}
+                          onPointerDown={(event) => { event.stopPropagation(); setDraggingAnnotationId(annotation.id); event.currentTarget.setPointerCapture(event.pointerId); }}
+                          onPointerMove={(event) => handleAnnotationPointerMove(event, annotation.id)}
+                          onPointerUp={(event) => { event.currentTarget.releasePointerCapture(event.pointerId); setDraggingAnnotationId(null); }}
+                          onDoubleClick={() => { const text = window.prompt("Upravit poznámku", annotation.text); if (text?.trim()) setAnnotations((items) => items.map((item) => item.id === annotation.id ? { ...item, text: text.trim() } : item)); }}
+                        >
+                          <span>{annotation.text}</span>
+                          <button type="button" className="annotationSize" title="Změnit velikost" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); const order = ["small", "medium", "large"] as const; const current = order.indexOf(annotation.textSize ?? "medium"); setAnnotations((items) => items.map((item) => item.id === annotation.id ? { ...item, textSize: order[(current + 1) % order.length] } : item)); }}>A</button>
+                          <button type="button" className="annotationDelete" aria-label="Odstranit poznámku" onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setAnnotations((items) => items.filter((item) => item.id !== annotation.id)); }}>×</button>
+                        </div>;
+                      })}
                     </div>
                       </div>
                     </div>
@@ -2334,19 +3010,33 @@ export default function BoothGenerator() {
 
                   {editorView === "3d" && (
                     <div className="cadViewerMode">
-                      <div className="cadModeHeader">
-                        <div>
-                          <span>3D / CAD MASTER</span>
-                          <strong>{selectedBooth.name}</strong>
-                        </div>
-                        <span>REFERENČNÍ MODEL · BEZ EDITACE</span>
-                      </div>
-
                       <BoothCadViewer
                         asset={selectedBoothMasterModel}
                         footprintWidthMm={selectedBooth.widthMm}
                         footprintDepthMm={selectedBooth.depthMm}
                         components={placedComponents}
+                        carpetFinish={selectedCarpetFinish}
+                        constructionFinish={selectedConstructionFinish}
+                        partDefinitions={selectedBooth.partDefinitions}
+                        nominalDimensions={selectedBooth.nominalDimensions}
+                        printSurfaces={selectedBooth.printSurfaces}
+                        showPrintPlaceholder={Boolean(selectedBooth.graphicsRequired && !["dataReceived", "ready"].includes(technicalRequirements.graphics.status))}
+                        defaultViews={selectedBooth.defaultViews}
+                        savedViews={savedViews}
+                        onSaveView={(view) =>
+                          setSavedViews((items) => [
+                            ...items,
+                            saveCameraView({
+                              ...view,
+                              name: `Vlastní pohled ${items.length + 1}`,
+                            }),
+                          ])
+                        }
+                        onDeleteView={(viewId) =>
+                          setSavedViews((items) =>
+                            items.filter((view) => view.id !== viewId),
+                          )
+                        }
                       />
                     </div>
                   )}
@@ -2365,10 +3055,24 @@ export default function BoothGenerator() {
                     </strong>
                   </div>
 
-                  <div className="propertySection">
-                    <span className="propertySectionTitle">
-                      PROJEKT
-                    </span>
+                  <div className="propertySection projectInspectorSection">
+                    <button
+                      type="button"
+                      className="projectInspectorToggle"
+                      onClick={() => setIsProjectInspectorOpen((open) => !open)}
+                      aria-expanded={isProjectInspectorOpen}
+                    >
+                      <span>{isProjectInspectorOpen ? "▾" : "▸"} PROJEKT</span>
+                      <small>{isProjectInspectorOpen ? "Sbalit" : "Detail"}</small>
+                    </button>
+
+                    <div className="projectCompactSummary">
+                      <div><span>Firma</span><strong>{company || "—"}</strong></div>
+                      <div><span>Stánek</span><strong>{selectedBooth.code}{selectedVariant ? ` / ${selectedVariant.name}` : ""}</strong></div>
+                      <div><span>Výstava</span><strong>{selectedFair?.name || "—"}</strong></div>
+                    </div>
+
+                    {isProjectInspectorOpen && <div className="projectInspectorDetails">
 
                     <div className="propertyRow">
                       <span>Veletrh</span>
@@ -2381,8 +3085,29 @@ export default function BoothGenerator() {
                     </div>
 
                     <div className="propertyRow">
+                      <span>Označení stánku</span>
+                      <strong>{boothNumber || "—"}</strong>
+                    </div>
+
+                    <div className="propertyRow">
+                      <span>Režim projektu</span>
+                      <strong>
+                        {projectMode === "proposal"
+                          ? "Návrh / kalkulace"
+                          : projectMode === "order"
+                            ? "Objednávka"
+                            : "Realizace"}
+                      </strong>
+                    </div>
+
+                    <div className="propertyRow">
                       <span>Kontakt</span>
-                      <strong>{contact || "—"}</strong>
+                      <strong>{contactName || contactEmail || "—"}</strong>
+                    </div>
+
+                    <div className="propertyRow">
+                      <span>Stav zakázky</span>
+                      <strong>{projectStage === "quote" ? "Nabídka / Kalkulace" : projectStage === "design" ? "Návrh" : projectStage === "approved" ? "Odsouhlaseno" : "Hotovo"}</strong>
                     </div>
 
                     <div className="propertyRow">
@@ -2413,6 +3138,11 @@ export default function BoothGenerator() {
                     </div>
 
                     <div className="propertyRow">
+                      <span>Jazyk komunikace</span>
+                      <strong>{communicationLanguage === "cs" ? "Čeština" : "English"}</strong>
+                    </div>
+
+                    <div className="propertyRow">
                       <span>Cena konstrukce</span>
                       <strong>
                         {selectedBooth.pricing.mode === "fixed"
@@ -2427,6 +3157,7 @@ export default function BoothGenerator() {
                       className="projectInspectorNotes inspectorNotes"
                       onChange={updateProjectNote}
                     />
+                    </div>}
                   </div>
 
                   <ScenePanel
@@ -2437,6 +3168,9 @@ export default function BoothGenerator() {
                     constructionVisibility={constructionVisibility}
                     selectedComponentId={selectedComponentId}
                     selectedConstructionPartId={selectedConstructionPartId}
+                    carpetVariants={selectedBooth.carpetVariants}
+                    carpetFinishId={carpetFinishId}
+                    onCarpetFinishChange={setCarpetFinishId}
                     onSelectComponent={selectSceneComponent}
                     onSelectConstructionPart={selectConstructionPart}
                     onToggleComponentLock={toggleComponentLock}
@@ -2444,6 +3178,16 @@ export default function BoothGenerator() {
                     onToggleComponentVisibility={toggleComponentVisibility}
                     onToggleConstructionVisibility={toggleConstructionVisibility}
                   />
+
+                  <div className="finishInspectorControl">
+                    <label>
+                      <span>Barva konstrukce</span>
+                      <select value={constructionFinishId} onChange={(event) => setConstructionFinishId(event.target.value)}>
+                        {(selectedBooth.finishVariants ?? constructionFinishVariants).map((finish) => <option key={finish.id} value={finish.id}>{finish.name}</option>)}
+                      </select>
+                    </label>
+                    {!selectedBooth.partDefinitions?.length && <small>MASTER zatím nemá mapované GLB části; volba je uložena, ale model se nepřebarvuje.</small>}
+                  </div>
 
                   <div className="propertySection">
                     <span className="propertySectionTitle">
@@ -2607,9 +3351,77 @@ export default function BoothGenerator() {
 
               {/* BOTTOM */}
 
-              <PricingBar placedItemCount={placedComponents.length} />
+              <PricingBar booth={selectedBooth} placedItems={placedComponents} currency={currency} />
+              <div className="workflowActions configuratorContinue">
+                <button className="primaryButton" onClick={() => setStep(4)}>
+                  Pokračovat na vizualizaci →
+                </button>
+              </div>
             </div>
           )}
+
+        {workspaceSection === "project" && step === 4 && (
+          <VisualizationStep
+            project={workflowProject}
+            onSaveView={(view) =>
+              setSavedViews((items) => [
+                ...items,
+                saveCameraView({
+                  ...view,
+                  name: `Vlastní pohled ${items.length + 1}`,
+                }),
+              ])
+            }
+            onDeleteView={(viewId) =>
+              setSavedViews((items) => items.filter((view) => view.id !== viewId))
+            }
+            onAddVisualization={(item) =>
+              setVisualizations((items) => [...items, item])
+            }
+            onAddPlanOutput={(item) => {
+              setGeneratedPlanOutputs((items) => [...items, item]);
+              setSelectedOutputIds((items) => [...items, item.id]);
+            }}
+            onUpdatePlanOutput={(item) =>
+              setGeneratedPlanOutputs((items) => items.map((current) => current.id === item.id ? item : current))
+            }
+            onDeletePlanOutput={(id) => {
+              setGeneratedPlanOutputs((items) => items.filter((item) => item.id !== id));
+              setSelectedOutputIds((items) => items.filter((item) => item !== id));
+            }}
+            onUpdateVisualization={(item) =>
+              setVisualizations((items) => items.map((current) => current.id === item.id ? item : current))
+            }
+            onDeleteVisualization={(id) => {
+              setVisualizations((items) => items.filter((item) => item.id !== id));
+              setSelectedOutputIds((items) => items.filter((item) => item !== id));
+            }}
+            onSelectedViewsChange={setSelectedVisualizationViewIds}
+            onPurposeChange={setVisualizationPurpose}
+            on2DLayersChange={setVisualization2DLayers}
+            onContinue={() => setStep(5)}
+          />
+        )}
+
+        {workspaceSection === "project" && step === 5 && (
+          <SummaryStep
+            project={workflowProject}
+            onAddGraphicsFiles={addTemporaryGraphics}
+            onRemoveGraphicsFile={removeTemporaryGraphic}
+            onContinue={() => setStep(6)}
+          />
+        )}
+
+        {workspaceSection === "project" && step === 6 && (
+          <ExportStep
+            project={workflowProject}
+            temporaryGraphicFiles={[...temporaryGraphicFilesRef.current].map(
+              ([id, file]) => ({ id, file }),
+            )}
+            onSelectedOutputIdsChange={setSelectedOutputIds}
+            onSelectedEventDocumentIdsChange={setSelectedEventDocumentIds}
+          />
+        )}
       </section>
     </main>
   );

@@ -4,6 +4,7 @@ import type {
   Notes,
   PlacedComponent,
 } from "./models.ts";
+import type { ProjectContact } from "./project.ts";
 import {
   getNominalDimensions,
   getProductionDimensions,
@@ -13,7 +14,7 @@ export type ProjectExportSource = Readonly<{
   project: Notes & Readonly<{
     fairId: string;
     company: string;
-    contact: string;
+    contact: string | ProjectContact;
     currency: Currency;
     realizationProfileId: string;
   }>;

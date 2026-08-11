@@ -66,7 +66,7 @@ test("MASTER GLB zachovává skutečný CAD offset vůči koberci", async () => 
 test("židle je reálný katalogový asset s CAD rozměry", async () => {
   const chairModel = getComponentModel(componentCatalog.chair.assets);
   assert.equal(chairModel?.url, "/models/chairs/zidle.glb");
-  assert.equal(componentCatalog.chair.name, "Židle");
+  assert.equal(componentCatalog.chair.name, "Židle kovová čalouněná");
   assert.equal(componentCatalog.chair.widthMm, 535);
   assert.equal(componentCatalog.chair.depthMm, 592);
   assert.equal(componentCatalog.chair.heightMm, 795);

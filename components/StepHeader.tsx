@@ -1,10 +1,13 @@
 type StepHeaderProps = {
   currentStep: number;
+  onStepSelect?: (step: number) => void;
+  onSave?: () => void;
+  saveStatus?: string;
 };
 
-const steps = ["Projekt", "Stánek", "Konfigurace", "Vizualizace", "Export"];
+const steps = ["Projekt", "Konfigurátor", "Vizualizace", "Souhrn", "Export"];
 
-export function StepHeader({ currentStep }: StepHeaderProps) {
+export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus }: StepHeaderProps) {
   return (
     <header className="topbar">
       <div>
@@ -18,14 +21,24 @@ export function StepHeader({ currentStep }: StepHeaderProps) {
             return (
               <Fragment key={label}>
                 {index > 0 && <div className="stepLine" />}
-                <div className={currentStep >= stepNumber ? "step active" : "step"}>
+                <button
+                  type="button"
+                  className={currentStep >= stepNumber ? "step active" : "step"}
+                  onClick={() => onStepSelect?.(stepNumber)}
+                >
                   <span>{stepNumber}</span>
                   {label}
-                </div>
+                </button>
               </Fragment>
             );
           })}
         </div>
+
+        {onSave && (
+          <button type="button" className="saveProjectButton" onClick={onSave}>
+            {saveStatus || "Uložit projekt"}
+          </button>
+        )}
 
         <form action="/api/auth/logout" method="post">
           <button type="submit" className="logoutButton">

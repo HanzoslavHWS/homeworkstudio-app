@@ -1,5 +1,9 @@
 import type { BoothType, CollisionRect } from "../domain/models.ts";
 import { pricingPolicyFor } from "../domain/pricing.ts";
+import {
+  carpetFinishVariants,
+  constructionFinishVariants,
+} from "../domain/finishes.ts";
 
 const lockedConstructionRotation = {
   defaultMode: "snap",
@@ -15,11 +19,12 @@ export const koje2x2CollisionWalls: readonly CollisionRect[] = [
   { id: "right-wall", x: 1920, y: 0, width: 80, height: 1000 },
 ];
 
-export const boothTypes: readonly BoothType[] = [
+const baseBoothTypes: readonly BoothType[] = [
   {
     id: "koje-2x2",
-    code: "K2",
-    name: "Koje 2 × 2 m",
+    code: "P86",
+    internalCode: "P86",
+    name: "Kóje 2 × 2 m",
     description: "Základní otevřená veletržní koje.",
     projectType: "typovy",
     size: "2 × 2 m",
@@ -27,12 +32,33 @@ export const boothTypes: readonly BoothType[] = [
     widthMm: 2000,
     depthMm: 2000,
     heightMm: 2500,
+    nominalDimensions: { widthMm: 2000, depthMm: 2000, heightMm: 2500 },
+    cadDimensions: { widthMm: 2020, depthMm: 1046, heightMm: 2500 },
     collarHeightMm: 300,
     profileWidthMm: 80,
     configReady: true,
     systemLocked: true,
     userLocked: false,
     visible: true,
+    active: true,
+    category: "typova-koje",
+    modelUrl: "/models/booths/koje-2x2/master.glb",
+    printable: true,
+    printSurfaces: [
+      {
+        id: "fascia-print",
+        name: "Límec",
+        widthMm: 2000,
+        heightMm: 300,
+        orientation: "landscape",
+        materialRole: "PRINT_SURFACE",
+        allowanceLinearMeters: 2,
+        active: true,
+      },
+    ],
+    partDefinitions: [],
+    finishVariants: constructionFinishVariants,
+    carpetVariants: carpetFinishVariants,
     variants: [],
     constructionParts: [
       {
@@ -102,6 +128,76 @@ export const boothTypes: readonly BoothType[] = [
     ],
     collisionObstacles: koje2x2CollisionWalls,
     pricing: pricingPolicyFor("typovy"),
+    pricingEntries: [
+      {
+        id: "p86-base-czk",
+        itemId: "koje-2x2",
+        currency: "CZK",
+        salePrice: 3640,
+      },
+    ],
+    vatRatePercent: 21,
+    defaultCarpetFinishId: "carpet-grey",
+    graphicsRequired: true,
+    packageContents: [
+      {
+        id: "p86-carpet-grey",
+        kind: "floor-finish",
+        name: "Šedý koberec",
+        quantity: 4,
+        unit: "m²",
+        includedInBasePrice: true,
+        finishId: "carpet-grey",
+      },
+      {
+        id: "p86-construction",
+        kind: "construction",
+        name: "Stavba stánku",
+        quantity: 2,
+        unit: "m²",
+        includedInBasePrice: true,
+      },
+      {
+        id: "p86-fascia-print",
+        kind: "print-allowance",
+        name: "Grafika na límec",
+        quantity: 2,
+        unit: "bm",
+        includedInBasePrice: true,
+        printSurfaceId: "fascia-print",
+      },
+    ],
+    parts: [],
+    defaultViews: [
+      {
+        id: "koje-2x2-main",
+        name: "Hlavní",
+        position: [4, 3.1, 4],
+        target: [1, 1.1, -1],
+        fov: 38,
+      },
+      {
+        id: "koje-2x2-left",
+        name: "Levý",
+        position: [-3.5, 2.5, 3.5],
+        target: [1, 1, -1],
+        fov: 38,
+      },
+      {
+        id: "koje-2x2-right",
+        name: "Pravý",
+        position: [5.5, 2.5, 2.5],
+        target: [1, 1, -1],
+        fov: 38,
+      },
+      {
+        id: "koje-2x2-top",
+        name: "Nadhled",
+        position: [1, 6, -1],
+        target: [1, 0, -1],
+        fov: 38,
+      },
+    ],
     assets: {
       sourceId: "booth-koje-2x2",
       scale: 1,
@@ -156,10 +252,12 @@ export const boothTypes: readonly BoothType[] = [
     systemLocked: true,
     userLocked: false,
     visible: true,
-    variants: [1, 2, 3, 4].map((number) => ({
-      id: `t4-v${number}`,
-      name: `Varianta ${number}`,
-    })),
+    variants: [
+      { id: "t4-v1", name: "Rohový – levá stěna" },
+      { id: "t4-v2", name: "Rohový – pravá stěna" },
+      { id: "t4-v3", name: "Řadový – zázemí vlevo" },
+      { id: "t4-v4", name: "Řadový – zázemí vpravo" },
+    ],
     constructionParts: [],
     collisionObstacles: [],
     pricing: pricingPolicyFor("typovy"),
@@ -190,6 +288,45 @@ export const boothTypes: readonly BoothType[] = [
     pricing: pricingPolicyFor("typovy"),
   },
 ];
+
+const koje2x2 = baseBoothTypes[0];
+
+/** Test series: four independent variants share one canonical booth asset. */
+export const boothTypes: readonly BoothType[] = baseBoothTypes.map((booth) =>
+  booth.id === "t4"
+    ? {
+        ...booth,
+        internalCode: "T4-TEST",
+        description:
+          "Testovací typová řada se čtyřmi variantami nad společnou geometrií Koje 2 × 2 m.",
+        widthMm: koje2x2.widthMm,
+        depthMm: koje2x2.depthMm,
+        heightMm: koje2x2.heightMm,
+        nominalDimensions: koje2x2.nominalDimensions,
+        cadDimensions: koje2x2.cadDimensions,
+        collarHeightMm: koje2x2.collarHeightMm,
+        profileWidthMm: koje2x2.profileWidthMm,
+        configReady: true,
+        active: true,
+        category: "typova-rada",
+        constructionParts: koje2x2.constructionParts,
+        collisionObstacles: koje2x2.collisionObstacles,
+        assets: koje2x2.assets,
+        modelUrl: koje2x2.modelUrl,
+        defaultViews: koje2x2.defaultViews,
+        printable: false,
+        printSurfaces: [],
+        partDefinitions: [],
+        finishVariants: koje2x2.finishVariants,
+        carpetVariants: koje2x2.carpetVariants,
+        variants: booth.variants.map((variant) => ({
+          ...variant,
+          configurationBoothId: koje2x2.id,
+          assetSourceBoothId: koje2x2.id,
+        })),
+      }
+    : booth,
+);
 
 /** Base shape for future atypical booths; dimensions and obstacles are project data. */
 export function createCustomBooth(

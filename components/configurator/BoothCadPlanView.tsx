@@ -10,12 +10,17 @@ import {
 } from "../../domain/cad3d";
 import type { CadModelAsset } from "../../domain/models";
 
-type CadPlanBounds = {
+export type CadPlanBounds = {
   minX: number;
   minY: number;
   width: number;
   depth: number;
 };
+
+export type CadPlanSnapshot = Readonly<{
+  imageDataUrl: string;
+  bounds: CadPlanBounds;
+}>;
 
 type BoothCadPlanViewProps = {
   asset?: CadModelAsset;
@@ -23,6 +28,8 @@ type BoothCadPlanViewProps = {
   footprintDepthMm: number;
   visible: boolean;
   selected: boolean;
+  rotateView180?: boolean;
+  onSnapshot?: (snapshot: CadPlanSnapshot) => void;
 };
 
 function disposePlanModel(root: THREE.Object3D) {
@@ -41,10 +48,17 @@ export function BoothCadPlanView({
   footprintDepthMm,
   visible,
   selected,
+  rotateView180 = false,
+  onSnapshot,
 }: BoothCadPlanViewProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const [bounds, setBounds] = useState<CadPlanBounds | null>(null);
   const [failed, setFailed] = useState(false);
+  const onSnapshotRef = useRef(onSnapshot);
+
+  useEffect(() => {
+    onSnapshotRef.current = onSnapshot;
+  }, [onSnapshot]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -60,7 +74,11 @@ export function BoothCadPlanView({
     let renderer: THREE.WebGLRenderer;
 
     try {
-      renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+      renderer = new THREE.WebGLRenderer({
+        alpha: true,
+        antialias: true,
+        preserveDrawingBuffer: true,
+      });
     } catch {
       setFailed(true);
       return;
@@ -91,12 +109,13 @@ export function BoothCadPlanView({
         const rawBounds = new THREE.Box3().setFromObject(gltf.scene);
         const rawSize = rawBounds.getSize(new THREE.Vector3());
         const rawCenter = rawBounds.getCenter(new THREE.Vector3());
-        setBounds({
+        const planBounds = {
           minX: rawBounds.min.x,
           minY: rawBounds.min.y,
           width: rawSize.x,
           depth: rawSize.y,
-        });
+        };
+        setBounds(planBounds);
 
         gltf.scene.scale.setScalar(SCENE_UNITS_PER_MILLIMETER);
         gltf.scene.rotation.x = CAD_TO_VIEWER_ROTATION_X_RAD;
@@ -151,6 +170,10 @@ export function BoothCadPlanView({
         camera.updateProjectionMatrix();
         setFailed(false);
         render();
+        onSnapshotRef.current?.({
+          imageDataUrl: renderer.domElement.toDataURL("image/png"),
+          bounds: planBounds,
+        });
       },
       undefined,
       () => {
@@ -173,10 +196,11 @@ export function BoothCadPlanView({
 
   const style = bounds
     ? {
-        left: `${(bounds.minX / footprintWidthMm) * 100}%`,
-        top: `${(bounds.minY / footprintDepthMm) * 100}%`,
+        left: `${((rotateView180 ? footprintWidthMm - bounds.minX - bounds.width : bounds.minX) / footprintWidthMm) * 100}%`,
+        top: `${((rotateView180 ? footprintDepthMm - bounds.minY - bounds.depth : bounds.minY) / footprintDepthMm) * 100}%`,
         width: `${(bounds.width / footprintWidthMm) * 100}%`,
         height: `${(bounds.depth / footprintDepthMm) * 100}%`,
+        transform: rotateView180 ? "rotate(180deg)" : undefined,
       }
     : { inset: 0 };
 

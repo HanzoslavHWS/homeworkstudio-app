@@ -2,12 +2,16 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onStartNewProject: () => void;
+  activeSection?: "project" | "projects" | "booths" | "components" | "events" | "priceLists";
+  onNavigate?: (section: "projects" | "booths" | "components" | "events" | "priceLists") => void;
 };
 
 export function AppSidebar({
   collapsed,
   onToggleCollapsed,
   onStartNewProject,
+  activeSection = "project",
+  onNavigate,
 }: AppSidebarProps) {
   return (
     <aside className={collapsed ? "sidebar collapsed" : "sidebar"}>
@@ -28,21 +32,29 @@ export function AppSidebar({
       </a>
 
       <nav className="nav">
-        <button type="button" className="navItem active" onClick={onStartNewProject} title="Nový projekt">
+        <button type="button" className={activeSection === "project" ? "navItem active" : "navItem"} onClick={onStartNewProject} title="Nový projekt">
           <span className="navIcon">＋</span>
           <span className="navLabel">Nový projekt</span>
         </button>
-        <button type="button" className="navItem" title="Projekty">
+        <button type="button" className={activeSection === "projects" ? "navItem active" : "navItem"} title="Projekty" onClick={() => onNavigate?.("projects")}>
           <span className="navIcon">▽</span>
           <span className="navLabel">Projekty</span>
         </button>
-        <button type="button" className="navItem" title="Knihovna stánků">
+        <button type="button" className={activeSection === "booths" ? "navItem active" : "navItem"} title="Knihovna stánků" onClick={() => onNavigate?.("booths")}>
           <span className="navIcon">◇</span>
           <span className="navLabel">Knihovna stánků</span>
         </button>
-        <button type="button" className="navItem" title="Komponenty">
+        <button type="button" className={activeSection === "components" ? "navItem active" : "navItem"} title="Komponenty" onClick={() => onNavigate?.("components")}>
           <span className="navIcon">▦</span>
           <span className="navLabel">Komponenty</span>
+        </button>
+        <button type="button" className={activeSection === "events" ? "navItem active" : "navItem"} title="Výstavy / eventy" onClick={() => onNavigate?.("events")}>
+          <span className="navIcon">◎</span>
+          <span className="navLabel">Výstavy / eventy</span>
+        </button>
+        <button type="button" className={activeSection === "priceLists" ? "navItem active" : "navItem"} title="Ceníky" onClick={() => onNavigate?.("priceLists")}>
+          <span className="navIcon">₠</span>
+          <span className="navLabel">Ceníky</span>
         </button>
       </nav>
 

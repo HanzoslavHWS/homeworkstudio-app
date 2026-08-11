@@ -1,5 +1,27 @@
 import type { ConstructionPricingPolicy, ProjectType } from "./models.ts";
 
+export const DEFAULT_CZ_VAT_RATE_PERCENT = 21;
+
+export type TaxBreakdown = Readonly<{
+  net: number;
+  vat: number;
+  gross: number;
+  vatRatePercent: number;
+}>;
+
+export function calculateNetVatGross(
+  net: number,
+  vatRatePercent = DEFAULT_CZ_VAT_RATE_PERCENT,
+): TaxBreakdown {
+  const vat = Math.round(net * vatRatePercent) / 100;
+  return {
+    net,
+    vat,
+    gross: Math.round((net + vat) * 100) / 100,
+    vatRatePercent,
+  };
+}
+
 export const STANDARD_BOOTH_PRICING: ConstructionPricingPolicy = {
   mode: "fixed",
   structuralChangesAffectPrice: false,
