@@ -46,6 +46,10 @@ import {
 import { calculateOrderInventory } from "../domain/order";
 import { LocalProjectRepository, type ProjectRepository } from "../domain/repository";
 import { LocalEventRepository, type EventRepository } from "../domain/eventRepository";
+import { RemoteApiProjectRepository } from "../lib/db/projectRepository.remoteApi.client";
+import { RemoteApiEventRepository } from "../lib/db/eventRepository.remoteApi.client";
+import { resolvePersistenceProbe } from "../lib/db/persistenceMode.client";
+import { ConcurrencyConflictError } from "../lib/db/concurrency";
 import { saveCameraView } from "../domain/workflow";
 import type { Exhibition, PriceList } from "../domain/organizations";
 import {
@@ -185,6 +189,8 @@ export default function BoothGenerator() {
   const temporaryGraphicFilesRef = useRef(new Map<string, File>());
   const [savedProjects, setSavedProjects] = useState<ProjectRecord[]>([]);
   const [saveStatus, setSaveStatus] = useState("");
+  const [saveError, setSaveError] = useState("");
+  const [persistenceMode, setPersistenceMode] = useState<"checking" | "db" | "local-fallback" | "unavailable">("checking");
 
   const [isSidebarCollapsed, setIsSidebarCollapsed] =
     useState(false);
@@ -274,15 +280,60 @@ export default function BoothGenerator() {
   ] = useState("");
 
   useEffect(() => {
-    const repository = new LocalProjectRepository(window.localStorage);
-    repositoryRef.current = repository;
-    repository.list().then((projects) => setSavedProjects([...projects]));
-    const eventRepository = new LocalEventRepository(window.localStorage, exhibitions);
-    eventRepositoryRef.current = eventRepository;
-    eventRepository.list().then((events) => {
-      setAdminEvents([...events]);
-      setEventsHydrated(true);
-    });
+    let cancelled = false;
+
+    function useLocalFallback(warn: boolean) {
+      if (warn) console.warn("[HomeworkStudio] Databázové úložiště není nakonfigurované — dočasně se používá localStorage (jen pro vývoj).");
+      const repository = new LocalProjectRepository(window.localStorage);
+      repositoryRef.current = repository;
+      repository.list().then((projects) => !cancelled && setSavedProjects([...projects]));
+      const eventRepository = new LocalEventRepository(window.localStorage, exhibitions);
+      eventRepositoryRef.current = eventRepository;
+      eventRepository.list().then((events) => {
+        if (cancelled) return;
+        setAdminEvents([...events]);
+        setEventsHydrated(true);
+      });
+    }
+
+    async function init() {
+      // DB is primary persistence when configured (section 6). Local*Repository stays as
+      // fallback: silent+warned in development, never in production (section 7) — a
+      // production deploy with missing Supabase config must show "unavailable", not
+      // quietly pretend localStorage is cloud storage.
+      const remoteProjects = new RemoteApiProjectRepository();
+      const probe = await resolvePersistenceProbe(() => remoteProjects.list());
+      if (cancelled) return;
+
+      if (probe.mode === "db") {
+        const remoteEvents = new RemoteApiEventRepository();
+        repositoryRef.current = remoteProjects;
+        eventRepositoryRef.current = remoteEvents;
+        setSavedProjects([...probe.value]);
+        const events = await remoteEvents.list();
+        if (cancelled) return;
+        setAdminEvents([...events]);
+        setEventsHydrated(true);
+        setPersistenceMode("db");
+        return;
+      }
+
+      if (probe.mode === "local-fallback") {
+        useLocalFallback(true);
+        setPersistenceMode("local-fallback");
+        return;
+      }
+
+      // "unavailable": repositoryRef/eventRepositoryRef stay null. Existing `if (!repository)
+      // return;` guards in saveProject/deleteProject already no-op safely; the banner below
+      // and saveProject's explicit check make sure the UI never claims a save succeeded.
+      setPersistenceMode("unavailable");
+    }
+
+    init();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   useEffect(() => {
@@ -856,14 +907,24 @@ export default function BoothGenerator() {
 
   async function saveProject() {
     const repository = repositoryRef.current;
-    if (!repository) return;
+    if (!repository) {
+      setSaveError(persistenceMode === "unavailable" ? "Databázové úložiště není dostupné. Projekt nebyl uložen." : "Úložiště zatím není připravené, zkuste to prosím znovu za chvíli.");
+      return;
+    }
     const snapshot = projectSnapshot();
     setProjectId(snapshot.id);
     setProjectCreatedAt(snapshot.createdAt);
-    await repository.save(snapshot);
-    setSavedProjects([...(await repository.list())]);
-    setSaveStatus("Uloženo");
-    window.setTimeout(() => setSaveStatus(""), 1400);
+    setSaveStatus("Ukládání…");
+    setSaveError("");
+    try {
+      await repository.save(snapshot);
+      setSavedProjects([...(await repository.list())]);
+      setSaveStatus("Uloženo");
+      window.setTimeout(() => setSaveStatus(""), 1400);
+    } catch (error) {
+      setSaveStatus("");
+      setSaveError(error instanceof ConcurrencyConflictError ? "Data byla mezitím změněna jinde. Obnovte stránku před uložením." : "Uložení projektu se nezdařilo.");
+    }
   }
 
   function openProject(project: ProjectRecord) {
@@ -923,8 +984,12 @@ export default function BoothGenerator() {
   async function deleteProject(projectToDeleteId: string) {
     const repository = repositoryRef.current;
     if (!repository) return;
-    await repository.delete(projectToDeleteId);
-    setSavedProjects([...(await repository.list())]);
+    try {
+      await repository.delete(projectToDeleteId);
+      setSavedProjects([...(await repository.list())]);
+    } catch {
+      setSaveError("Smazání projektu se nezdařilo.");
+    }
   }
 
   function selectWorkflowStep(target: number) {
@@ -1642,7 +1707,15 @@ export default function BoothGenerator() {
           onStepSelect={selectWorkflowStep}
           onSave={workspaceSection === "project" ? saveProject : undefined}
           saveStatus={saveStatus}
+          saveError={saveError}
         />
+
+        {persistenceMode === "local-fallback" && (
+          <p className="temporaryNotice persistenceBanner">Databázové úložiště není nakonfigurované — projekty a eventy se dočasně ukládají jen do tohoto prohlížeče (localStorage). Toto hlášení se zobrazuje jen ve vývoji.</p>
+        )}
+        {persistenceMode === "unavailable" && (
+          <p className="uploadError persistenceBanner">Databázové úložiště není dostupné. Ukládání projektů a eventů je dočasně vypnuté — kontaktujte administrátora.</p>
+        )}
 
         {workspaceSection === "projects" && (
           <ProjectsPage

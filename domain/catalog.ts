@@ -45,6 +45,35 @@ function pricingSpecificity(entry: PricingEntry): number {
     Number(Boolean(entry.priceListId));
 }
 
+/**
+ * "missing" here means no PricingEntry resolved at all for the context (selectPricingEntry
+ * returned undefined) — never confuse with "fixed" salePrice of 0, which is a real price.
+ * A CatalogItem being "active"/ready is independent of this: readiness is about the item
+ * being well-formed, pricing availability is about whether *this* project/event has a
+ * number to charge right now. See domain/catalogReadiness.ts for the readiness side.
+ */
+export type PricingAvailability = "fixed" | "individual" | "included" | "missing";
+
+export function derivePricingAvailability(entry: PricingEntry | undefined): PricingAvailability {
+  if (!entry) return "missing";
+  if (entry.priceMode === "individual") return "individual";
+  if (entry.priceMode === "included") return "included";
+  return entry.salePrice !== undefined ? "fixed" : "missing";
+}
+
+/**
+ * Section 10's priority, made explicit: selectPricingEntry already prefers the most
+ * specific event/realization/price-list override over a base (all-undefined) entry —
+ * this just resolves the result into the 4-way availability a pricing UI needs to show
+ * ("missing price / nutno nacenit" rather than silently falling back to 0).
+ */
+export function resolvePricingAvailability(
+  item: Pick<ComponentDefinition, "pricingEntries">,
+  context: PricingContext,
+): PricingAvailability {
+  return derivePricingAvailability(selectPricingEntry(item.pricingEntries ?? [], context));
+}
+
 export interface CatalogImportProvider {
   readonly id: string;
   importCatalog(file: File): Promise<{

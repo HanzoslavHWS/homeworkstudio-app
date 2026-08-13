@@ -721,6 +721,13 @@ select:focus {
   gap: 15px;
 }
 
+.saveProjectGroup {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
+}
+
 .saveProjectButton {
   min-height: 32px;
   padding: 0 12px;
@@ -731,6 +738,18 @@ select:focus {
   font-size: 8px;
   font-weight: 700;
   cursor: pointer;
+}
+
+.saveProjectGroup .uploadError {
+  max-width: 220px;
+  text-align: right;
+}
+
+.persistenceBanner {
+  margin: 0;
+  padding: 8px 14px;
+  font-size: 9px;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
 }
 
 /* ================================================= */

@@ -184,6 +184,20 @@ export type PriceList = Readonly<{
   active: boolean;
 }>;
 
+/**
+ * Section 5: makes "Event → default PriceList" an explicit, testable resolution instead
+ * of just trusting the fields exist. Falls back to the first assigned price list when no
+ * defaultPriceListId is set; returns undefined rather than guessing if neither resolves to
+ * an actual PriceList the caller passed in (e.g. stale id after a price list was archived).
+ */
+export function resolveDefaultPriceList(
+  event: Pick<Exhibition, "defaultPriceListId" | "priceListIds">,
+  priceLists: readonly PriceList[],
+): PriceList | undefined {
+  const candidateId = event.defaultPriceListId ?? event.priceListIds[0];
+  return candidateId ? priceLists.find((priceList) => priceList.id === candidateId) : undefined;
+}
+
 export function eventLogoUrl(slug: string): string {
   return `/events/${slug}/logo.png`;
 }

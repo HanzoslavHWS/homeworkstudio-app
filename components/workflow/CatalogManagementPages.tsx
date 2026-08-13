@@ -12,6 +12,7 @@ import {
 import type { StoredAsset } from "../../domain/assets";
 import { getAssetDownloadUrl, uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
 import { useAssetUrl } from "../../hooks/useAssetUrl";
+import { ConcurrencyConflictError } from "../../lib/db/concurrency";
 
 export function EventLogo({ event, compact = false }: { event?: Exhibition; compact?: boolean }) {
   return <EventMediaPreview asset={event?.logoAsset} url={event?.logoUrl} label="Logo výstavy" compact={compact} />;
@@ -135,9 +136,12 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
       savedEventsRef.current.set(selected.id, selected);
       setSaveState("saved");
       onDirtyChange?.(false);
-    } catch {
+    } catch (error) {
       setSaveState("dirty");
-      setUploadStates((current) => ({ ...current, save: { state: "error", percent: 0, message: "Event se nepodařilo uložit. Uploadovaná data v R2 zůstávají bezpečně zachována." } }));
+      const message = error instanceof ConcurrencyConflictError
+        ? "Data byla mezitím změněna jinde. Obnovte stránku před uložením."
+        : "Event se nepodařilo uložit. Uploadovaná data v R2 zůstávají bezpečně zachována.";
+      setUploadStates((current) => ({ ...current, save: { state: "error", percent: 0, message } }));
     }
   }
 

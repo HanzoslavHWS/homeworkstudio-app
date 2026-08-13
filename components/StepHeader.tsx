@@ -3,11 +3,12 @@ type StepHeaderProps = {
   onStepSelect?: (step: number) => void;
   onSave?: () => void;
   saveStatus?: string;
+  saveError?: string;
 };
 
 const steps = ["Projekt", "Konfigurátor", "Vizualizace", "Souhrn", "Export"];
 
-export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus }: StepHeaderProps) {
+export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus, saveError }: StepHeaderProps) {
   return (
     <header className="topbar">
       <div>
@@ -35,9 +36,12 @@ export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus }: St
         </div>
 
         {onSave && (
-          <button type="button" className="saveProjectButton" onClick={onSave}>
-            {saveStatus || "Uložit projekt"}
-          </button>
+          <div className="saveProjectGroup">
+            <button type="button" className="saveProjectButton" onClick={onSave}>
+              {saveStatus || "Uložit projekt"}
+            </button>
+            {saveError && <small className="uploadError">{saveError}</small>}
+          </div>
         )}
 
         <form action="/api/auth/logout" method="post">

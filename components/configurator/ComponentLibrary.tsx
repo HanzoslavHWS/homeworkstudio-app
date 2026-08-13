@@ -8,6 +8,7 @@ import type { ComponentDefinition } from "../../domain/models";
 import type { OrderInventoryItem } from "../../domain/order";
 import { matchesCatalogSearch } from "../../domain/search";
 import { catalogDisplayName } from "../../domain/catalog";
+import { isGeneratorEligible } from "../../domain/catalogReadiness";
 
 type Props = {
   onAddComponent: (definition: ComponentDefinition) => void;
@@ -22,7 +23,7 @@ export function ComponentLibrary({ onAddComponent, inventory = [] }: Props) {
   const [open, setOpen] = useState({ inventory: true, furniture: true, technical: false });
   const [category, setCategory] = useState("");
   const [query, setQuery] = useState("");
-  const activeItems = componentCatalogItems.filter((item) => item.active !== false && item.catalogItemType !== "service");
+  const activeItems = componentCatalogItems.filter((item) => item.active !== false && item.catalogItemType !== "service" && isGeneratorEligible(item));
   const physical = activeItems.filter((item) => item.sceneLayer === "furniture");
   const technical = activeItems.filter((item) => item.sceneLayer !== "furniture");
   const categories = categoryOptions(physical);

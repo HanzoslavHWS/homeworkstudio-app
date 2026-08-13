@@ -12,6 +12,29 @@ export type SceneLayer =
   | "waste"
   | "annotations";
 
+/** Catalog publication lifecycle. Undefined on an item means "legacy seed, predates this field" — treated as active for backward compatibility. */
+export const CATALOG_ITEM_STATUSES = [
+  "draft",
+  "needs_review",
+  "active",
+  "inactive",
+  "archived",
+] as const;
+export type CatalogItemStatus = (typeof CATALOG_ITEM_STATUSES)[number];
+
+/** Classification used to select which readiness rules apply — see domain/catalogReadiness.ts. */
+export const CATALOG_ITEM_KINDS = [
+  "booth",
+  "construction",
+  "furniture",
+  "technical_point",
+  "service",
+  "graphics_service",
+  "floor_finish",
+  "other",
+] as const;
+export type CatalogItemKind = (typeof CATALOG_ITEM_KINDS)[number];
+
 export type MaterialRole =
   | "OCTANORM_WHITE"
   | "OCTANORM_BLACK"
@@ -249,6 +272,8 @@ export type BoothType = Readonly<{
   defaultCarpetFinishId?: string;
   graphicsRequired?: boolean;
   vatRatePercent?: number;
+  /** Absent = legacy seed item (e.g. P86), treated as active for backward compatibility. */
+  lifecycleStatus?: CatalogItemStatus;
 }>;
 
 export type Vector3Tuple = readonly [number, number, number];
@@ -267,6 +292,17 @@ export type BoothPartReference = Readonly<{
   quantity: number;
 }>;
 
+/**
+ * Absent salePrice is ambiguous on its own (does it mean "not priced yet" or "priced at
+ * zero on purpose"?) — priceMode disambiguates it. Absent priceMode = "fixed" for full
+ * backward compatibility with existing seed PricingEntry data (M57/L02/...).
+ * - "fixed": salePrice is a real number, use it directly.
+ * - "individual": must be quoted per case (e.g. Kontejner) — salePrice stays undefined.
+ * - "included": already covered by a package (e.g. P86 fascia graphics) — salePrice is 0
+ *   and must never be charged again; see domain/technicalServices.ts includedInPackage.
+ */
+export type PricingEntryMode = "fixed" | "individual" | "included";
+
 export type PricingEntry = Readonly<{
   id: string;
   itemId: string;
@@ -278,6 +314,7 @@ export type PricingEntry = Readonly<{
   purchasePrice?: number;
   validFrom?: string;
   validTo?: string;
+  priceMode?: PricingEntryMode;
 }>;
 
 export type ComponentDefinition = Readonly<{
@@ -326,8 +363,16 @@ export type ComponentDefinition = Readonly<{
   partDefinitions?: readonly PartDefinition[];
   finishVariants?: readonly FinishVariant[];
   catalogItemType?: "physical" | "service";
-  pricingUnit?: "piece" | "square-meter" | "linear-meter";
+  /** Explicit pricing unit — deliberately separate from the physical `unit` field, since
+   * a service's charging unit (e.g. graphics "bm" vs "m²") can differ from how the item
+   * would otherwise be measured. See domain/catalogReadiness.ts for which kinds require it. */
+  pricingUnit?: "piece" | "square-meter" | "linear-meter" | "day" | "cubic-meter";
   vatRatePercent?: number;
+  /** Absent = legacy seed item (e.g. M57), treated as active for backward compatibility. */
+  lifecycleStatus?: CatalogItemStatus;
+  catalogItemKind?: CatalogItemKind;
+  /** Set once a human has reviewed/approved this item for activation. */
+  reviewedAt?: string;
 }>;
 
 export type PlacedComponent = Notes & {
