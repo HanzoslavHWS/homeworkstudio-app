@@ -22,6 +22,13 @@ export function calculateNetVatGross(
   };
 }
 
+export function calculateMarginDelta(
+  salePriceNet: number,
+  purchasePriceNet: number,
+): number {
+  return Math.round((salePriceNet - purchasePriceNet) * 100) / 100;
+}
+
 export const STANDARD_BOOTH_PRICING: ConstructionPricingPolicy = {
   mode: "fixed",
   structuralChangesAffectPrice: false,

@@ -1,4 +1,5 @@
 import type { Currency, Notes } from "./models.ts";
+import type { StoredAsset } from "./assets.ts";
 
 export type EventDeadline = Readonly<{
   id: string;
@@ -12,6 +13,9 @@ export type EventDocument = Readonly<{
   category: string;
   fileName: string;
   assetUrl?: string;
+  asset?: StoredAsset;
+  storageKey?: string;
+  size?: number;
   mimeType: string;
   language?: "cs" | "en";
   active: boolean;
@@ -22,6 +26,9 @@ export type EventDocument = Readonly<{
 export type EventMediaMetadata = Readonly<{
   fileName: string;
   mimeType: string;
+  size?: number;
+  storageKey?: string;
+  createdAt?: string;
   availability: "temporary-session" | "persistent";
 }>;
 
@@ -34,6 +41,8 @@ export type Exhibition = Readonly<{
   venue: string;
   logoUrl: string;
   coverImageUrl: string;
+  logoAsset?: StoredAsset;
+  coverImageAsset?: StoredAsset;
   logoMetadata?: EventMediaMetadata;
   coverImageMetadata?: EventMediaMetadata;
   assemblyDate?: string;
@@ -62,11 +71,34 @@ export function normalizeEventDocument(
     category: document.category ?? "other",
     fileName: document.fileName ?? "document",
     assetUrl: document.assetUrl,
+    asset: document.asset,
+    storageKey: document.storageKey ?? document.asset?.storageKey,
+    size: document.size ?? document.asset?.size,
     mimeType: document.mimeType ?? "application/octet-stream",
     language: document.language,
     active: document.active ?? true,
     createdAt: document.createdAt,
-    availability: document.availability ?? "temporary-session",
+    availability: document.storageKey || document.asset?.storageKey ? "persistent" : document.availability ?? "temporary-session",
+  };
+}
+
+export function createEventDocumentFromAsset(
+  asset: StoredAsset,
+  defaults: Readonly<{ category?: string; language?: "cs" | "en" }> = {},
+): EventDocument {
+  return {
+    id: asset.id,
+    title: asset.originalFileName.replace(/\.[^.]+$/, ""),
+    category: defaults.category ?? "other",
+    fileName: asset.originalFileName,
+    asset,
+    storageKey: asset.storageKey,
+    size: asset.size,
+    mimeType: asset.mimeType,
+    language: defaults.language,
+    active: true,
+    createdAt: asset.createdAt,
+    availability: "persistent",
   };
 }
 
@@ -104,6 +136,8 @@ export function normalizeExhibition(
     venue: event.venue ?? "",
     logoUrl: event.logoUrl ?? eventLogoUrl(slug),
     coverImageUrl: event.coverImageUrl ?? eventCoverImageUrl(slug),
+    logoAsset: event.logoAsset,
+    coverImageAsset: event.coverImageAsset,
     logoMetadata: event.logoMetadata,
     coverImageMetadata: event.coverImageMetadata,
     assemblyDate: event.assemblyDate,

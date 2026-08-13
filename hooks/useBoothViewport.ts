@@ -11,11 +11,13 @@ import {
   DEFAULT_PIXELS_PER_MM,
   centerWorld,
   fitWorldToViewport,
+  fitBoundsToViewport,
   panViewport,
   screenToWorld,
   zoomAroundScreenPoint,
   type ViewportSize,
   type ViewportTransform,
+  type WorldBounds,
 } from "../geometry/viewport";
 
 type UseBoothViewportOptions = {
@@ -170,6 +172,8 @@ export function useBoothViewport({
   const zoomOut = () => zoomAt(transform.zoom / 1.25);
   const resetZoom = () => setTransform(centerWorld(viewportSize, worldSize, 1));
   const fitToBooth = () => setTransform(fitWorldToViewport(viewportSize, worldSize));
+  const fitToContent = (bounds: WorldBounds) =>
+    setTransform(fitBoundsToViewport(viewportSize, bounds));
 
   const startPan = (event: ReactPointerEvent<HTMLDivElement>): boolean => {
     const shouldPan = event.button === 1 || (event.button === 0 && isSpacePressed);
@@ -245,6 +249,7 @@ export function useBoothViewport({
     zoomOut,
     resetZoom,
     fitToBooth,
+    fitToContent,
     startPan,
     movePan,
     endPan,

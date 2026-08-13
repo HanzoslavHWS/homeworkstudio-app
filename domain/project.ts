@@ -7,6 +7,7 @@ import type {
 import { createEmptyNotes } from "./notes.ts";
 import type { CustomDimension, ProjectAnnotation } from "./spatialAnnotations.ts";
 import type { ExportLayer } from "./workflow.ts";
+import type { StoredAsset } from "./assets.ts";
 
 export type ProjectMode = "proposal" | "order" | "production";
 export type ProjectStatus = "draft" | "inProgress" | "ready" | "archived";
@@ -37,6 +38,20 @@ export type TechnicalRequirement = Readonly<{
   note: string;
 }>;
 
+export type CleaningRequirement = Readonly<{
+  status: "unspecified" | "notWanted" | "inquire" | "oneTime" | "daily";
+  note: string;
+  /** Optional future multiplier; no business default is inferred. */
+  dayCount?: number;
+}>;
+
+export type ContainerRequirement = Readonly<{
+  status: "unspecified" | "notWanted" | "inquire" | "wanted";
+  volumeSize: string;
+  note: string;
+  individualPriceNet?: number;
+}>;
+
 export type ElectricityRequirement = TechnicalRequirement &
   Readonly<{
     powerOption: "" | "3kw" | "5kw" | "9kw" | "custom";
@@ -48,6 +63,49 @@ export type TechnicalRequirements = Readonly<{
   water: TechnicalRequirement;
   waste: TechnicalRequirement;
   graphics: TechnicalRequirement;
+  fasciaGraphics: TechnicalRequirement;
+  fullWrapGraphics: TechnicalRequirement;
+  cleaning: CleaningRequirement;
+  container: ContainerRequirement;
+}>;
+
+export type ArtworkStatus = "missing" | "received" | "ready";
+
+export type PrintSurfaceAssignment = Readonly<{
+  printSurfaceId: string;
+  sceneReference: string;
+  graphicsKind: "fascia" | "fullWrap";
+  artworkStatus: ArtworkStatus;
+  artworkFileId?: string;
+  selectedForPrint: boolean;
+  canonicalWidthMm: number;
+  canonicalHeightMm: number;
+  productionWidthMm: number;
+  productionHeightMm: number;
+  includedInPackage: boolean;
+  pricedSeparately: boolean;
+}>;
+
+export type Measurement3D = Readonly<{
+  id: string;
+  pointA: readonly [number, number, number];
+  pointB: readonly [number, number, number];
+  measuredValueMm: number;
+  displayLabel?: string;
+  displayOffset?: readonly [number, number, number];
+  snapA?: "vertex" | "edge" | "surface";
+  snapB?: "vertex" | "edge" | "surface";
+}>;
+
+export type ExportCalculationOptions = Readonly<{
+  includeVisuals: boolean;
+  includePricingTable: boolean;
+  includeVatSummary: boolean;
+  includeProjectNote: boolean;
+  includeItemNotes: boolean;
+  includeContact: boolean;
+  includeEventLogo: boolean;
+  selectedOutputIds: readonly string[];
 }>;
 
 export type ImportedOrderMappingStatus = "matched" | "unresolved" | "ignored";
@@ -95,6 +153,7 @@ export type VisualizationItem = Readonly<{
   name: string;
   sourceViewId: string;
   imageDataUrl: string;
+  asset?: StoredAsset;
   type: "technical" | "ai";
   purpose: "working" | "presentation";
   createdAt: string;
@@ -107,6 +166,7 @@ export type GeneratedPlanOutput = Readonly<{
   type: "plan2d";
   layers: readonly ExportLayer[];
   imageDataUrl: string;
+  asset?: StoredAsset;
   createdAt: string;
   reviewStatus: "unreviewed" | "reviewed";
 }>;
@@ -118,6 +178,12 @@ export type GraphicFileReference = Readonly<{
   mimeType: string;
   availability: "temporary-session" | "persistent";
   storageUrl?: string;
+  storageKey?: string;
+  asset?: StoredAsset;
+  status?: "uploaded" | "dataReceived" | "ready";
+  associatedRequirement?: "fascia" | "fullWrap";
+  printSurfaceId?: string;
+  createdAt?: string;
 }>;
 
 export type ProjectRecord = Readonly<{
@@ -162,10 +228,14 @@ export type ProjectRecord = Readonly<{
   constructionFinishId: string;
   annotations: readonly ProjectAnnotation[];
   customDimensions: readonly CustomDimension[];
+  printSurfaceAssignments: readonly PrintSurfaceAssignment[];
+  measurements3D: readonly Measurement3D[];
+  dimensionOffsets3D: Readonly<Record<"width" | "depth" | "height", number>>;
+  exportCalculationOptions: ExportCalculationOptions;
   access: readonly ProjectAccess[];
 }>;
 
-export const CURRENT_PROJECT_SCHEMA_VERSION = 2;
+export const CURRENT_PROJECT_SCHEMA_VERSION = 4;
 
 export const DEFAULT_REALIZATION_COMPANY_ID = "default";
 
@@ -176,6 +246,23 @@ export function createDefaultTechnicalRequirements(): TechnicalRequirements {
     water: { ...base },
     waste: { ...base },
     graphics: { ...base },
+    fasciaGraphics: { ...base },
+    fullWrapGraphics: { ...base },
+    cleaning: { status: "unspecified", note: "" },
+    container: { status: "unspecified", volumeSize: "", note: "" },
+  };
+}
+
+export function createDefaultExportCalculationOptions(): ExportCalculationOptions {
+  return {
+    includeVisuals: true,
+    includePricingTable: true,
+    includeVatSummary: true,
+    includeProjectNote: true,
+    includeItemNotes: true,
+    includeContact: true,
+    includeEventLogo: true,
+    selectedOutputIds: [],
   };
 }
 
@@ -220,6 +307,7 @@ export function createProjectRecord(
       customerNote: item.customerNote ?? "",
       visible: item.visible ?? true,
       userLocked: item.userLocked ?? false,
+      displayOrder2D: item.displayOrder2D ?? 0,
     })),
     savedViews: overrides.savedViews ?? [],
     visualizations: (overrides.visualizations ?? []).map((item) => ({
@@ -240,7 +328,13 @@ export function createProjectRecord(
       "furniture",
       "annotations",
     ],
-    graphicsFiles: overrides.graphicsFiles ?? [],
+    graphicsFiles: (overrides.graphicsFiles ?? []).map((file) => ({
+      ...file,
+      storageKey: file.storageKey ?? file.asset?.storageKey,
+      availability: file.storageKey || file.asset?.storageKey ? "persistent" : file.availability ?? "temporary-session",
+      status: file.status ?? (file.storageKey || file.asset?.storageKey ? "uploaded" : undefined),
+      createdAt: file.createdAt ?? file.asset?.createdAt,
+    })),
     carpetFinishId: overrides.carpetFinishId ?? "carpet-grey",
     constructionFinishId:
       overrides.constructionFinishId ?? "construction-white",
@@ -250,6 +344,19 @@ export function createProjectRecord(
       textSize: item.textSize ?? "medium",
     })),
     customDimensions: overrides.customDimensions ?? [],
+    printSurfaceAssignments: overrides.printSurfaceAssignments ?? [],
+    measurements3D: overrides.measurements3D ?? [],
+    dimensionOffsets3D: overrides.dimensionOffsets3D ?? {
+      width: 0,
+      depth: 0,
+      height: 0,
+    },
+    exportCalculationOptions: {
+      ...createDefaultExportCalculationOptions(),
+      ...(overrides.exportCalculationOptions ?? {}),
+      selectedOutputIds:
+        overrides.exportCalculationOptions?.selectedOutputIds ?? [],
+    },
     access: overrides.access ?? [],
   };
 }
@@ -267,6 +374,16 @@ function normalizeTechnicalRequirements(
     water: { ...defaults.water, ...(requirements.water ?? {}) },
     waste: { ...defaults.waste, ...(requirements.waste ?? {}) },
     graphics: { ...defaults.graphics, ...(requirements.graphics ?? {}) },
+    fasciaGraphics: {
+      ...defaults.fasciaGraphics,
+      ...(requirements.fasciaGraphics ?? requirements.graphics ?? {}),
+    },
+    fullWrapGraphics: {
+      ...defaults.fullWrapGraphics,
+      ...(requirements.fullWrapGraphics ?? {}),
+    },
+    cleaning: { ...defaults.cleaning, ...(requirements.cleaning ?? {}) },
+    container: { ...defaults.container, ...(requirements.container ?? {}) },
   };
 }
 

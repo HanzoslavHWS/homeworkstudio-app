@@ -57,7 +57,7 @@ function stripTemporaryBinaryReferences(event: Exhibition): Exhibition {
       ? ""
       : event.coverImageUrl,
     documents: event.documents.map((document) =>
-      document.availability === "temporary-session"
+      document.availability === "temporary-session" && !document.storageKey
         ? { ...document, assetUrl: undefined }
         : document,
     ),

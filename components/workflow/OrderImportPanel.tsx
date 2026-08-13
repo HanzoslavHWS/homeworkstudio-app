@@ -1,5 +1,5 @@
 import { useState, type ChangeEvent } from "react";
-import { componentCatalog } from "../../data/components";
+import { componentCatalog, componentCatalogItems } from "../../data/components";
 import { createImportedOrder } from "../../domain/order";
 import type { ImportedOrder, ImportedOrderLine } from "../../domain/project";
 
@@ -14,15 +14,15 @@ export function OrderImportPanel({ order, onChange }: Props) {
   async function handleFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (!file) return;
-    onChange(await createImportedOrder(file));
+    onChange(await createImportedOrder(file, undefined, undefined, componentCatalogItems));
     event.target.value = "";
   }
 
   function addMappedChairLine() {
     const line: ImportedOrderLine = {
       id: `line-${Date.now()}`,
-      sourceCode: componentCatalog.chair.internalCode ?? "CHAIR-001",
-      sourceName: componentCatalog.chair.name,
+      sourceCode: componentCatalog.chair.internalCode ?? "M57",
+      sourceName: componentCatalog.chair.displayName ?? componentCatalog.chair.name,
       quantity: Math.max(1, quantity),
       unit: "ks",
       rawText: "Ručně mapovaný demonstrační řádek",

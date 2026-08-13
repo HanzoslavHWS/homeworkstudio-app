@@ -7,6 +7,7 @@ import {
 import type { ComponentDefinition } from "../../domain/models";
 import type { OrderInventoryItem } from "../../domain/order";
 import { matchesCatalogSearch } from "../../domain/search";
+import { catalogDisplayName } from "../../domain/catalog";
 
 type Props = {
   onAddComponent: (definition: ComponentDefinition) => void;
@@ -30,7 +31,7 @@ export function ComponentLibrary({ onAddComponent, inventory = [] }: Props) {
 
   const renderItem = (definition: ComponentDefinition) => <button key={definition.id} className="libraryItem" onClick={() => onAddComponent(definition)}>
     <span className={`libraryItemIcon ${definition.sceneLayer !== "furniture" ? "technicalIcon" : definition.type === "chair" ? "chairIcon" : "cabinetIcon"}`}>{definition.footprint2D?.symbol ?? (definition.type === "chair" ? "◇" : "▭")}</span>
-    <span className="libraryItemText"><strong>{definition.name}</strong><small>{definition.widthMm} × {definition.depthMm} mm</small><em>{definition.showIn3D ? "CAD model 1:1" : definition.sceneLayer !== "furniture" ? "Pouze 2D technická vrstva" : "2D prvek"}</em></span><span className="libraryAdd">+</span>
+    <span className="libraryItemText"><strong>{catalogDisplayName(definition)}</strong><small>{definition.internalCode ? `Kód: ${definition.internalCode} · ` : ""}{definition.widthMm} × {definition.depthMm} mm</small><em>{definition.showIn3D ? "CAD model 1:1" : definition.sceneLayer !== "furniture" ? "Pouze 2D technická vrstva" : "2D prvek"}</em></span><span className="libraryAdd">+</span>
   </button>;
 
   return <aside className="componentLibrary">

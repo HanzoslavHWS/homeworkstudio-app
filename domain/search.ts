@@ -46,6 +46,6 @@ export function matchesBoothSearch(booth: BoothType, query: string): boolean {
 
 export function matchesCatalogSearch(item: ComponentDefinition, query: string): boolean {
   const needle = normalized(query.trim());
-  return !needle || [item.internalCode, item.name, item.category]
+  return !needle || [item.internalCode, item.displayName, item.name, item.officialName, item.category]
     .some((value) => normalized(value).includes(needle));
 }

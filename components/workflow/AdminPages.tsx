@@ -8,8 +8,19 @@ import {
   matchesCatalogSearch,
 } from "../../domain/search";
 import { placeComponent } from "../../data/components";
-import { getMasterReferenceModel } from "../../domain/cad3d";
-import { pricingPolicyFor } from "../../domain/pricing";
+import { getComponentModel, getMasterReferenceModel } from "../../domain/cad3d";
+import {
+  calculateMarginDelta,
+  calculateNetVatGross,
+  pricingPolicyFor,
+} from "../../domain/pricing";
+import {
+  catalogImageAsset,
+  catalogDisplayName,
+  catalogImageUrl,
+  getBasePricingEntry,
+} from "../../domain/catalog";
+import { useAssetUrl } from "../../hooks/useAssetUrl";
 import { BoothCadPlanView } from "../configurator/BoothCadPlanView";
 import { BoothCadViewer } from "../configurator/BoothCadViewer";
 import {
@@ -78,7 +89,7 @@ export function ProjectsPage({ projects, fairName, boothName, onOpen, onDelete, 
                   </summary>
                   <div className="projectExpandedDetail">
                     <div className="projectStatusGrid">
-                      <ProjectStatus label="Grafika" value={project.technicalRequirements.graphics.status} />
+                      <ProjectStatus label="Grafika límce" value={project.technicalRequirements.fasciaGraphics.status} />
                       <ProjectStatus label="Elektro" value={project.technicalRequirements.electricity.status} />
                       <ProjectStatus label="Voda" value={project.technicalRequirements.water.status} />
                       <ProjectStatus label="Odpad" value={project.technicalRequirements.waste.status} />
@@ -87,7 +98,7 @@ export function ProjectsPage({ projects, fairName, boothName, onOpen, onDelete, 
                     </div>
                     <div className="projectExpandedNotes"><span>Interní poznámka</span><p>{project.notes.internalNote || "Bez interní poznámky."}</p></div>
                     <div className="projectExpandedMeta"><span>Kontakt: {project.contact.name || "—"} · {project.contact.phone || "—"} · {project.contact.email || "—"}</span><span>Nevyřešené řádky: {project.importedOrder?.lines.filter((line) => line.mappingStatus === "unresolved").length ?? 0}</span></div>
-                    <div className="projectExpandedNotes"><span>Technické poznámky</span><p>{[project.technicalRequirements.electricity.note, project.technicalRequirements.water.note, project.technicalRequirements.waste.note, project.technicalRequirements.graphics.note].filter(Boolean).join(" · ") || "Bez technických poznámek."}</p></div>
+                    <div className="projectExpandedNotes"><span>Technické poznámky</span><p>{[project.technicalRequirements.electricity.note, project.technicalRequirements.water.note, project.technicalRequirements.waste.note, project.technicalRequirements.fasciaGraphics.note, project.technicalRequirements.fullWrapGraphics.note, project.technicalRequirements.cleaning.note, project.technicalRequirements.container.note].filter(Boolean).join(" · ") || "Bez technických poznámek."}</p></div>
                     <div className="projectRowActions"><button type="button" onClick={() => onOpen(project)}>Otevřít projekt</button><button type="button" className="dangerText" onClick={() => onDelete(project.id)}>Smazat</button></div>
                     <div className="futureAccess"><strong>Sdílení a práva</strong><span>Budoucí owner/member oprávnění · vyžaduje uživatelské účty</span><button disabled>Spravovat přístupy</button></div>
                   </div>
@@ -191,6 +202,19 @@ export function ComponentCatalogPage({ items }: { items: readonly ComponentDefin
   const [showIn3D, setShowIn3D] = useState("");
   const item = allItems.find((entry) => entry.id === selectedId);
   const preview = item ? placeComponent(item, "admin-preview", 600, 600) : undefined;
+  const selectedCategory = item
+    ? categories.find((value) => value.id === item.category)?.name ?? item.category
+    : "";
+  const selectedPrice = getBasePricingEntry(item?.pricingEntries, "CZK");
+  const selectedTax = calculateNetVatGross(
+    selectedPrice?.salePrice ?? 0,
+    item?.vatRatePercent,
+  );
+  const selectedMargin =
+    selectedPrice?.salePrice !== undefined &&
+    selectedPrice.purchasePrice !== undefined
+      ? calculateMarginDelta(selectedPrice.salePrice, selectedPrice.purchasePrice)
+      : undefined;
   return (
     <div className="workspacePage">
       <div className="workspacePageHeader"><div><span className="eyebrow">ADMINISTRACE</span><h1>Mobiliář / komponenty</h1></div><button className="primaryButton" onClick={() => setShowForm(!showForm)}>+ Přidat mobiliář</button></div>
@@ -202,6 +226,7 @@ export function ComponentCatalogPage({ items }: { items: readonly ComponentDefin
           id,
           internalCode: draft.code,
           type: "catalog-component",
+          displayName: draft.name,
           name: draft.name,
           category: draft.category || "other",
           description: draft.description,
@@ -245,14 +270,54 @@ export function ComponentCatalogPage({ items }: { items: readonly ComponentDefin
         setShowForm(false);
       }} />}
       <div className="adminSplit">
-        <div className="adminList">{filterCatalogCategory(visibleItems, category).filter((entry) => matchesCatalogSearch(entry, query) && (!printable || Boolean(entry.printable) === (printable === "yes")) && (!showIn3D || Boolean(entry.showIn3D) === (showIn3D === "yes"))).map((entry) => <button key={entry.id} className={entry.id === selectedId ? "active" : ""} onClick={() => setSelectedId(entry.id)}><strong>{entry.name}</strong><span>{entry.internalCode} · {categories.find((value) => value.id === entry.category)?.name ?? entry.category}</span></button>)}</div>
+        <div className="adminList catalogAdminList">{filterCatalogCategory(visibleItems, category).filter((entry) => matchesCatalogSearch(entry, query) && (!printable || Boolean(entry.printable) === (printable === "yes")) && (!showIn3D || Boolean(entry.showIn3D) === (showIn3D === "yes"))).map((entry) => {
+          const basePrice = getBasePricingEntry(entry.pricingEntries, "CZK");
+          const categoryName = categories.find((value) => value.id === entry.category)?.name ?? entry.category;
+          return <button key={entry.id} className={`catalogListCard ${entry.id === selectedId ? "active" : ""}`} onClick={() => setSelectedId(entry.id)}>
+            <SafeCatalogImage item={entry} className="catalogCardImage" alt={`Náhled ${catalogDisplayName(entry)}`} fallback={<span className={`catalogCardFallback ${entry.sceneLayer}`}>{entry.footprint2D?.symbol ?? "2D"}</span>} />
+            <span className="catalogCardCopy"><strong>{catalogDisplayName(entry)}</strong><small>{entry.internalCode}</small><small>{entry.widthMm} × {entry.depthMm} × {entry.heightMm ?? "—"} mm</small><b>{basePrice?.salePrice !== undefined ? `${formatMoney(basePrice.salePrice)} bez DPH` : "Cena neuvedena"}</b><em>Kategorie: {categoryName}</em></span>
+          </button>;
+        })}</div>
         {item && preview && <div className="adminDetail">
-          <div className="adminDetailMeta"><span>{item.internalCode}</span><h2>{item.name}</h2><p>{item.description}</p><dl><div><dt>Kategorie / stav</dt><dd>{categories.find((value) => value.id === item.category)?.name ?? item.category} · {item.active === false ? "Neaktivní" : "Aktivní"}</dd></div><div><dt>Rozměry</dt><dd>{item.widthMm} × {item.depthMm} × {item.heightMm ?? "—"} mm</dd></div><div><dt>Jednotka</dt><dd>{item.unit ?? "—"}</dd></div><div><dt>GLB model</dt><dd>{item.modelUrl ?? "Pouze 2D"}</dd></div><div><dt>Thumbnail</dt><dd>{item.thumbnailUrl ?? "—"}</dd></div><div><dt>Reálná fotografie</dt><dd>{item.photoUrl ?? "—"}</dd></div><div><dt>SketchUp asset</dt><dd>{item.sketchupUrl ?? "—"}</dd></div><div><dt>Base sale / purchase / měna</dt><dd>{priceSummary(item.pricingEntries)}</dd></div><div><dt>Pricing overrides</dt><dd>{item.pricingEntries?.filter((entry) => entry.exhibitionId || entry.priceListId || entry.realizationCompanyId).length ?? 0} řádků</dd></div><div><dt>Potisk / tiskové plochy</dt><dd>{item.printable ? "Ano" : "Ne"} · {item.printSurfaces?.length ?? 0}</dd></div><div><dt>Finish varianty</dt><dd>{item.finishVariants?.map((finish) => finish.name).join(", ") || "—"}</dd></div></dl></div>
-          <div className="adminPreviews">{item.photoUrl && <div><span>REÁLNÁ FOTOGRAFIE</span><img className="catalogPhotoPreview" src={item.photoUrl} alt={`Fotografie ${item.name}`} /></div>}<div><span>2D NÁHLED</span><div className={`catalogFootprint ${item.sceneLayer}`}>{item.footprint2D?.symbol ?? item.name}</div></div><div><span>3D PREVIEW</span>{item.showIn3D ? <BoothCadViewer footprintWidthMm={1200} footprintDepthMm={1200} components={[preview]} /> : <p className="workspaceEmpty">Tato komponenta je pouze ve 2D.</p>}</div></div>
+          <header className="catalogDetailHeader"><span>{item.internalCode}</span><h2>{catalogDisplayName(item)}</h2><p>{item.description}</p></header>
+          <div className="catalogDetailSections">
+            <CatalogDetailSection title="Identifikace"><dl><Detail label="Interní kód" value={item.internalCode} /><Detail label="Oficiální interní název" value={item.officialName} /><Detail label="Zobrazovaný název" value={catalogDisplayName(item)} /><Detail label="Kategorie" value={selectedCategory} /><Detail label="Jednotka" value={item.unit} /><Detail label="Stav" value={item.active === false ? "Neaktivní" : "Aktivní"} /></dl></CatalogDetailSection>
+            <CatalogDetailSection title="Rozměry"><dl><Detail label="Šířka" value={`${item.widthMm} mm`} /><Detail label="Hloubka" value={`${item.depthMm} mm`} /><Detail label="Výška" value={item.heightMm !== undefined ? `${item.heightMm} mm` : "—"} /></dl></CatalogDetailSection>
+            <CatalogDetailSection title="Ceny"><dl><Detail label="Prodejní cena bez DPH" value={selectedPrice?.salePrice !== undefined ? formatMoney(selectedPrice.salePrice) : "—"} /><Detail label="Nákupní cena bez DPH" value={selectedPrice?.purchasePrice !== undefined ? formatMoney(selectedPrice.purchasePrice) : "—"} /><Detail label="Marže / rozdíl" value={selectedMargin !== undefined ? formatMoney(selectedMargin) : "—"} /><Detail label={`DPH ${selectedTax.vatRatePercent} %`} value={selectedPrice?.salePrice !== undefined ? formatMoney(selectedTax.vat) : "—"} /><Detail label="Cena s DPH" value={selectedPrice?.salePrice !== undefined ? formatMoney(selectedTax.gross) : "—"} /><Detail label="Pricing overrides / ceníky" value={`${item.pricingEntries?.filter((entry) => entry.exhibitionId || entry.priceListId || entry.realizationCompanyId).length ?? 0} řádků`} /></dl></CatalogDetailSection>
+            <CatalogDetailSection title="Assety"><dl><Detail label="GLB URL" value={getComponentModel(item.assets)?.url ?? item.modelUrl ?? "—"} /><Detail label="Reálná fotografie" value={item.photoUrl ?? "—"} /><Detail label="Thumbnail URL" value={item.thumbnailUrl ?? (item.photoUrl ? `${item.photoUrl} (fallback)` : "—")} /><Detail label="SKP URL" value={item.sketchupUrl ?? "—"} /></dl></CatalogDetailSection>
+            <CatalogDetailSection title="Vlastnosti"><dl><Detail label="Zobrazit ve 2D" value={yesNo(item.showIn2D)} /><Detail label="Zobrazit ve 3D" value={yesNo(item.showIn3D)} /><Detail label="Potisknutelné" value={yesNo(item.printable)} /><Detail label="Tiskové plochy" value={String(item.printSurfaces?.length ?? 0)} /><Detail label="Finish varianty" value={item.finishVariants?.map((finish) => finish.name).join(", ") || "—"} /></dl></CatalogDetailSection>
+          </div>
+          <div className="adminPreviews catalogAssetPreviews"><div><span>REÁLNÁ FOTOGRAFIE</span><SafeCatalogImage item={item} className="catalogPhotoPreview" alt={`Fotografie ${catalogDisplayName(item)}`} fallback={<p className="catalogPhotoPlaceholder">Fotografie zatím není nahraná</p>} /></div><div><span>2D NÁHLED</span>{item.showIn2D ? <div className={`catalogFootprint ${item.sceneLayer}`}>{item.footprint2D?.symbol ?? catalogDisplayName(item)}</div> : <p className="workspaceEmpty">Položka se ve 2D nezobrazuje.</p>}</div><div><span>3D PREVIEW</span>{item.showIn3D ? <BoothCadViewer footprintWidthMm={1200} footprintDepthMm={1200} components={[preview]} /> : <p className="workspaceEmpty">Tato komponenta je pouze ve 2D.</p>}</div></div>
         </div>}
       </div>
     </div>
   );
+}
+
+function SafeCatalogImage({ item, className, alt, fallback }: { item: Pick<ComponentDefinition, "thumbnailUrl" | "photoUrl" | "thumbnailAsset" | "photoAsset">; className: string; alt: string; fallback: React.ReactNode }) {
+  const [unavailableUrls, setUnavailableUrls] = useState<string[]>([]);
+  const legacySource = catalogImageUrl(item, unavailableUrls);
+  const resolved = useAssetUrl(catalogImageAsset(item), legacySource);
+  const source = resolved.url;
+  return source
+    ? <img className={className} src={source} alt={alt} onError={() => setUnavailableUrls((urls) => urls.includes(source) ? urls : [...urls, source])} />
+    : fallback;
+}
+
+function CatalogDetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return <section className="catalogDetailSection"><h3>{title}</h3>{children}</section>;
+}
+
+function Detail({ label, value }: { label: string; value: React.ReactNode }) {
+  return <div><dt>{label}</dt><dd>{value || "—"}</dd></div>;
+}
+
+function formatMoney(value: number): string {
+  return `${value.toLocaleString("cs-CZ")} Kč`;
+}
+
+function yesNo(value: boolean | undefined): string {
+  return value ? "Ano" : "Ne";
 }
 
 type MetadataDraft = {

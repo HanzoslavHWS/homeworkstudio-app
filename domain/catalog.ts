@@ -1,8 +1,11 @@
 import type {
   ComponentDefinition,
   Currency,
+  PlacedComponent,
   PricingEntry,
 } from "./models.ts";
+import type { StoredAsset } from "./assets.ts";
+export type { AssetStorageProvider } from "./assets.ts";
 
 export type PricingContext = Readonly<{
   exhibitionId?: string;
@@ -51,11 +54,6 @@ export interface CatalogImportProvider {
   }>;
 }
 
-export interface AssetStorageProvider {
-  readonly id: string;
-  store(file: File): Promise<{ url: string }>;
-}
-
 export function normalizeCatalogCode(value: string | undefined): string {
   return (value ?? "").trim().toLocaleUpperCase("cs");
 }
@@ -65,6 +63,108 @@ export function normalizeCatalogName(value: string | undefined): string {
     .trim()
     .replace(/\s+/g, " ")
     .toLocaleLowerCase("cs");
+}
+
+export function catalogDisplayName(
+  item: Pick<ComponentDefinition, "displayName" | "name">,
+): string {
+  return item.displayName ?? item.name;
+}
+
+export function getBasePricingEntry(
+  entries: readonly PricingEntry[] | undefined,
+  currency?: Currency,
+): PricingEntry | undefined {
+  return entries?.find(
+    (entry) =>
+      (!currency || entry.currency === currency) &&
+      !entry.exhibitionId &&
+      !entry.realizationCompanyId &&
+      !entry.priceListId,
+  );
+}
+
+export function catalogImageCandidates(
+  item: Pick<ComponentDefinition, "thumbnailUrl" | "photoUrl">,
+): readonly string[] {
+  return [...new Set([item.thumbnailUrl, item.photoUrl].filter((url): url is string => Boolean(url)))];
+}
+
+export function catalogImageAsset(
+  item: Pick<ComponentDefinition, "thumbnailAsset" | "photoAsset">,
+): StoredAsset | undefined {
+  return item.thumbnailAsset ?? item.photoAsset;
+}
+
+export function catalogImageUrl(
+  item: Pick<ComponentDefinition, "thumbnailUrl" | "photoUrl">,
+  unavailableUrls: readonly string[] = [],
+): string | undefined {
+  const unavailable = new Set(unavailableUrls);
+  return catalogImageCandidates(item).find((url) => !unavailable.has(url));
+}
+
+export type CatalogSceneSummaryItem = Readonly<{
+  catalogItemId: string;
+  internalCode?: string;
+  displayName: string;
+  quantity: number;
+  unit: string;
+  saleUnitNet: number;
+  saleTotalNet: number;
+  photoUrl?: string;
+  photoAsset?: StoredAsset;
+}>;
+
+export function groupCatalogSceneItems(
+  sceneObjects: readonly Pick<PlacedComponent, "definitionId" | "name">[],
+  catalogItems: readonly ComponentDefinition[],
+  currency: Currency,
+): readonly CatalogSceneSummaryItem[] {
+  const grouped = new Map<string, CatalogSceneSummaryItem>();
+  for (const sceneObject of sceneObjects) {
+    const definition = catalogItems.find(
+      (candidate) => candidate.id === sceneObject.definitionId,
+    );
+    const current = grouped.get(sceneObject.definitionId);
+    const saleUnitNet = getBasePricingEntry(
+      definition?.pricingEntries,
+      currency,
+    )?.salePrice ?? 0;
+    grouped.set(sceneObject.definitionId, {
+      catalogItemId: sceneObject.definitionId,
+      internalCode: definition?.internalCode,
+      displayName: definition
+        ? catalogDisplayName(definition)
+        : sceneObject.name,
+      quantity: (current?.quantity ?? 0) + 1,
+      unit: definition?.unit ?? "ks",
+      saleUnitNet,
+      saleTotalNet: (current?.saleTotalNet ?? 0) + saleUnitNet,
+      photoUrl: definition?.photoUrl,
+      photoAsset: definition?.photoAsset,
+    });
+  }
+  return [...grouped.values()];
+}
+
+type CatalogPhotoResponse = Readonly<{
+  ok: boolean;
+  arrayBuffer(): Promise<ArrayBuffer>;
+}>;
+
+export async function loadCatalogPhoto(
+  photoUrl: string,
+  fetchPhoto: (url: string) => Promise<CatalogPhotoResponse>,
+): Promise<Uint8Array | undefined> {
+  try {
+    const response = await fetchPhoto(photoUrl);
+    return response.ok
+      ? new Uint8Array(await response.arrayBuffer())
+      : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 export function matchCatalogItem(
@@ -81,7 +181,7 @@ export function matchCatalogItem(
   const name = normalizeCatalogName(input.name);
   return name
     ? items.find((item) =>
-        [item.name, item.officialName].some(
+        [item.displayName, item.name, item.officialName].some(
           (candidate) => normalizeCatalogName(candidate) === name,
         ),
       )

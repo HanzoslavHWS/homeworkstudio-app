@@ -7,20 +7,34 @@ import {
 import type { BoothType, PlacedComponent } from "../../domain/models";
 import { componentCatalogItems } from "../../data/components";
 import { calculateNetVatGross } from "../../domain/pricing";
+import {
+  getBasePricingEntry,
+  groupCatalogSceneItems,
+  loadCatalogPhoto,
+} from "../../domain/catalog";
 import type { EventDocument, Exhibition } from "../../domain/organizations";
 import type { OrderInventoryItem } from "../../domain/order";
 import type {
   CommunicationLanguage,
   GeneratedPlanOutput,
+  ExportCalculationOptions,
   GraphicFileReference,
   ImportedOrder,
   ProjectContact,
   ProjectMode,
   ProjectStage,
+  PrintSurfaceAssignment,
   SavedCameraView,
   TechnicalRequirements,
   VisualizationItem,
 } from "../../domain/project";
+import {
+  createCustomerCalculationViewModel,
+  type CustomerCalculationViewModel,
+} from "../../domain/calculationExport";
+import { effectiveFasciaRequirement } from "../../domain/technicalServices";
+import { getAssetDownloadUrl, type UploadProgress } from "../../lib/storage/assetClient";
+import { useAssetUrl } from "../../hooks/useAssetUrl";
 import type {
   CustomDimension,
   ProjectAnnotation,
@@ -82,6 +96,9 @@ type CommonProject = {
   carpetFinishId: string;
   constructionFinishId: string;
   internalNote?: string;
+  customerNote: string;
+  printSurfaceAssignments: readonly PrintSurfaceAssignment[];
+  exportCalculationOptions: ExportCalculationOptions;
 };
 
 type TemporaryGraphicFile = Readonly<{ id: string; file: File }>;
@@ -128,7 +145,7 @@ export function VisualizationStep({ project, onSaveView, onDeleteView, onAddVisu
     <StepTitle eyebrow="KROK 3" title="Vizualizace" text="Připravte a uložte konkrétní 3D pohledy i 2D půdorysy. AI se nespouští automaticky." />
     <div className="visualizationStaging">
       <section className="workflowCard visualizationSources"><h2>3D zdroje</h2><div className="viewSelectionList">{views.map((view) => <label key={view.id}><input type="checkbox" checked={project.selectedVisualizationViewIds.includes(view.id)} onChange={() => toggleView(view.id)} /><span><strong>{view.name}</strong><small>{view.type}</small></span></label>)}</div><label className="purposeSelect"><span>Kategorie vizualizace</span><select value={project.visualizationPurpose} onChange={(event) => onPurposeChange(event.target.value as typeof project.visualizationPurpose)}><option value="working">Pracovní návrh</option><option value="presentation">Vizu / prezentační vizualizace</option></select></label><button type="button" disabled>Vytvořit AI vizualizace · budoucí provider</button><p className="workflowMuted">Technický snímek je lokální Three.js capture.</p></section>
-      <div className="visualizationWorkspace"><BoothCadViewer asset={getMasterReferenceModel(booth.assets)} footprintWidthMm={booth.widthMm} footprintDepthMm={booth.depthMm} components={project.sceneObjects} defaultViews={booth.defaultViews} savedViews={project.savedViews} nominalDimensions={booth.nominalDimensions} printSurfaces={booth.printSurfaces} showPrintPlaceholder={Boolean(booth.graphicsRequired && !["dataReceived", "ready"].includes(project.requirements.graphics.status))} carpetFinish={selectedFinish(booth.carpetVariants ?? carpetFinishVariants, project.carpetFinishId)} constructionFinish={selectedFinish(booth.finishVariants ?? constructionFinishVariants, project.constructionFinishId)} partDefinitions={booth.partDefinitions} onSaveView={onSaveView} onDeleteView={onDeleteView} onCapture={async ({ imageDataUrl, view }) => onAddVisualization(await provider.create({ name: `Technický vizu ${project.visualizations.length + 1}`, sourceViewId: view.name, technicalRenderDataUrl: imageDataUrl, purpose: project.visualizationPurpose }))} /></div>
+      <div className="visualizationWorkspace"><BoothCadViewer asset={getMasterReferenceModel(booth.assets)} footprintWidthMm={booth.widthMm} footprintDepthMm={booth.depthMm} components={project.sceneObjects} defaultViews={booth.defaultViews} savedViews={project.savedViews} nominalDimensions={booth.nominalDimensions} printSurfaces={booth.printSurfaces} printSurfaceAssignments={project.printSurfaceAssignments} showPrintPlaceholder={project.printSurfaceAssignments.some((assignment) => assignment.selectedForPrint && assignment.artworkStatus === "missing")} carpetFinish={selectedFinish(booth.carpetVariants ?? carpetFinishVariants, project.carpetFinishId)} constructionFinish={selectedFinish(booth.finishVariants ?? constructionFinishVariants, project.constructionFinishId)} partDefinitions={booth.partDefinitions} onSaveView={onSaveView} onDeleteView={onDeleteView} onCapture={async ({ imageDataUrl, view }) => onAddVisualization(await provider.create({ name: `Technický vizu ${project.visualizations.length + 1}`, sourceViewId: view.name, technicalRenderDataUrl: imageDataUrl, purpose: project.visualizationPurpose }))} /></div>
     </div>
     <section className="workflowCard visualization2D"><div><h2>2D zdroj</h2><p>Vyberte vrstvy a vytvořte samostatný uložený výstup.</p><div className="layerOptions">{allLayers.map((layer) => <label key={layer}><input type="checkbox" checked={layers.includes(layer)} onChange={() => toggleLayer(layer)} /> {EXPORT_LAYER_LABELS[layer]}</label>)}</div><button className="primaryButton" type="button" onClick={createPlanOutput} disabled={!planPreviewDataUrl}>Vytvořit půdorys</button></div><PlanLayerPreview booth={booth} sceneObjects={project.sceneObjects} layers={layers} annotations={project.annotations} customDimensions={project.customDimensions} onRendered={setPlanPreviewDataUrl} /></section>
     <GeneratedOutputResults visualizations={project.visualizations} plans={project.generatedPlanOutputs} onUpdateVisualization={onUpdateVisualization} onDeleteVisualization={onDeleteVisualization} onUpdatePlan={onUpdatePlanOutput} onDeletePlan={onDeletePlanOutput} />
@@ -136,29 +153,33 @@ export function VisualizationStep({ project, onSaveView, onDeleteView, onAddVisu
   </div>;
 }
 
-export function SummaryStep({ project, onAddGraphicsFiles, onRemoveGraphicsFile, onContinue }: { project: CommonProject; onAddGraphicsFiles: (files: FileList) => void; onRemoveGraphicsFile: (id: string) => void; onContinue: () => void }) {
-  const counts = countScene(project.sceneObjects.filter((item) => item.sceneLayer === "furniture"));
+export function SummaryStep({ project, onAddGraphicsFiles, onRetryGraphics, onRemoveGraphicsFile, graphicsUpload, onContinue }: { project: CommonProject; onAddGraphicsFiles: (files: FileList) => Promise<void>; onRetryGraphics: () => Promise<void>; onRemoveGraphicsFile: (id: string) => void; graphicsUpload?: UploadProgress; onContinue: () => void }) {
+  const furnitureSummary = groupCatalogSceneItems(
+    project.sceneObjects.filter((item) => item.sceneLayer === "furniture"),
+    componentCatalogItems,
+    project.currency,
+  );
   const unresolved = project.order?.lines.filter((line) => line.mappingStatus === "unresolved") ?? [];
   const mismatches = project.inventory.filter((item) => item.status !== "complete");
   const projectPackage = packageForProject(project);
-  const graphicsMissing = Boolean(project.booth?.graphicsRequired && !["dataReceived", "ready"].includes(project.requirements.graphics.status));
+  const graphicsMissing = Boolean(project.booth?.graphicsRequired && !["dataReceived", "ready"].includes(project.requirements.fasciaGraphics.status) && !effectiveFasciaRequirement(project.requirements.fasciaGraphics, project.booth).includedInPackage);
   const pricing = projectPricing(project);
   return <div className="workflowStepPage"><StepTitle eyebrow="KROK 4" title="Souhrn" text="Interní kontrola projektu před exportem." />
-    {(mismatches.length > 0 || unresolved.length > 0 || project.requiresAction || graphicsMissing) && <div className="workflowWarning">{mismatches.length > 0 && <span>Objednávka a model nejsou v přesné shodě.</span>}{unresolved.length > 0 && <span>Objednávka obsahuje nevyřešené řádky.</span>}{project.requiresAction && <span>Projekt vyžaduje naši akci.</span>}{graphicsMissing && <span>Požadujeme zaslání grafických / tiskových dat pro límec.</span>}</div>}
+    {(mismatches.length > 0 || unresolved.length > 0 || project.requiresAction || graphicsMissing || pricing.warnings.length > 0) && <div className="workflowWarning">{mismatches.length > 0 && <span>Objednávka a model nejsou v přesné shodě.</span>}{unresolved.length > 0 && <span>Objednávka obsahuje nevyřešené řádky.</span>}{project.requiresAction && <span>Projekt vyžaduje naši akci.</span>}{graphicsMissing && <span>Požadujeme zaslání grafických / tiskových dat pro límec.</span>}{pricing.warnings.map((warning) => <span key={warning}>{warning}</span>)}</div>}
     <div className="summaryGrid">
       <SummaryCard title="Projekt"><Row label="Firma" value={project.company} /><Row label="Stánek" value={project.booth?.name ?? "—"} /><Row label="Označení" value={project.boothNumber || "—"} /><Row label="Stage" value={stageLabel(project.stage)} /><Row label="Režim" value={modeLabel(project.mode)} /><Row label="Jazyk komunikace" value={project.communicationLanguage === "cs" ? "Čeština" : "English"} /><Row label="Kontakt" value={project.contact.name || "—"} /><Row label="Telefon" value={project.contact.phone || "—"} /><Row label="E-mail" value={project.contact.email || "—"} /><Row label="Realizace" value={project.realizationName} />{project.internalNote && <div className="internalSummaryNote"><span>INTERNÍ POZNÁMKA</span><p>{project.internalNote}</p></div>}</SummaryCard>
       <SummaryCard title="Výstava"><div className="summaryEvent"><EventLogo event={project.event} compact /><div><strong>{project.event?.name ?? project.fairName}</strong><span>{project.event?.venue || "Místo neuvedeno"}</span><span>{eventDate(project.event)}</span></div></div></SummaryCard>
-      <SummaryCard title="Mobiliář">{counts.size ? [...counts].map(([name, count]) => <Row key={name} label={name} value={`${count} ks`} />) : <p className="emptyState">Scéna je prázdná.</p>}</SummaryCard>
+      <SummaryCard title="Mobiliář">{furnitureSummary.length ? furnitureSummary.map((item) => <Row key={item.catalogItemId} label={`${item.quantity}× ${item.displayName}`} value={item.saleUnitNet ? `${item.quantity} × ${formatMoney(item.saleUnitNet, project.currency)} = ${formatMoney(item.saleTotalNet, project.currency)} bez DPH` : `${item.quantity} ${item.unit}`} />) : <p className="emptyState">Scéna je prázdná.</p>}</SummaryCard>
       <SummaryCard title="Objednávka">{project.order ? <>{project.inventory.map((item) => <Row key={item.catalogItemId} label={item.name} value={item.status === "complete" ? `${item.placed} / ${item.ordered} · OK` : item.status === "over" ? `${item.placed} / ${item.ordered} · navíc ${item.extra}` : `${item.placed} / ${item.ordered} · chybí ${item.remaining}`} />)}{unresolved.map((line) => <Row key={line.id} label={line.sourceName || line.rawText} value="Nevyřešeno" />)}</> : <p className="emptyState">Zatím není importovaná objednávka.</p>}</SummaryCard>
       <SummaryCard title="Technické požadavky">{(["electricity", "water", "waste"] as const).map((key) => <Row key={key} label={{ electricity: "Elektro", water: "Voda", waste: "Odpad" }[key]} value={requirementStatusLabels[project.requirements[key].status]} />)}</SummaryCard>
-      <section className="workflowCard summaryWorkflowCard graphicsSummary"><h2>Grafika</h2><Row label="Stav" value={requirementStatusLabels[project.requirements.graphics.status]} /><Row label="Poznámka" value={project.requirements.graphics.note || "—"} /><label className="filePicker"><span>Přidat dočasná grafická data</span><input type="file" multiple accept="image/*,.pdf,.ai,.eps,.svg" onChange={(event) => { if (event.target.files) onAddGraphicsFiles(event.target.files); event.target.value = ""; }} /></label><p className="temporaryNotice">Pouze lokální relace. Nejde o trvalý upload.</p><div className="graphicsFiles">{project.graphicsFiles.map((file) => <div key={file.id}><span><strong>{file.name}</strong><small>{formatBytes(file.size)} · {file.mimeType || "neznámý typ"} · dočasné</small></span><button onClick={() => onRemoveGraphicsFile(file.id)}>Odebrat</button></div>)}</div></section>
+      <section className="workflowCard summaryWorkflowCard graphicsSummary"><h2>Grafika</h2><Row label="Límec" value={effectiveFasciaRequirement(project.requirements.fasciaGraphics, project.booth).includedInPackage ? "Objednáno – v ceně stánku" : requirementStatusLabels[project.requirements.fasciaGraphics.status]} /><Row label="Celopolep" value={requirementStatusLabels[project.requirements.fullWrapGraphics.status]} /><Row label="Poznámka límec" value={project.requirements.fasciaGraphics.note || "—"} /><label className="filePicker"><span>Přidat grafická data do R2</span><input type="file" multiple accept="image/*,.pdf,.ai,.eps,.svg" onChange={(event) => { if (event.target.files) void onAddGraphicsFiles(event.target.files); event.target.value = ""; }} /></label>{graphicsUpload && <div className={`assetUploadState ${graphicsUpload.state}`}><progress max="100" value={graphicsUpload.percent} /><span>{graphicsUpload.state === "uploading" ? `Nahrávám ${graphicsUpload.percent} %` : graphicsUpload.state === "success" ? "Nahráno do R2" : graphicsUpload.message}</span>{graphicsUpload.state === "error" && <button type="button" onClick={() => void onRetryGraphics()}>Zkusit znovu</button>}</div>}<p className="temporaryNotice">Ukládá se stabilní storageKey; podpisová URL se vytváří až při otevření nebo exportu.</p><div className="graphicsFiles">{project.graphicsFiles.map((file) => <div key={file.id}><span><strong>{file.name}</strong><small>{formatBytes(file.size)} · {file.mimeType || "neznámý typ"} · {file.storageKey ? "R2" : "legacy/dočasné"}</small></span><button onClick={() => onRemoveGraphicsFile(file.id)}>Odebrat metadata</button></div>)}</div></section>
       <SummaryCard title="Výstupy"><Row label="2D půdorysy" value={String(project.generatedPlanOutputs.length)} /><Row label="3D technické pohledy" value={String(project.visualizations.length)} /></SummaryCard>
       <SummaryCard title="Cena"><Row label="Cena bez DPH" value={`${pricing.net.toLocaleString("cs-CZ")} ${project.currency}`} /><Row label={`DPH ${pricing.vatRatePercent} %`} value={`${pricing.vat.toLocaleString("cs-CZ")} ${project.currency}`} /><Row label="Celkem s DPH" value={`${pricing.gross.toLocaleString("cs-CZ")} ${project.currency}`} /></SummaryCard>
       <SummaryCard title="Project package"><PackageTree projectPackage={projectPackage} /></SummaryCard>
     </div><StepActions onContinue={onContinue} /></div>;
 }
 
-export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIdsChange, onSelectedEventDocumentIdsChange }: { project: CommonProject; temporaryGraphicFiles: readonly TemporaryGraphicFile[]; onSelectedOutputIdsChange: (ids: string[]) => void; onSelectedEventDocumentIdsChange: (ids: string[]) => void }) {
+export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIdsChange, onSelectedEventDocumentIdsChange, onCalculationOptionsChange }: { project: CommonProject; temporaryGraphicFiles: readonly TemporaryGraphicFile[]; onSelectedOutputIdsChange: (ids: string[]) => void; onSelectedEventDocumentIdsChange: (ids: string[]) => void; onCalculationOptionsChange: (options: ExportCalculationOptions) => void }) {
   const [layers, setLayers] = useState<ExportLayer[]>(["booth", "furniture"]);
   const [language, setLanguage] = useState<ExportLanguage>(project.communicationLanguage);
   const [includeFurniturePhotos, setIncludeFurniturePhotos] = useState(false);
@@ -171,6 +192,20 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [planPreviewDataUrl, setPlanPreviewDataUrl] = useState("");
   const booth = project.booth;
+  const calculation = createCustomerCalculationViewModel({
+    company: project.company,
+    customerProjectNote: project.customerNote,
+    currency: project.currency,
+    booth: project.booth,
+    event: project.event,
+    sceneObjects: project.sceneObjects,
+    requirements: project.requirements,
+    printSurfaceAssignments: project.printSurfaceAssignments,
+    generatedPlanOutputs: project.generatedPlanOutputs,
+    visualizations: project.visualizations,
+    options: project.exportCalculationOptions,
+    catalogItems: componentCatalogItems,
+  });
   const summary = summaryText(project, language);
   const activeDocuments = project.event?.documents.filter((document) => document.active) ?? [];
   const outputAttachments = useMemo<EmailAttachmentReference[]>(() => [
@@ -179,7 +214,7 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
     ...project.visualizations.map((item) => ({ id: item.id, name: item.name, source: "visualization" as const, selected: emailAttachmentIds.includes(item.id) })),
     ...activeDocuments.map((item) => ({ id: item.id, name: item.title, source: "event-document" as const, selected: emailAttachmentIds.includes(item.id) })),
   ], [activeDocuments, emailAttachmentIds, language, project.generatedPlanOutputs, project.visualizations]);
-  const projectPackage = packageForProject(project);
+  const projectPackage = packageForProject(project, includeFurniturePhotos);
   const toggleLayer = (layer: ExportLayer) => setLayers((current) => current.includes(layer) ? current.filter((item) => item !== layer) : [...current, layer]);
   const toggleOutput = (id: string) => onSelectedOutputIdsChange(project.selectedOutputIds.includes(id) ? project.selectedOutputIds.filter((value) => value !== id) : [...project.selectedOutputIds, id]);
   const toggleDocument = (id: string) => onSelectedEventDocumentIdsChange(project.selectedEventDocumentIds.includes(id) ? project.selectedEventDocumentIds.filter((value) => value !== id) : [...project.selectedEventDocumentIds, id]);
@@ -190,11 +225,35 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
     if (!booth) return;
     const entries: ZipEntry[] = [textZipEntry(`${packageFolderPath(projectPackage, "project")}/souhrn-${language}.txt`, summary)];
     if (planPreviewDataUrl) entries.push(dataUrlZipEntry(`${packageFolderPath(projectPackage, "plans-technical")}/pudorys.png`, planPreviewDataUrl));
-    project.generatedPlanOutputs.filter((item) => project.selectedOutputIds.includes(item.id)).forEach((item) => entries.push(dataUrlZipEntry(`${packageFolderPath(projectPackage, "plans-complete")}/${safeName(item.name)}.png`, item.imageDataUrl)));
-    project.visualizations.filter((item) => project.selectedOutputIds.includes(item.id)).forEach((item, index) => entries.push(dataUrlZipEntry(`${packageFolderPath(projectPackage, item.purpose === "presentation" ? "visualizations-final" : "visualizations-working")}/${String(index + 1).padStart(2, "0")}-${safeName(item.name)}.png`, item.imageDataUrl)));
+    for (const item of project.generatedPlanOutputs.filter((output) => project.selectedOutputIds.includes(output.id))) {
+      try {
+        const source = item.asset?.storageKey ? await getAssetDownloadUrl(item.asset.storageKey) : item.imageDataUrl;
+        const data = new Uint8Array(await (await fetch(source)).arrayBuffer());
+        entries.push({ path: `${packageFolderPath(projectPackage, "plans-complete")}/${safeName(item.name)}.png`, data });
+      } catch { /* unavailable persistent output falls back only when its legacy data URL is usable */ }
+    }
+    for (const [index, item] of project.visualizations.filter((output) => project.selectedOutputIds.includes(output.id)).entries()) {
+      try {
+        const source = item.asset?.storageKey ? await getAssetDownloadUrl(item.asset.storageKey) : item.imageDataUrl;
+        const data = new Uint8Array(await (await fetch(source)).arrayBuffer());
+        entries.push({ path: `${packageFolderPath(projectPackage, item.purpose === "presentation" ? "visualizations-final" : "visualizations-working")}/${String(index + 1).padStart(2, "0")}-${safeName(item.name)}.png`, data });
+      } catch { /* unavailable output is intentionally omitted */ }
+    }
+    if (includeFurniturePhotos) {
+      const furniture = groupCatalogSceneItems(project.sceneObjects, componentCatalogItems, project.currency);
+      for (const item of furniture) {
+        if (!item.photoUrl) continue;
+        const data = await loadCatalogPhoto(item.photoUrl, (url) => fetch(url));
+        if (!data) continue;
+        entries.push({ path: `${packageFolderPath(projectPackage, "furniture-photos")}/${safeName(item.internalCode ?? item.displayName)}.${photoExtension(item.photoUrl)}`, data });
+      }
+    }
     for (const temporary of temporaryGraphicFiles) entries.push({ path: `${packageFolderPath(projectPackage, "graphics-input")}/${temporary.file.name}`, data: new Uint8Array(await temporary.file.arrayBuffer()) });
-    for (const document of activeDocuments.filter((item) => project.selectedEventDocumentIds.includes(item.id) && item.assetUrl)) {
-      try { const data = new Uint8Array(await (await fetch(document.assetUrl!)).arrayBuffer()); entries.push({ path: `${packageFolderPath(projectPackage, "event-documents")}/${document.fileName}`, data }); } catch { /* unavailable temporary binary is intentionally omitted */ }
+    for (const graphic of project.graphicsFiles.filter((item) => item.storageKey)) {
+      try { const data = new Uint8Array(await (await fetch(await getAssetDownloadUrl(graphic.storageKey!))).arrayBuffer()); entries.push({ path: `${packageFolderPath(projectPackage, "graphics-input")}/${graphic.name}`, data }); } catch { /* unavailable private asset is intentionally omitted */ }
+    }
+    for (const document of activeDocuments.filter((item) => project.selectedEventDocumentIds.includes(item.id) && (item.storageKey || item.assetUrl))) {
+      try { const source = document.storageKey ? await getAssetDownloadUrl(document.storageKey) : document.assetUrl!; const data = new Uint8Array(await (await fetch(source)).arrayBuffer()); entries.push({ path: `${packageFolderPath(projectPackage, "event-documents")}/${document.fileName}`, data }); } catch { /* unavailable private or legacy binary is intentionally omitted */ }
     }
     const url = URL.createObjectURL(createZip(entries)); downloadDataUrl(url, `${projectPackage.rootName}.zip`); window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
@@ -204,6 +263,13 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
   }
 
   return <div className="workflowStepPage"><StepTitle eyebrow="KROK 5" title="Export" text="Vyberte konkrétní výstupy, přílohy a témata pro kontrolovaný e-mailový draft." />
+    <section className="calculationWorkspace">
+      <aside className="workflowCard calculationOptions"><div className="workflowCardHeader"><div><span>ZÁKAZNICKÝ EXPORT</span><strong>Kalkulace / nabídka</strong></div></div>
+        <CalculationOptions options={project.exportCalculationOptions} outputs={[...project.generatedPlanOutputs, ...project.visualizations]} onChange={onCalculationOptionsChange} />
+        <button type="button" className="primaryButton" onClick={() => window.print()}>Vytisknout / uložit jako PDF</button>
+      </aside>
+      <CalculationPreview calculation={calculation} currency={project.currency} />
+    </section>
     <div className="exportSettings"><label><span>Jazyk výstupu</span><select value={language} onChange={(event) => setLanguage(event.target.value as ExportLanguage)}><option value="cs">Čeština</option><option value="en">English</option></select><small>Výchozí: {project.communicationLanguage === "cs" ? "Čeština" : "English"}; změna neovlivní projekt.</small></label><label className="checkLabel"><input type="checkbox" checked={includeFurniturePhotos} onChange={(event) => setIncludeFurniturePhotos(event.target.checked)} /> Zahrnout fotografie mobiliáře</label></div>
     <div className="exportGrid">
       <section className="workflowCard"><div className="workflowCardHeader"><div><span>2D EXPORT</span><strong>Technický půdorys PNG</strong></div></div><div className="exportPresets">{EXPORT_PRESETS.map((preset) => <button key={preset.id} onClick={() => setLayers([...preset.options.layers])}>{preset.name}</button>)}</div><div className="layerOptions">{allLayers.map((layer) => <label key={layer}><input type="checkbox" checked={layers.includes(layer)} onChange={() => toggleLayer(layer)} /> {EXPORT_LAYER_LABELS[layer]}</label>)}</div>{booth?.widthMm && booth.depthMm && <PlanLayerPreview booth={booth} sceneObjects={project.sceneObjects} layers={layers} annotations={project.annotations} customDimensions={project.customDimensions} onRendered={setPlanPreviewDataUrl} compact />}<button className="primaryButton" onClick={exportPlan} disabled={!booth || !planPreviewDataUrl}>Stáhnout 2D PNG</button></section>
@@ -213,6 +279,30 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
     </div>
     <section className="workflowCard emailDraftSection"><div className="workflowCardHeader"><div><span>PŘÍPRAVA E-MAILU</span><strong>Pracovní prostor</strong></div></div><div className="emailPreparationGrid"><div><h3>A · Přílohy</h3>{outputAttachments.map((attachment) => <label className="outputSelectionRow" key={attachment.id}><input type="checkbox" checked={emailDraft?.attachments.find((item) => item.id === attachment.id)?.selected ?? emailAttachmentIds.includes(attachment.id)} onChange={() => { setEmailAttachmentIds((ids) => ids.includes(attachment.id) ? ids.filter((id) => id !== attachment.id) : [...ids, attachment.id]); if (emailDraft) setEmailDraft({ ...emailDraft, attachments: emailDraft.attachments.map((item) => item.id === attachment.id ? { ...item, selected: !item.selected } : item) }); }} /><span>{attachment.name}</span></label>)}</div><div><h3>B · Co zahrnout do e-mailu</h3>{EMAIL_TOPICS.map((topic) => <label className="outputSelectionRow" key={topic.id}><input type="checkbox" checked={emailTopics.includes(topic.id)} onChange={() => toggleTopic(topic.id)} /><span>{topic.label}</span></label>)}</div><div><h3>C · Jazyk</h3><strong>{language === "cs" ? "Čeština" : "English"}</strong><p className="workflowMuted">Draft respektuje tento exportní override.</p></div></div><button className="primaryButton" onClick={prepareEmail}>Vytvořit text e-mailu</button>{emailDraft ? <EmailDraftEditor draft={emailDraft} onChange={setEmailDraft} /> : <p className="workspaceEmpty">RuleBasedEmailDraftProvider sestaví text ze skutečného stavu projektu. Nic se automaticky neodesílá.</p>}</section>
   </div>;
+}
+
+function CalculationOptions({ options, outputs, onChange }: { options: ExportCalculationOptions; outputs: readonly (GeneratedPlanOutput | VisualizationItem)[]; onChange: (options: ExportCalculationOptions) => void }) {
+  const toggle = (key: Exclude<keyof ExportCalculationOptions, "selectedOutputIds">) => onChange({ ...options, [key]: !options[key] });
+  const toggleOutput = (id: string) => {
+    const selected = options.selectedOutputIds.includes(id);
+    if (!selected && options.selectedOutputIds.length >= 4) return;
+    onChange({ ...options, selectedOutputIds: selected ? options.selectedOutputIds.filter((value) => value !== id) : [...options.selectedOutputIds, id] });
+  };
+  return <div className="calculationOptionList">
+    {([['includeVisuals','Vizuály / půdorysy'],['includePricingTable','Cenová tabulka'],['includeVatSummary','DPH / souhrn cen'],['includeProjectNote','Poznámka k projektu'],['includeItemNotes','Poznámky k položkám'],['includeContact','Kontaktní údaje'],['includeEventLogo','Logo akce']] as const).map(([key, label]) => <label key={key}><input type="checkbox" checked={options[key]} onChange={() => toggle(key)} /> {label}</label>)}
+    {options.includeVisuals && <div className="calculationOutputPicker"><strong>Vizuály · max. 4</strong>{[...outputs].sort((a, b) => Number(b.reviewStatus === "reviewed") - Number(a.reviewStatus === "reviewed")).map((output) => <label key={output.id} className={output.reviewStatus === "unreviewed" ? "unreviewed" : ""}><input type="checkbox" checked={options.selectedOutputIds.includes(output.id)} disabled={!options.selectedOutputIds.includes(output.id) && options.selectedOutputIds.length >= 4} onChange={() => toggleOutput(output.id)} /><span>{output.name}<small>{output.reviewStatus === "reviewed" ? "Zkontrolováno" : "Nezkontrolováno – ověřte před exportem"}</small></span></label>)}</div>}
+  </div>;
+}
+
+function CalculationPreview({ calculation, currency }: { calculation: CustomerCalculationViewModel; currency: CommonProject["currency"] }) {
+  const logo = useAssetUrl(calculation.logoAsset, calculation.logoUrl);
+  return <article className="calculationPreview" id="customer-calculation">
+    <header><div>{logo.url && <img src={logo.url} alt="Logo akce" onError={(event) => { event.currentTarget.style.display = "none"; }} />}<span>ZÁKAZNICKÁ KALKULACE</span><h2>{calculation.documentTitle}</h2></div><dl><div><dt>Datum zpracování</dt><dd>{new Date(calculation.processedAt).toLocaleDateString("cs-CZ")}</dd></div>{calculation.processor && <><div><dt>Zpracoval</dt><dd>{calculation.processor.name || "—"}</dd></div><div><dt>E-mail</dt><dd>{calculation.processor.email || "—"}</dd></div><div><dt>Telefon</dt><dd>{calculation.processor.phone || "—"}</dd></div></>}</dl></header>
+    <section className="calculationProject"><div><span>Název společnosti</span><strong>{calculation.project.company || "—"}</strong></div><div><span>Expozice / velikost</span><strong>{calculation.project.exhibitionSize}</strong></div><div><span>Akce</span><strong>{calculation.project.eventName}</strong></div><div><span>Termín konání</span><strong>{calculation.project.eventDate}</strong></div></section>
+    {calculation.images.length > 0 && <section><h3>Vizuály a půdorysy</h3><div className={`calculationImages ${calculation.imageLayout}`}>{calculation.images.map((image) => <figure key={image.id}><img src={image.imageDataUrl} alt={image.name} /><figcaption>{image.name}{!image.reviewed && <em>Nezkontrolováno</em>}</figcaption></figure>)}</div></section>}
+    {calculation.priceRows.length > 0 && <section><h3>Cenová tabulka</h3><table><thead><tr><th>Položka</th><th>MJ</th><th>Množství</th><th>Cena za MJ</th><th>Celkem</th></tr></thead><tbody>{calculation.priceRows.map((row) => <tr key={row.id}><td><strong>{row.name}</strong>{row.includedInPackage && <small>Součást balíčku</small>}{row.customerNotes?.map((note) => <small key={note}>{note}</small>)}{row.warning && <small className="calculationWarning">{row.warning}</small>}</td><td>{row.unit}</td><td>{row.quantity.toLocaleString("cs-CZ")}</td><td>{row.unitPriceNet === undefined ? "Individuálně" : row.includedInPackage ? "V ceně" : `${row.unitPriceNet.toLocaleString("cs-CZ")} ${currency}`}</td><td>{row.totalNet === undefined ? "Nutno nacenit" : row.includedInPackage ? "0" : `${row.totalNet.toLocaleString("cs-CZ")} ${currency}`}</td></tr>)}</tbody></table><div className="calculationTotals"><span>Celkem bez DPH <strong>{calculation.totals.net.toLocaleString("cs-CZ")} {currency}</strong></span>{calculation.totals.vat !== undefined && <><span>DPH {calculation.totals.vatRatePercent} % <strong>{calculation.totals.vat.toLocaleString("cs-CZ")} {currency}</strong></span><span>Celkem s DPH <strong>{calculation.totals.gross?.toLocaleString("cs-CZ")} {currency}</strong></span></>}</div></section>}
+    {calculation.project.customerNote && <section className="calculationNote"><h3>Poznámka k projektu</h3><p>{calculation.project.customerNote}</p></section>}
+  </article>;
 }
 
 const allLayers: readonly ExportLayer[] = ["booth", "furniture", "electrical", "water", "waste", "annotations", "dimensions"];
@@ -256,26 +346,31 @@ function OutputSelection({ project, toggleOutput }: { project: CommonProject; to
 
 function EmailDraftEditor({ draft, onChange }: { draft: EmailDraft; onChange: (draft: EmailDraft) => void }) { return <div className="emailDraftForm"><label><span>Komu</span><input value={draft.to} onChange={(event) => onChange({ ...draft, to: event.target.value })} /></label><label><span>Kopie</span><input value={draft.cc ?? ""} onChange={(event) => onChange({ ...draft, cc: event.target.value })} /></label><label><span>Předmět</span><input value={draft.subject} onChange={(event) => onChange({ ...draft, subject: event.target.value })} /></label><label><span>Text</span><textarea value={draft.body} onChange={(event) => onChange({ ...draft, body: event.target.value })} /></label><div className="emailAttachments"><strong>Vybrané přílohy</strong>{draft.attachments.map((attachment) => <label key={attachment.id}><input type="checkbox" checked={attachment.selected} onChange={(event) => onChange({ ...draft, attachments: draft.attachments.map((item) => item.id === attachment.id ? { ...item, selected: event.target.checked } : item) })} /> {attachment.name}</label>)}</div><div className="futureAccess"><strong>Outlook Drafts</strong><span>Budoucí Microsoft Graph provider · žádný e-mail se nyní neposílá.</span><button disabled>Vytvořit koncept v Outlooku</button></div></div>; }
 
-function packageForProject(project: CommonProject) {
+function packageForProject(project: CommonProject, includeFurniturePhotos = false) {
+  const furniturePhotos = groupCatalogSceneItems(project.sceneObjects, componentCatalogItems, project.currency)
+    .filter((item) => item.photoUrl)
+    .map((item) => ({ id: `photo-${item.catalogItemId}`, name: `${safeName(item.internalCode ?? item.displayName)}.${photoExtension(item.photoUrl!)}`, folderId: "furniture-photos", sourceType: "generated" as const, mimeType: "image/jpeg", includeInZip: includeFurniturePhotos, dataReference: item.photoUrl }));
   const documents = project.event?.documents ?? [];
   return createProjectPackage(project.id ?? "unsaved", safeName(project.name), [
     { id: "summary", name: "souhrn.txt", folderId: "project", sourceType: "generated", mimeType: "text/plain", includeInZip: true },
-    ...project.generatedPlanOutputs.map((item) => ({ id: item.id, name: `${safeName(item.name)}.png`, folderId: "plans-complete", sourceType: "generated" as const, mimeType: "image/png", includeInZip: project.selectedOutputIds.includes(item.id), dataReference: item.imageDataUrl })),
-    ...project.visualizations.map((item) => ({ id: item.id, name: `${safeName(item.name)}.png`, folderId: item.purpose === "presentation" ? "visualizations-final" : "visualizations-working", sourceType: "generated" as const, mimeType: "image/png", includeInZip: project.selectedOutputIds.includes(item.id), dataReference: item.imageDataUrl })),
-    ...project.graphicsFiles.map((file) => ({ id: file.id, name: file.name, folderId: "graphics-input", sourceType: "uploaded" as const, mimeType: file.mimeType, includeInZip: file.availability === "temporary-session" })),
-    ...documents.map((file) => ({ id: file.id, name: file.fileName, folderId: "event-documents", sourceType: "uploaded" as const, mimeType: file.mimeType, includeInZip: project.selectedEventDocumentIds.includes(file.id), dataReference: file.assetUrl })),
+    ...project.generatedPlanOutputs.map((item) => ({ id: item.id, name: `${safeName(item.name)}.png`, folderId: "plans-complete", sourceType: "generated" as const, mimeType: "image/png", includeInZip: project.selectedOutputIds.includes(item.id), dataReference: item.asset?.storageKey ?? item.imageDataUrl })),
+    ...project.visualizations.map((item) => ({ id: item.id, name: `${safeName(item.name)}.png`, folderId: item.purpose === "presentation" ? "visualizations-final" : "visualizations-working", sourceType: "generated" as const, mimeType: "image/png", includeInZip: project.selectedOutputIds.includes(item.id), dataReference: item.asset?.storageKey ?? item.imageDataUrl })),
+    ...project.graphicsFiles.map((file) => ({ id: file.id, name: file.name, folderId: "graphics-input", sourceType: "uploaded" as const, mimeType: file.mimeType, includeInZip: Boolean(file.storageKey) || file.availability === "temporary-session", dataReference: file.storageKey ?? file.storageUrl })),
+    ...documents.map((file) => ({ id: file.id, name: file.fileName, folderId: "event-documents", sourceType: "uploaded" as const, mimeType: file.mimeType, includeInZip: project.selectedEventDocumentIds.includes(file.id), dataReference: file.storageKey ?? file.assetUrl })),
+    ...furniturePhotos,
   ]);
 }
 
 function PackageTree({ projectPackage }: { projectPackage: ReturnType<typeof createProjectPackage> }) { return <div className="packageTree"><strong>{projectPackage.rootName}</strong>{projectPackage.folders.map((folder) => <div key={folder.id} className="packageFolder"><span style={{ paddingLeft: folder.parentId ? 18 : 0 }}>{folder.parentId ? "└─" : "├─"} {folder.name}</span>{projectPackage.files.filter((file) => file.folderId === folder.id && file.includeInZip).map((file) => <small key={file.id} style={{ paddingLeft: folder.parentId ? 38 : 20 }}>└─ {file.name}</small>)}</div>)}</div>; }
-function summaryText(project: CommonProject, language: ExportLanguage): string { const en = language === "en"; const pricing = projectPricing(project); return [en ? `Project: ${project.name}` : `Projekt: ${project.name}`, `${en ? "Exhibition" : "Výstava"}: ${project.fairName}`, `${en ? "Company" : "Firma"}: ${project.company}`, `${en ? "Contact" : "Kontakt"}: ${project.contact.name} · ${project.contact.phone} · ${project.contact.email}`, `${en ? "Booth" : "Stánek"}: ${project.booth?.name ?? "—"}`, `${en ? "Stage" : "Stav"}: ${stageLabel(project.stage)}`, "", en ? "Scene:" : "Scéna:", ...project.sceneObjects.map((item) => `- ${item.name}: X ${item.xMm} mm, Y ${item.yMm} mm, ${item.rotationDeg}°`), "", en ? "Technical requirements:" : "Technické požadavky:", `- ${en ? "Electricity" : "Elektro"}: ${requirementStatusLabels[project.requirements.electricity.status]}`, `- ${en ? "Water" : "Voda"}: ${requirementStatusLabels[project.requirements.water.status]}`, `- ${en ? "Waste" : "Odpad"}: ${requirementStatusLabels[project.requirements.waste.status]}`, "", `${en ? "Total net" : "Celkem bez DPH"}: ${pricing.net} ${project.currency}`, `${en ? `VAT ${pricing.vatRatePercent}%` : `DPH ${pricing.vatRatePercent} %`}: ${pricing.vat} ${project.currency}`, `${en ? "Total gross" : "Celkem s DPH"}: ${pricing.gross} ${project.currency}`].join("\n"); }
-function countScene(items: readonly PlacedComponent[]) { const counts = new Map<string, number>(); items.forEach((item) => counts.set(item.name, (counts.get(item.name) ?? 0) + 1)); return counts; }
+function summaryText(project: CommonProject, language: ExportLanguage): string { const en = language === "en"; const pricing = projectPricing(project); const furniture = groupCatalogSceneItems(project.sceneObjects.filter((item) => item.sceneLayer === "furniture"), componentCatalogItems, project.currency); return [en ? `Project: ${project.name}` : `Projekt: ${project.name}`, `${en ? "Exhibition" : "Výstava"}: ${project.fairName}`, `${en ? "Company" : "Firma"}: ${project.company}`, `${en ? "Contact" : "Kontakt"}: ${project.contact.name} · ${project.contact.phone} · ${project.contact.email}`, `${en ? "Booth" : "Stánek"}: ${project.booth?.name ?? "—"}`, `${en ? "Stage" : "Stav"}: ${stageLabel(project.stage)}`, "", en ? "Furniture:" : "Mobiliář:", ...(furniture.length ? furniture.map((item) => `- ${item.quantity}× ${item.displayName}: ${item.saleTotalNet} ${project.currency} ${en ? "net" : "bez DPH"}`) : [en ? "- Empty" : "- Bez položek"]), "", en ? "Technical requirements:" : "Technické požadavky:", `- ${en ? "Electricity" : "Elektro"}: ${requirementStatusLabels[project.requirements.electricity.status]}`, `- ${en ? "Water" : "Voda"}: ${requirementStatusLabels[project.requirements.water.status]}`, `- ${en ? "Waste" : "Odpad"}: ${requirementStatusLabels[project.requirements.waste.status]}`, "", `${en ? "Total net" : "Celkem bez DPH"}: ${pricing.net} ${project.currency}`, `${en ? `VAT ${pricing.vatRatePercent}%` : `DPH ${pricing.vatRatePercent} %`}: ${pricing.vat} ${project.currency}`, `${en ? "Total gross" : "Celkem s DPH"}: ${pricing.gross} ${project.currency}`].join("\n"); }
 function modeLabel(mode: ProjectMode) { return mode === "proposal" ? "Návrh / kalkulace" : mode === "order" ? "Objednávka" : "Realizace"; }
 function stageLabel(stage: ProjectStage) { return stage === "quote" ? "Nabídka / Kalkulace" : stage === "design" ? "Návrh" : stage === "approved" ? "Odsouhlaseno" : "Hotovo"; }
 function eventDate(event?: Exhibition) { return event?.eventFrom || event?.eventTo ? `${event.eventFrom || "?"}–${event.eventTo || "?"}` : "Termín neuveden"; }
 function safeName(value: string) { return (value || "Projekt").trim().replace(/[^a-zA-Z0-9ěščřžýáíéúůĚŠČŘŽÝÁÍÉÚŮ_-]+/g, "_"); }
 function formatBytes(size: number) { return size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 1024)} kB` : `${(size / 1024 / 1024).toFixed(1)} MB`; }
-function projectPricing(project: CommonProject) { const boothNet = project.booth?.pricingEntries?.find((entry) => entry.currency === project.currency && !entry.exhibitionId && !entry.priceListId)?.salePrice ?? 0; const furnitureNet = project.sceneObjects.reduce((sum, item) => { const definition = componentCatalogItems.find((candidate) => candidate.id === item.definitionId); return sum + (definition?.pricingEntries?.find((entry) => entry.currency === project.currency && !entry.exhibitionId && !entry.priceListId)?.salePrice ?? 0); }, 0); return calculateNetVatGross(boothNet + furnitureNet); }
+function projectPricing(project: CommonProject) { const calculation = createCustomerCalculationViewModel({ company: project.company, customerProjectNote: project.customerNote, currency: project.currency, booth: project.booth, event: project.event, sceneObjects: project.sceneObjects, requirements: project.requirements, printSurfaceAssignments: project.printSurfaceAssignments, generatedPlanOutputs: [], visualizations: [], options: { ...project.exportCalculationOptions, includePricingTable: true, includeVatSummary: true, includeVisuals: false }, catalogItems: componentCatalogItems }); return { net: calculation.totals.net, vat: calculation.totals.vat ?? 0, gross: calculation.totals.gross ?? calculation.totals.net, vatRatePercent: calculation.totals.vatRatePercent ?? 21, warnings: calculation.warnings }; }
+function formatMoney(value: number, currency: CommonProject["currency"]) { return `${value.toLocaleString("cs-CZ")} ${currency}`; }
+function photoExtension(url: string) { const extension = url.split(/[?#]/, 1)[0]?.split(".").pop()?.toLowerCase(); return extension && ["jpg", "jpeg", "png", "webp"].includes(extension) ? extension : "jpg"; }
 function StepTitle({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) { return <div className="workspacePageHeader"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p></div></div>; }
 function StepActions({ onContinue }: { onContinue: () => void }) { return <div className="workflowActions"><button className="primaryButton" onClick={onContinue}>Pokračovat</button></div>; }
 function StepEmpty({ title, text }: { title: string; text: string }) { return <div className="workflowStepPage"><StepTitle eyebrow="WORKFLOW" title={title} text={text} /></div>; }

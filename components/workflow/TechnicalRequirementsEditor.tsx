@@ -23,12 +23,13 @@ type Props = {
 };
 
 export function TechnicalRequirementsEditor({ value, onChange, readOnly }: Props) {
-  const keys = ["electricity", "water", "waste", "graphics"] as const;
+  const keys = ["electricity", "water", "waste", "fasciaGraphics", "fullWrapGraphics"] as const;
   const labels = {
     electricity: "Elektřina",
     water: "Voda",
     waste: "Odpad",
-    graphics: "Grafika",
+    fasciaGraphics: "Grafika – límec",
+    fullWrapGraphics: "Grafika – celopolep",
   };
 
   return (
@@ -49,7 +50,7 @@ export function TechnicalRequirementsEditor({ value, onChange, readOnly }: Props
               }
             >
               {statusOptions.filter((option) =>
-                key === "graphics" || !["dataReceived", "ready"].includes(option.value),
+                ["fasciaGraphics", "fullWrapGraphics"].includes(key) || !["dataReceived", "ready"].includes(option.value),
               ).map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
               ))}
@@ -107,6 +108,23 @@ export function TechnicalRequirementsEditor({ value, onChange, readOnly }: Props
           </div>
         );
       })}
+      <div className="technicalRequirement">
+        <strong>Úklid</strong>
+        <select value={value.cleaning.status} disabled={readOnly} onChange={(event) => onChange({ ...value, cleaning: { ...value.cleaning, status: event.target.value as typeof value.cleaning.status } })}>
+          <option value="unspecified">Neuvedeno</option><option value="notWanted">Nechtějí</option><option value="inquire">Poptat</option><option value="oneTime">Chtějí jednorázový</option><option value="daily">Chtějí denní</option>
+        </select>
+        {value.cleaning.status === "daily" && <input type="number" min={1} value={value.cleaning.dayCount ?? ""} disabled={readOnly} placeholder="Počet dnů (pokud je známý)" onChange={(event) => onChange({ ...value, cleaning: { ...value.cleaning, dayCount: event.target.value ? Number(event.target.value) : undefined } })} />}
+        <input value={value.cleaning.note} disabled={readOnly} placeholder="Poznámka" onChange={(event) => onChange({ ...value, cleaning: { ...value.cleaning, note: event.target.value } })} />
+      </div>
+      <div className="technicalRequirement">
+        <strong>Kontejner</strong>
+        <select value={value.container.status} disabled={readOnly} onChange={(event) => onChange({ ...value, container: { ...value.container, status: event.target.value as typeof value.container.status } })}>
+          <option value="unspecified">Neuvedeno</option><option value="notWanted">Nechce</option><option value="inquire">Poptat</option><option value="wanted">Chtějí</option>
+        </select>
+        <input value={value.container.volumeSize} disabled={readOnly} placeholder="Objem / velikost" onChange={(event) => onChange({ ...value, container: { ...value.container, volumeSize: event.target.value } })} />
+        <input type="number" min={0} value={value.container.individualPriceNet ?? ""} disabled={readOnly} placeholder="Individuální cena bez DPH" onChange={(event) => onChange({ ...value, container: { ...value.container, individualPriceNet: event.target.value ? Number(event.target.value) : undefined } })} />
+        <input value={value.container.note} disabled={readOnly} placeholder="Poznámka" onChange={(event) => onChange({ ...value, container: { ...value.container, note: event.target.value } })} />
+      </div>
     </div>
   );
 }

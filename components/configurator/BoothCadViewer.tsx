@@ -22,6 +22,8 @@ import type {
 import { constructionMaterialOverrides } from "../../domain/materialOverrides";
 import type { CameraViewDefinition } from "../../domain/models";
 import type { SavedCameraView } from "../../domain/project";
+import type { Measurement3D, PrintSurfaceAssignment } from "../../domain/project";
+import { createMeasurement3D, nominalDimensionAnchors } from "../../domain/spatialAnnotations";
 
 type BoothCadViewerProps = {
   asset?: CadModelAsset;
@@ -42,6 +44,13 @@ type BoothCadViewerProps = {
   nominalDimensions?: NominalDimensions;
   printSurfaces?: readonly PrintSurface[];
   showPrintPlaceholder?: boolean;
+  measurements?: readonly Measurement3D[];
+  onMeasurementsChange?: (measurements: readonly Measurement3D[]) => void;
+  dimensionOffsets?: Readonly<Record<"width" | "depth" | "height", number>>;
+  onDimensionOffsetsChange?: (offsets: Readonly<Record<"width" | "depth" | "height", number>>) => void;
+  printSurfaceAssignments?: readonly PrintSurfaceAssignment[];
+  selectedPrintSurfaceId?: string | null;
+  onSelectPrintSurface?: (surfaceId: string | null) => void;
 };
 
 type ModelDimensionsMm = {
@@ -49,6 +58,13 @@ type ModelDimensionsMm = {
   depth: number;
   height: number;
 };
+
+const EMPTY_CAMERA_VIEWS: readonly CameraViewDefinition[] = [];
+const EMPTY_SAVED_VIEWS: readonly SavedCameraView[] = [];
+const EMPTY_PRINT_SURFACES: readonly PrintSurface[] = [];
+const EMPTY_MEASUREMENTS: readonly Measurement3D[] = [];
+const EMPTY_PRINT_SURFACE_ASSIGNMENTS: readonly PrintSurfaceAssignment[] = [];
+const DEFAULT_DIMENSION_OFFSETS = { width: 0, depth: 0, height: 0 } as const;
 
 function disposeObject(root: THREE.Object3D) {
   root.traverse((object) => {
@@ -103,13 +119,35 @@ function fitCameraToObject(
   controls.update();
 }
 
+function lineBetween(a: THREE.Vector3, b: THREE.Vector3, color = 0x34383a) {
+  return new THREE.Line(
+    new THREE.BufferGeometry().setFromPoints([a, b]),
+    new THREE.LineBasicMaterial({ color, depthTest: false }),
+  );
+}
+
+function labelSprite(text: string, color = "#25292b") {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512; canvas.height = 96;
+  const context = canvas.getContext("2d")!;
+  context.fillStyle = "rgba(255,255,255,.9)"; context.fillRect(0, 0, canvas.width, canvas.height);
+  context.fillStyle = color; context.font = "700 30px Arial"; context.textAlign = "center"; context.textBaseline = "middle"; context.fillText(text, 256, 48);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
+  sprite.scale.set(1.5, .28, 1);
+  return sprite;
+}
+
+function cadTupleToViewer(point: readonly [number, number, number]) {
+  return new THREE.Vector3(mmToSceneUnits(point[0]), mmToSceneUnits(point[2]), -mmToSceneUnits(point[1]));
+}
+
 export function BoothCadViewer({
   asset,
   footprintWidthMm,
   footprintDepthMm,
   components,
-  defaultViews = [],
-  savedViews = [],
+  defaultViews = EMPTY_CAMERA_VIEWS,
+  savedViews = EMPTY_SAVED_VIEWS,
   onSaveView,
   onDeleteView,
   onCapture,
@@ -117,8 +155,15 @@ export function BoothCadViewer({
   constructionFinish,
   partDefinitions,
   nominalDimensions,
-  printSurfaces = [],
+  printSurfaces = EMPTY_PRINT_SURFACES,
   showPrintPlaceholder = false,
+  measurements = EMPTY_MEASUREMENTS,
+  onMeasurementsChange,
+  dimensionOffsets = DEFAULT_DIMENSION_OFFSETS,
+  onDimensionOffsetsChange,
+  printSurfaceAssignments = EMPTY_PRINT_SURFACE_ASSIGNMENTS,
+  selectedPrintSurfaceId,
+  onSelectPrintSurface,
 }: BoothCadViewerProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const fitViewRef = useRef<() => void>(() => undefined);
@@ -136,6 +181,18 @@ export function BoothCadViewer({
   const [modelDimensions, setModelDimensions] =
     useState<ModelDimensionsMm | null>(null);
   const [showDimensions, setShowDimensions] = useState(false);
+  const [viewerTool, setViewerTool] = useState<"select" | "measure" | "print">("select");
+  const [measurementStart, setMeasurementStart] = useState<readonly [number, number, number] | null>(null);
+  const onMeasurementsChangeRef = useRef(onMeasurementsChange);
+  const onSelectPrintSurfaceRef = useRef(onSelectPrintSurface);
+
+  useEffect(() => {
+    onMeasurementsChangeRef.current = onMeasurementsChange;
+  }, [onMeasurementsChange]);
+
+  useEffect(() => {
+    onSelectPrintSurfaceRef.current = onSelectPrintSurface;
+  }, [onSelectPrintSurface]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -195,6 +252,32 @@ export function BoothCadViewer({
     const furniture = new THREE.Group();
     furniture.name = "Placed project components";
     content.add(furniture);
+    const editorOverlays = new THREE.Group();
+    editorOverlays.name = "Editor overlays";
+    scene.add(editorOverlays);
+
+    if (showDimensions && nominalDimensions) {
+      (["width", "depth", "height"] as const).forEach((axis) => {
+        const dimension = nominalDimensionAnchors(nominalDimensions, axis);
+        const offsetMm = dimensionOffsets[axis] ?? 0;
+        const offset = axis === "width" ? new THREE.Vector3(0, 0, mmToSceneUnits(offsetMm)) : axis === "depth" ? new THREE.Vector3(mmToSceneUnits(offsetMm), 0, 0) : new THREE.Vector3(mmToSceneUnits(offsetMm), 0, 0);
+        const a = cadTupleToViewer(dimension.pointA).add(offset);
+        const b = cadTupleToViewer(dimension.pointB).add(offset);
+        editorOverlays.add(lineBetween(a, b));
+        const label = labelSprite(`${axis === "width" ? "Šířka" : axis === "depth" ? "Hloubka" : "Výška"} ${dimension.measuredValueMm} mm`);
+        label.position.copy(a).lerp(b, .5).add(new THREE.Vector3(0, .08, 0));
+        editorOverlays.add(label);
+      });
+    }
+    measurements.forEach((measurement) => {
+      const a = cadTupleToViewer(measurement.pointA);
+      const b = cadTupleToViewer(measurement.pointB);
+      editorOverlays.add(lineBetween(a, b, 0x806d4f));
+      const label = labelSprite(measurement.displayLabel?.trim() || `${measurement.measuredValueMm} mm`, "#6f5e44");
+      const offset = measurement.displayOffset ? cadTupleToViewer(measurement.displayOffset) : new THREE.Vector3(0, .06, 0);
+      label.position.copy(a).lerp(b, .5).add(offset);
+      editorOverlays.add(label);
+    });
 
     let carpet: THREE.Mesh | undefined;
     if (carpetFinish && carpetFinish.id !== "none") {
@@ -305,6 +388,30 @@ export function BoothCadViewer({
             return clone;
           });
         });
+        if (viewerTool === "print") {
+          for (const surface of printSurfaces.filter((item) => item.active && item.nodeName)) {
+            const object = gltf.scene.getObjectByName(surface.nodeName!);
+            if (!object) continue;
+            object.userData.printSurfaceId = surface.id;
+            object.traverse((child) => {
+              const mesh = child as THREE.Mesh;
+              if (!mesh.material) return;
+              const materials = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+              mesh.material = materials.map((material) => {
+                const clone = material.clone() as THREE.MeshStandardMaterial;
+                if ("emissive" in clone) clone.emissive = new THREE.Color(surface.id === selectedPrintSurfaceId ? 0x9a8059 : 0x5f574c);
+                clone.transparent = true; clone.opacity = .72;
+                return clone;
+              });
+            });
+            if (showPrintPlaceholder) {
+              const bounds = new THREE.Box3().setFromObject(object);
+              const placeholder = labelSprite("Doplnit grafiku", "#6f5e44");
+              placeholder.position.copy(bounds.getCenter(new THREE.Vector3()));
+              gltf.scene.add(placeholder);
+            }
+          }
+        }
         loadedModels.push(gltf.scene);
         content.add(gltf.scene);
 
@@ -389,6 +496,28 @@ export function BoothCadViewer({
 
     fitView();
 
+    const handleCanvasClick = (event: MouseEvent) => {
+      if (viewerTool === "select") return;
+      const rect = renderer.domElement.getBoundingClientRect();
+      const pointer = new THREE.Vector2((event.clientX - rect.left) / rect.width * 2 - 1, -((event.clientY - rect.top) / rect.height) * 2 + 1);
+      const raycaster = new THREE.Raycaster(); raycaster.setFromCamera(pointer, camera);
+      const hit = raycaster.intersectObject(content, true)[0];
+      if (!hit) return;
+      if (viewerTool === "print") {
+        let object: THREE.Object3D | null = hit.object;
+        while (object && !object.userData.printSurfaceId) object = object.parent;
+        onSelectPrintSurfaceRef.current?.(object?.userData.printSurfaceId ?? null);
+        return;
+      }
+      const point: readonly [number, number, number] = [hit.point.x / SCENE_UNITS_PER_MILLIMETER, -hit.point.z / SCENE_UNITS_PER_MILLIMETER, hit.point.y / SCENE_UNITS_PER_MILLIMETER];
+      if (!measurementStart) setMeasurementStart(point);
+      else {
+        onMeasurementsChangeRef.current?.([...measurements, createMeasurement3D(`measurement-3d-${Date.now()}`, measurementStart, point)]);
+        setMeasurementStart(null);
+      }
+    };
+    renderer.domElement.addEventListener("click", handleCanvasClick);
+
     const render = () => {
       controls.update();
       renderer.render(scene, camera);
@@ -401,6 +530,7 @@ export function BoothCadViewer({
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
       controls.dispose();
+      renderer.domElement.removeEventListener("click", handleCanvasClick);
       fitViewRef.current = () => undefined;
       applyViewRef.current = () => undefined;
       captureRef.current = () => null;
@@ -409,14 +539,14 @@ export function BoothCadViewer({
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [asset, carpetFinish, components, constructionFinish, footprintDepthMm, footprintWidthMm, partDefinitions]);
+  }, [asset, carpetFinish, components, constructionFinish, dimensionOffsets, footprintDepthMm, footprintWidthMm, measurementStart, measurements, nominalDimensions, partDefinitions, printSurfaces, selectedPrintSurfaceId, showDimensions, showPrintPlaceholder, viewerTool]);
 
   return (
     <div className="cadViewer">
       <div ref={mountRef} className="cadViewerMount" />
 
-      <div className="cadViewerToolbar">
-        <div className="cadViewButtons">
+      <div className="cadViewerToolbars">
+        <div className="cadViewerToolbar cadViewToolbar"><strong>POHLED</strong><div className="cadViewButtons">
           <button type="button" onClick={() => fitViewRef.current()}>
             Fit model
           </button>
@@ -466,17 +596,13 @@ export function BoothCadViewer({
               Technický snímek
             </button>
           )}
-          {nominalDimensions && (
-            <button
-              type="button"
-              className={showDimensions ? "active" : ""}
-              onClick={() => setShowDimensions((visible) => !visible)}
-            >
-              Kóty
-            </button>
-          )}
-        </div>
-        <span>Levý tah: orbit · Pravý tah: pan · Kolečko: zoom</span>
+        </div><span>Levý tah: orbit · Pravý tah: pan · Kolečko: zoom</span></div>
+        <div className="cadViewerToolbar cadWorkToolbar"><strong>PRACOVNÍ NÁSTROJE</strong><div className="cadViewButtons">
+          <button type="button" className={viewerTool === "select" ? "active" : ""} onClick={() => { setViewerTool("select"); setMeasurementStart(null); }}>Výběr</button>
+          {nominalDimensions && <button type="button" className={showDimensions ? "active" : ""} onClick={() => setShowDimensions((visible) => !visible)}>Kóty</button>}
+          <button type="button" className={viewerTool === "measure" ? "active" : ""} onClick={() => { setViewerTool("measure"); setMeasurementStart(null); }}>Měření</button>
+          {printSurfaces.length > 0 && <button type="button" className={viewerTool === "print" ? "active" : ""} onClick={() => { setViewerTool("print"); setMeasurementStart(null); }}>Tiskové plochy</button>}
+        </div>{measurementStart && <span>Vyberte bod B</span>}</div>
       </div>
 
       {(loadingProgress !== null || pendingComponents > 0) && (
@@ -508,24 +634,8 @@ export function BoothCadViewer({
           {Math.round(modelDimensions.height)} mm
         </div>
       )}
-      {showDimensions && nominalDimensions && (
-        <div className="cadNominalDimensions" aria-label="Nominální rozměry">
-          <svg viewBox="0 0 360 230" role="img" aria-label={`Šířka ${nominalDimensions.widthMm} mm, hloubka ${nominalDimensions.depthMm} mm, výška ${nominalDimensions.heightMm} mm`}>
-            <g className="cadDimensionLine"><line x1="58" y1="184" x2="286" y2="184" /><line x1="58" y1="176" x2="58" y2="192" /><line x1="286" y1="176" x2="286" y2="192" /></g>
-            <text x="172" y="174">Šířka {nominalDimensions.widthMm} mm</text>
-            <g className="cadDimensionLine"><line x1="286" y1="184" x2="330" y2="143" /><line x1="281" y1="178" x2="292" y2="190" /><line x1="324" y1="137" x2="336" y2="149" /></g>
-            <text x="266" y="128">Hloubka {nominalDimensions.depthMm} mm</text>
-            <g className="cadDimensionLine"><line x1="42" y1="184" x2="42" y2="38" /><line x1="34" y1="184" x2="50" y2="184" /><line x1="34" y1="38" x2="50" y2="38" /></g>
-            <text x="52" y="62">Výška {nominalDimensions.heightMm} mm</text>
-          </svg>
-        </div>
-      )}
-      {showPrintPlaceholder && printSurfaces.some((surface) => surface.active) && (
-        <div className="cadPrintPlaceholder" role="status">
-          <span>Doplnit grafiku</span>
-          <small>{printSurfaces.filter((surface) => surface.active).map((surface) => `${surface.name} ${surface.widthMm} × ${surface.heightMm} mm`).join(" · ")}</small>
-        </div>
-      )}
+      {showDimensions && nominalDimensions && onDimensionOffsetsChange && <div className="cadDimensionOffsets"><span>Přesun kót</span>{(["width", "depth", "height"] as const).map((axis) => <button type="button" key={axis} onClick={() => onDimensionOffsetsChange({ ...dimensionOffsets, [axis]: (dimensionOffsets[axis] ?? 0) >= 0 ? -250 : 250 })}>{axis === "width" ? "Šířka" : axis === "depth" ? "Hloubka" : "Výška"} ↔</button>)}</div>}
+      {viewerTool === "print" && <div className="cadPrintSurfaceList">{printSurfaces.filter((surface) => surface.active).map((surface) => { const assignment = printSurfaceAssignments.find((item) => item.printSurfaceId === surface.id); return <button type="button" className={selectedPrintSurfaceId === surface.id ? "active" : ""} key={surface.id} onClick={() => onSelectPrintSurface?.(surface.id)}>{surface.name}<small>{surface.widthMm} × {surface.heightMm} mm · {surface.pricingUnit ?? "—"}{assignment?.includedInPackage ? " · v ceně" : ""}</small></button>; })}</div>}
     </div>
   );
 }

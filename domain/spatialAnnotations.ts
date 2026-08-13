@@ -1,4 +1,5 @@
 import type { Point } from "./models.ts";
+import type { Measurement3D } from "./project.ts";
 
 export type ProjectAnnotation = Readonly<{
   id: string;
@@ -83,4 +84,54 @@ export function measurementClick(
 
 export function cancelMeasurement(): MeasurementState {
   return { active: false };
+}
+
+export function measuredDistance3DMm(
+  pointA: readonly [number, number, number],
+  pointB: readonly [number, number, number],
+): number {
+  return Math.round(Math.hypot(
+    pointB[0] - pointA[0],
+    pointB[1] - pointA[1],
+    pointB[2] - pointA[2],
+  ));
+}
+
+export function createMeasurement3D(
+  id: string,
+  pointA: readonly [number, number, number],
+  pointB: readonly [number, number, number],
+  snapA: Measurement3D["snapA"] = "surface",
+  snapB: Measurement3D["snapB"] = "surface",
+): Measurement3D {
+  return {
+    id,
+    pointA,
+    pointB,
+    measuredValueMm: measuredDistance3DMm(pointA, pointB),
+    snapA,
+    snapB,
+  };
+}
+
+export function moveMeasurement3DLabel(
+  measurement: Measurement3D,
+  displayOffset: readonly [number, number, number],
+): Measurement3D {
+  return { ...measurement, displayOffset };
+}
+
+export type NominalDimensionAxis = "width" | "depth" | "height";
+
+export function nominalDimensionAnchors(
+  dimensions: Readonly<{ widthMm: number; depthMm: number; heightMm: number }>,
+  axis: NominalDimensionAxis,
+): Readonly<{
+  pointA: readonly [number, number, number];
+  pointB: readonly [number, number, number];
+  measuredValueMm: number;
+}> {
+  if (axis === "width") return { pointA: [0, 0, 0], pointB: [dimensions.widthMm, 0, 0], measuredValueMm: dimensions.widthMm };
+  if (axis === "depth") return { pointA: [dimensions.widthMm, 0, 0], pointB: [dimensions.widthMm, dimensions.depthMm, 0], measuredValueMm: dimensions.depthMm };
+  return { pointA: [0, 0, 0], pointB: [0, 0, dimensions.heightMm], measuredValueMm: dimensions.heightMm };
 }

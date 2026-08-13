@@ -31,11 +31,15 @@ import type {
   ProjectRecord,
   ProjectStage,
   ProjectStatus,
+  ExportCalculationOptions,
+  Measurement3D,
+  PrintSurfaceAssignment,
   SavedCameraView,
   TechnicalRequirements,
   VisualizationItem,
 } from "../domain/project";
 import {
+  createDefaultExportCalculationOptions,
   createDefaultTechnicalRequirements,
   createProjectRecord,
 } from "../domain/project";
@@ -61,6 +65,16 @@ import {
   worldToPlanView180,
 } from "../domain/planView";
 import { getMasterReferenceModel } from "../domain/cad3d";
+import {
+  componentZIndex,
+  moveComponentDisplayOrder,
+  scenePlanBounds,
+  sortComponentsFor2D,
+} from "../domain/displayOrder";
+import {
+  effectiveFasciaRequirement,
+  productionPrintSurfaceDimensions,
+} from "../domain/technicalServices";
 import { isObjectLocked, toggleUserLock } from "../domain/locking";
 import {
   createEmptyNotes,
@@ -107,6 +121,7 @@ import {
   EventsPage,
   PriceListsPage,
 } from "./workflow/CatalogManagementPages";
+import { dataUrlToFile, uploadAsset, type UploadProgress } from "../lib/storage/assetClient";
 
 export default function BoothGenerator() {
   const repositoryRef = useRef<ProjectRepository | null>(null);
@@ -146,11 +161,17 @@ export default function BoothGenerator() {
   const [visualizationPurpose, setVisualizationPurpose] = useState<"working" | "presentation">("working");
   const [visualization2DLayers, setVisualization2DLayers] = useState<string[]>(["booth", "furniture", "annotations"]);
   const [graphicsFiles, setGraphicsFiles] = useState<GraphicFileReference[]>([]);
+  const [graphicsUpload, setGraphicsUpload] = useState<UploadProgress | undefined>();
   const [carpetFinishId, setCarpetFinishId] = useState("carpet-grey");
   const [constructionFinishId, setConstructionFinishId] =
     useState("construction-white");
   const [annotations, setAnnotations] = useState<ProjectAnnotation[]>([]);
   const [customDimensions, setCustomDimensions] = useState<CustomDimension[]>([]);
+  const [measurements3D, setMeasurements3D] = useState<Measurement3D[]>([]);
+  const [dimensionOffsets3D, setDimensionOffsets3D] = useState<Record<"width" | "depth" | "height", number>>({ width: 0, depth: 0, height: 0 });
+  const [printSurfaceAssignments, setPrintSurfaceAssignments] = useState<PrintSurfaceAssignment[]>([]);
+  const [selectedPrintSurfaceId, setSelectedPrintSurfaceId] = useState<string | null>(null);
+  const [exportCalculationOptions, setExportCalculationOptions] = useState<ExportCalculationOptions>(() => createDefaultExportCalculationOptions());
   const [editorTool, setEditorTool] =
     useState<"select" | "annotation" | "measure">("select");
   const [pendingMeasurePoint, setPendingMeasurePoint] = useState<{
@@ -353,6 +374,39 @@ export default function BoothGenerator() {
     selectedPlacedComponent
       ? isObjectLocked(selectedPlacedComponent)
       : false;
+  const selectedPrintSurface = selectedBooth?.printSurfaces?.find((surface) => surface.id === selectedPrintSurfaceId);
+  const selectedPrintAssignment = printSurfaceAssignments.find((assignment) => assignment.printSurfaceId === selectedPrintSurfaceId);
+
+  useEffect(() => {
+    if (!selectedBooth) {
+      return;
+    }
+    setPrintSurfaceAssignments((current) =>
+      (selectedBooth.printSurfaces ?? []).map((surface) => {
+        const existing = current.find((item) => item.printSurfaceId === surface.id);
+        const production = productionPrintSurfaceDimensions(surface, realizationProfileId);
+        const included = Boolean(
+          selectedBooth.packageContents?.some(
+            (item) => item.printSurfaceId === surface.id && item.includedInBasePrice,
+          ),
+        );
+        return {
+          printSurfaceId: surface.id,
+          sceneReference: selectedBooth.id,
+          graphicsKind: existing?.graphicsKind ?? (included ? "fascia" : "fullWrap"),
+          artworkStatus: existing?.artworkStatus ?? "missing",
+          artworkFileId: existing?.artworkFileId,
+          selectedForPrint: existing?.selectedForPrint ?? included,
+          canonicalWidthMm: surface.widthMm,
+          canonicalHeightMm: surface.heightMm,
+          productionWidthMm: production.widthMm,
+          productionHeightMm: production.heightMm,
+          includedInPackage: included,
+          pricedSeparately: !included,
+        };
+      }),
+    );
+  }, [realizationProfileId, selectedBooth]);
 
   const selectedConstructionPart =
     selectedConstructionPartId && selectedConstructionPartId !== "assembly"
@@ -464,27 +518,73 @@ export default function BoothGenerator() {
     carpetFinishId,
     constructionFinishId,
     internalNote: projectNotes.internalNote,
+    customerNote: projectNotes.customerNote,
+    printSurfaceAssignments,
+    exportCalculationOptions,
   };
 
-  function addTemporaryGraphics(files: FileList) {
-    const additions: GraphicFileReference[] = [];
-    Array.from(files).forEach((file) => {
-      const id = `graphic-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-      temporaryGraphicFilesRef.current.set(id, file);
-      additions.push({
-        id,
-        name: file.name,
-        size: file.size,
-        mimeType: file.type,
-        availability: "temporary-session",
-      });
+  function ensureProjectStorageId(): string {
+    if (projectId) return projectId;
+    const id = `project-${crypto.randomUUID()}`;
+    setProjectId(id);
+    setProjectCreatedAt((current) => current || new Date().toISOString());
+    return id;
+  }
+
+  async function addPersistentGraphics(files: FileList | readonly File[]) {
+    const ownerId = ensureProjectStorageId();
+    const batch = Array.from(files);
+    const results = await Promise.allSettled(batch.map(async (file) => {
+      const asset = await uploadAsset(file, { category: "project-graphics", ownerId }, setGraphicsUpload);
+      return {
+        id: asset.id,
+        name: asset.originalFileName,
+        size: asset.size,
+        mimeType: asset.mimeType,
+        availability: "persistent" as const,
+        storageKey: asset.storageKey,
+        asset,
+        status: "uploaded" as const,
+        associatedRequirement: !["unspecified", "notWanted"].includes(technicalRequirements.fullWrapGraphics.status) ? "fullWrap" as const : "fascia" as const,
+        printSurfaceId: selectedPrintSurfaceId ?? undefined,
+        createdAt: asset.createdAt,
+      };
+    }));
+    const additions = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    if (additions.length) setGraphicsFiles((current) => [...current, ...additions]);
+    batch.forEach((file, index) => {
+      if (results[index]?.status === "rejected") temporaryGraphicFilesRef.current.set(`retry-${Date.now()}-${index}`, file);
     });
-    setGraphicsFiles((current) => [...current, ...additions]);
+  }
+
+  async function retryPersistentGraphics() {
+    const files = [...temporaryGraphicFilesRef.current.entries()].filter(([id]) => id.startsWith("retry-")).map(([, file]) => file);
+    [...temporaryGraphicFilesRef.current.keys()].filter((id) => id.startsWith("retry-")).forEach((id) => temporaryGraphicFilesRef.current.delete(id));
+    if (files.length) await addPersistentGraphics(files);
   }
 
   function removeTemporaryGraphic(id: string) {
     temporaryGraphicFilesRef.current.delete(id);
     setGraphicsFiles((current) => current.filter((file) => file.id !== id));
+  }
+
+  async function addPersistentVisualization(item: VisualizationItem) {
+    setVisualizations((items) => [...items, item]);
+    try {
+      const file = await dataUrlToFile(item.imageDataUrl, `${item.id}.png`);
+      const asset = await uploadAsset(file, { category: "project-visualization", ownerId: ensureProjectStorageId(), displayName: item.name });
+      setVisualizations((items) => items.map((current) => current.id === item.id ? { ...current, asset } : current));
+    } catch { /* legacy data URL remains a non-destructive fallback */ }
+  }
+
+  async function addPersistentPlanOutput(item: GeneratedPlanOutput) {
+    setGeneratedPlanOutputs((items) => [...items, item]);
+    setSelectedOutputIds((items) => [...items, item.id]);
+    try {
+      const file = await dataUrlToFile(item.imageDataUrl, `${item.id}.png`);
+      const asset = await uploadAsset(file, { category: "project-floorplan", ownerId: ensureProjectStorageId(), displayName: item.name });
+      setGeneratedPlanOutputs((items) => items.map((current) => current.id === item.id ? { ...current, asset } : current));
+    } catch { /* legacy data URL remains a non-destructive fallback */ }
   }
 
   function pointFromPlanPointer(
@@ -593,12 +693,25 @@ export default function BoothGenerator() {
     setConstructionFinishId("construction-white");
     setAssemblyNotes(createEmptyNotes());
     setConstructionNotes({});
-    if (booth?.graphicsRequired) {
-      setTechnicalRequirements((requirements) => ({
-        ...requirements,
-        graphics: { status: "inquire", note: "Požadujeme zaslání grafických / tiskových dat pro límec." },
-      }));
-    }
+    setMeasurements3D([]);
+    setSelectedPrintSurfaceId(null);
+    setPrintSurfaceAssignments((booth?.printSurfaces ?? []).map((surface) => {
+      const production = productionPrintSurfaceDimensions(surface, realizationProfileId);
+      const included = Boolean(booth?.packageContents?.some((item) => item.printSurfaceId === surface.id && item.includedInBasePrice));
+      return {
+        printSurfaceId: surface.id,
+        sceneReference: booth?.id ?? "booth",
+        graphicsKind: included ? "fascia" as const : "fullWrap" as const,
+        artworkStatus: "missing" as const,
+        selectedForPrint: included,
+        canonicalWidthMm: surface.widthMm,
+        canonicalHeightMm: surface.heightMm,
+        productionWidthMm: production.widthMm,
+        productionHeightMm: production.heightMm,
+        includedInPackage: included,
+        pricedSeparately: !included,
+      };
+    }));
 
     setEditorMessage("");
   }
@@ -647,6 +760,11 @@ export default function BoothGenerator() {
     setConstructionFinishId("construction-white");
     setAnnotations([]);
     setCustomDimensions([]);
+    setMeasurements3D([]);
+    setDimensionOffsets3D({ width: 0, depth: 0, height: 0 });
+    setPrintSurfaceAssignments([]);
+    setSelectedPrintSurfaceId(null);
+    setExportCalculationOptions(createDefaultExportCalculationOptions());
     setEditorTool("select");
     setPendingMeasurePoint(null);
     temporaryGraphicFilesRef.current.clear();
@@ -729,6 +847,10 @@ export default function BoothGenerator() {
       constructionFinishId,
       annotations,
       customDimensions,
+      measurements3D,
+      dimensionOffsets3D,
+      printSurfaceAssignments,
+      exportCalculationOptions,
     }, now);
   }
 
@@ -786,6 +908,11 @@ export default function BoothGenerator() {
     setConstructionFinishId(project.constructionFinishId);
     setAnnotations([...project.annotations]);
     setCustomDimensions([...project.customDimensions]);
+    setMeasurements3D([...project.measurements3D]);
+    setDimensionOffsets3D({ ...project.dimensionOffsets3D });
+    setPrintSurfaceAssignments([...project.printSurfaceAssignments]);
+    setExportCalculationOptions(project.exportCalculationOptions);
+    setSelectedPrintSurfaceId(null);
     temporaryGraphicFilesRef.current.clear();
     setSelectedComponentId(null);
     setSelectedConstructionPartId(null);
@@ -2660,7 +2787,7 @@ export default function BoothGenerator() {
                         zoomPercent={boothViewport.zoomPercent}
                         onZoomOut={boothViewport.zoomOut}
                         onZoomIn={boothViewport.zoomIn}
-                        onFit={boothViewport.fitToBooth}
+                        onFit={() => boothViewport.fitToContent(scenePlanBounds(selectedBooth.widthMm!, selectedBooth.depthMm!, placedComponents))}
                         onReset={boothViewport.resetZoom}
                       />
                     </div>
@@ -2860,7 +2987,7 @@ export default function BoothGenerator() {
 
                       {/* COMPONENTS */}
 
-                      {placedComponents.map(
+                      {sortComponentsFor2D(placedComponents).map(
                         (item) => {
                           if (!item.visible || !item.showIn2D) {
                             return null;
@@ -2917,6 +3044,7 @@ export default function BoothGenerator() {
                                 }%`,
 
                                 transform: `translate(-50%, -50%) rotate(${worldRotationToPlanView180(item.rotationDeg)}deg)`,
+                                zIndex: componentZIndex(item),
                               }}
                               onPointerDown={(
                                 event
@@ -3020,7 +3148,14 @@ export default function BoothGenerator() {
                         partDefinitions={selectedBooth.partDefinitions}
                         nominalDimensions={selectedBooth.nominalDimensions}
                         printSurfaces={selectedBooth.printSurfaces}
-                        showPrintPlaceholder={Boolean(selectedBooth.graphicsRequired && !["dataReceived", "ready"].includes(technicalRequirements.graphics.status))}
+                        showPrintPlaceholder={printSurfaceAssignments.some((assignment) => assignment.selectedForPrint && assignment.artworkStatus === "missing")}
+                        measurements={measurements3D}
+                        onMeasurementsChange={(items) => setMeasurements3D([...items])}
+                        dimensionOffsets={dimensionOffsets3D}
+                        onDimensionOffsetsChange={(offsets) => setDimensionOffsets3D({ ...offsets })}
+                        printSurfaceAssignments={printSurfaceAssignments}
+                        selectedPrintSurfaceId={selectedPrintSurfaceId}
+                        onSelectPrintSurface={setSelectedPrintSurfaceId}
                         defaultViews={selectedBooth.defaultViews}
                         savedViews={savedViews}
                         onSaveView={(view) =>
@@ -3177,7 +3312,18 @@ export default function BoothGenerator() {
                     onToggleConstructionLock={toggleConstructionLock}
                     onToggleComponentVisibility={toggleComponentVisibility}
                     onToggleConstructionVisibility={toggleConstructionVisibility}
+                    onMoveComponentDisplayOrder={(componentId, direction) => setPlacedComponents((items) => [...moveComponentDisplayOrder(items, componentId, direction)])}
                   />
+                  {effectiveFasciaRequirement(technicalRequirements.fasciaGraphics, selectedBooth).message && <div className="packageOverrideNotice">{effectiveFasciaRequirement(technicalRequirements.fasciaGraphics, selectedBooth).message}</div>}
+                  {selectedPrintSurface && selectedPrintAssignment && <section className="printSurfaceInspector">
+                    <span className="propertySectionTitle">TISKOVÁ PLOCHA</span>
+                    <div className="propertyRow"><span>Název</span><strong>{selectedPrintSurface.name}</strong></div>
+                    <div className="propertyRow"><span>Rozměr</span><strong>{selectedPrintSurface.widthMm} × {selectedPrintSurface.heightMm} mm</strong></div>
+                    <div className="propertyRow"><span>Pricing unit</span><strong>{selectedPrintSurface.pricingUnit ?? "—"}</strong></div>
+                    <div className="propertyRow"><span>Grafika</span><strong>{selectedPrintAssignment.includedInPackage ? "Objednáno – v ceně" : selectedPrintAssignment.selectedForPrint ? "Vybráno pro celopolep" : "Nevybráno"}</strong></div>
+                    <div className="propertyRow"><span>Data</span><strong>{selectedPrintAssignment.artworkStatus === "missing" ? "Chybí" : selectedPrintAssignment.artworkStatus === "received" ? "Přijata" : "Ready"}</strong></div>
+                    <div className="printSurfaceActions"><button type="button" onClick={() => setPrintSurfaceAssignments((items) => items.map((item) => item.printSurfaceId === selectedPrintSurface.id ? { ...item, selectedForPrint: !item.selectedForPrint, graphicsKind: item.includedInPackage ? "fascia" : "fullWrap" } : item))}>{selectedPrintAssignment.selectedForPrint ? "Odebrat z grafiky" : "Použít pro grafiku"}</button><button type="button" onClick={() => setPrintSurfaceAssignments((items) => items.map((item) => item.printSurfaceId === selectedPrintSurface.id ? { ...item, artworkStatus: item.artworkStatus === "missing" ? "received" : item.artworkStatus === "received" ? "ready" : "missing" } : item))}>Změnit stav dat</button></div>
+                  </section>}
 
                   <div className="finishInspectorControl">
                     <label>
@@ -3376,11 +3522,10 @@ export default function BoothGenerator() {
               setSavedViews((items) => items.filter((view) => view.id !== viewId))
             }
             onAddVisualization={(item) =>
-              setVisualizations((items) => [...items, item])
+              void addPersistentVisualization(item)
             }
             onAddPlanOutput={(item) => {
-              setGeneratedPlanOutputs((items) => [...items, item]);
-              setSelectedOutputIds((items) => [...items, item.id]);
+              void addPersistentPlanOutput(item);
             }}
             onUpdatePlanOutput={(item) =>
               setGeneratedPlanOutputs((items) => items.map((current) => current.id === item.id ? item : current))
@@ -3406,7 +3551,9 @@ export default function BoothGenerator() {
         {workspaceSection === "project" && step === 5 && (
           <SummaryStep
             project={workflowProject}
-            onAddGraphicsFiles={addTemporaryGraphics}
+            onAddGraphicsFiles={addPersistentGraphics}
+            onRetryGraphics={retryPersistentGraphics}
+            graphicsUpload={graphicsUpload}
             onRemoveGraphicsFile={removeTemporaryGraphic}
             onContinue={() => setStep(6)}
           />
@@ -3420,6 +3567,7 @@ export default function BoothGenerator() {
             )}
             onSelectedOutputIdsChange={setSelectedOutputIds}
             onSelectedEventDocumentIdsChange={setSelectedEventDocumentIds}
+            onCalculationOptionsChange={setExportCalculationOptions}
           />
         )}
       </section>

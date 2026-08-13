@@ -24,6 +24,7 @@ type ScenePanelProps = {
   onToggleConstructionLock: (partId: string) => void;
   onToggleComponentVisibility: (componentId: string) => void;
   onToggleConstructionVisibility: (partId: string) => void;
+  onMoveComponentDisplayOrder: (componentId: string, direction: "forward" | "backward" | "front" | "back") => void;
 };
 
 type SceneItemProps = {
@@ -38,6 +39,8 @@ type SceneItemProps = {
   onSelect: () => void;
   onToggleVisibility: () => void;
   onToggleLock: () => void;
+  onMoveForward?: () => void;
+  onMoveBackward?: () => void;
 };
 
 function Icon({ kind }: { kind: SceneItemProps["kind"] }) {
@@ -63,6 +66,8 @@ function SceneItem(props: SceneItemProps) {
     <div className="sceneActions">
       <button type="button" className="sceneActionButton" disabled={props.visibilityDisabled} onClick={(event) => { event.stopPropagation(); props.onToggleVisibility(); }} title={props.visibilityDisabled ? "Viditelnost části bude dostupná po mapování GLB nodů" : props.visible ? "Skrýt prvek" : "Zobrazit prvek"}><Eye off={!props.visible} /></button>
       <button type="button" className="sceneActionButton" disabled={props.systemLocked} onClick={(event) => { event.stopPropagation(); props.onToggleLock(); }} title={props.systemLocked ? "Systémově zamčeno" : locked ? "Odemknout" : "Zamknout"}><Lock open={!locked} /></button>
+      {props.onMoveBackward && <button type="button" className="sceneActionButton sceneOrderButton" onClick={props.onMoveBackward} title="V 2D dozadu">↓</button>}
+      {props.onMoveForward && <button type="button" className="sceneActionButton sceneOrderButton" onClick={props.onMoveForward} title="V 2D dopředu">↑</button>}
     </div>
   </div>;
 }
@@ -100,7 +105,7 @@ export function ScenePanel(props: ScenePanelProps) {
       <TreeHeader label="Mobiliář" open={openGroups.furniture} onToggle={() => toggle("furniture")} />
       {openGroups.furniture && <div className="sceneTreeChildren">{props.components.length === 0 ? <span className="sceneEmpty">Žádné vložené prvky</span> : props.components.map((component, index) => {
         const number = props.components.slice(0, index + 1).filter((item) => item.sceneLabel === component.sceneLabel).length;
-        return <SceneItem key={component.id} kind="furniture" label={`${component.sceneLabel} ${String(number).padStart(2, "0")}`} selected={props.selectedComponentId === component.id} visible={component.visible} systemLocked={component.systemLocked} userLocked={component.userLocked} onSelect={() => props.onSelectComponent(component.id)} onToggleVisibility={() => props.onToggleComponentVisibility(component.id)} onToggleLock={() => props.onToggleComponentLock(component.id)} />;
+        return <SceneItem key={component.id} kind="furniture" label={`${component.sceneLabel} ${String(number).padStart(2, "0")}`} selected={props.selectedComponentId === component.id} visible={component.visible} systemLocked={component.systemLocked} userLocked={component.userLocked} onSelect={() => props.onSelectComponent(component.id)} onToggleVisibility={() => props.onToggleComponentVisibility(component.id)} onToggleLock={() => props.onToggleComponentLock(component.id)} onMoveBackward={() => props.onMoveComponentDisplayOrder(component.id, "backward")} onMoveForward={() => props.onMoveComponentDisplayOrder(component.id, "forward")} />;
       })}</div>}
     </div>
   </div>;

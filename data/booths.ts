@@ -53,6 +53,8 @@ const baseBoothTypes: readonly BoothType[] = [
         orientation: "landscape",
         materialRole: "PRINT_SURFACE",
         allowanceLinearMeters: 2,
+        pricingUnit: "bm",
+        productionProfiles: {},
         active: true,
       },
     ],

@@ -2,22 +2,26 @@ import { useEffect, useRef, useState, type DragEvent } from "react";
 import { realizationCompanies } from "../../data/organizations";
 import {
   eventCoverImageUrl,
-  createEventDocumentsFromFiles,
+  createEventDocumentFromAsset,
   eventHasUnsavedChanges,
   eventLogoUrl,
   type EventDocument,
   type Exhibition,
   type PriceList,
 } from "../../domain/organizations";
+import type { StoredAsset } from "../../domain/assets";
+import { getAssetDownloadUrl, uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
+import { useAssetUrl } from "../../hooks/useAssetUrl";
 
 export function EventLogo({ event, compact = false }: { event?: Exhibition; compact?: boolean }) {
-  return <EventMediaPreview url={event?.logoUrl} label="Logo výstavy" compact={compact} />;
+  return <EventMediaPreview asset={event?.logoAsset} url={event?.logoUrl} label="Logo výstavy" compact={compact} />;
 }
 
-function EventMediaPreview({ url, label, compact = false, onOpen }: { url?: string; label: string; compact?: boolean; onOpen?: () => void }) {
+function EventMediaPreview({ asset, url, label, compact = false, onOpen }: { asset?: StoredAsset; url?: string; label: string; compact?: boolean; onOpen?: (url: string) => void }) {
   const [failed, setFailed] = useState("");
-  const available = Boolean(url && failed !== url);
-  return <button type="button" className={`eventMediaPreview ${compact ? "compact" : ""}`} onClick={onOpen} disabled={!available || !onOpen}>{available ? <img src={url} alt={label} onError={() => setFailed(url!)} /> : <span>{label}</span>}</button>;
+  const resolved = useAssetUrl(asset, url);
+  const available = Boolean(resolved.url && failed !== resolved.url);
+  return <button type="button" className={`eventMediaPreview ${compact ? "compact" : ""}`} onClick={() => resolved.url && onOpen?.(resolved.url)} disabled={!available || !onOpen}>{available ? <img src={resolved.url} alt={label} onError={() => setFailed(resolved.url!)} /> : <span>{resolved.loading ? "Načítám…" : label}</span>}</button>;
 }
 
 export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange }: { events: readonly Exhibition[]; priceLists: readonly PriceList[]; onChange: (events: Exhibition[]) => void; onSave: (event: Exhibition) => Promise<void>; onDirtyChange?: (dirty: boolean) => void }) {
@@ -28,6 +32,8 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
   const [documentCategory, setDocumentCategory] = useState("other");
   const [documentLanguage, setDocumentLanguage] = useState<"" | "cs" | "en">("");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
+  const [uploadStates, setUploadStates] = useState<Record<string, UploadProgress>>({});
+  const retryFilesRef = useRef(new Map<string, File>());
   const savedEventsRef = useRef(new Map(events.map((event) => [event.id, event])));
   const selected = events.find((event) => event.id === selectedId);
   const filtered = events.filter((event) => `${event.name} ${event.slug} ${event.venue} ${event.year}`.toLocaleLowerCase("cs").includes(query.toLocaleLowerCase("cs")));
@@ -81,20 +87,30 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
     setAdding(false);
   }
 
-  function temporaryMedia(field: "logoUrl" | "coverImageUrl", file?: File) {
+  async function persistentMedia(kind: "logo" | "cover", file?: File) {
     if (!file) return;
-    const metadata = { fileName: file.name, mimeType: file.type || "application/octet-stream", availability: "temporary-session" as const };
-    update({ [field]: URL.createObjectURL(file), [field === "logoUrl" ? "logoMetadata" : "coverImageMetadata"]: metadata });
+    if (!selected) return;
+    retryFilesRef.current.set(kind, file);
+    try {
+      const asset = await uploadAsset(file, { category: kind === "logo" ? "event-logo" : "event-cover", ownerId: selected.slug || selected.id }, (state) => setUploadStates((current) => ({ ...current, [kind]: state })));
+      const metadata = { fileName: file.name, mimeType: asset.mimeType, size: asset.size, storageKey: asset.storageKey, createdAt: asset.createdAt, availability: "persistent" as const };
+      update(kind === "logo" ? { logoAsset: asset, logoUrl: "", logoMetadata: metadata } : { coverImageAsset: asset, coverImageUrl: "", coverImageMetadata: metadata });
+      retryFilesRef.current.delete(kind);
+    } catch { /* state is rendered next to the uploader */ }
   }
 
-  function addDocuments(files?: FileList | readonly File[]) {
+  async function addDocuments(files?: FileList | readonly File[]) {
     if (!selected || !files?.length) return;
-    const documents = createEventDocumentsFromFiles(
-      Array.from(files),
-      { category: documentCategory, language: documentLanguage || undefined },
-      (file) => URL.createObjectURL(file as File),
-    );
-    update({ documents: [...selected.documents, ...documents] });
+    const batch = Array.from(files);
+    const results = await Promise.allSettled(batch.map(async (file, index) => {
+      const key = `document-${index}-${file.name}`;
+      retryFilesRef.current.set(key, file);
+      const asset = await uploadAsset(file, { category: "event-document", ownerId: selected.slug || selected.id }, (state) => setUploadStates((current) => ({ ...current, [key]: state })));
+      retryFilesRef.current.delete(key);
+      return createEventDocumentFromAsset(asset, { category: documentCategory, language: documentLanguage || undefined });
+    }));
+    const documents = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
+    if (documents.length) update({ documents: [...selected.documents, ...documents] });
   }
 
   function dropDocuments(event: DragEvent<HTMLDivElement>) {
@@ -102,13 +118,27 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
     addDocuments(event.dataTransfer.files);
   }
 
+  async function openDocument(document: EventDocument) {
+    try {
+      const url = document.storageKey ? await getAssetDownloadUrl(document.storageKey) : document.assetUrl;
+      if (url) window.open(url, "_blank", "noopener,noreferrer");
+    } catch (error) {
+      setUploadStates((current) => ({ ...current, [`open-${document.id}`]: { state: "error", percent: 0, message: error instanceof Error ? error.message : "Dokument nelze otevřít." } }));
+    }
+  }
+
   async function saveSelected() {
     if (!selected) return;
     setSaveState("saving");
-    await onSave(selected);
-    savedEventsRef.current.set(selected.id, selected);
-    setSaveState("saved");
-    onDirtyChange?.(false);
+    try {
+      await onSave(selected);
+      savedEventsRef.current.set(selected.id, selected);
+      setSaveState("saved");
+      onDirtyChange?.(false);
+    } catch {
+      setSaveState("dirty");
+      setUploadStates((current) => ({ ...current, save: { state: "error", percent: 0, message: "Event se nepodařilo uložit. Uploadovaná data v R2 zůstávají bezpečně zachována." } }));
+    }
   }
 
   return <div className="workspacePage">
@@ -117,12 +147,12 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
     {adding && <div className="inlineCreate"><span>Nový event použije předvídatelné cesty logo.png a cover.png.</span><button onClick={addEvent}>Vytvořit lokální event</button></div>}
     <div className="adminSplit"><div className="adminList">{filtered.map((event) => <button key={event.id} className={event.id === selectedId ? "active" : ""} onClick={() => selectEvent(event.id)}><strong>{event.name}</strong><span>{event.year} · {event.venue || "Místo neuvedeno"}</span></button>)}</div>
       {selected && <section className="adminDetail eventDetail">
-        <div className="eventSaveBar"><span className={saveState}>{saveState === "dirty" ? "Neuložené změny" : saveState === "saving" ? "Ukládám…" : "Uloženo"}</span><button type="button" className="primaryButton" onClick={saveSelected} disabled={!dirty || saveState === "saving"}>Uložit změny</button></div>
+        <div className="eventSaveBar"><span className={saveState}>{saveState === "dirty" ? "Neuložené změny" : saveState === "saving" ? "Ukládám…" : "Uloženo"}{uploadStates.save?.message && <small className="uploadError">{uploadStates.save.message}</small>}</span><button type="button" className="primaryButton" onClick={saveSelected} disabled={!dirty || saveState === "saving"}>Uložit změny</button></div>
         <div className="eventMediaArea">
-          <MediaEditor label="Logo" url={selected.logoUrl} onOpen={() => selected.logoUrl && setLightbox({ url: selected.logoUrl, label: "Logo" })} onFile={(file) => temporaryMedia("logoUrl", file)} onRemove={() => update({ logoUrl: "" })} />
-          <MediaEditor label="Cover / banner" url={selected.coverImageUrl} wide onOpen={() => selected.coverImageUrl && setLightbox({ url: selected.coverImageUrl, label: "Cover" })} onFile={(file) => temporaryMedia("coverImageUrl", file)} onRemove={() => update({ coverImageUrl: "" })} />
+          <MediaEditor label="Logo" asset={selected.logoAsset} url={selected.logoUrl} progress={uploadStates.logo} onOpen={(url) => setLightbox({ url, label: "Logo" })} onFile={(file) => persistentMedia("logo", file)} onRetry={() => persistentMedia("logo", retryFilesRef.current.get("logo"))} onRemove={() => update({ logoUrl: "", logoAsset: undefined, logoMetadata: undefined })} />
+          <MediaEditor label="Cover / banner" asset={selected.coverImageAsset} url={selected.coverImageUrl} progress={uploadStates.cover} wide onOpen={(url) => setLightbox({ url, label: "Cover" })} onFile={(file) => persistentMedia("cover", file)} onRetry={() => persistentMedia("cover", retryFilesRef.current.get("cover"))} onRemove={() => update({ coverImageUrl: "", coverImageAsset: undefined, coverImageMetadata: undefined })} />
         </div>
-        <p className="temporaryNotice">Nahraná média jsou pouze dočasný náhled aktuální relace. Trvalé uložení čeká na AssetStorageProvider.</p>
+        <p className="temporaryNotice">Nová média se ukládají přímo do privátního R2. Odstranění zde odebere bezpečně metadata; fyzický objekt zůstává zachován do zavedení globálního reference trackingu.</p>
         <div className="eventForm">
           <label><span>Název</span><input value={selected.name} onChange={(event) => update({ name: event.target.value })} /></label>
           <div className="threeColumns"><label><span>Slug</span><input value={selected.slug} onChange={(event) => { const slug = event.target.value; update({ slug, logoUrl: eventLogoUrl(slug), coverImageUrl: eventCoverImageUrl(slug) }); }} /></label><label><span>Rok</span><input type="number" value={selected.year} onChange={(event) => update({ year: Number(event.target.value) })} /></label><label><span>Edice</span><input value={selected.edition} onChange={(event) => update({ edition: event.target.value })} /></label></div>
@@ -134,7 +164,7 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
           <label><span>Dostupné ceníky</span><select multiple value={[...selected.priceListIds]} onChange={(event) => { const priceListIds = [...event.target.selectedOptions].map((option) => option.value); update({ priceListIds, defaultPriceListId: priceListIds.includes(selected.defaultPriceListId ?? "") ? selected.defaultPriceListId : priceListIds[0] }); }}>{priceLists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label>
           <label><span>Důležité informace</span><textarea value={selected.importantInfo} onChange={(event) => update({ importantInfo: event.target.value })} /></label>
           <label><span>Interní poznámky</span><textarea value={selected.notes.internalNote} onChange={(event) => update({ notes: { ...selected.notes, internalNote: event.target.value } })} /></label>
-          <section className="eventDocuments"><div className="eventDocumentsHeader"><div><strong>Dokumenty pro vystavovatele</strong><small>Soubor je zatím uložen pouze dočasně a po reloadu nebude dostupný. Metadata po uložení zůstanou.</small></div><label className="smallUploadButton">+ Přidat dokumenty<input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={(event) => { addDocuments(event.target.files ?? undefined); event.target.value = ""; }} /></label></div><div className="eventDocumentDefaults"><label><span>Výchozí kategorie dávky</span><select value={documentCategory} onChange={(event) => setDocumentCategory(event.target.value)}><option value="application">Přihláška</option><option value="technical">Technické podmínky</option><option value="manual">Manuál</option><option value="instructions">Instrukce</option><option value="other">Ostatní</option></select></label><label><span>Výchozí jazyk</span><select value={documentLanguage} onChange={(event) => setDocumentLanguage(event.target.value as typeof documentLanguage)}><option value="">Neuveden</option><option value="cs">Čeština</option><option value="en">English</option></select></label></div><div className="eventDocumentDropzone" onDragOver={(event) => event.preventDefault()} onDrop={dropDocuments}>Přetáhněte sem více dokumentů najednou</div>{selected.documents.length ? selected.documents.map((document) => <div className="eventDocumentRow" key={document.id}><div><input value={document.title} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, title: event.target.value } : item) })} /><select value={document.category} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, category: event.target.value } : item) })}><option value="application">Přihláška</option><option value="technical">Technické podmínky</option><option value="manual">Manuál</option><option value="instructions">Instrukce</option><option value="other">Ostatní</option></select><select value={document.language ?? ""} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, language: (event.target.value || undefined) as EventDocument["language"] } : item) })}><option value="">—</option><option value="cs">CS</option><option value="en">EN</option></select><label className="checkLabel"><input type="checkbox" checked={document.active} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, active: event.target.checked } : item) })} /> Aktivní</label></div><span>{document.fileName} · {document.mimeType} · {document.availability === "temporary-session" ? "dočasné" : "uložené"}</span><button onClick={() => update({ documents: selected.documents.filter((item) => item.id !== document.id) })}>Odebrat</button></div>) : <p className="workspaceEmpty">Bez dokumentů.</p>}</section>
+          <section className="eventDocuments"><div className="eventDocumentsHeader"><div><strong>Dokumenty pro vystavovatele</strong><small>Multi-upload ukládá soubory do R2; title, kategorie, jazyk a aktivita zůstávají samostatně editovatelné.</small></div><label className="smallUploadButton">+ Přidat dokumenty<input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={(event) => { void addDocuments(event.target.files ?? undefined); event.target.value = ""; }} /></label></div><div className="eventDocumentDefaults"><label><span>Výchozí kategorie dávky</span><select value={documentCategory} onChange={(event) => setDocumentCategory(event.target.value)}><option value="application">Přihláška</option><option value="technical">Technické podmínky</option><option value="manual">Manuál</option><option value="instructions">Instrukce</option><option value="other">Ostatní</option></select></label><label><span>Výchozí jazyk</span><select value={documentLanguage} onChange={(event) => setDocumentLanguage(event.target.value as typeof documentLanguage)}><option value="">Neuveden</option><option value="cs">Čeština</option><option value="en">English</option></select></label></div><div className="eventDocumentDropzone" onDragOver={(event) => event.preventDefault()} onDrop={dropDocuments}>Přetáhněte sem více dokumentů najednou</div><UploadBatchStatus states={uploadStates} onRetry={() => void addDocuments([...retryFilesRef.current].filter(([key]) => key.startsWith("document-")).map(([, file]) => file))} />{selected.documents.length ? selected.documents.map((document) => <div className="eventDocumentRow" key={document.id}><div><input value={document.title} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, title: event.target.value } : item) })} /><select value={document.category} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, category: event.target.value } : item) })}><option value="application">Přihláška</option><option value="technical">Technické podmínky</option><option value="manual">Manuál</option><option value="instructions">Instrukce</option><option value="other">Ostatní</option></select><select value={document.language ?? ""} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, language: (event.target.value || undefined) as EventDocument["language"] } : item) })}><option value="">—</option><option value="cs">CS</option><option value="en">EN</option></select><label className="checkLabel"><input type="checkbox" checked={document.active} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, active: event.target.checked } : item) })} /> Aktivní</label></div><span>{document.fileName} · {document.size ? `${formatFileSize(document.size)} · ` : ""}{document.mimeType} · {document.storageKey ? "R2" : document.availability === "temporary-session" ? "legacy dočasné" : "legacy uložené"}</span><div className="eventDocumentActions"><button type="button" onClick={() => void openDocument(document)}>Otevřít</button><button type="button" onClick={() => update({ documents: selected.documents.filter((item) => item.id !== document.id) })}>Odebrat</button></div>{uploadStates[`open-${document.id}`]?.message && <small className="uploadError">{uploadStates[`open-${document.id}`]?.message}</small>}</div>) : <p className="workspaceEmpty">Bez dokumentů.</p>}</section>
           <label className="checkLabel"><input type="checkbox" checked={selected.active} onChange={(event) => update({ active: event.target.checked })} /> Aktivní event</label>
         </div>
       </section>}
@@ -143,8 +173,21 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
   </div>;
 }
 
-function MediaEditor({ label, url, wide, onOpen, onFile, onRemove }: { label: string; url?: string; wide?: boolean; onOpen: () => void; onFile: (file?: File) => void; onRemove: () => void }) {
-  return <div className={`eventMediaEditor ${wide ? "wide" : ""}`}><span>{label}</span><EventMediaPreview url={url} label={label} onOpen={onOpen} /><div><label className="smallUploadButton">{url ? "Změnit" : "Nahrát"}<input type="file" accept="image/*" onChange={(event) => { onFile(event.target.files?.[0]); event.target.value = ""; }} /></label>{url && <button type="button" onClick={onRemove}>Odstranit</button>}</div></div>;
+function MediaEditor({ label, asset, url, progress, wide, onOpen, onFile, onRetry, onRemove }: { label: string; asset?: StoredAsset; url?: string; progress?: UploadProgress; wide?: boolean; onOpen: (url: string) => void; onFile: (file?: File) => void; onRetry: () => void; onRemove: () => void }) {
+  const present = Boolean(asset || url);
+  return <div className={`eventMediaEditor ${wide ? "wide" : ""}`}><span>{label}</span><EventMediaPreview asset={asset} url={url} label={label} onOpen={onOpen} /><div><label className="smallUploadButton">{present ? "Změnit" : "Nahrát"}<input type="file" accept="image/jpeg,image/png,image/webp,image/gif,image/svg+xml" onChange={(event) => { onFile(event.target.files?.[0]); event.target.value = ""; }} /></label>{present && <button type="button" onClick={onRemove}>Odstranit</button>}</div>{progress && <div className={`assetUploadState ${progress.state}`}><progress max="100" value={progress.percent} /><span>{progress.state === "uploading" ? `Nahrávám ${progress.percent} %` : progress.state === "success" ? "Nahráno do R2" : progress.message}</span>{progress.state === "error" && <button type="button" onClick={onRetry}>Zkusit znovu</button>}</div>}</div>;
+}
+
+function UploadBatchStatus({ states, onRetry }: { states: Readonly<Record<string, UploadProgress>>; onRetry: () => void }) {
+  const documentStates = Object.entries(states).filter(([key]) => key.startsWith("document-"));
+  if (!documentStates.length) return null;
+  const errors = documentStates.filter(([, state]) => state.state === "error");
+  const uploading = documentStates.filter(([, state]) => state.state === "uploading");
+  return <div className={`assetUploadState ${errors.length ? "error" : uploading.length ? "uploading" : "success"}`}><span>{errors.length ? `${errors.length} souborů se nepodařilo nahrát.` : uploading.length ? `Nahrávám ${uploading.length} souborů…` : "Dokumenty byly nahrány do R2."}</span>{errors.length > 0 && <button type="button" onClick={onRetry}>Opakovat neúspěšné</button>}</div>;
+}
+
+function formatFileSize(size: number): string {
+  return size < 1_000_000 ? `${Math.round(size / 1000)} kB` : `${(size / 1_000_000).toFixed(1)} MB`;
 }
 
 export function PriceListsPage({ priceLists, onChange }: { priceLists: readonly PriceList[]; onChange: (lists: PriceList[]) => void }) {

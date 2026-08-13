@@ -157,6 +157,8 @@ test("customer export data neobsahují internalNote", () => {
 
   assert.equal("internalNote" in exported.components[0]!, false);
   assert.equal(exported.components[0]?.customerNote, "Text pro zákazníka");
+  assert.equal(JSON.stringify(exported).includes("purchasePrice"), false);
+  assert.equal(JSON.stringify(exported).includes("170"), false);
 });
 
 test("internal export data mohou obsahovat internalNote", () => {

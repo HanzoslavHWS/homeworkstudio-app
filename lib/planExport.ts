@@ -9,6 +9,7 @@ import {
   worldRotationToPlanView180,
   worldToPlanView180,
 } from "../domain/planView.ts";
+import { sortComponentsFor2D } from "../domain/displayOrder.ts";
 
 export type CadPlanSnapshot = Readonly<{
   imageDataUrl: string;
@@ -110,7 +111,7 @@ export async function renderTechnicalPlanPng(input: {
     context.restore();
   }
 
-  for (const item of sceneObjects) {
+  for (const item of sortComponentsFor2D(sceneObjects)) {
     if (!item.visible || !item.showIn2D || !layers.includes(item.sceneLayer)) continue;
     const point = worldToPlanView180(
       { x: item.xMm, y: item.yMm },

@@ -3,6 +3,8 @@ import type {
   ImportedOrderLine,
 } from "./project.ts";
 import type { PlacedComponent } from "./models.ts";
+import type { ComponentDefinition } from "./models.ts";
+import { matchCatalogItem } from "./catalog.ts";
 
 export type OrderInventoryItem = Readonly<{
   catalogItemId: string;
@@ -37,8 +39,10 @@ export async function createImportedOrder(
   file: File,
   parser: OrderParser = new AwaitingSampleOrderParser(),
   now = new Date().toISOString(),
+  catalogItems: readonly ComponentDefinition[] = [],
 ): Promise<ImportedOrder> {
-  const lines = await parser.parse(file);
+  const parsedLines = await parser.parse(file);
+  const lines = reconcileOrderLines(parsedLines, catalogItems);
   return {
     id: `order-${Date.now()}`,
     fileName: file.name,
@@ -48,6 +52,34 @@ export async function createImportedOrder(
     status: lines.length > 0 ? "parsed" : "awaiting-parser",
     lines,
   };
+}
+
+export function reconcileOrderLines(
+  lines: readonly ImportedOrderLine[],
+  catalogItems: readonly ComponentDefinition[],
+): readonly ImportedOrderLine[] {
+  return lines.map((line) => {
+    if (line.mappingStatus === "ignored" || line.mappedCatalogItemId) {
+      return line;
+    }
+    const match = matchCatalogItem(catalogItems, {
+      internalCode: line.sourceCode,
+      name: line.sourceName,
+    });
+    return match
+      ? {
+          ...line,
+          mappedCatalogItemId: match.id,
+          mappingStatus: "matched",
+          itemType:
+            match.catalogItemType === "service"
+              ? "service"
+              : match.sceneLayer === "furniture"
+                ? "furniture"
+                : "technical",
+        }
+      : { ...line, mappingStatus: "unresolved" };
+  });
 }
 
 export function calculateOrderInventory(

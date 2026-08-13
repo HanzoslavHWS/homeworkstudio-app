@@ -39,6 +39,7 @@ export const PROJECT_PACKAGE_FOLDERS: readonly ProjectPackageFolder[] = [
   { id: "technical-waste", name: "odpad", parentId: "technical" },
   { id: "export", name: "06_Export" },
   { id: "export-customer", name: "zakaznik", parentId: "export" },
+  { id: "furniture-photos", name: "fotografie_mobiliare", parentId: "export-customer" },
   { id: "export-internal", name: "interni", parentId: "export" },
   { id: "source", name: "07_Zdrojova_data" },
   { id: "event-documents", name: "event_dokumenty", parentId: "source" },

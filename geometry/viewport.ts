@@ -19,6 +19,13 @@ export type WorldSize = Readonly<{
   height: number;
 }>;
 
+export type WorldBounds = Readonly<{
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+}>;
+
 export function clampZoom(zoom: number): number {
   return Math.min(MAX_VIEWPORT_ZOOM, Math.max(MIN_VIEWPORT_ZOOM, zoom));
 }
@@ -116,4 +123,23 @@ export function fitWorldToViewport(
   );
 
   return centerWorld(viewport, world, zoom, pixelsPerMm);
+}
+
+export function fitBoundsToViewport(
+  viewport: ViewportSize,
+  bounds: WorldBounds,
+  padding = 70,
+  pixelsPerMm = DEFAULT_PIXELS_PER_MM,
+): ViewportTransform {
+  const width = Math.max(1, bounds.maxX - bounds.minX);
+  const height = Math.max(1, bounds.maxY - bounds.minY);
+  const base = fitWorldToViewport(viewport, { width, height }, padding, pixelsPerMm);
+  const scale = pixelsPerMm * base.zoom;
+  return {
+    zoom: base.zoom,
+    pan: {
+      x: (viewport.width - width * scale) / 2 - bounds.minX * scale,
+      y: (viewport.height - height * scale) / 2 - bounds.minY * scale,
+    },
+  };
 }

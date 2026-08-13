@@ -1,8 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { componentCatalog, componentCatalogItems, placeComponent } from "../data/components.ts";
-import { matchCatalogItem, normalizeCatalogCode, selectPricingEntry } from "../domain/catalog.ts";
-import { calculateOrderInventory } from "../domain/order.ts";
+import {
+  catalogImageUrl,
+  getBasePricingEntry,
+  groupCatalogSceneItems,
+  loadCatalogPhoto,
+  matchCatalogItem,
+  normalizeCatalogCode,
+  selectPricingEntry,
+} from "../domain/catalog.ts";
+import { calculateOrderInventory, reconcileOrderLines } from "../domain/order.ts";
 import {
   createDefaultTechnicalRequirements,
   createProjectRecord,
@@ -29,6 +37,7 @@ import {
   packageFolderPath,
 } from "../domain/projectPackage.ts";
 import type {
+  ComponentDefinition,
   PartDefinition,
   PrintSurface,
 } from "../domain/models.ts";
@@ -64,7 +73,7 @@ import {
 } from "../domain/communication.ts";
 import { EXPORT_LAYER_LABELS } from "../domain/workflow.ts";
 import { constructionMaterialOverrides } from "../domain/materialOverrides.ts";
-import { calculateNetVatGross } from "../domain/pricing.ts";
+import { calculateMarginDelta, calculateNetVatGross } from "../domain/pricing.ts";
 import { LocalEventRepository } from "../domain/eventRepository.ts";
 import { createEventDocumentsFromFiles, eventHasUnsavedChanges } from "../domain/organizations.ts";
 import { cancelMeasurement, measurementClick, startMeasurement, updateMeasurementHover } from "../domain/spatialAnnotations.ts";
@@ -123,11 +132,11 @@ test("zásobník počítá objednáno, vloženo a zbývá bez paralelní scény"
     lines: [
       {
         id: "line-1",
-        sourceCode: "CHAIR-001",
-        sourceName: "Židle",
+        sourceCode: "M57",
+        sourceName: "Židle kovová čalouněná",
         quantity: 4,
         unit: "ks",
-        rawText: "Židle 4 ks",
+        rawText: "M57 Židle kovová čalouněná 4 ks",
         mappedCatalogItemId: componentCatalog.chair.id,
         mappingStatus: "matched",
         itemType: "furniture",
@@ -142,7 +151,7 @@ test("zásobník počítá objednáno, vloženo a zbývá bez paralelní scény"
   assert.deepEqual(calculateOrderInventory(order, scene), [
     {
       catalogItemId: componentCatalog.chair.id,
-      name: "Židle",
+      name: "Židle kovová čalouněná",
       ordered: 4,
       placed: 2,
       remaining: 2,
@@ -399,11 +408,11 @@ test("order reconciliation rozlišuje deficit, shodu i položky navíc", () => {
     status: "parsed",
     lines: [{
       id: "chairs",
-      sourceCode: "CHAIR-001",
-      sourceName: "Židle",
+      sourceCode: "M57",
+      sourceName: "Židle kovová čalouněná",
       quantity: 2,
       unit: "ks",
-      rawText: "Židle 2",
+      rawText: "M57 Židle kovová čalouněná 2",
       mappedCatalogItemId: componentCatalog.chair.id,
       mappingStatus: "matched",
       itemType: "furniture",
@@ -429,7 +438,7 @@ test("objednávku lze importovat až po vytvoření scény", () => {
     importedAt: "2026-08-11T10:00:00.000Z",
     parserId: "test",
     status: "parsed",
-    lines: [{ id: "line", sourceCode: "CHAIR-001", sourceName: "Židle", quantity: 2, unit: "ks", rawText: "Židle 2", mappedCatalogItemId: componentCatalog.chair.id, mappingStatus: "matched", itemType: "furniture" }],
+    lines: [{ id: "line", sourceCode: "M57", sourceName: "Židle kovová čalouněná", quantity: 2, unit: "ks", rawText: "M57 Židle kovová čalouněná 2", mappedCatalogItemId: componentCatalog.chair.id, mappingStatus: "matched", itemType: "furniture" }],
   };
   assert.equal(calculateOrderInventory(order, scene)[0]?.status, "complete");
 });
@@ -638,12 +647,78 @@ test("shared 2D render layout drží orientaci, fit a kóty vně geometrie", () 
   assert.ok(PLAN_RENDER_CONFIG.dimensionFontPx >= 30);
 });
 
-test("M57 používá canonical code, display metadata a base NET cenu", () => {
-  assert.equal(normalizeCatalogCode(" m57 "), "M57");
-  assert.equal(matchCatalogItem(componentCatalogItems, { internalCode: "m57" })?.id, componentCatalog.chair.id);
-  assert.equal(componentCatalog.chair.officialName, "ŽIDLE KOVOVÁ ČALOUNĚNÁ");
-  assert.equal(componentCatalog.chair.name, "Židle kovová čalouněná");
-  assert.equal(componentCatalog.chair.pricingEntries?.[0]?.salePrice, 300);
+test("M57 používá kompletní canonical katalogová data", () => {
+  const m57: ComponentDefinition = componentCatalog.chair;
+  const basePrice = getBasePricingEntry(m57.pricingEntries, "CZK");
+  assert.equal(m57.internalCode, "M57");
+  assert.equal(m57.officialName, "ŽIDLE KOVOVÁ ČALOUNĚNÁ");
+  assert.equal(m57.displayName, "Židle kovová čalouněná");
+  assert.equal(m57.name, m57.displayName);
+  assert.equal(m57.category, "chairs");
+  assert.equal(m57.unit, "ks");
+  assert.deepEqual([m57.widthMm, m57.depthMm, m57.heightMm], [535, 592, 795]);
+  assert.equal(basePrice?.salePrice, 300);
+  assert.equal(basePrice?.purchasePrice, 170);
+  assert.equal(m57.vatRatePercent, 21);
+  assert.equal(m57.active, true);
+  assert.equal(m57.showIn2D, true);
+  assert.equal(m57.showIn3D, true);
+  assert.equal(m57.printable, false);
+  assert.equal(m57.photoUrl, "/models/chairs/M57/photo.jpg");
+  assert.equal(m57.thumbnailUrl, undefined);
+  assert.equal(m57.sketchupUrl, undefined);
+  assert.equal(m57.modelUrl, undefined);
+});
+
+test("M57 matching normalizuje velikost a mezery, název je pouze fallback", () => {
+  for (const internalCode of ["M57", "m57", " M57", "m57 "]) {
+    assert.equal(normalizeCatalogCode(internalCode), "M57");
+    assert.equal(matchCatalogItem(componentCatalogItems, { internalCode })?.id, componentCatalog.chair.id);
+  }
+  assert.equal(matchCatalogItem(componentCatalogItems, { internalCode: "unknown", name: componentCatalog.chair.officialName })?.id, componentCatalog.chair.id);
+});
+
+test("order reconciliation mapuje varianty kódu primárně na M57", () => {
+  const lines = ["M57", "m57", " M57", "m57 "].map((sourceCode, index) => ({
+    id: `m57-${index}`,
+    sourceCode,
+    sourceName: "Nesprávný název",
+    quantity: 1,
+    unit: "ks",
+    rawText: sourceCode,
+    mappingStatus: "unresolved" as const,
+    itemType: "unknown" as const,
+  }));
+  const reconciled = reconcileOrderLines(lines, componentCatalogItems);
+  assert.ok(reconciled.every((line) => line.mappingStatus === "matched"));
+  assert.ok(reconciled.every((line) => line.mappedCatalogItemId === componentCatalog.chair.id));
+});
+
+test("M57 thumbnail používá photoUrl a po chybě čistý 2D fallback", () => {
+  assert.equal(catalogImageUrl(componentCatalog.chair), "/models/chairs/M57/photo.jpg");
+  assert.equal(catalogImageUrl(componentCatalog.chair, ["/models/chairs/M57/photo.jpg"]), undefined);
+});
+
+test("chybějící fotografie se při exportu bezpečně přeskočí", async () => {
+  assert.equal(await loadCatalogPhoto(componentCatalog.chair.photoUrl!, async () => ({ ok: false, arrayBuffer: async () => new ArrayBuffer(0) })), undefined);
+  assert.equal(await loadCatalogPhoto(componentCatalog.chair.photoUrl!, async () => { throw new Error("404"); }), undefined);
+});
+
+test("Summary seskupí pět instancí M57 podle catalog itemu", () => {
+  const scene = Array.from({ length: 5 }, (_, index) => placeComponent(componentCatalog.chair, `m57-${index}`, 500, 1500));
+  const summary = groupCatalogSceneItems(scene, componentCatalogItems, "CZK");
+  assert.equal(summary.length, 1);
+  assert.deepEqual(summary[0], {
+    catalogItemId: componentCatalog.chair.id,
+    internalCode: "M57",
+    displayName: "Židle kovová čalouněná",
+    quantity: 5,
+    unit: "ks",
+    saleUnitNet: 300,
+    saleTotalNet: 1500,
+    photoUrl: "/models/chairs/M57/photo.jpg",
+    photoAsset: componentCatalog.chair.photoAsset,
+  });
 });
 
 test("L02 je cenová služba oddělená od technického bodu Elektro", () => {
@@ -666,4 +741,5 @@ test("P86 má fixní NET cenu, included obsah, koberec a print surface", () => {
 
 test("NET/VAT/gross helper počítá 300 + 21 % jako 363", () => {
   assert.deepEqual(calculateNetVatGross(300), { net: 300, vat: 63, gross: 363, vatRatePercent: 21 });
+  assert.equal(calculateMarginDelta(300, 170), 130);
 });

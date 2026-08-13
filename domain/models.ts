@@ -1,3 +1,5 @@
+import type { StoredAsset } from "./assets.ts";
+
 export type ProjectType = "typovy" | "individualni";
 export type Currency = "CZK" | "EUR";
 export type RotationControlMode = "free" | "snap";
@@ -62,6 +64,10 @@ export type PrintSurface = Readonly<{
   orientation?: "portrait" | "landscape" | "custom";
   active: boolean;
   allowanceLinearMeters?: number;
+  pricingUnit?: "bm" | "m²";
+  productionProfiles?: Readonly<
+    Record<string, Readonly<{ widthMm?: number; heightMm?: number }>>
+  >;
 }>;
 
 export type BoothPackageItem = Readonly<{
@@ -224,12 +230,14 @@ export type BoothType = Readonly<{
   assets?: AssetReference;
   internalCode?: string;
   thumbnailUrl?: string;
+  thumbnailAsset?: StoredAsset;
   active?: boolean;
   defaultViews?: readonly CameraViewDefinition[];
   pricingEntries?: readonly PricingEntry[];
   parts?: readonly BoothPartReference[];
   category?: string;
   photoUrl?: string;
+  photoAsset?: StoredAsset;
   modelUrl?: string;
   sketchupUrl?: string;
   printable?: boolean;
@@ -276,6 +284,8 @@ export type ComponentDefinition = Readonly<{
   id: string;
   internalCode?: string;
   officialName?: string;
+  /** Customer-facing catalog name. `name` remains the legacy compatibility field. */
+  displayName?: string;
   type: string;
   name: string;
   category: string;
@@ -295,7 +305,9 @@ export type ComponentDefinition = Readonly<{
   assets?: AssetReference;
   modelUrl?: string;
   thumbnailUrl?: string;
+  thumbnailAsset?: StoredAsset;
   photoUrl?: string;
+  photoAsset?: StoredAsset;
   sketchupUrl?: string;
   footprint2D?: Readonly<{
     shape: "rectangle" | "circle" | "symbol";
@@ -314,6 +326,7 @@ export type ComponentDefinition = Readonly<{
   partDefinitions?: readonly PartDefinition[];
   finishVariants?: readonly FinishVariant[];
   catalogItemType?: "physical" | "service";
+  pricingUnit?: "piece" | "square-meter" | "linear-meter";
   vatRatePercent?: number;
 }>;
 
@@ -343,6 +356,8 @@ export type PlacedComponent = Notes & {
   showIn2D: boolean;
   showIn3D: boolean;
   sceneLayer: SceneLayer;
+  /** Editor-only 2D stacking metadata; never changes world geometry. */
+  displayOrder2D?: number;
 };
 
 export type Placement = Readonly<{

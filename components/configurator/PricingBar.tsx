@@ -1,6 +1,7 @@
 import { componentCatalogItems } from "../../data/components";
 import { calculateNetVatGross } from "../../domain/pricing";
 import type { BoothType, Currency, PlacedComponent } from "../../domain/models";
+import { getBasePricingEntry } from "../../domain/catalog";
 
 type PricingBarProps = {
   booth?: BoothType;
@@ -9,10 +10,10 @@ type PricingBarProps = {
 };
 
 export function PricingBar({ booth, placedItems, currency }: PricingBarProps) {
-  const boothNet = booth?.pricingEntries?.find((entry) => entry.currency === currency && !entry.exhibitionId && !entry.priceListId)?.salePrice ?? 0;
+  const boothNet = getBasePricingEntry(booth?.pricingEntries, currency)?.salePrice ?? 0;
   const furnitureNet = placedItems.reduce((sum, item) => {
     const definition = componentCatalogItems.find((candidate) => candidate.id === item.definitionId);
-    return sum + (definition?.pricingEntries?.find((entry) => entry.currency === currency && !entry.exhibitionId && !entry.priceListId)?.salePrice ?? 0);
+    return sum + (getBasePricingEntry(definition?.pricingEntries, currency)?.salePrice ?? 0);
   }, 0);
   const totals = calculateNetVatGross(boothNet + furnitureNet);
   return (
