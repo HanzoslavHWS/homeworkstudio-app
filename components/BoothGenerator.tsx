@@ -118,9 +118,9 @@ import { OrderImportPanel } from "./workflow/OrderImportPanel";
 import { TechnicalRequirementsEditor } from "./workflow/TechnicalRequirementsEditor";
 import {
   BoothCatalogPage,
-  ComponentCatalogPage,
   ProjectsPage,
 } from "./workflow/AdminPages";
+import { ComponentAdminPage } from "./workflow/ComponentAdminPage";
 import {
   ExportStep,
   SummaryStep,
@@ -134,12 +134,15 @@ import {
 import { dataUrlToFile, uploadAsset, type UploadProgress } from "../lib/storage/assetClient";
 import { PricingAdminPage } from "./workflow/PricingAdminPages";
 import { RemoteApiPricingAdminRepository } from "../lib/db/pricingAdmin.remoteApi.client";
+import { RemoteApiCatalogItemsAdminRepository } from "../lib/db/catalogItemsAdmin.remoteApi.client";
 
 export default function BoothGenerator() {
   const repositoryRef = useRef<ProjectRepository | null>(null);
   const eventRepositoryRef = useRef<EventRepository | null>(null);
   const priceListRepositoryRef = useRef<PriceListRepository | null>(null);
   const pricingAdminRepositoryRef = useRef(new RemoteApiPricingAdminRepository());
+  const catalogItemsAdminRepositoryRef = useRef(new RemoteApiCatalogItemsAdminRepository());
+  const [pricingAdminPreselect, setPricingAdminPreselect] = useState<string | undefined>(undefined);
   const [workspaceSection, setWorkspaceSection] = useState<
     "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin"
   >("project");
@@ -393,13 +396,14 @@ export default function BoothGenerator() {
     return !eventDirty || window.confirm("Máte neuložené změny. Opravdu chcete pokračovat?");
   }
 
-  function navigateWorkspace(section: typeof workspaceSection) {
+  function navigateWorkspace(section: typeof workspaceSection, payload?: { catalogItemId?: string }) {
     if (workspaceSection === "events" && section !== "events" && !confirmLeaveEvent()) return;
     if (workspaceSection === "events" && section !== "events" && eventDirty) {
       eventRepositoryRef.current?.list().then((events) => setAdminEvents([...events]));
       setEventDirty(false);
     }
     setWorkspaceSection(section);
+    setPricingAdminPreselect(section === "pricingAdmin" ? payload?.catalogItemId : undefined);
     if (section === "projects") {
       repositoryRef.current?.list().then((projects) => setSavedProjects([...projects]));
     }
@@ -1805,7 +1809,10 @@ export default function BoothGenerator() {
         {workspaceSection === "booths" && <BoothCatalogPage booths={boothTypes} />}
 
         {workspaceSection === "components" && (
-          <ComponentCatalogPage items={componentCatalogItems} />
+          <ComponentAdminPage
+            repository={catalogItemsAdminRepositoryRef.current}
+            onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
+          />
         )}
 
         {workspaceSection === "events" && eventsHydrated && (
@@ -1843,6 +1850,7 @@ export default function BoothGenerator() {
             priceLists={adminPriceLists}
             events={adminEvents}
             repository={pricingAdminRepositoryRef.current}
+            initialCatalogItemId={pricingAdminPreselect}
           />
         )}
 

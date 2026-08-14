@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { Currency, PricingEntryMode } from "../../domain/models";
 import type { Exhibition, PriceList, RealizationCompany } from "../../domain/organizations";
 import type { CatalogItemSummary } from "../../domain/catalogPricing";
@@ -566,17 +566,28 @@ export function PricingAdminPage({
   priceLists,
   events,
   repository,
+  initialCatalogItemId,
 }: {
   catalogItems: readonly CatalogItemSummary[];
   priceLists: readonly PriceList[];
   events: readonly Exhibition[];
   repository: RemoteApiPricingAdminRepository;
+  /** Section 17 — preselects the matrix for one item when navigated here from Component Administration's "Upravit ceny" action, instead of the normal checkbox multi-select flow. */
+  initialCatalogItemId?: string;
 }) {
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [matrixItemIds, setMatrixItemIds] = useState<readonly string[] | null>(null);
   const [entries, setEntries] = useState<readonly PricingEntryAdmin[]>([]);
   const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (initialCatalogItemId) void openMatrix([initialCatalogItemId]);
+    // Deliberately only re-runs when the preselected id itself changes — openMatrix is stable
+    // enough for this one-shot "arrived from elsewhere" trigger, matching the established
+    // effect-driven fetch pattern elsewhere in this file (openMatrix/toggleSelected closures).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialCatalogItemId]);
 
   const filteredItems = catalogItems.filter((item) => `${item.internalCode ?? ""} ${item.displayName} ${item.category ?? ""}`.toLocaleLowerCase("cs").includes(query.toLocaleLowerCase("cs")));
 

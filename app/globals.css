@@ -5126,6 +5126,27 @@ select:focus {
 .catalogDetailSection dt { color: #989b9e; font-size: 7px; }
 .catalogDetailSection dd { min-width: 0; overflow-wrap: anywhere; color: #3c4042; font-size: 8px; text-align: right; }
 .catalogAssetPreviews { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+.catalogAdminCount { color: #8a8e91; font-size: 8px; font-weight: 700; letter-spacing: .04em; }
+.catalogAdminTable { display: grid; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.catalogAdminRow { display: grid; grid-template-columns: 80px minmax(120px, 1.4fr) minmax(100px, 1.1fr) 90px minmax(90px, 1fr) 60px 90px 100px; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border-bottom: 1px solid #ededee; background: white; border-left: 0; border-right: 0; border-top: 0; text-align: left; font-size: 8px; cursor: pointer; }
+.catalogAdminRow:last-child { border-bottom: 0; }
+.catalogAdminHeaderRow { background: #fafafa; color: #96999c; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; font-size: 7px; cursor: default; }
+.catalogAdminRow.active { background: #f3f6f4; }
+.catalogAdminRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.lifecycleBadge { width: fit-content; padding: 3px 7px; border-radius: 20px; background: #f0f1f1; color: #666a6d; font-size: 7px; white-space: nowrap; }
+.lifecycleBadge.active { background: #edf5ef; color: #45634f; }
+.lifecycleBadge.needs_review { background: #faf3e6; color: #8a6d2f; }
+.lifecycleBadge.inactive,
+.lifecycleBadge.archived { background: #f1eeee; color: #7a7472; }
+.readinessBadge { width: fit-content; padding: 3px 7px; border-radius: 20px; font-size: 7px; font-weight: 700; white-space: nowrap; }
+.readinessBadge.ready { background: #e9f5ec; color: #2f7a45; }
+.readinessBadge.blocked { background: #fbeceb; color: #a1372c; }
+.readOnlyField { color: #7d8083; font-size: 8px; }
+.catalogAdminEditRow dd input { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; text-align: left; font-size: 8px; }
+.readinessIssues { margin-top: 9px; padding: 8px; border: 1px dashed #e2b6ae; border-radius: 6px; background: #fdf4f3; font-size: 7px; color: #8a3f35; }
+.readinessIssues ul { margin: 4px 0 0 14px; }
+.catalogAdminSaveBar .primaryButton:disabled { opacity: .45; cursor: not-allowed; }
 .catalogPhotoPlaceholder { min-height: 180px; display: grid; place-items: center; margin-top: 8px; padding: 18px; border: 1px dashed #d5d8da; border-radius: 7px; background: #fbfbfb; color: #969a9d; font-size: 8px; text-align: center; }
 .calculationWorkspace { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: start; gap: 16px; margin-bottom: 18px; }
 .calculationOptions { position: sticky; top: 12px; }
