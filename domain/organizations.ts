@@ -216,6 +216,27 @@ export function resolveDefaultPriceList(
   return candidateId ? priceLists.find((priceList) => priceList.id === candidateId) : undefined;
 }
 
+/**
+ * Batch #2A section 4/5: the mandatory Event + project-currency → PriceList rule.
+ * Deliberately independent of resolveDefaultPriceList() — defaultPriceListId may stay a CZK
+ * list forever, but that must never leak into an EUR project. This never falls back to the
+ * default/other-currency list and never converts a rate; it either finds the one PriceList
+ * assigned to this event in the requested currency, or returns undefined ("no PriceList for
+ * this currency yet" is a real, valid state a caller must show as such, not paper over).
+ *
+ * NOT yet wired into BoothGenerator's selectedFair computation (components/BoothGenerator.tsx)
+ * — that inline logic still only reads defaultPriceListId and is currency-blind. See the
+ * Batch #2A report for the audit of that gap; wiring it in is a follow-up, not part of this
+ * dry-run-only batch.
+ */
+export function resolveEventPriceListForCurrency(
+  event: Pick<Exhibition, "priceListIds">,
+  priceLists: readonly PriceList[],
+  currency: Currency,
+): PriceList | undefined {
+  return priceLists.find((priceList) => event.priceListIds.includes(priceList.id) && priceList.currency === currency);
+}
+
 export function eventLogoUrl(slug: string): string {
   return `/events/${slug}/logo.png`;
 }

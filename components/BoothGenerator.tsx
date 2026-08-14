@@ -54,6 +54,7 @@ import { resolvePersistenceProbe } from "../lib/db/persistenceMode.client";
 import { ConcurrencyConflictError } from "../lib/db/concurrency";
 import { saveCameraView } from "../domain/workflow";
 import type { Exhibition, PriceList } from "../domain/organizations";
+import { resolveEventPriceListForCurrency } from "../domain/organizations";
 import {
   carpetFinishVariants,
   constructionFinishVariants,
@@ -386,20 +387,22 @@ export default function BoothGenerator() {
   /* ================================================= */
 
   const selectedExhibition = adminEvents.find((event) => event.id === fairId);
+  // Section 1 (Batch #2A fix): the PriceList shown/used must follow the PROJECT's chosen
+  // currency, never the event's defaultPriceListId — defaultPriceListId is only a preference
+  // for which currency to suggest when a fair is first picked (see handleFairChange), it must
+  // never override an already-chosen EUR project back onto a CZK list. No fallback to the
+  // other currency, no conversion — resolveEventPriceListForCurrency returns undefined when
+  // this event genuinely has no PriceList in the requested currency yet.
+  const resolvedEventPriceList = selectedExhibition
+    ? resolveEventPriceListForCurrency(selectedExhibition, adminPriceLists, currency)
+    : undefined;
   const selectedFair =
     fairs.find((fair) => fair.id === fairId) ??
     (selectedExhibition
       ? {
           id: selectedExhibition.id,
           name: selectedExhibition.name,
-          priceList:
-            adminPriceLists.find(
-              (list) => list.id === selectedExhibition.defaultPriceListId,
-            )?.name ??
-            adminPriceLists.find((list) =>
-              selectedExhibition.priceListIds.includes(list.id),
-            )?.name ??
-            "Bez přiřazeného ceníku",
+          priceList: resolvedEventPriceList?.name ?? "Ceník pro zvolenou měnu není dostupný.",
           defaultCurrency: selectedExhibition.defaultCurrency,
           logo: selectedExhibition.logoUrl,
         }
