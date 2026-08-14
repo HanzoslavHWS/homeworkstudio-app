@@ -2,8 +2,8 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onStartNewProject: () => void;
-  activeSection?: "project" | "projects" | "booths" | "components" | "events" | "priceLists";
-  onNavigate?: (section: "projects" | "booths" | "components" | "events" | "priceLists") => void;
+  activeSection?: "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin";
+  onNavigate?: (section: "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin") => void;
 };
 
 export function AppSidebar({
@@ -55,6 +55,10 @@ export function AppSidebar({
         <button type="button" className={activeSection === "priceLists" ? "navItem active" : "navItem"} title="Ceníky" onClick={() => onNavigate?.("priceLists")}>
           <span className="navIcon">₠</span>
           <span className="navLabel">Ceníky</span>
+        </button>
+        <button type="button" className={activeSection === "pricingAdmin" ? "navItem active" : "navItem"} title="Správa cen" onClick={() => onNavigate?.("pricingAdmin")}>
+          <span className="navIcon">⚙</span>
+          <span className="navLabel">Správa cen</span>
         </button>
       </nav>
 

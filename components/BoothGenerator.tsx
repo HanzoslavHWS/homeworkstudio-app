@@ -132,13 +132,16 @@ import {
   PriceListsPage,
 } from "./workflow/CatalogManagementPages";
 import { dataUrlToFile, uploadAsset, type UploadProgress } from "../lib/storage/assetClient";
+import { PricingAdminPage } from "./workflow/PricingAdminPages";
+import { RemoteApiPricingAdminRepository } from "../lib/db/pricingAdmin.remoteApi.client";
 
 export default function BoothGenerator() {
   const repositoryRef = useRef<ProjectRepository | null>(null);
   const eventRepositoryRef = useRef<EventRepository | null>(null);
   const priceListRepositoryRef = useRef<PriceListRepository | null>(null);
+  const pricingAdminRepositoryRef = useRef(new RemoteApiPricingAdminRepository());
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "booths" | "components" | "events" | "priceLists"
+    "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin"
   >("project");
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
@@ -1821,6 +1824,9 @@ export default function BoothGenerator() {
         {workspaceSection === "priceLists" && priceListsHydrated && (
           <PriceListsPage
             priceLists={adminPriceLists}
+            events={adminEvents}
+            catalogItems={dbCatalogItems}
+            pricingAdminRepository={pricingAdminRepositoryRef.current}
             onChange={setAdminPriceLists}
             onSave={async (priceList) => {
               if (!priceListRepositoryRef.current) throw new Error("Databázové úložiště není dostupné. Ceník nebyl uložen.");
@@ -1828,6 +1834,15 @@ export default function BoothGenerator() {
               setAdminPriceLists((lists) => lists.map((item) => item.id === priceList.id ? saved : item));
               return saved;
             }}
+          />
+        )}
+
+        {workspaceSection === "pricingAdmin" && (
+          <PricingAdminPage
+            catalogItems={dbCatalogItems}
+            priceLists={adminPriceLists}
+            events={adminEvents}
+            repository={pricingAdminRepositoryRef.current}
           />
         )}
 

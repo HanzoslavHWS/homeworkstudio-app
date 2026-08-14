@@ -7,7 +7,7 @@ export type { PriceListRepository } from "../../domain/priceListRepository.ts";
 
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
-type PriceListRow = Readonly<{
+export type PriceListRow = Readonly<{
   id: string;
   code: string;
   name: string;
@@ -29,13 +29,14 @@ type PriceListRow = Readonly<{
  * importer already relies on this same rule (lib/db/importBatch1.supabase.ts): it never sets
  * `id` on insert, only `code`, and lets Postgres assign the real id.
  */
-function rowToPriceList(row: PriceListRow): PriceList {
-  return normalizePriceList({ ...(row.document as Partial<PriceList>), id: row.id });
+export function rowToPriceList(row: PriceListRow): PriceList {
+  return normalizePriceList({ ...(row.document as Partial<PriceList>), id: row.id, eventId: row.event_id ?? undefined });
 }
 
-function priceListToRow(priceList: PriceList): Readonly<{
+export function priceListToRow(priceList: PriceList): Readonly<{
   code: string;
   name: string;
+  event_id: string | null;
   currency: Currency;
   year: number;
   edition: string | null;
@@ -48,6 +49,7 @@ function priceListToRow(priceList: PriceList): Readonly<{
   return {
     code: priceList.code,
     name: priceList.name,
+    event_id: priceList.eventId ?? null,
     currency: priceList.currency,
     year: priceList.year,
     edition: priceList.edition ?? null,

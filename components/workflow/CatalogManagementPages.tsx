@@ -13,6 +13,10 @@ import type { StoredAsset } from "../../domain/assets";
 import { getAssetDownloadUrl, uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
 import { useAssetUrl } from "../../hooks/useAssetUrl";
 import { ConcurrencyConflictError } from "../../lib/db/concurrency";
+import type { CatalogItemSummary } from "../../domain/catalogPricing";
+import type { PricingEntryAdmin } from "../../domain/pricingAdmin";
+import type { RemoteApiPricingAdminRepository } from "../../lib/db/pricingAdmin.remoteApi.client";
+import { DuplicatePriceListDialog, PriceListPricingTable } from "./PricingAdminPages";
 
 export function EventLogo({ event, compact = false }: { event?: Exhibition; compact?: boolean }) {
   return <EventMediaPreview asset={event?.logoAsset} url={event?.logoUrl} label="Logo výstavy" compact={compact} />;
@@ -194,20 +198,35 @@ function formatFileSize(size: number): string {
   return size < 1_000_000 ? `${Math.round(size / 1000)} kB` : `${(size / 1_000_000).toFixed(1)} MB`;
 }
 
-export function PriceListsPage({ priceLists, onChange, onSave }: { priceLists: readonly PriceList[]; onChange: (lists: PriceList[]) => void; onSave?: (priceList: PriceList) => Promise<PriceList> }) {
+export function PriceListsPage({ priceLists, events, catalogItems, pricingAdminRepository, onChange, onSave }: { priceLists: readonly PriceList[]; events: readonly Exhibition[]; catalogItems: readonly CatalogItemSummary[]; pricingAdminRepository: RemoteApiPricingAdminRepository; onChange: (lists: PriceList[]) => void; onSave?: (priceList: PriceList) => Promise<PriceList> }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(priceLists[0]?.id ?? "");
   const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
   const [saveErrorMessage, setSaveErrorMessage] = useState("");
+  const [entries, setEntries] = useState<readonly PricingEntryAdmin[]>([]);
+  const [entriesLoading, setEntriesLoading] = useState(false);
+  const [duplicateOpen, setDuplicateOpen] = useState(false);
   const savedListsRef = useRef(new Map(priceLists.map((list) => [list.id, list])));
   const selected = priceLists.find((item) => item.id === selectedId);
   const filtered = priceLists.filter((item) => `${item.name} ${item.code} ${item.year} ${item.edition ?? ""}`.toLowerCase().includes(query.toLowerCase()));
   const update = (patch: Partial<PriceList>) => selected && onChange(priceLists.map((item) => item.id === selected.id ? { ...item, ...patch } : item));
   const dirty = Boolean(selected) && JSON.stringify(savedListsRef.current.get(selectedId) ?? null) !== JSON.stringify(selected ?? null);
+  const selectedEvent = selected ? events.find((event) => event.id === selected.eventId || event.priceListIds.includes(selected.id)) : undefined;
 
   useEffect(() => {
     setSaveState(dirty ? "dirty" : "saved");
   }, [dirty]);
+
+  useEffect(() => {
+    if (!selectedId) { setEntries([]); return; }
+    let cancelled = false;
+    setEntriesLoading(true);
+    pricingAdminRepository.listEntries({ priceListIds: [selectedId] })
+      .then((result) => { if (!cancelled) setEntries(result); })
+      .catch(() => { if (!cancelled) setEntries([]); })
+      .finally(() => { if (!cancelled) setEntriesLoading(false); });
+    return () => { cancelled = true; };
+  }, [selectedId, pricingAdminRepository]);
 
   function add() { const id = `price-list-${Date.now()}`; const created: PriceList = { id, name: `Nový ceník ${new Date().getFullYear()}`, code: id.toUpperCase(), currency: "CZK", year: new Date().getFullYear(), active: true }; onChange([...priceLists, created]); setSelectedId(id); }
 
@@ -233,7 +252,25 @@ export function PriceListsPage({ priceLists, onChange, onSave }: { priceLists: r
     }
   }
 
-  return <div className="workspacePage"><div className="workspacePageHeader"><div><span className="eyebrow">ADMINISTRACE</span><h1>Ceníky</h1></div><button className="primaryButton" onClick={add}>+ Přidat ceník</button></div><div className="adminFilters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat ceník, kód, edici nebo rok…" /></div><div className="adminSplit"><div className="adminList">{filtered.map((list) => <button key={list.id} className={list.id === selectedId ? "active" : ""} onClick={() => selectList(list.id)}><strong>{list.name}</strong><span>{list.code} · {list.year} · {list.active ? "Aktivní" : "Archiv"}</span></button>)}</div>{selected && <section className="adminDetail eventForm">{onSave && <div className="eventSaveBar"><span className={saveState}>{saveState === "dirty" ? "Neuložené změny" : saveState === "saving" ? "Ukládám…" : "Uloženo"}{saveErrorMessage && <small className="uploadError">{saveErrorMessage}</small>}</span><button type="button" className="primaryButton" onClick={saveSelected} disabled={!dirty || saveState === "saving"}>Uložit změny</button></div>}<label><span>Název</span><input value={selected.name} onChange={(event) => update({ name: event.target.value })} /></label><div className="threeColumns"><label><span>Kód</span><input value={selected.code} onChange={(event) => update({ code: event.target.value })} /></label><label><span>Rok</span><input type="number" value={selected.year} onChange={(event) => update({ year: Number(event.target.value) })} /></label><label><span>Edice</span><input value={selected.edition ?? ""} onChange={(event) => update({ edition: event.target.value || undefined })} /></label></div><div className="twoColumns"><label><span>Měna</span><select value={selected.currency} onChange={(event) => update({ currency: event.target.value as PriceList["currency"] })}><option>CZK</option><option>EUR</option></select></label><label><span>Realizačka</span><select value={selected.realizationCompanyId ?? ""} onChange={(event) => update({ realizationCompanyId: event.target.value || undefined })}><option value="">Všechny</option>{realizationCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label></div><div className="twoColumns"><DateField label="Platnost od" value={selected.validFrom} onChange={(validFrom) => update({ validFrom })} /><DateField label="Platnost do" value={selected.validTo} onChange={(validTo) => update({ validTo })} /></div><label className="checkLabel"><input type="checkbox" checked={selected.active} onChange={(event) => update({ active: event.target.checked })} /> Aktivní; vypnuté ceníky zůstávají v archivu</label></section>}</div></div>;
+  return <div className="workspacePage"><div className="workspacePageHeader"><div><span className="eyebrow">ADMINISTRACE</span><h1>Ceníky</h1></div><button className="primaryButton" onClick={add}>+ Přidat ceník</button></div><div className="adminFilters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat ceník, kód, edici nebo rok…" /></div><div className="adminSplit"><div className="adminList">{filtered.map((list) => <button key={list.id} className={list.id === selectedId ? "active" : ""} onClick={() => selectList(list.id)}><strong>{list.name}</strong><span>{list.code} · {list.year} · {list.active ? "Aktivní" : "Archiv"}</span></button>)}</div>{selected && <section className="adminDetail eventForm">{onSave && <div className="eventSaveBar"><span className={saveState}>{saveState === "dirty" ? "Neuložené změny" : saveState === "saving" ? "Ukládám…" : "Uloženo"}{saveErrorMessage && <small className="uploadError">{saveErrorMessage}</small>}</span><button type="button" className="primaryButton" onClick={saveSelected} disabled={!dirty || saveState === "saving"}>Uložit změny</button></div>}<label><span>Název</span><input value={selected.name} onChange={(event) => update({ name: event.target.value })} /></label><div className="threeColumns"><label><span>Kód</span><input value={selected.code} onChange={(event) => update({ code: event.target.value })} /></label><label><span>Rok</span><input type="number" value={selected.year} onChange={(event) => update({ year: Number(event.target.value) })} /></label><label><span>Edice</span><input value={selected.edition ?? ""} onChange={(event) => update({ edition: event.target.value || undefined })} /></label></div><div className="twoColumns"><label><span>Měna</span><select value={selected.currency} onChange={(event) => update({ currency: event.target.value as PriceList["currency"] })}><option>CZK</option><option>EUR</option></select></label><label><span>Event</span><input value={selectedEvent?.name ?? "Nepřiřazeno k žádnému eventu"} readOnly disabled /></label></div><div className="twoColumns"><label><span>Realizačka</span><select value={selected.realizationCompanyId ?? ""} onChange={(event) => update({ realizationCompanyId: event.target.value || undefined })}><option value="">Všechny</option>{realizationCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label><label><span>Stav</span><label className="checkLabel"><input type="checkbox" checked={selected.active} onChange={(event) => update({ active: event.target.checked })} /> Aktivní; vypnuté ceníky zůstávají v archivu</label></label></div><div className="twoColumns"><DateField label="Platnost od" value={selected.validFrom} onChange={(validFrom) => update({ validFrom })} /><DateField label="Platnost do" value={selected.validTo} onChange={(validTo) => update({ validTo })} /></div>
+    <PriceListPricingTable
+      priceList={selected}
+      entries={entries}
+      catalogItems={catalogItems}
+      loading={entriesLoading}
+      onSaveEdits={(edits) => pricingAdminRepository.saveEntries(edits)}
+      onOpenDuplicate={() => setDuplicateOpen(true)}
+    />
+    {duplicateOpen && <DuplicatePriceListDialog
+      sourcePriceList={selected}
+      sourceEntries={entries}
+      existingCodes={priceLists.map((list) => list.code)}
+      events={events}
+      realizationCompanies={realizationCompanies}
+      onConfirm={(draft) => pricingAdminRepository.duplicatePriceList(selected.id, draft)}
+      onClose={() => setDuplicateOpen(false)}
+    />}
+  </section>}</div></div>;
 }
 
 function DateField({ label, value, onChange }: { label: string; value?: string; onChange: (value: string | undefined) => void }) {

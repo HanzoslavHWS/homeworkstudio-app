@@ -178,6 +178,11 @@ export type PriceList = Readonly<{
   currency: Currency;
   year: number;
   edition?: string;
+  /** The `price_lists.event_id` DB column — already existed from Batch #1/#2A imports, just not
+   *  previously wired into the domain layer. Secondary/denormalized: the authoritative event↔
+   *  price-list link is still Exhibition.priceListIds; this only drives admin display (which
+   *  event a price list belongs to) and the "Duplikovat ceník" dialog's default event. */
+  eventId?: string;
   realizationCompanyId?: string;
   validFrom?: string;
   validTo?: string;
@@ -195,6 +200,7 @@ export function normalizePriceList(
     currency: priceList.currency ?? "CZK",
     year: priceList.year ?? new Date().getFullYear(),
     edition: priceList.edition,
+    eventId: priceList.eventId,
     realizationCompanyId: priceList.realizationCompanyId,
     validFrom: priceList.validFrom,
     validTo: priceList.validTo,
