@@ -2,20 +2,30 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import {
+  attachBasePricing,
   BATCH2B_SOURCE_SYSTEM,
+  Batch2bPreflightError,
+  buildBatch2bCatalogDocument,
   categoryGroupFor,
   classifyPricelistItemKind,
   detectBatch2bConflicts,
   isBatch2bEligibleRow,
   parseBoothFootprintFromAbfName,
   parseFurnitureDimensionsFromAbfName,
+  planBatch2bMappings,
   planP86Canonical,
   planPricelistItem,
   planPricelistItems,
+  previewBatch2bApply,
+  runBatch2bPreflight,
+  simulatePostApplyExistingItems,
   summarizeByCategoryGroup,
+  type Batch2bPlanItem,
   type Batch2bSourceRow,
+  type ExistingCatalogMappingRow,
 } from "../domain/importBatch2b.ts";
-import type { ExistingCatalogItemRow } from "../domain/importBatch2a.ts";
+import { CatalogItemConflictError, type ExistingCatalogItemRow } from "../domain/importBatch2a.ts";
+import { applyBatch2bPlan, readExistingCatalogItemsSafely, TransientReadError } from "../lib/db/importBatch2b.supabase.ts";
 import { boothTypes } from "../data/booths.ts";
 
 // ---------------------------------------------------------------------------------------
@@ -322,4 +332,311 @@ test("Batch #2B modul nezasahuje do manual pricing protection (pricingAdmin.ts s
   const scriptSource = readFileSync(new URL("../scripts/importBatch2b.ts", import.meta.url), "utf8");
   assert.doesNotMatch(domainSource, /pricingAdmin/u);
   assert.doesNotMatch(scriptSource, /resolveImportPriceUpdate|saveManyPricingEntriesAdmin|duplicatePriceListAdmin/u);
+});
+
+// =========================================================================================
+// SECTION 20 — APPLY WRITER (lib/db/importBatch2b.supabase.ts). NEVER invoked against real
+// Supabase — fake in-memory client only, mirrors tests/importBatch2a.test.ts's own pattern.
+// =========================================================================================
+
+/** 10 Txx booths (section 5) — distinct footprints so no dimension/sourceKey collides. */
+function buildTxxRows(): readonly Batch2bSourceRow[] {
+  const specs: ReadonlyArray<readonly [string, number, number]> = [
+    ["T04", 2, 2], ["T06", 3, 2], ["T09", 3, 3], ["T12", 4, 3], ["T15", 4, 4],
+    ["T16", 5, 4], ["T18", 5, 5], ["T20", 6, 4], ["T24", 6, 6], ["T25", 8, 5],
+  ];
+  return specs.map(([code, w, d], i) =>
+    row({ sourceRow: 10 + i, category: "Typovky", nameCz: `Typový stánek octanorm - ${code}`, status: "EXACT_SAFE", proposedCode: code, proposedName: `${code} - TYPOVÝ STÁNEK ${w}X${d} m (STAVBA)` }),
+  );
+}
+
+/** 46 ordinary furniture rows, deliberately WITHOUT a dimension pattern in proposedName — missing dimensions must stay missing (section 3/16), never invented. */
+function buildFurnitureRows(count: number): readonly Batch2bSourceRow[] {
+  return Array.from({ length: count }, (_, i) =>
+    row({ sourceRow: 1000 + i, category: "Nábytek", nameCz: `Testovací nábytek ${i + 1}`, status: "EXACT_SAFE", proposedCode: `F${String(i + 1).padStart(2, "0")}`, proposedName: `TESTOVACÍ NÁBYTEK ${i + 1}` }),
+  );
+}
+
+const FULL_FIXTURE_ROWS: readonly Batch2bSourceRow[] = [...buildTxxRows(), ...buildFurnitureRows(46), M57_ROW];
+
+/** 10 Txx + 46 furniture + M57(existing, noop) + P86(new) — mirrors the real report's 56 new / 1 noop / 1 canonical shape. */
+function buildFullPlanItems(existing: readonly ExistingCatalogItemRow[] = [M57_EXISTING]): readonly Batch2bPlanItem[] {
+  return [...planPricelistItems(FULL_FIXTURE_ROWS, existing), planP86Canonical(koje2x2, existing)];
+}
+
+const TEST_META = { sourceFileName: "test-fixture.json", sourceFingerprint: "fp-test-fixture" };
+
+type FakeRow = Record<string, unknown>;
+
+function createFakeSupabaseClient() {
+  const tables = new Map<string, FakeRow[]>();
+  let nextId = 1;
+
+  function getTable(name: string): FakeRow[] {
+    if (!tables.has(name)) tables.set(name, []);
+    return tables.get(name)!;
+  }
+
+  function from(tableName: string) {
+    type Op = "select" | "insert" | "update";
+    let op: Op = "select";
+    let filters: Array<[string, unknown]> = [];
+    let payload: FakeRow | undefined;
+    let singleMode: "none" | "single" = "none";
+
+    const builder = {
+      select(_columns?: string) {
+        return builder;
+      },
+      insert(row: FakeRow) {
+        op = "insert";
+        payload = row;
+        return builder;
+      },
+      update(patch: FakeRow) {
+        op = "update";
+        payload = patch;
+        return builder;
+      },
+      eq(column: string, value: unknown) {
+        filters = [...filters, [column, value]];
+        return builder;
+      },
+      single() {
+        singleMode = "single";
+        return execute();
+      },
+      then(onFulfilled: (value: { data: unknown; error: unknown }) => unknown, onRejected?: (reason: unknown) => unknown) {
+        return execute().then(onFulfilled, onRejected);
+      },
+    };
+
+    async function execute(): Promise<{ data: unknown; error: unknown }> {
+      const rows = getTable(tableName);
+      if (op === "select") {
+        const matched = rows.filter((r) => filters.every(([c, v]) => r[c] === v));
+        if (singleMode === "single") return matched[0] ? { data: matched[0], error: null } : { data: null, error: { message: "not found" } };
+        return { data: matched, error: null };
+      }
+      if (op === "insert") {
+        const newRow: FakeRow = { id: `fake-id-${nextId++}`, ...payload };
+        rows.push(newRow);
+        if (singleMode === "single") return { data: newRow, error: null };
+        return { data: [newRow], error: null };
+      }
+      if (op === "update") {
+        const matched = rows.filter((r) => filters.every(([c, v]) => r[c] === v));
+        for (const r of matched) Object.assign(r, payload);
+        return { data: matched, error: null };
+      }
+      return { data: null, error: { message: `unsupported op ${op}` } };
+    }
+
+    return builder;
+  }
+
+  return { from, _tables: tables };
+}
+
+test("writer default je dry-run: previewBatch2bApply je čistá funkce, nikdy nepřijímá Supabase klienta", () => {
+  assert.equal(previewBatch2bApply.length, 3); // (items, existingCatalogItems, existingMappings) — no client parameter
+  const source = readFileSync(new URL("../domain/importBatch2b.ts", import.meta.url), "utf8");
+  assert.equal(/@supabase/u.test(source), false);
+});
+
+test("scripts/importBatch2b.ts vyžaduje explicitní --apply flag; default je dry-run", () => {
+  const source = readFileSync(new URL("../scripts/importBatch2b.ts", import.meta.url), "utf8");
+  assert.match(source, /args\.includes\("--apply"\)/u);
+  assert.match(source, /if \(!apply\)/u);
+});
+
+test("live preview (section 17): 57 insertů (56 nových + P86), 1 noop (M57), 0 konfliktů, 56 mapping insertů", () => {
+  const items = buildFullPlanItems();
+  const preview = previewBatch2bApply(items, [M57_EXISTING], []);
+  assert.equal(preview.catalogItems.insert, 57);
+  assert.equal(preview.catalogItems.noop, 1);
+  assert.equal(preview.catalogItems.conflicts, 0);
+  assert.equal(preview.catalogMappings.insert, 56);
+  assert.equal(preview.catalogMappings.noop, 0);
+  assert.deepEqual(preview.conflictDetails, []);
+});
+
+test("preflight (section 12): OK pro čistý 57-položkový plán, žádné issues", () => {
+  const items = buildFullPlanItems();
+  const preflight = runBatch2bPreflight(items, [M57_EXISTING]);
+  assert.equal(preflight.ok, true);
+  assert.deepEqual(preflight.issues, []);
+});
+
+test("preflight: STOP pokud se L02 objeví v plánu (L02 je výhradně Batch #2A) — apply se nikdy nespustí, ani import_batches řádek nevznikne", async () => {
+  const client = createFakeSupabaseClient();
+  const l02Row = row({ sourceRow: 9999, category: "Nábytek", nameCz: "Testovací L02 bug", status: "EXACT_SAFE", proposedCode: "L02", proposedName: "L02 BUG" });
+  const badItems = [...buildFullPlanItems(), planPricelistItem(l02Row, [])];
+  const preflight = runBatch2bPreflight(badItems, [M57_EXISTING]);
+  assert.equal(preflight.ok, false);
+  assert.ok(preflight.issues.some((issue) => issue.code === "l02_touched"));
+  await assert.rejects(() => applyBatch2bPlan(client as never, badItems, koje2x2, TEST_META), (error) => error instanceof Batch2bPreflightError);
+  const tables = (client as unknown as { _tables: Map<string, FakeRow[]> })._tables;
+  assert.equal((tables.get("import_batches") ?? []).length, 0, "preflight STOP musí nastat před prvním zápisem");
+});
+
+test("10 Txx booths mají správnou identitu (kind=booth), 56 nových ordinary položek je needs_review/generatorEligible=false, jen P86 může být generatorEligible", () => {
+  const items = buildFullPlanItems();
+  const txxCodes = ["T04", "T06", "T09", "T12", "T15", "T16", "T18", "T20", "T24", "T25"];
+  for (const code of txxCodes) {
+    const item = items.find((entry) => entry.internalCode === code);
+    assert.ok(item, `${code} chybí v plánu`);
+    assert.equal(item!.catalogKind, "booth");
+    assert.equal(item!.lifecycleStatus, "needs_review");
+    assert.equal(item!.generatorEligible, false);
+  }
+  const newOrdinary = items.filter((item) => item.status === "exact_safe" && item.internalCode !== "P86");
+  assert.equal(newOrdinary.length, 56);
+  assert.ok(newOrdinary.every((item) => item.lifecycleStatus === "needs_review" && item.generatorEligible === false));
+  const generatorEligibleCodes = items.filter((item) => item.generatorEligible).map((item) => item.internalCode);
+  assert.ok(generatorEligibleCodes.every((code) => code === "P86"), "jedině P86 smí být generatorEligible=true");
+});
+
+test("žádná REVIEW ani NO_MATCH položka nikdy nedostane action=insert (preflight by to i tak zachytil)", () => {
+  const items = planPricelistItems([REVIEW_ROW, NO_MATCH_ROW], NO_EXISTING);
+  assert.ok(items.every((item) => item.action !== "insert"));
+  const preflight = runBatch2bPreflight(items, NO_EXISTING);
+  assert.equal(preflight.ok, true); // no violation here BECAUSE nothing was marked insert — proves the guard is structurally moot, not merely untested
+});
+
+test("chybějící rozměry zůstávají chybějící (46 furniture řádků bez WxDxH patternu -> dimensions=undefined, nikdy vymyšlené)", () => {
+  const items = buildFullPlanItems();
+  const furniture = items.filter((item) => item.internalCode?.startsWith("F"));
+  assert.equal(furniture.length, 46);
+  assert.ok(furniture.every((item) => item.dimensions === undefined));
+});
+
+test("buildBatch2bCatalogDocument nikdy nevymyslí modelUrl/GLB cestu pro nové needs_review položky — jen prázdné/undefined pole", () => {
+  const items = buildFullPlanItems();
+  const f01 = items.find((item) => item.internalCode === "F01")!;
+  const document = buildBatch2bCatalogDocument(f01);
+  assert.equal(document.modelUrl, undefined);
+  assert.equal(document.widthMm, 0);
+  assert.equal(document.depthMm, 0);
+  assert.equal(document.heightMm, undefined);
+});
+
+test("sourceKey fallback identita je idempotentní i bez internalCode na existující DB řádce (nikdy jen normalized name)", () => {
+  const testRow = row({ sourceRow: 5000, category: "Nábytek", nameCz: "Fallback test", status: "EXACT_SAFE", proposedCode: "F99", proposedName: "FALLBACK TEST" });
+  const sourceKey = planPricelistItem(testRow, []).sourceKey;
+  const existingBySourceKeyOnly: ExistingCatalogItemRow = { id: "existing-by-sourcekey", sourceSystem: BATCH2B_SOURCE_SYSTEM, sourceKey, kind: "furniture" };
+  const plan = planPricelistItem(testRow, [existingBySourceKeyOnly]);
+  assert.equal(plan.action, "noop");
+  assert.equal(plan.catalogTarget, "existing-by-sourcekey");
+});
+
+test("idempotency simulace (section 15, pure): druhý previewBatch2bApply po simulatePostApplyExistingItems dává insert=0 pro catalog_items I catalog_mappings", () => {
+  const items = buildFullPlanItems();
+  const firstPreview = previewBatch2bApply(items, [M57_EXISTING], []);
+  assert.equal(firstPreview.catalogItems.insert, 57);
+
+  const simulatedItems = simulatePostApplyExistingItems(items, [M57_EXISTING]);
+  assert.equal(simulatedItems.length, 58, "1 preexistující M57 + 57 nově vložených");
+
+  const plannedMappings = planBatch2bMappings(items);
+  const simulatedMappings: readonly ExistingCatalogMappingRow[] = plannedMappings.map((m) => ({ sourceSystem: m.sourceSystem, sourceKey: m.sourceKey, catalogItemId: `simulated-${m.catalogItemRef}` }));
+
+  const secondPreview = previewBatch2bApply(items, simulatedItems, simulatedMappings);
+  assert.equal(secondPreview.catalogItems.insert, 0, "druhý apply nesmí nic znovu vložit");
+  assert.equal(secondPreview.catalogItems.noop, 58);
+  assert.equal(secondPreview.catalogMappings.insert, 0, "0 duplicitních catalog_mappings insertů");
+  assert.equal(secondPreview.catalogMappings.noop, 56);
+});
+
+test("apply writer end-to-end: první apply vloží 57 catalog_items + 56 catalog_mappings, M57 zůstává noop; druhý apply proti stejnému stavu je 0/0 (skutečná idempotence přes fake DB)", async () => {
+  const client = createFakeSupabaseClient();
+  (client as unknown as { _tables: Map<string, FakeRow[]> })._tables.set("catalog_items", [
+    { id: M57_EXISTING.id, internal_code: "M57", kind: "furniture", document: { sourceSystem: BATCH2B_SOURCE_SYSTEM, sourceKey: M57_EXISTING.sourceKey } },
+  ]);
+
+  const items = buildFullPlanItems();
+  const first = await applyBatch2bPlan(client as never, items, koje2x2, TEST_META);
+  assert.equal(first.catalogItems.inserted, 57);
+  assert.equal(first.catalogItems.noop, 1);
+  assert.equal(first.catalogMappings.inserted, 56);
+  assert.equal(first.pricingEntriesWrites, 0);
+
+  const existingAfterFirst = await readExistingCatalogItemsSafely(client as never);
+  assert.equal(existingAfterFirst.length, 58);
+  assert.equal(existingAfterFirst.filter((r) => r.internalCode === "P86").length, 1, "P86 vzniká maximálně jednou");
+
+  const secondItems = buildFullPlanItems(existingAfterFirst);
+  const second = await applyBatch2bPlan(client as never, secondItems, koje2x2, TEST_META);
+  assert.equal(second.catalogItems.inserted, 0, "druhý apply nesmí nic znovu vložit");
+  assert.equal(second.catalogItems.noop, 58);
+  assert.equal(second.catalogMappings.inserted, 0, "0 duplicitních catalog_mappings insertů");
+
+  const finalCatalogItems = await readExistingCatalogItemsSafely(client as never);
+  assert.equal(finalCatalogItems.length, 58, "žádné duplicitní catalog_items po dvou apply bězích");
+  assert.equal(finalCatalogItems.filter((r) => r.internalCode === "P86").length, 1);
+
+  const tables = (client as unknown as { _tables: Map<string, FakeRow[]> })._tables;
+  assert.equal((tables.get("pricing_entries") ?? []).length, 0, "writer se nikdy nedotkne pricing_entries");
+});
+
+test("apply writer: catalog_mappings ukazující na jiný catalog_item_id (data drift) vyhodí CatalogItemConflictError, batch skončí status='failed', pricing_entries se nezapíše", async () => {
+  const client = createFakeSupabaseClient();
+  const items = buildFullPlanItems();
+  const f01 = items.find((item) => item.internalCode === "F01")!;
+  (client as unknown as { _tables: Map<string, FakeRow[]> })._tables.set("catalog_mappings", [
+    { id: "stale-mapping", source_system: BATCH2B_SOURCE_SYSTEM, source_key: f01.sourceKey, catalog_item_id: "some-other-unrelated-id", confirmed: true },
+  ]);
+
+  await assert.rejects(() => applyBatch2bPlan(client as never, items, koje2x2, TEST_META), (error) => error instanceof CatalogItemConflictError);
+
+  const tables = (client as unknown as { _tables: Map<string, FakeRow[]> })._tables;
+  assert.equal((tables.get("import_batches") ?? [])[0]?.status, "failed");
+  assert.equal((tables.get("pricing_entries") ?? []).length, 0, "pricing_entries se nesmí zapsat, pokud mapping krok selže");
+});
+
+test("transient read guard (section 13): dvě čtení catalog_items s rozdílným počtem řádků -> TransientReadError, STOP před jakýmkoli zápisem", async () => {
+  const client = createFakeSupabaseClient();
+  (client as unknown as { _tables: Map<string, FakeRow[]> })._tables.set("catalog_items", [{ id: "a", internal_code: "X1", kind: "furniture", document: {} }]);
+  const realFrom = client.from.bind(client);
+  let selectCount = 0;
+  client.from = ((tableName: string) => {
+    const builder = realFrom(tableName);
+    if (tableName === "catalog_items") {
+      const originalThen = builder.then.bind(builder);
+      builder.then = ((onFulfilled: (value: { data: unknown; error: unknown }) => unknown, onRejected?: (reason: unknown) => unknown) => {
+        selectCount += 1;
+        if (selectCount === 2) return Promise.resolve({ data: [], error: null }).then(onFulfilled, onRejected);
+        return originalThen(onFulfilled, onRejected);
+      }) as typeof builder.then;
+    }
+    return builder;
+  }) as typeof client.from;
+
+  await assert.rejects(() => readExistingCatalogItemsSafely(client as never), (error) => error instanceof TransientReadError);
+});
+
+test("transient read guard: dvě konzistentní čtení nikdy nevyhodí TransientReadError (happy path)", async () => {
+  const client = createFakeSupabaseClient();
+  (client as unknown as { _tables: Map<string, FakeRow[]> })._tables.set("catalog_items", [{ id: "a", internal_code: "M57", kind: "furniture", document: {} }]);
+  const result = await readExistingCatalogItemsSafely(client as never);
+  assert.equal(result.length, 1);
+});
+
+test("pricing_entries writes = 0 strukturálně garantováno typem (Batch2bApplyResult.pricingEntriesWrites je literal 0)", async () => {
+  const client = createFakeSupabaseClient();
+  const items = buildFullPlanItems();
+  const result = await applyBatch2bPlan(client as never, items, koje2x2, TEST_META);
+  assert.equal(result.pricingEntriesWrites, 0);
+});
+
+test("attachBasePricing nikdy nevymyslí cenu chybějící ve zdroji a P86 (sourceRow=-1) nikdy nedostane base pricing z PRICELIST mapy", () => {
+  const items = buildFullPlanItems();
+  const basePricingByRow = new Map([[1000, { saleCzk: 1000, saleEur: 40, purchaseCzk: 500 }]]);
+  const enriched = attachBasePricing(items, basePricingByRow);
+  const f01 = enriched.find((item) => item.internalCode === "F01")!;
+  assert.deepEqual(f01.basePricing, { saleCzk: 1000, saleEur: 40, purchaseCzk: 500 });
+  const f02 = enriched.find((item) => item.internalCode === "F02")!;
+  assert.equal(f02.basePricing, undefined, "žádná cena ve zdroji -> zůstává undefined, nikdy vymyšlená");
+  const p86 = enriched.find((item) => item.internalCode === "P86")!;
+  assert.equal(p86.basePricing, undefined, "P86 (sourceRow=-1) nikdy nedostane PRICELIST base pricing");
 });

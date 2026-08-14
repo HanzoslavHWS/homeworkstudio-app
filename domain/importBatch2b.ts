@@ -15,10 +15,10 @@
  * are always planned with internalCode=null, action="review"/"skip" — no automatic M/L/P/T/
  * A/I/W/U code generation, ever.
  */
-import type { BoothType, CatalogItemKind, CatalogItemStatus, ComponentDefinition } from "./models.ts";
+import type { BoothType, CatalogItemKind, CatalogItemStatus, ComponentDefinition, PricingEntry } from "./models.ts";
 import { evaluateCatalogReadiness, isGeneratorEligible } from "./catalogReadiness.ts";
-import { buildMappingSourceKey } from "./importBatch.ts";
-import { resolveExistingCatalogItem, type ExistingCatalogItemRow } from "./importBatch2a.ts";
+import { buildMappingSourceKey, normalizedMappingName } from "./importBatch.ts";
+import { resolveCatalogItemForApply, resolveExistingCatalogItem, type ExistingCatalogItemRow } from "./importBatch2a.ts";
 
 /** Same workbook/source system Batch #1/#2A already use — this is still the V6.6 Excel + ABF warehouse export pairing. */
 export const BATCH2B_SOURCE_SYSTEM = "excel-v6.6";
@@ -139,6 +139,8 @@ export type Batch2bPlanItem = Readonly<{
   sourceKey: string;
   reasons: readonly string[];
   warnings: readonly string[];
+  /** Section 9 — base/catalog pricing (PRICELIST saleCzk/saleEur/purchaseCzk), attached via attachBasePricing(). Never event-level pricing_entries. */
+  basePricing?: SourceBasePricing;
 }>;
 
 function sourceRowKey(row: Pick<Batch2bSourceRow, "category" | "nameCz">): string {
@@ -450,4 +452,260 @@ export function summarizeByCategoryGroup(items: readonly Batch2bPlanItem[]): rea
     missingDimensions: groupItems.filter((item) => (item.status === "exact_safe" || item.status === "skip_existing") && !item.dimensions).length,
     missingAssets: groupItems.filter((item) => item.assetStatus === "missing" && (item.status === "exact_safe" || item.status === "skip_existing")).length,
   }));
+}
+
+// ============================================================================
+// BASE PRICING (section 9) — the PRICELIST sheet's own saleCzk/saleEur/purchaseCzk, keyed by
+// sourceRow (private-imports/import-preview-v6.6.json's catalog.rows). Deliberately NOT
+// event-level pricing_entries — this only ever feeds a NEW catalog_item's own
+// document.pricingEntries (a base/catalog price with no priceListId/exhibitionId), which the
+// domain model already supports (see data/booths.ts's P86 base CZK price). The 495 existing
+// event-level pricing_entries rows are never touched by this — see buildBatch2bCatalogDocument.
+// ============================================================================
+
+export type SourceBasePricing = Readonly<{ saleCzk: number | null; saleEur: number | null; purchaseCzk: number | null }>;
+
+/** Pure — attaches base pricing by sourceRow. P86 (sourceRow=-1, not a PRICELIST row) never gets one; never invents a price for a row absent from the map. */
+export function attachBasePricing(
+  items: readonly Batch2bPlanItem[],
+  basePricingByRow: ReadonlyMap<number, SourceBasePricing>,
+): readonly Batch2bPlanItem[] {
+  return items.map((item) => {
+    if (item.sourceRow < 0) return item;
+    const pricing = basePricingByRow.get(item.sourceRow);
+    if (!pricing || (pricing.saleCzk === null && pricing.saleEur === null)) return item;
+    return { ...item, basePricing: pricing };
+  });
+}
+
+// ============================================================================
+// CATALOG DOCUMENT BUILDING — the exact document JSONB payload a real apply would write for
+// a NEW catalog_item. Mirrors domain/importBatch2a.ts's insertTechnicalServiceCatalogItem
+// document shape (a stable stub `id`, never the eventual DB uuid — the DB `id` COLUMN is
+// always authoritative on read, same pattern as price_lists/priceListRepository.supabase.ts).
+// ============================================================================
+
+/** Never fabricates a dimension/asset — widthMm/depthMm default to 0 (this codebase's established "unknown" sentinel, see scripts/importPreviewV66.ts stubFromRow and evaluateCatalogReadiness's hasDimensions check), heightMm/modelUrl/photoUrl stay undefined when not actually known. */
+export function buildBatch2bCatalogDocument(item: Batch2bPlanItem): ComponentDefinition {
+  const stubId = `batch2b-${item.internalCode ?? item.sourceKey}`;
+  const pricingEntries: PricingEntry[] = [];
+  if (item.basePricing?.saleCzk != null) {
+    pricingEntries.push({ id: `${stubId}-base-czk`, itemId: stubId, currency: "CZK", salePrice: item.basePricing.saleCzk, purchasePrice: item.basePricing.purchaseCzk ?? undefined });
+  }
+  if (item.basePricing?.saleEur != null) {
+    pricingEntries.push({ id: `${stubId}-base-eur`, itemId: stubId, currency: "EUR", salePrice: item.basePricing.saleEur });
+  }
+  return {
+    id: stubId,
+    internalCode: item.internalCode ?? undefined,
+    displayName: item.sourceName,
+    type: item.catalogKind ?? "other",
+    name: item.sourceName,
+    category: item.sourceCategory,
+    widthMm: item.dimensions?.widthMm ?? 0,
+    depthMm: item.dimensions?.depthMm ?? 0,
+    heightMm: item.dimensions?.heightMm,
+    resizable: false,
+    productionProfiles: {},
+    rotation: { defaultMode: "free", snapStep: 45, quickAngles: [0], allowFreeRotation: true, locked: false },
+    systemLocked: false,
+    userLocked: false,
+    visible: true,
+    sceneLabel: item.sourceName,
+    unit: item.unit ?? undefined,
+    pricingUnit: (item.pricingUnit as ComponentDefinition["pricingUnit"]) ?? undefined,
+    pricingEntries,
+    catalogItemKind: item.catalogKind ?? undefined,
+    lifecycleStatus: item.lifecycleStatus ?? "needs_review",
+  } as ComponentDefinition;
+}
+
+// ============================================================================
+// CATALOG MAPPINGS (section 8) — confirmed sourceKey -> catalogItemRef for the new PRICELIST
+// EXACT_SAFE inserts only. Explicitly EXCLUDES: M57 (already has its Batch #2A mapping — noop,
+// nothing to plan), P86 (no PRICELIST source row was ever manually confirmed as P86 — it came
+// from a direct ABF warehouse lookup, never from this fuzzy-matched sheet, so the "confirmed
+// from a PRICELIST row" precondition in section 8 is never met), and any REVIEW/NO_MATCH row.
+// ============================================================================
+
+export type PlannedBatch2bMapping = Readonly<{
+  sourceSystem: string;
+  sourceKey: string;
+  normalizedName: string;
+  catalogItemRef: string;
+  rawName: string;
+}>;
+
+export function planBatch2bMappings(items: readonly Batch2bPlanItem[]): readonly PlannedBatch2bMapping[] {
+  return items
+    .filter((item) => item.source === PRICELIST_SOURCE_SHEET && item.status === "exact_safe" && item.action === "insert" && item.internalCode)
+    .map((item) => ({
+      sourceSystem: BATCH2B_SOURCE_SYSTEM,
+      sourceKey: item.sourceKey,
+      normalizedName: normalizedMappingName(item.sourceName),
+      catalogItemRef: item.internalCode!,
+      rawName: item.sourceName,
+    }));
+}
+
+// ============================================================================
+// PREFLIGHT (section 12) — defensive re-verification of every invariant the plan-building
+// functions above are already supposed to guarantee by construction. Never trusts a plan
+// blindly, even one this same module produced — protects against a future bug here or a
+// hand-edited plan file. STOP (ok:false) before any write on the first violation found.
+// ============================================================================
+
+export type Batch2bPreflightIssueCode =
+  | "l02_touched"
+  | "review_marked_insert"
+  | "no_match_marked_insert"
+  | "m57_not_resolved"
+  | "p84_present"
+  | "p86_t04_identity_collision"
+  | "duplicate_internal_code"
+  | "duplicate_source_key"
+  | "db_collision";
+
+export type Batch2bPreflightIssue = Readonly<{ code: Batch2bPreflightIssueCode; message: string }>;
+export type Batch2bPreflightResult = Readonly<{ ok: boolean; issues: readonly Batch2bPreflightIssue[] }>;
+
+export function runBatch2bPreflight(
+  items: readonly Batch2bPlanItem[],
+  existingCatalogItems: readonly ExistingCatalogItemRow[],
+): Batch2bPreflightResult {
+  const issues: Batch2bPreflightIssue[] = [];
+
+  if (items.some((item) => item.internalCode === "L02")) {
+    issues.push({ code: "l02_touched", message: "L02 se objevil v Batch #2B plánu — L02 je výhradně Batch #2A technical-service identita, nesmí se zde plánovat vůbec." });
+  }
+  if (items.some((item) => item.internalCode === "P84")) {
+    issues.push({ code: "p84_present", message: "P84 se objevil v plánu — P84 (KÓJE 2X2 JOBS) nebyl nikdy bezpečně ověřen jako identita pro tento batch." });
+  }
+
+  for (const item of items) {
+    if (item.status === "review" && item.action === "insert") {
+      issues.push({ code: "review_marked_insert", message: `REVIEW položka "${item.sourceName}" (řádek ${item.sourceRow}) má action=insert — REVIEW nesmí nikdy vést k insertu.` });
+    }
+    if (item.status === "review" && item.action === "skip" && item.internalCode !== null) {
+      issues.push({ code: "no_match_marked_insert", message: `NO_MATCH položka "${item.sourceName}" (řádek ${item.sourceRow}) nese internalCode — NO_MATCH nesmí nikdy dostat kód.` });
+    }
+  }
+
+  const m57 = items.find((item) => item.internalCode === "M57");
+  if (m57 && (m57.action !== "noop" || !m57.catalogTarget)) {
+    issues.push({ code: "m57_not_resolved", message: `M57 musí resolvovat na existující catalog_item (action=noop, catalogTarget nastaven) — aktuálně action="${m57.action}".` });
+  }
+
+  const p86 = items.find((item) => item.internalCode === "P86");
+  const t04 = items.find((item) => item.internalCode === "T04");
+  if (p86 && t04 && p86.sourceKey === t04.sourceKey) {
+    issues.push({ code: "p86_t04_identity_collision", message: "P86 a T04 sdílejí stejný sourceKey — identity kolize mezi dvěma odlišnými produkty." });
+  }
+
+  for (const conflict of detectBatch2bConflicts(items, existingCatalogItems)) {
+    const code: Batch2bPreflightIssueCode = conflict.kind === "duplicate_internal_code_in_plan" ? "duplicate_internal_code" : conflict.kind === "duplicate_source_key_in_plan" ? "duplicate_source_key" : "db_collision";
+    issues.push({ code, message: conflict.reason });
+  }
+
+  return { ok: issues.length === 0, issues };
+}
+
+export class Batch2bPreflightError extends Error {
+  readonly issues: readonly Batch2bPreflightIssue[];
+  constructor(issues: readonly Batch2bPreflightIssue[]) {
+    super(`Batch #2B preflight selhal (${issues.length} issue(s)): ${issues.map((issue) => issue.message).join(" | ")}`);
+    this.name = "Batch2bPreflightError";
+    this.issues = issues;
+  }
+}
+
+// ============================================================================
+// APPLY PREVIEW (dry-run/idempotency) — computed with the EXACT SAME resolveCatalogItemForApply
+// the real writer (lib/db/importBatch2b.supabase.ts) uses, so this preview can never drift
+// from real apply behavior. Pure — takes already-fetched existing rows, does no I/O.
+// ============================================================================
+
+export type ExistingCatalogMappingRow = Readonly<{ sourceSystem: string; sourceKey: string; catalogItemId: string }>;
+
+export type Batch2bApplyPreview = Readonly<{
+  catalogItems: Readonly<{ insert: number; noop: number; conflicts: number }>;
+  catalogMappings: Readonly<{ insert: number; noop: number }>;
+  conflictDetails: readonly Readonly<{ internalCode: string; reason: string }>[];
+}>;
+
+export function previewBatch2bApply(
+  items: readonly Batch2bPlanItem[],
+  existingCatalogItems: readonly ExistingCatalogItemRow[],
+  existingMappings: readonly ExistingCatalogMappingRow[],
+): Batch2bApplyPreview {
+  let insertCount = 0;
+  let noopCount = 0;
+  let conflictCount = 0;
+  const conflictDetails: Readonly<{ internalCode: string; reason: string }>[] = [];
+
+  // Same apply order as the writer: M57 first, then P86, then the rest.
+  const orderedItems = [
+    ...items.filter((item) => item.internalCode === "M57"),
+    ...items.filter((item) => item.internalCode === "P86"),
+    ...items.filter((item) => item.internalCode !== "M57" && item.internalCode !== "P86" && (item.status === "exact_safe" || item.status === "skip_existing")),
+  ];
+
+  for (const item of orderedItems) {
+    if (!item.internalCode || !item.catalogKind) continue;
+    const resolution = resolveCatalogItemForApply(
+      { internalCode: item.internalCode, sourceSystem: BATCH2B_SOURCE_SYSTEM, sourceKey: item.sourceKey, kind: item.catalogKind },
+      existingCatalogItems,
+    );
+    if (resolution.action === "conflict") {
+      conflictCount += 1;
+      conflictDetails.push({ internalCode: item.internalCode, reason: resolution.conflictReason ?? "" });
+    } else if (resolution.action === "noop") {
+      noopCount += 1;
+    } else {
+      insertCount += 1;
+    }
+  }
+
+  const plannedMappings = planBatch2bMappings(items);
+  let mappingInsertCount = 0;
+  let mappingNoopCount = 0;
+  for (const mapping of plannedMappings) {
+    const already = existingMappings.some((existingMapping) => existingMapping.sourceSystem === mapping.sourceSystem && existingMapping.sourceKey === mapping.sourceKey);
+    if (already) mappingNoopCount += 1;
+    else mappingInsertCount += 1;
+  }
+
+  return {
+    catalogItems: { insert: insertCount, noop: noopCount, conflicts: conflictCount },
+    catalogMappings: { insert: mappingInsertCount, noop: mappingNoopCount },
+    conflictDetails,
+  };
+}
+
+/**
+ * Section 15 idempotency simulation helper — builds the hypothetical existingCatalogItems set
+ * a SECOND apply would see after a first apply succeeded, WITHOUT any real write. Pure: takes
+ * the preview's own insert decisions and synthesizes stub DB rows for them.
+ */
+export function simulatePostApplyExistingItems(
+  items: readonly Batch2bPlanItem[],
+  existingCatalogItems: readonly ExistingCatalogItemRow[],
+): readonly ExistingCatalogItemRow[] {
+  const orderedItems = [
+    ...items.filter((item) => item.internalCode === "M57"),
+    ...items.filter((item) => item.internalCode === "P86"),
+    ...items.filter((item) => item.internalCode !== "M57" && item.internalCode !== "P86" && (item.status === "exact_safe" || item.status === "skip_existing")),
+  ];
+  let mutableExisting = [...existingCatalogItems];
+  for (const item of orderedItems) {
+    if (!item.internalCode || !item.catalogKind) continue;
+    const resolution = resolveCatalogItemForApply(
+      { internalCode: item.internalCode, sourceSystem: BATCH2B_SOURCE_SYSTEM, sourceKey: item.sourceKey, kind: item.catalogKind },
+      mutableExisting,
+    );
+    if (resolution.action === "insert") {
+      mutableExisting = [...mutableExisting, { id: `simulated-${item.internalCode}`, internalCode: item.internalCode, kind: item.catalogKind, sourceSystem: BATCH2B_SOURCE_SYSTEM, sourceKey: item.sourceKey }];
+    }
+  }
+  return mutableExisting;
 }

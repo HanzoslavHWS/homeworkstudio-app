@@ -1,30 +1,39 @@
 /**
- * Import Batch #2B — DRY-RUN PLAN ONLY, this session. Never writes to Supabase, never writes
- * to R2, never touches the source .xlsm/.xlsx files.
+ * Import Batch #2B — catalog identity import (56 new EXACT_SAFE non-technical PRICELIST
+ * identities + canonical P86). No pricing_entries writes, ever — see domain/importBatch2b.ts.
  *
- *   node scripts/importBatch2b.ts
+ *   node scripts/importBatch2b.ts              -> dry-run (DEFAULT, zero writes)
+ *   node scripts/importBatch2b.ts --dry-run     -> same, explicit
+ *   node scripts/importBatch2b.ts --apply       -> real writes (requires Supabase env) — NOT
+ *                                                   invoked this session.
  *
  * Source of truth: private-imports/code-matching-report.json (identity/status per PRICELIST
  * row) + private-imports/import-preview-v6.6.json (base sale/purchase pricing per sourceRow,
- * for the informational pricing-coverage report only — no pricing_entries are planned here).
- * Reuses Batch #2A's identity/read functions (lib/db/importBatch2a.supabase.ts,
- * domain/importBatch2a.ts) rather than reimplementing them.
+ * attached into the new catalog_item's own document.pricingEntries — never a new event-level
+ * pricing_entries row). Reuses Batch #2A's identity/read/error primitives
+ * (lib/db/importBatch2a.supabase.ts, domain/importBatch2a.ts) rather than reimplementing them.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { boothTypes } from "../data/booths.ts";
+import { fingerprintBytes } from "../domain/importBatch.ts";
 import { createSupabaseServerClient } from "../lib/db/supabase.server.ts";
-import { readExistingCatalogItemsFull } from "../lib/db/importBatch2a.supabase.ts";
-import type { ExistingCatalogItemRow } from "../domain/importBatch2a.ts";
+import { readExistingCatalogMappings } from "../lib/db/importBatch2a.supabase.ts";
+import { applyBatch2bPlan, readExistingCatalogItemsSafely, TransientReadError } from "../lib/db/importBatch2b.supabase.ts";
 import {
+  attachBasePricing,
   categoryGroupFor,
-  detectBatch2bConflicts,
   isBatch2bEligibleRow,
+  planBatch2bMappings,
   planP86Canonical,
   planPricelistItems,
+  previewBatch2bApply,
+  runBatch2bPreflight,
+  simulatePostApplyExistingItems,
   summarizeByCategoryGroup,
   type Batch2bPlanItem,
   type Batch2bSourceRow,
+  type SourceBasePricing,
 } from "../domain/importBatch2b.ts";
 
 const REPORT_PATH = path.resolve(process.cwd(), "private-imports", "code-matching-report.json");
@@ -50,30 +59,15 @@ type CodeMatchingReport = Readonly<{
   }>[];
 }>;
 
-type BasePricingRow = Readonly<{ sourceRow: number; saleCzk: number | null; saleEur: number | null; purchaseCzk: number | null }>;
-
 function loadReport(): CodeMatchingReport {
   return JSON.parse(readFileSync(REPORT_PATH, "utf8")) as CodeMatchingReport;
 }
 
-function loadBasePricingByRow(): ReadonlyMap<number, BasePricingRow> {
+function loadBasePricingByRow(): ReadonlyMap<number, SourceBasePricing> {
   const raw = JSON.parse(readFileSync(BASE_PRICING_PATH, "utf8")) as { catalog: { rows: readonly Readonly<{ sourceRow: number; saleCzk: number | null; saleEur: number | null; purchaseCzk: number | null }>[] } };
-  const map = new Map<number, BasePricingRow>();
+  const map = new Map<number, SourceBasePricing>();
   for (const row of raw.catalog.rows) map.set(row.sourceRow, row);
   return map;
-}
-
-/** Known transient-read guard (observed repeatedly this engagement) — never plan against an obviously incomplete read without a retry + explicit anomaly report. */
-async function readExistingCatalogItemsWithRetry(client: ReturnType<typeof createSupabaseServerClient>): Promise<readonly ExistingCatalogItemRow[]> {
-  const first = await readExistingCatalogItemsFull(client);
-  const second = await readExistingCatalogItemsFull(client);
-  if (first.length !== second.length) {
-    console.log(`ANOMALY: první čtení catalog_items vrátilo ${first.length} řádků, druhé ${second.length} — pravděpodobný transient Supabase read problém. Zkouším potřetí.`);
-    const third = await readExistingCatalogItemsFull(client);
-    console.log(`Třetí čtení: ${third.length} řádků.`);
-    return third;
-  }
-  return second;
 }
 
 function toBatch2bSourceRow(row: CodeMatchingReport["pricelist"][number]): Batch2bSourceRow {
@@ -93,14 +87,32 @@ function toBatch2bSourceRow(row: CodeMatchingReport["pricelist"][number]): Batch
 }
 
 async function main() {
-  console.log("=== BATCH #2B — DRY-RUN PLAN ONLY (DATABASE WRITES = 0, R2 WRITES = 0) ===\n");
+  const args = process.argv.slice(2);
+  const apply = args.includes("--apply");
+  console.log(`=== BATCH #2B — ${apply ? "APPLY" : "DRY-RUN"} (source: code-matching-report.json + import-preview-v6.6.json) ===\n`);
 
   const report = loadReport();
   const basePricingByRow = loadBasePricingByRow();
-  const client = createSupabaseServerClient();
-  const existingCatalogItems = await readExistingCatalogItemsWithRetry(client);
+  const reportBytes = readFileSync(REPORT_PATH);
+  const fingerprint = fingerprintBytes(new Uint8Array(reportBytes));
 
-  console.log(`Remote DB (read-only): ${existingCatalogItems.length} existující catalog_items.`);
+  const client = createSupabaseServerClient();
+
+  // Section 13: transient-read guard — two reads, compare, STOP (never plan/write) on mismatch.
+  let existingCatalogItems;
+  try {
+    existingCatalogItems = await readExistingCatalogItemsSafely(client);
+  } catch (error) {
+    if (error instanceof TransientReadError) {
+      console.error(`STOP: ${error.message}`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+  const existingMappings = await readExistingCatalogMappings(client);
+
+  console.log(`Remote DB (read-only, double-read verified): ${existingCatalogItems.length} existující catalog_items, ${existingMappings.length} existující catalog_mappings.`);
 
   const allRows = report.pricelist.map(toBatch2bSourceRow);
   const eligibleRows = allRows.filter(isBatch2bEligibleRow);
@@ -111,61 +123,101 @@ async function main() {
   console.log(`EXACT_SAFE total (report): ${report.counts.pricelist.EXACT_SAFE}`);
   console.log(`REVIEW total (report): ${report.counts.pricelist.REVIEW}`);
   console.log(`NO_MATCH total (report): ${report.counts.pricelist.NO_MATCH}`);
-  console.log(`Already covered by Batch #2A (category="T. služby"): ${technicalServiceRows.length}`);
-  console.log(`Eligible for Batch #2B (non-technical-service rows): ${eligibleRows.length}`);
+  console.log(`Již pokryto Batch #2A (category="T. služby"): ${technicalServiceRows.length}`);
+  console.log(`Eligible pro Batch #2B (non-technical-service): ${eligibleRows.length}`);
 
-  const pricelistPlan = planPricelistItems(eligibleRows, existingCatalogItems);
+  const pricelistPlanRaw = planPricelistItems(eligibleRows, existingCatalogItems);
+  const pricelistPlan = attachBasePricing(pricelistPlanRaw, basePricingByRow);
   const koje2x2 = boothTypes.find((booth) => booth.internalCode === "P86");
   if (!koje2x2) throw new Error("P86 (koje-2x2) seed nenalezen v data/booths.ts — Batch #2B na něm závisí pro canonical případ.");
   const p86Plan = planP86Canonical(koje2x2, existingCatalogItems);
   const allPlanItems: readonly Batch2bPlanItem[] = [...pricelistPlan, p86Plan];
 
-  const conflicts = detectBatch2bConflicts(allPlanItems, existingCatalogItems);
+  // -----------------------------------------------------------------------------------------
+  // PREFLIGHT (section 12) — STOP before any write on the first violation.
+  // -----------------------------------------------------------------------------------------
+  const preflight = runBatch2bPreflight(allPlanItems, existingCatalogItems);
+  console.log(`\n=== PREFLIGHT ===`);
+  console.log(preflight.ok ? "OK — no blocking issues found." : `BLOCKED — ${preflight.issues.length} issue(s):`);
+  for (const issue of preflight.issues) console.log(`  - [${issue.code}] ${issue.message}`);
 
-  const insertCount = allPlanItems.filter((item) => item.action === "insert").length;
-  const noopCount = allPlanItems.filter((item) => item.action === "noop").length;
-  const reviewCount = allPlanItems.filter((item) => item.action === "review").length;
-  const skipCount = allPlanItems.filter((item) => item.action === "skip").length;
-
-  console.log(`\n=== PLAN SUMMARY (section 7) ===`);
-  console.log(`insert=${insertCount}  noop(existing)=${noopCount}  review=${reviewCount}  skip(NO_MATCH)=${skipCount}  conflicts=${conflicts.length}`);
-
-  console.log(`\n=== CATEGORY REPORT (section 17) ===`);
+  console.log(`\n=== CATEGORY REPORT (section 18) ===`);
   for (const summary of summarizeByCategoryGroup(allPlanItems)) {
     console.log(`- ${summary.group}: source=${summary.sourceCount} exactSafe=${summary.exactSafeCount} plannedInserts=${summary.plannedInserts} existingNoop=${summary.existingNoop} needsReview=${summary.needsReview} generatorEligible=${summary.generatorEligible} missingDimensions=${summary.missingDimensions} missingAssets=${summary.missingAssets}`);
   }
 
-  console.log(`\n=== TYPOVÉ STÁNKY Txx (section 18) ===`);
+  console.log(`\n=== TYPOVÉ STÁNKY Txx ===`);
   for (const item of allPlanItems.filter((entry) => categoryGroupFor(entry) === "Booths / Txx")) {
     console.log(`- ${item.internalCode}: "${item.sourceName}" dims=${item.dimensions ? `${item.dimensions.widthMm}x${item.dimensions.depthMm}mm` : "?"} lifecycle=${item.lifecycleStatus} generatorEligible=${item.generatorEligible} action=${item.action}`);
   }
 
-  console.log(`\n=== P86 (section 20) ===`);
-  console.log(JSON.stringify(p86Plan, null, 2));
+  console.log(`\n=== P86 ===`);
+  console.log(`internalCode=${p86Plan.internalCode} action=${p86Plan.action} lifecycle=${p86Plan.lifecycleStatus} generatorEligible=${p86Plan.generatorEligible} assetStatus=${p86Plan.assetStatus}`);
 
-  console.log(`\n=== PRICING COVERAGE (section 12 — informational only, no pricing_entries planned) ===`);
+  // -----------------------------------------------------------------------------------------
+  // LIVE DRY-RUN PREVIEW — real remote DB state, same resolveCatalogItemForApply the writer uses.
+  // -----------------------------------------------------------------------------------------
+  const preview = previewBatch2bApply(allPlanItems, existingCatalogItems, existingMappings);
+  console.log(`\n=== LIVE APPLY PREVIEW (section 17, real remote DB state) ===`);
+  console.log(`catalog_items:    insert=${preview.catalogItems.insert}  noop=${preview.catalogItems.noop}  conflicts=${preview.catalogItems.conflicts}`);
+  console.log(`catalog_mappings: insert=${preview.catalogMappings.insert}  noop=${preview.catalogMappings.noop}`);
+  console.log(`pricing_entries:  insert=0  update=0  untouched=495 (this writer never touches pricing_entries)`);
+  console.log(`R2: 0 writes`);
+  if (preview.conflictDetails.length > 0) {
+    console.log("CONFLICTS:");
+    for (const conflict of preview.conflictDetails) console.log(`  - ${conflict.internalCode}: ${conflict.reason}`);
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // IDEMPOTENCY SIMULATION (section 15) — simulate a first apply's resulting DB state, then
+  // preview a SECOND apply against that simulated state. No real write happens for this.
+  // -----------------------------------------------------------------------------------------
+  const simulatedPostFirstApply = simulatePostApplyExistingItems(allPlanItems, existingCatalogItems);
+  const secondPreview = previewBatch2bApply(allPlanItems, simulatedPostFirstApply, existingMappings);
+  console.log(`\n=== IDEMPOTENCY SIMULATION (section 15/16) ===`);
+  console.log(`FIRST apply (preview):  insert=${preview.catalogItems.insert} noop=${preview.catalogItems.noop} conflicts=${preview.catalogItems.conflicts}`);
+  console.log(`SECOND apply (simulated, no real write): insert=${secondPreview.catalogItems.insert} noop=${secondPreview.catalogItems.noop} conflicts=${secondPreview.catalogItems.conflicts}`);
+  if (secondPreview.catalogItems.insert !== 0) {
+    console.log("WARNING: druhý simulovaný apply navrhuje insert > 0 — idempotence není zaručena, zastavte se před skutečným apply.");
+  }
+
+  // -----------------------------------------------------------------------------------------
+  // BASE PRICING COVERAGE (section 9 — informational; catalog document only, never pricing_entries)
+  // -----------------------------------------------------------------------------------------
   const insertOrExisting = allPlanItems.filter((item) => item.status === "exact_safe" || item.status === "skip_existing");
-  let withBasePricing = 0;
-  let withoutBasePricing = 0;
-  for (const item of insertOrExisting) {
-    const pricingRow = item.sourceRow >= 0 ? basePricingByRow.get(item.sourceRow) : undefined;
-    if (pricingRow && (pricingRow.saleCzk !== null || pricingRow.saleEur !== null)) withBasePricing += 1;
-    else withoutBasePricing += 1;
-  }
-  console.log(`EXACT_SAFE/existing položek s dostupnou base cenou (PRICELIST saleCzk/saleEur): ${withBasePricing}`);
-  console.log(`EXACT_SAFE/existing položek BEZ base ceny ve zdroji: ${withoutBasePricing}`);
-  console.log("Event-level pricing_entries (CZK/EUR sheets): žádné další nad rámec Batch #2A (264 CZK + 231 EUR = 495, potvrzeno proti import-preview-v6.6.json pricing.counts) — technické služby jsou jediná položka s per-event cenami v tomto workbooku.");
+  const withBasePricing = insertOrExisting.filter((item) => item.basePricing).length;
+  const withoutBasePricing = insertOrExisting.length - withBasePricing;
+  console.log(`\n=== BASE PRICING (section 9 — do catalog_item.document.pricingEntries, NIKDY nové pricing_entries řádky) ===`);
+  console.log(`Položek s dostupnou base cenou (bude v document.pricingEntries): ${withBasePricing}`);
+  console.log(`Položek bez base ceny ve zdroji: ${withoutBasePricing}`);
+  console.log(`Event-level pricing_entries: 0 nových — 264 CZK + 231 EUR = 495 zůstává nedotčeno (Batch #2A, technické služby jsou jediná položka s per-event cenami v tomto workbooku).`);
 
-  if (conflicts.length > 0) {
-    console.log(`\n=== CONFLICTS (section 15) — STOP pro tyto konkrétní položky, žádný silent merge ===`);
-    for (const conflict of conflicts) console.log(`- [${conflict.kind}] ${conflict.reason}`);
-  }
+  const plannedMappings = planBatch2bMappings(allPlanItems);
+  console.log(`\nPlanned catalog_mappings (confirmed): ${plannedMappings.length} (M57 už mapován Batch #2A — noop; P86 bez PRICELIST source row — žádný nový mapping).`);
 
-  writeFileSync(PLAN_OUTPUT_PATH, JSON.stringify({ generatedAt: new Date().toISOString(), source: "private-imports/code-matching-report.json", items: allPlanItems, conflicts }, null, 2), "utf8");
+  writeFileSync(PLAN_OUTPUT_PATH, JSON.stringify({ generatedAt: new Date().toISOString(), source: "private-imports/code-matching-report.json", items: allPlanItems, plannedMappings, preflight, preview }, null, 2), "utf8");
   console.log(`\nPlan written to: ${PLAN_OUTPUT_PATH}`);
-  console.log("\n=== DATABASE WRITES: 0 (dry-run, read-only) ===");
-  console.log("=== R2 WRITES: 0 ===");
-  console.log("=== BATCH #2B APPLY: NE ===");
+
+  if (!apply) {
+    console.log("\n=== DATABASE WRITES: 0 (dry-run, read-only) ===");
+    console.log("=== R2 WRITES: 0 ===");
+    console.log("=== BATCH #2B APPLY: NE ===");
+    console.log("\nRe-run with --apply to write for real (requires SUPABASE_URL/SUPABASE_SECRET_KEY, and a clean preflight).");
+    return;
+  }
+
+  if (!preflight.ok) {
+    console.error("\nSTOP: preflight selhal, --apply se nespustí.");
+    process.exitCode = 1;
+    return;
+  }
+
+  console.log("\n=== APPLYING ===");
+  const result = await applyBatch2bPlan(client, allPlanItems, koje2x2, { sourceFileName: "code-matching-report.json", sourceFingerprint: fingerprint, sourceVersion: "V6.6" });
+  console.log("import_batches id:", result.batchId);
+  console.log("catalog_items:", JSON.stringify(result.catalogItems));
+  console.log("catalog_mappings:", JSON.stringify(result.catalogMappings));
+  console.log("pricing_entries writes:", result.pricingEntriesWrites);
 }
 
 main().catch((error) => {
