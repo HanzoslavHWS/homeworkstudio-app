@@ -194,14 +194,46 @@ function formatFileSize(size: number): string {
   return size < 1_000_000 ? `${Math.round(size / 1000)} kB` : `${(size / 1_000_000).toFixed(1)} MB`;
 }
 
-export function PriceListsPage({ priceLists, onChange }: { priceLists: readonly PriceList[]; onChange: (lists: PriceList[]) => void }) {
+export function PriceListsPage({ priceLists, onChange, onSave }: { priceLists: readonly PriceList[]; onChange: (lists: PriceList[]) => void; onSave?: (priceList: PriceList) => Promise<PriceList> }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(priceLists[0]?.id ?? "");
+  const [saveState, setSaveState] = useState<"saved" | "saving" | "dirty">("saved");
+  const [saveErrorMessage, setSaveErrorMessage] = useState("");
+  const savedListsRef = useRef(new Map(priceLists.map((list) => [list.id, list])));
   const selected = priceLists.find((item) => item.id === selectedId);
   const filtered = priceLists.filter((item) => `${item.name} ${item.code} ${item.year} ${item.edition ?? ""}`.toLowerCase().includes(query.toLowerCase()));
   const update = (patch: Partial<PriceList>) => selected && onChange(priceLists.map((item) => item.id === selected.id ? { ...item, ...patch } : item));
+  const dirty = Boolean(selected) && JSON.stringify(savedListsRef.current.get(selectedId) ?? null) !== JSON.stringify(selected ?? null);
+
+  useEffect(() => {
+    setSaveState(dirty ? "dirty" : "saved");
+  }, [dirty]);
+
   function add() { const id = `price-list-${Date.now()}`; const created: PriceList = { id, name: `Nový ceník ${new Date().getFullYear()}`, code: id.toUpperCase(), currency: "CZK", year: new Date().getFullYear(), active: true }; onChange([...priceLists, created]); setSelectedId(id); }
-  return <div className="workspacePage"><div className="workspacePageHeader"><div><span className="eyebrow">ADMINISTRACE</span><h1>Ceníky</h1></div><button className="primaryButton" onClick={add}>+ Přidat ceník</button></div><div className="adminFilters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat ceník, kód, edici nebo rok…" /></div><div className="adminSplit"><div className="adminList">{filtered.map((list) => <button key={list.id} className={list.id === selectedId ? "active" : ""} onClick={() => setSelectedId(list.id)}><strong>{list.name}</strong><span>{list.code} · {list.year} · {list.active ? "Aktivní" : "Archiv"}</span></button>)}</div>{selected && <section className="adminDetail eventForm"><label><span>Název</span><input value={selected.name} onChange={(event) => update({ name: event.target.value })} /></label><div className="threeColumns"><label><span>Kód</span><input value={selected.code} onChange={(event) => update({ code: event.target.value })} /></label><label><span>Rok</span><input type="number" value={selected.year} onChange={(event) => update({ year: Number(event.target.value) })} /></label><label><span>Edice</span><input value={selected.edition ?? ""} onChange={(event) => update({ edition: event.target.value || undefined })} /></label></div><div className="twoColumns"><label><span>Měna</span><select value={selected.currency} onChange={(event) => update({ currency: event.target.value as PriceList["currency"] })}><option>CZK</option><option>EUR</option></select></label><label><span>Realizačka</span><select value={selected.realizationCompanyId ?? ""} onChange={(event) => update({ realizationCompanyId: event.target.value || undefined })}><option value="">Všechny</option>{realizationCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label></div><div className="twoColumns"><DateField label="Platnost od" value={selected.validFrom} onChange={(validFrom) => update({ validFrom })} /><DateField label="Platnost do" value={selected.validTo} onChange={(validTo) => update({ validTo })} /></div><label className="checkLabel"><input type="checkbox" checked={selected.active} onChange={(event) => update({ active: event.target.checked })} /> Aktivní; vypnuté ceníky zůstávají v archivu</label></section>}</div></div>;
+
+  function selectList(id: string) {
+    if (id === selectedId) return;
+    if (dirty && !window.confirm("Máte neuložené změny. Opravdu chcete pokračovat?")) return;
+    setSelectedId(id);
+  }
+
+  async function saveSelected() {
+    if (!selected || !onSave) return;
+    setSaveState("saving");
+    setSaveErrorMessage("");
+    try {
+      const saved = await onSave(selected);
+      savedListsRef.current.delete(selected.id);
+      savedListsRef.current.set(saved.id, saved);
+      if (saved.id !== selected.id) setSelectedId(saved.id);
+      setSaveState("saved");
+    } catch (error) {
+      setSaveState("dirty");
+      setSaveErrorMessage(error instanceof Error ? error.message : "Ceník se nepodařilo uložit.");
+    }
+  }
+
+  return <div className="workspacePage"><div className="workspacePageHeader"><div><span className="eyebrow">ADMINISTRACE</span><h1>Ceníky</h1></div><button className="primaryButton" onClick={add}>+ Přidat ceník</button></div><div className="adminFilters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat ceník, kód, edici nebo rok…" /></div><div className="adminSplit"><div className="adminList">{filtered.map((list) => <button key={list.id} className={list.id === selectedId ? "active" : ""} onClick={() => selectList(list.id)}><strong>{list.name}</strong><span>{list.code} · {list.year} · {list.active ? "Aktivní" : "Archiv"}</span></button>)}</div>{selected && <section className="adminDetail eventForm">{onSave && <div className="eventSaveBar"><span className={saveState}>{saveState === "dirty" ? "Neuložené změny" : saveState === "saving" ? "Ukládám…" : "Uloženo"}{saveErrorMessage && <small className="uploadError">{saveErrorMessage}</small>}</span><button type="button" className="primaryButton" onClick={saveSelected} disabled={!dirty || saveState === "saving"}>Uložit změny</button></div>}<label><span>Název</span><input value={selected.name} onChange={(event) => update({ name: event.target.value })} /></label><div className="threeColumns"><label><span>Kód</span><input value={selected.code} onChange={(event) => update({ code: event.target.value })} /></label><label><span>Rok</span><input type="number" value={selected.year} onChange={(event) => update({ year: Number(event.target.value) })} /></label><label><span>Edice</span><input value={selected.edition ?? ""} onChange={(event) => update({ edition: event.target.value || undefined })} /></label></div><div className="twoColumns"><label><span>Měna</span><select value={selected.currency} onChange={(event) => update({ currency: event.target.value as PriceList["currency"] })}><option>CZK</option><option>EUR</option></select></label><label><span>Realizačka</span><select value={selected.realizationCompanyId ?? ""} onChange={(event) => update({ realizationCompanyId: event.target.value || undefined })}><option value="">Všechny</option>{realizationCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label></div><div className="twoColumns"><DateField label="Platnost od" value={selected.validFrom} onChange={(validFrom) => update({ validFrom })} /><DateField label="Platnost do" value={selected.validTo} onChange={(validTo) => update({ validTo })} /></div><label className="checkLabel"><input type="checkbox" checked={selected.active} onChange={(event) => update({ active: event.target.checked })} /> Aktivní; vypnuté ceníky zůstávají v archivu</label></section>}</div></div>;
 }
 
 function DateField({ label, value, onChange }: { label: string; value?: string; onChange: (value: string | undefined) => void }) {

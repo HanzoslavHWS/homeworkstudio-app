@@ -4,9 +4,10 @@ import { readFileSync } from "node:fs";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
 import { SupabaseProjectRepository } from "../lib/db/projectRepository.supabase.ts";
 import { SupabaseEventRepository } from "../lib/db/eventRepository.supabase.ts";
+import { SupabasePriceListRepository } from "../lib/db/priceListRepository.supabase.ts";
 import { ConcurrencyConflictError } from "../lib/db/concurrency.ts";
 import { createProjectRecord } from "../domain/project.ts";
-import { normalizeExhibition } from "../domain/organizations.ts";
+import { normalizeExhibition, resolveDefaultPriceList, type PriceList } from "../domain/organizations.ts";
 
 test("Supabase env validace vrátí srozumitelnou chybu se jmény chybějících proměnných bez secrets", () => {
   assert.throws(
@@ -126,9 +127,6 @@ test("Event assigned/default PriceList vazba přežije DB serializaci", async ()
 });
 
 test("PriceList realization context (realizationCompanyId, edition, validity) přežije JSONB round-trip", () => {
-  // No SupabasePriceListRepository exists yet (out of scope for this hardening pass) — this
-  // proves the domain PriceList shape itself round-trips through a JSONB `document` column
-  // exactly like the migration's price_lists.document is designed to store it.
   const priceList = {
     id: "pl-realization",
     name: "For Beauty 2026 CZK — Medaprex",
@@ -144,6 +142,67 @@ test("PriceList realization context (realizationCompanyId, edition, validity) p�
   const roundTripped = JSON.parse(JSON.stringify(priceList));
   assert.deepEqual(roundTripped, priceList);
   assert.equal(roundTripped.realizationCompanyId, "medaprex");
+});
+
+test("SupabasePriceListRepository: nový ceník s klientským (ne-uuid) id se vloží a DB přidělí skutečné uuid", async () => {
+  const client = createFakeSupabaseClient();
+  const repository = new SupabasePriceListRepository(client as never);
+  const saved = await repository.save({ id: "price-list-1755000000000", name: "Nový ceník 2026", code: "NEW-2026-CZK", currency: "CZK", year: 2026, active: true });
+  assert.notEqual(saved.id, "price-list-1755000000000");
+  assert.match(saved.id, /^[0-9a-f-]{36}$/u);
+  assert.equal(saved.code, "NEW-2026-CZK");
+  const list = await repository.list();
+  assert.equal(list.length, 1);
+  assert.equal(list[0]?.id, saved.id);
+});
+
+test("SupabasePriceListRepository: existující uuid id aktualizuje řádek, nikdy nevytvoří duplicitní insert", async () => {
+  const client = createFakeSupabaseClient();
+  const repository = new SupabasePriceListRepository(client as never);
+  const created = await repository.save({ id: "price-list-temp", name: "Beauty 2026 CZK", code: "BEAUTY-2026-CZK", currency: "CZK", year: 2026, active: true });
+  const updated = await repository.save({ ...created, name: "Beauty 2026 CZK — přejmenováno" });
+  assert.equal(updated.id, created.id);
+  const list = await repository.list();
+  assert.equal(list.length, 1, "update podle skutečného uuid nesmí vytvořit druhý řádek");
+  assert.equal(list[0]?.name, "Beauty 2026 CZK — přejmenováno");
+});
+
+test("SupabasePriceListRepository.list() vrátí ceníky seřazené podle code, včetně neaktivních (archivních)", async () => {
+  const client = createFakeSupabaseClient();
+  const repository = new SupabasePriceListRepository(client as never);
+  await repository.save({ id: "t1", name: "B", code: "BEAUTY-2026-CZK", currency: "CZK", year: 2026, active: true });
+  await repository.save({ id: "t2", name: "A", code: "ARCH-2026-CZK", currency: "CZK", year: 2026, active: false });
+  const list = await repository.list();
+  assert.deepEqual(list.map((p) => p.code), ["ARCH-2026-CZK", "BEAUTY-2026-CZK"]);
+  assert.equal(list.some((p) => !p.active), true, "archivní (active:false) ceníky musí zůstat viditelné, ne skryté");
+});
+
+test("SupabasePriceListRepository nikdy nečte statická demo data z data/organizations.ts — DB v produkčním režimu nesmí ukazovat ukázkové ceníky", () => {
+  const source = readFileSync(new URL("../lib/db/priceListRepository.supabase.ts", import.meta.url), "utf8");
+  assert.equal(/from\s+["'][^"']*data\/organizations[^"']*["']/iu.test(source), false);
+});
+
+test("resolveDefaultPriceList: importovaný event najde svůj skutečný CZK ceník podle defaultPriceListId (žádné hádání, žádná konverze)", () => {
+  const czk: PriceList = { id: "11111111-1111-1111-1111-111111111111", name: "For Beauty 2026 — CZK", code: "BEAUTY-2026-CZK", currency: "CZK", year: 2026, active: true };
+  const eur: PriceList = { id: "22222222-2222-2222-2222-222222222222", name: "For Beauty 2026 — EUR", code: "BEAUTY-2026-EUR", currency: "EUR", year: 2026, active: true };
+  const event = normalizeExhibition({ id: "beauty", name: "For Beauty", year: 2026, priceListIds: [czk.id, eur.id], defaultPriceListId: czk.id });
+
+  const resolved = resolveDefaultPriceList(event, [czk, eur]);
+  assert.equal(resolved?.id, czk.id);
+  assert.equal(resolved?.currency, "CZK");
+  assert.equal(resolved?.name, "For Beauty 2026 — CZK");
+
+  // CZK/EUR isolation: the EUR list is independently resolvable, never merged or derived from CZK.
+  const eurOnly = [...event.priceListIds].filter((id) => id !== czk.id).map((id) => [czk, eur].find((p) => p.id === id));
+  assert.equal(eurOnly[0]?.currency, "EUR");
+  assert.notEqual(eurOnly[0]?.id, resolved?.id);
+});
+
+test("resolveDefaultPriceList: neplatné/smazané defaultPriceListId vrátí undefined místo náhrady náhodným ceníkem", () => {
+  const czk: PriceList = { id: "11111111-1111-1111-1111-111111111111", name: "For Beauty 2026 — CZK", code: "BEAUTY-2026-CZK", currency: "CZK", year: 2026, active: true };
+  const event = normalizeExhibition({ id: "beauty", name: "For Beauty", year: 2026, priceListIds: ["stale-id"], defaultPriceListId: "stale-id" });
+  const resolved = resolveDefaultPriceList(event, [czk]);
+  assert.equal(resolved, undefined);
 });
 
 test("PricingEntry.priceMode (fixed/individual/included) přežije serializaci beze ztráty", () => {
@@ -234,7 +293,11 @@ function createFakeSupabaseClient() {
         return { data: matched, error: null };
       }
       if (op === "insert") {
+        // Mirrors real Postgres column defaults this app relies on (e.g. price_lists.id
+        // "uuid primary key default gen_random_uuid()") — repositories that never set `id`
+        // themselves (see SupabasePriceListRepository) depend on the DB assigning one.
         const row = { ...payload };
+        if (row.id === undefined) row.id = crypto.randomUUID();
         rows.push(row);
         if (singleMode === "single") return { data: row, error: null };
         return { data: [row], error: null };

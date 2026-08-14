@@ -184,6 +184,24 @@ export type PriceList = Readonly<{
   active: boolean;
 }>;
 
+/** Defensive defaults for a PriceList coming from a partial source (DB document JSONB, admin form draft) — mirrors normalizeExhibition(). */
+export function normalizePriceList(
+  priceList: Partial<PriceList> & Pick<PriceList, "id">,
+): PriceList {
+  return {
+    id: priceList.id,
+    name: priceList.name ?? "Nový ceník",
+    code: priceList.code ?? priceList.id.toUpperCase(),
+    currency: priceList.currency ?? "CZK",
+    year: priceList.year ?? new Date().getFullYear(),
+    edition: priceList.edition,
+    realizationCompanyId: priceList.realizationCompanyId,
+    validFrom: priceList.validFrom,
+    validTo: priceList.validTo,
+    active: priceList.active ?? true,
+  };
+}
+
 /**
  * Section 5: makes "Event → default PriceList" an explicit, testable resolution instead
  * of just trusting the fields exist. Falls back to the first assigned price list when no

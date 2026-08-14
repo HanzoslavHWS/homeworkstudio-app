@@ -75,6 +75,7 @@ import { EXPORT_LAYER_LABELS } from "../domain/workflow.ts";
 import { constructionMaterialOverrides } from "../domain/materialOverrides.ts";
 import { calculateMarginDelta, calculateNetVatGross } from "../domain/pricing.ts";
 import { LocalEventRepository } from "../domain/eventRepository.ts";
+import { LocalPriceListRepository } from "../domain/priceListRepository.ts";
 import { createEventDocumentsFromFiles, eventHasUnsavedChanges } from "../domain/organizations.ts";
 import { cancelMeasurement, measurementClick, startMeasurement, updateMeasurementHover } from "../domain/spatialAnnotations.ts";
 import { createPlanRenderLayout, PLAN_RENDER_CONFIG } from "../lib/planExport.ts";
@@ -603,6 +604,22 @@ test("Event repository uloží metadata a nepředstírá persistentní temporary
   assert.equal(loaded.documents[0]?.fileName, "manual.pdf");
   assert.equal(loaded.documents[0]?.assetUrl, undefined);
   assert.equal(eventHasUnsavedChanges(loaded, loaded), false);
+});
+
+test("PriceList repository (dev/local fallback): prázdné úložiště padá zpět na statický seed, uložení persistuje beze ztráty měny/roku", async () => {
+  const storage = new MemoryStorage();
+  const repository = new LocalPriceListRepository(storage, priceLists);
+  const seeded = await repository.list();
+  assert.deepEqual(seeded.map((p) => p.id), priceLists.map((p) => p.id), "prázdné localStorage musí padnout zpět na statický seed (dev fallback), ne na prázdný seznam");
+
+  const edited = { ...seeded[0]!, name: "Přejmenovaný ceník" };
+  await repository.save(edited);
+  const reloaded = await repository.list();
+  const found = reloaded.find((p) => p.id === edited.id)!;
+  assert.equal(found.name, "Přejmenovaný ceník");
+  assert.equal(found.currency, seeded[0]!.currency);
+  assert.equal(found.year, seeded[0]!.year);
+  assert.equal(reloaded.length, priceLists.length, "uložení jedné položky nesmí duplikovat zbytek seedu");
 });
 
 test("starší minimální ProjectRecord se v repository centrálně migruje", async () => {

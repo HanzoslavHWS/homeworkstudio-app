@@ -46,8 +46,10 @@ import {
 import { calculateOrderInventory } from "../domain/order";
 import { LocalProjectRepository, type ProjectRepository } from "../domain/repository";
 import { LocalEventRepository, type EventRepository } from "../domain/eventRepository";
+import { LocalPriceListRepository, type PriceListRepository } from "../domain/priceListRepository";
 import { RemoteApiProjectRepository } from "../lib/db/projectRepository.remoteApi.client";
 import { RemoteApiEventRepository } from "../lib/db/eventRepository.remoteApi.client";
+import { RemoteApiPriceListRepository } from "../lib/db/priceListRepository.remoteApi.client";
 import { resolvePersistenceProbe } from "../lib/db/persistenceMode.client";
 import { ConcurrencyConflictError } from "../lib/db/concurrency";
 import { saveCameraView } from "../domain/workflow";
@@ -130,6 +132,7 @@ import { dataUrlToFile, uploadAsset, type UploadProgress } from "../lib/storage/
 export default function BoothGenerator() {
   const repositoryRef = useRef<ProjectRepository | null>(null);
   const eventRepositoryRef = useRef<EventRepository | null>(null);
+  const priceListRepositoryRef = useRef<PriceListRepository | null>(null);
   const [workspaceSection, setWorkspaceSection] = useState<
     "project" | "projects" | "booths" | "components" | "events" | "priceLists"
   >("project");
@@ -137,6 +140,7 @@ export default function BoothGenerator() {
   const [eventsHydrated, setEventsHydrated] = useState(false);
   const [eventDirty, setEventDirty] = useState(false);
   const [adminPriceLists, setAdminPriceLists] = useState<PriceList[]>([...priceLists]);
+  const [priceListsHydrated, setPriceListsHydrated] = useState(false);
   const [step, setStep] =
     useState(1);
 
@@ -294,6 +298,13 @@ export default function BoothGenerator() {
         setAdminEvents([...events]);
         setEventsHydrated(true);
       });
+      const priceListRepository = new LocalPriceListRepository(window.localStorage, priceLists);
+      priceListRepositoryRef.current = priceListRepository;
+      priceListRepository.list().then((lists) => {
+        if (cancelled) return;
+        setAdminPriceLists([...lists]);
+        setPriceListsHydrated(true);
+      });
     }
 
     async function init() {
@@ -307,13 +318,19 @@ export default function BoothGenerator() {
 
       if (probe.mode === "db") {
         const remoteEvents = new RemoteApiEventRepository();
+        const remotePriceLists = new RemoteApiPriceListRepository();
         repositoryRef.current = remoteProjects;
         eventRepositoryRef.current = remoteEvents;
+        priceListRepositoryRef.current = remotePriceLists;
         setSavedProjects([...probe.value]);
         const events = await remoteEvents.list();
         if (cancelled) return;
         setAdminEvents([...events]);
         setEventsHydrated(true);
+        const lists = await remotePriceLists.list();
+        if (cancelled) return;
+        setAdminPriceLists([...lists]);
+        setPriceListsHydrated(true);
         setPersistenceMode("db");
         return;
       }
@@ -1711,10 +1728,10 @@ export default function BoothGenerator() {
         />
 
         {persistenceMode === "local-fallback" && (
-          <p className="temporaryNotice persistenceBanner">Databázové úložiště není nakonfigurované — projekty a eventy se dočasně ukládají jen do tohoto prohlížeče (localStorage). Toto hlášení se zobrazuje jen ve vývoji.</p>
+          <p className="temporaryNotice persistenceBanner">Databázové úložiště není nakonfigurované — projekty, eventy a ceníky se dočasně ukládají jen do tohoto prohlížeče (localStorage). Toto hlášení se zobrazuje jen ve vývoji.</p>
         )}
         {persistenceMode === "unavailable" && (
-          <p className="uploadError persistenceBanner">Databázové úložiště není dostupné. Ukládání projektů a eventů je dočasně vypnuté — kontaktujte administrátora.</p>
+          <p className="uploadError persistenceBanner">Databázové úložiště není dostupné. Ukládání projektů, eventů a ceníků je dočasně vypnuté — kontaktujte administrátora.</p>
         )}
 
         {workspaceSection === "projects" && (
@@ -1747,10 +1764,16 @@ export default function BoothGenerator() {
           />
         )}
 
-        {workspaceSection === "priceLists" && (
+        {workspaceSection === "priceLists" && priceListsHydrated && (
           <PriceListsPage
             priceLists={adminPriceLists}
             onChange={setAdminPriceLists}
+            onSave={async (priceList) => {
+              if (!priceListRepositoryRef.current) throw new Error("Databázové úložiště není dostupné. Ceník nebyl uložen.");
+              const saved = await priceListRepositoryRef.current.save(priceList);
+              setAdminPriceLists((lists) => lists.map((item) => item.id === priceList.id ? saved : item));
+              return saved;
+            }}
           />
         )}
 

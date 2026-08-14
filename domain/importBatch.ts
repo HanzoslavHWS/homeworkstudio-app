@@ -29,6 +29,7 @@ export type ImportRowMappingStatus =
   | "changed"
   | "candidate"
   | "confirmed"
+  | "rejected"
   | "missing_from_latest_import";
 
 export type ImportRow = Readonly<{
