@@ -13,6 +13,7 @@ import {
   type PricingEntryAdmin,
   type PricingEntryEdit,
   type PricingEntrySaveSummary,
+  type PricingEntrySource,
   type PricingFilters,
   type PricingPreviewRow,
 } from "../../domain/pricingAdmin";
@@ -45,8 +46,9 @@ export function eventIdForPriceList(priceList: PriceList, events: readonly Exhib
   return events.find((event) => event.priceListIds.includes(priceList.id))?.id ?? "";
 }
 
-function PriceModeBadge({ mode }: { mode: PricingEntryMode | "missing" }) {
-  return <span className={`pricingModeBadge ${mode}`}>{mode === "missing" ? "Missing" : priceModeLabel(mode)}</span>;
+/** Section 6: decent, non-alarming — "Ručně upraveno" is a fact, not a warning. */
+function SourceBadge({ source }: { source: PricingEntrySource }) {
+  return <span className={`pricingSourceBadge ${source}`}>{source === "manual" ? "Ručně upraveno" : "Import"}</span>;
 }
 
 function SaveSummaryBanner({ summary, saving }: { summary: PricingEntrySaveSummary | null; saving: boolean }) {
@@ -139,20 +141,24 @@ export function PriceListPricingTable({
       ) : (
         <table className="pricingEntriesTable">
           <thead>
-            <tr><th>Kód</th><th>Položka</th><th>Jednotka</th><th>Cena</th><th>Price mode</th><th>Stav</th><th>Zdroj / poslední změna</th></tr>
+            <tr><th>Kód</th><th>Položka</th><th>Jednotka</th><th>Původní cena</th><th>Aktuální cena</th><th>Price mode</th><th>Stav</th><th>Poslední změna</th></tr>
           </thead>
           <tbody>
             {entries.map((entry) => {
               const item = catalogItems.find((candidate) => candidate.id === entry.catalogItemId);
               const draft = draftFor(entry);
+              const dirty = drafts[entry.id] !== undefined && (draft.priceMode !== entry.priceMode || draft.salePrice !== entry.salePrice);
               return (
                 <tr key={entry.id}>
                   <td>{item?.internalCode ?? "—"}</td>
                   <td>{item?.displayName ?? entry.catalogItemId}</td>
                   <td>{item?.unit ?? "—"}</td>
+                  <td className="pricingCellStatic">{entry.sourcePrice !== undefined ? formatMoney(entry.sourcePrice, entry.currency) : "—"}</td>
                   <td>
                     {draft.priceMode === "fixed" ? (
-                      <input type="number" value={draft.salePrice ?? ""} onChange={(event) => updateDraft(entry, { salePrice: event.target.value === "" ? undefined : Number(event.target.value) })} placeholder="Cena není nastavena" />
+                      <div className={`pricingCell ${dirty ? "pricingCellDirty" : ""}`}>
+                        <input type="number" value={draft.salePrice ?? ""} onChange={(event) => updateDraft(entry, { salePrice: event.target.value === "" ? undefined : Number(event.target.value) })} placeholder="Cena není nastavena" />
+                      </div>
                     ) : (
                       <span className="pricingCellStatic">{draft.priceMode === "included" ? "V ceně" : "Individuální"}</span>
                     )}
@@ -164,8 +170,8 @@ export function PriceListPricingTable({
                       <option value="included">Included</option>
                     </select>
                   </td>
-                  <td><PriceModeBadge mode={draft.priceMode} /></td>
-                  <td>{entry.createdAt ? new Date(entry.createdAt).toLocaleDateString("cs-CZ") : "—"}</td>
+                  <td><SourceBadge source={dirty ? "manual" : entry.source} /></td>
+                  <td>{entry.updatedAt ? new Date(entry.updatedAt).toLocaleDateString("cs-CZ") : entry.createdAt ? new Date(entry.createdAt).toLocaleDateString("cs-CZ") : "—"}</td>
                 </tr>
               );
             })}
@@ -365,14 +371,17 @@ function BulkEditDialog({
         {preview && !summary && (
           <>
             <table className="pricingPreviewTable">
-              <thead><tr><th>Komponenta</th><th>Ceník</th><th>Původní</th><th>Nová</th></tr></thead>
+              <thead><tr><th>Položka</th><th>Ceník</th><th>Měna</th><th>Původní cena</th><th>Nová cena</th><th>Původní mode</th><th>Nový mode</th></tr></thead>
               <tbody>
                 {preview.map((row) => (
                   <tr key={`${row.catalogItemId}::${row.priceListId}`}>
                     <td>{row.catalogItemLabel}</td>
                     <td>{row.priceListLabel}</td>
-                    <td>{row.before ? `${priceModeLabel(row.before.priceMode)} · ${formatMoney(row.before.salePrice, row.currency)}` : <span className="pricingMissing">Missing</span>}</td>
-                    <td>{priceModeLabel(row.after.priceMode)} · {formatMoney(row.after.salePrice, row.currency)}</td>
+                    <td>{row.currency}</td>
+                    <td>{row.before ? formatMoney(row.before.salePrice, row.currency) : <span className="pricingMissing">Missing</span>}</td>
+                    <td>{formatMoney(row.after.salePrice, row.currency)}</td>
+                    <td>{row.before ? priceModeLabel(row.before.priceMode) : "—"}</td>
+                    <td>{priceModeLabel(row.after.priceMode)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -434,7 +443,18 @@ function PricingMatrix({
     const existing = entries.find((entry) => entry.catalogItemId === catalogItemId && entry.priceListId === priceList.id);
     const priceMode = pendingEdit?.priceMode ?? existing?.priceMode;
     const salePrice = pendingEdit ? resolvedSalePriceForEdit(pendingEdit) : existing?.salePrice;
-    return { priceMode, salePrice, dirty: Boolean(pendingEdit), eventId: eventIdForPriceList(priceList, events) };
+    return {
+      priceMode,
+      salePrice,
+      dirty: Boolean(pendingEdit),
+      eventId: eventIdForPriceList(priceList, events),
+      // Section 7: before→after — "original" always reflects the last SAVED state (entries),
+      // never the in-progress local edit, so a dirty cell can show "bylo: X" beside the new
+      // value the operator is currently typing.
+      originalSalePrice: existing?.salePrice,
+      originalPriceMode: existing?.priceMode,
+      source: existing?.source,
+    };
   }
 
   function updateCell(catalogItemId: string, priceList: PriceList, patch: Partial<{ priceMode: PricingEntryMode; salePrice?: number }>) {
@@ -492,21 +512,27 @@ function PricingMatrix({
                     {columns.map((priceList) => {
                       const cell = cellState(catalogItemId, priceList);
                       const disabled = !cell.eventId;
+                      const beforeLabel = cell.originalSalePrice !== undefined ? formatMoney(cell.originalSalePrice, priceList.currency) : cell.originalPriceMode ? priceModeLabel(cell.originalPriceMode) : "Missing";
+                      const tooltip = cell.source ? `Bylo: ${beforeLabel} (${cell.source === "manual" ? "ručně upraveno" : "import"})` : "Bylo: Missing";
                       return (
                         <td key={priceList.id}>
-                          <div className={`pricingCell ${cell.dirty ? "pricingCellDirty" : ""} ${disabled ? "pricingCellDisabled" : ""}`}>
+                          <div className={`pricingCell ${cell.dirty ? "pricingCellDirty" : ""} ${disabled ? "pricingCellDisabled" : ""}`} title={tooltip}>
                             {disabled ? (
                               <span className="pricingCellStatic" title="Ceník není přiřazen k žádnému eventu — nelze upravit.">nelze upravit</span>
                             ) : (
                               <>
-                                <select value={cell.priceMode ?? "fixed"} onChange={(event) => updateCell(catalogItemId, priceList, { priceMode: event.target.value as PricingEntryMode })}>
-                                  <option value="fixed">Fixed</option>
-                                  <option value="individual">Individual</option>
-                                  <option value="included">Included</option>
-                                </select>
-                                {(cell.priceMode ?? "fixed") === "fixed" && (
-                                  <input type="number" value={cell.salePrice ?? ""} onChange={(event) => updateCell(catalogItemId, priceList, { salePrice: event.target.value === "" ? undefined : Number(event.target.value) })} placeholder="—" />
-                                )}
+                                {cell.source && <span className={`pricingSourceDot ${cell.source}`} aria-hidden="true" />}
+                                <div className="pricingCellInputs">
+                                  <select value={cell.priceMode ?? "fixed"} onChange={(event) => updateCell(catalogItemId, priceList, { priceMode: event.target.value as PricingEntryMode })}>
+                                    <option value="fixed">Fixed</option>
+                                    <option value="individual">Individual</option>
+                                    <option value="included">Included</option>
+                                  </select>
+                                  {(cell.priceMode ?? "fixed") === "fixed" && (
+                                    <input type="number" value={cell.salePrice ?? ""} onChange={(event) => updateCell(catalogItemId, priceList, { salePrice: event.target.value === "" ? undefined : Number(event.target.value) })} placeholder="—" />
+                                  )}
+                                  {cell.dirty && <small className="pricingCellBefore">bylo: {beforeLabel}</small>}
+                                </div>
                               </>
                             )}
                           </div>

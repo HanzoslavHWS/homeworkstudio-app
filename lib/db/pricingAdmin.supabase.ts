@@ -2,6 +2,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Currency, PricingEntryMode } from "../../domain/models.ts";
 import type { PriceList } from "../../domain/organizations.ts";
 import {
+  buildManualSaveRow,
   planDuplicatedPricingEntries,
   resolvedSalePriceForEdit,
   summarizeSaveResults,
@@ -10,6 +11,7 @@ import {
   type PricingEntryAdmin,
   type PricingEntryEdit,
   type PricingEntrySaveSummary,
+  type PricingEntrySource,
 } from "../../domain/pricingAdmin.ts";
 import { priceListToRow, rowToPriceList, type PriceListRow } from "./priceListRepository.supabase.ts";
 
@@ -27,6 +29,8 @@ export class PriceListNotFoundError extends Error {
   }
 }
 
+const PRICING_ENTRY_ADMIN_COLUMNS = "id, catalog_item_id, price_list_id, event_id, realization_company_id, currency, sale_price, purchase_price, valid_from, valid_to, price_mode, source, source_price, created_at, updated_at";
+
 type PricingEntryAdminRow = Readonly<{
   id: string;
   catalog_item_id: string;
@@ -39,7 +43,10 @@ type PricingEntryAdminRow = Readonly<{
   valid_from: string | null;
   valid_to: string | null;
   price_mode: string;
+  source: string;
+  source_price: number | null;
   created_at: string;
+  updated_at: string;
 }>;
 
 function rowToPricingEntryAdmin(row: PricingEntryAdminRow): PricingEntryAdmin {
@@ -53,9 +60,12 @@ function rowToPricingEntryAdmin(row: PricingEntryAdminRow): PricingEntryAdmin {
     salePrice: row.sale_price ?? undefined,
     purchasePrice: row.purchase_price ?? undefined,
     priceMode: row.price_mode as PricingEntryMode,
+    source: row.source as PricingEntrySource,
+    sourcePrice: row.source_price ?? undefined,
     validFrom: row.valid_from ?? undefined,
     validTo: row.valid_to ?? undefined,
     createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
@@ -76,7 +86,7 @@ export async function readPricingEntriesAdmin(
   if (catalogItemIds.length === 0 && priceListIds.length === 0) {
     throw new Error("readPricingEntriesAdmin requires at least one of catalogItemIds/priceListIds.");
   }
-  let query = client.from("pricing_entries").select("id, catalog_item_id, price_list_id, event_id, realization_company_id, currency, sale_price, purchase_price, valid_from, valid_to, price_mode, created_at");
+  let query = client.from("pricing_entries").select(PRICING_ENTRY_ADMIN_COLUMNS);
   if (catalogItemIds.length > 0) query = query.in("catalog_item_id", catalogItemIds);
   if (priceListIds.length > 0) query = query.in("price_list_id", priceListIds);
   const { data, error } = await query;
@@ -104,13 +114,22 @@ export async function saveManyPricingEntriesAdmin(
         .eq("price_list_id", edit.priceListId)
         .maybeSingle();
       if (lookupError) throw lookupError;
-      const row = {
+      // buildManualSaveRow (pure, tested) decides source_price handling: absent entirely on
+      // an update (column keeps whatever it already held — this IS the "never silently
+      // overwrite the original import reference" rule), explicit null only for a brand-new
+      // row. updated_at is intentionally NOT set here — the pricing_entries_set_updated_at
+      // DB trigger (added by the audit-columns migration) maintains it on every UPDATE, and
+      // the column default covers INSERT.
+      const manualRow = buildManualSaveRow(edit, !existing);
+      const row: Readonly<{ catalog_item_id: string; price_list_id: string; event_id: string; currency: Currency; sale_price: number | null; price_mode: PricingEntryMode; source: "manual"; source_price?: number | null }> = {
         catalog_item_id: edit.catalogItemId,
         price_list_id: edit.priceListId,
         event_id: edit.eventId,
         currency: edit.currency,
-        sale_price: resolvedSalePriceForEdit(edit) ?? null,
-        price_mode: edit.priceMode,
+        sale_price: manualRow.salePrice ?? null,
+        price_mode: manualRow.priceMode,
+        source: manualRow.source,
+        ...("sourcePrice" in manualRow ? { source_price: manualRow.sourcePrice } : {}),
       };
       if (existing) {
         const { error } = await client.from("pricing_entries").update(row).eq("id", (existing as { id: string }).id);
@@ -180,7 +199,7 @@ export async function duplicatePriceListAdmin(
 
   const { data: sourceEntryRows, error: entriesError } = await client
     .from("pricing_entries")
-    .select("id, catalog_item_id, price_list_id, event_id, realization_company_id, currency, sale_price, purchase_price, valid_from, valid_to, price_mode, created_at")
+    .select(PRICING_ENTRY_ADMIN_COLUMNS)
     .eq("price_list_id", sourcePriceListId);
   if (entriesError) {
     return { priceList: newPriceList, copiedCount: 0, skippedCount: 0, entriesError: "Ceník byl vytvořen, ale načtení zdrojových cen selhalo — zkontrolujte ceník ručně." };
@@ -194,13 +213,20 @@ export async function duplicatePriceListAdmin(
   if (plan.copied.length === 0) {
     return { priceList: newPriceList, copiedCount: 0, skippedCount: plan.skippedCurrencyMismatch.length };
   }
+  // Section 10: every duplicated row is source='manual' (an administrative duplication, never
+  // an Excel import) with sourcePrice carried forward from the SOURCE entry's own sourcePrice
+  // — see planDuplicatedPricingEntries' doc comment for the full reasoning. This is what
+  // stops a future re-import of the source price list's sheet from silently reaching into
+  // the new (e.g. next year's) price list.
   const insertRows = plan.copied.map((edit) => ({
     catalog_item_id: edit.catalogItemId,
     price_list_id: edit.priceListId,
     event_id: edit.eventId,
     currency: edit.currency,
-    sale_price: resolvedSalePriceForEdit(edit) ?? null,
+    sale_price: edit.salePrice ?? null,
     price_mode: edit.priceMode,
+    source: edit.source,
+    source_price: edit.sourcePrice ?? null,
   }));
   const { error: copyError } = await client.from("pricing_entries").insert(insertRows);
   if (copyError) {

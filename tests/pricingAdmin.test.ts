@@ -4,9 +4,11 @@ import { readFileSync } from "node:fs";
 import { NextRequest } from "next/server.js";
 import {
   buildBulkEdits,
+  buildManualSaveRow,
   buildPricingEditPreview,
   filterPriceListsForAdmin,
   planDuplicatedPricingEntries,
+  resolveImportPriceUpdate,
   resolvedSalePriceForEdit,
   summarizeSaveResults,
   validateNewPriceListCode,
@@ -27,6 +29,7 @@ import { handlePricingAdminEntriesSave } from "../app/api/pricing-admin/entries/
 import { handlePricingAdminDuplicatePriceList } from "../app/api/pricing-admin/price-lists/duplicate/route.ts";
 import { createSessionToken } from "../lib/auth/session.ts";
 import { readCatalogItems, readPricingEntriesForPriceList } from "../lib/db/catalogPricing.supabase.ts";
+import { resolvePricingEntryForApply, type ExistingPricingEntryRow } from "../domain/importBatch2a.ts";
 
 const SECRET = "pricing-admin-test-session-secret-32chars";
 const mutableEnv = process.env as Record<string, string | undefined>;
@@ -140,7 +143,10 @@ function pricingEntryRow(overrides: Partial<FakeRow> & { id: string; catalog_ite
     valid_from: null,
     valid_to: null,
     price_mode: "fixed",
+    source: "import",
+    source_price: overrides.sale_price ?? null,
     created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
     ...overrides,
   };
 }
@@ -263,7 +269,7 @@ test("Component Price View filtry se kombinují: Rok=2026 + Měna=CZK + Event=Be
 // PRICING MATRIX — section 19
 // -----------------------------------------------------------------------------------------
 
-const l02Entry: PricingEntryAdmin = { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, purchasePrice: undefined, priceMode: "fixed" };
+const l02Entry: PricingEntryAdmin = { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, purchasePrice: undefined, priceMode: "fixed", source: "import", sourcePrice: 5100 };
 
 test("Pricing Matrix: buildBulkEdits vytvoří edity pro více komponent × více ceníků", () => {
   const edits = buildBulkEdits([L02_ID, L03_ID], [{ id: BEAUTY_CZK_LIST_ID, currency: "CZK", eventId: "beauty" }, { id: DECOR_CZK_LIST_ID, currency: "CZK", eventId: "decor" }], { priceMode: "fixed", salePriceByCurrency: { CZK: 6000 } });
@@ -422,14 +428,14 @@ test("duplicatePriceListAdmin: zachová správnou měnu nového ceníku", async 
 });
 
 test("planDuplicatedPricingEntries: fixed cena v jiné měně se NIKDY nezkopíruje jako fabrikovaná hodnota", () => {
-  const czkEntry: PricingEntryAdmin = { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, purchasePrice: undefined, priceMode: "fixed" };
+  const czkEntry: PricingEntryAdmin = { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, purchasePrice: undefined, priceMode: "fixed", source: "import", sourcePrice: 5100 };
   const plan = planDuplicatedPricingEntries([czkEntry], { priceListId: "new-eur-list", eventId: "beauty", currency: "EUR" });
   assert.equal(plan.copied.length, 0);
   assert.equal(plan.skippedCurrencyMismatch.length, 1);
 });
 
 test("planDuplicatedPricingEntries: individual/included se kopírují i při změně měny (currency-independent)", () => {
-  const individualEntry: PricingEntryAdmin = { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: undefined, purchasePrice: undefined, priceMode: "individual" };
+  const individualEntry: PricingEntryAdmin = { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: undefined, purchasePrice: undefined, priceMode: "individual", source: "manual", sourcePrice: undefined };
   const plan = planDuplicatedPricingEntries([individualEntry], { priceListId: "new-eur-list", eventId: "beauty", currency: "EUR" });
   assert.equal(plan.copied.length, 1);
   assert.equal(plan.copied[0]?.currency, "EUR");
@@ -502,4 +508,224 @@ test("readCatalogItems (customer-safe) nikdy nevrací document/sourceKey ani u k
   const items = await readCatalogItems(client as never);
   const serialized = JSON.stringify(items);
   assert.doesNotMatch(serialized, /sourceKey|abf-raw/iu);
+});
+
+test("customer-safe catalogPricing.supabase.ts nikdy nečte nové audit sloupce (source/source_price/updated_at)", () => {
+  const source = readFileSync(new URL("../lib/db/catalogPricing.supabase.ts", import.meta.url), "utf8");
+  assert.equal(/\bsource_price\b/u.test(source), false);
+  assert.equal(/\bupdated_at\b/u.test(source), false);
+  assert.equal(/select\([^)]*\bsource\b/u.test(source), false);
+});
+
+// -----------------------------------------------------------------------------------------
+// MIGRATION / DOMAIN — manual vs import provenance (this session)
+// -----------------------------------------------------------------------------------------
+
+test("importovaná fixed cena má source=import a source_price rovno importované sale_price", async () => {
+  const client = createFakeSupabaseClient({
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, currency: "CZK", sale_price: 5100 })],
+  });
+  const [entry] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  assert.equal(entry?.source, "import");
+  assert.equal(entry?.sourcePrice, 5100);
+  assert.equal(entry?.salePrice, 5100);
+});
+
+test("buildManualSaveRow: první ruční editace mění jen sale_price/price_mode/source, source_price je pro update ABSENTNÍ (sloupec zůstává)", () => {
+  const edit: PricingEntryEdit = { catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", priceMode: "fixed", salePrice: 5300 };
+  const row = buildManualSaveRow(edit, false);
+  assert.equal(row.salePrice, 5300);
+  assert.equal(row.source, "manual");
+  assert.equal("sourcePrice" in row, false, "update nesmí obsahovat klíč sourcePrice vůbec — sloupec se nesmí přepsat");
+});
+
+test("saveManyPricingEntriesAdmin: ruční editace importované ceny 5100 -> 5300 zachová source_price=5100, source=manual", async () => {
+  const client = createFakeSupabaseClient({
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, currency: "CZK", sale_price: 5100, source: "import", source_price: 5100 })],
+  });
+  await saveManyPricingEntriesAdmin(client as never, [{ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", priceMode: "fixed", salePrice: 5300 }]);
+  const [entry] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  assert.equal(entry?.salePrice, 5300, "aktuální cena se změnila");
+  assert.equal(entry?.sourcePrice, 5100, "původní importovaná cena zůstala zachována");
+  assert.equal(entry?.source, "manual", "editace přes Pricing Administration nastaví source=manual");
+});
+
+test("saveManyPricingEntriesAdmin: druhá ruční editace (5300 -> 5400) zachová PŮVODNÍ source_price=5100, ne 5300", async () => {
+  const client = createFakeSupabaseClient({
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, currency: "CZK", sale_price: 5300, source: "manual", source_price: 5100 })],
+  });
+  await saveManyPricingEntriesAdmin(client as never, [{ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", priceMode: "fixed", salePrice: 5400 }]);
+  const [entry] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  assert.equal(entry?.salePrice, 5400);
+  assert.equal(entry?.sourcePrice, 5100, "druhá ruční editace nesmí přepsat původní importovanou referenci");
+  assert.equal(entry?.source, "manual");
+});
+
+test("saveManyPricingEntriesAdmin: nová (dříve missing) cena zapsaná ručně má source_price=null (žádná známá import reference)", async () => {
+  const client = createFakeSupabaseClient({ pricing_entries: [] });
+  await saveManyPricingEntriesAdmin(client as never, [{ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", priceMode: "fixed", salePrice: 4000 }]);
+  const [entry] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  assert.equal(entry?.source, "manual");
+  assert.equal(entry?.sourcePrice, undefined);
+});
+
+test("price mode fixed->individual je stále manual edit, source_price se nemaže bezdůvodně", async () => {
+  const client = createFakeSupabaseClient({
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, currency: "CZK", sale_price: 5100, source: "import", source_price: 5100 })],
+  });
+  await saveManyPricingEntriesAdmin(client as never, [{ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", priceMode: "individual" }]);
+  const [entry] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  assert.equal(entry?.source, "manual");
+  assert.equal(entry?.priceMode, "individual");
+  assert.equal(entry?.sourcePrice, 5100, "source_price zůstává zachované i při změně price_mode");
+});
+
+test("price mode fixed->included je stále manual edit, source_price se nemaže bezdůvodně", async () => {
+  const client = createFakeSupabaseClient({
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, currency: "CZK", sale_price: 5100, source: "import", source_price: 5100 })],
+  });
+  await saveManyPricingEntriesAdmin(client as never, [{ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", priceMode: "included" }]);
+  const [entry] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  assert.equal(entry?.source, "manual");
+  assert.equal(entry?.priceMode, "included");
+  assert.equal(entry?.salePrice, 0);
+  assert.equal(entry?.sourcePrice, 5100);
+});
+
+// -----------------------------------------------------------------------------------------
+// IMPORT PROTECTION — section 11/14 (pure resolveImportPriceUpdate, no real importer built)
+// -----------------------------------------------------------------------------------------
+
+test("resolveImportPriceUpdate A: import/import stejná cena = noop", () => {
+  const resolution = resolveImportPriceUpdate({ source: "import", sourcePrice: 5100, salePrice: 5100 }, 5100);
+  assert.equal(resolution.action, "noop");
+});
+
+test("resolveImportPriceUpdate B: import/import jiná cena = update, sale_price i source_price se přepíšou na novou import cenu", () => {
+  const resolution = resolveImportPriceUpdate({ source: "import", sourcePrice: 5100, salePrice: 5100 }, 5400);
+  assert.equal(resolution.action, "update");
+  assert.equal(resolution.nextSalePrice, 5400);
+  assert.equal(resolution.nextSourcePrice, 5400);
+});
+
+test("resolveImportPriceUpdate C: manual + import cena beze změny (odpovídá source_price) = ruční cena zachována, noop", () => {
+  const resolution = resolveImportPriceUpdate({ source: "manual", sourcePrice: 5100, salePrice: 5300 }, 5100);
+  assert.equal(resolution.action, "noop");
+  assert.equal(resolution.manualPrice, 5300, "manuální cena je viditelná ve výstupu i při noop");
+});
+
+test("resolveImportPriceUpdate D: manual + import cena se změnila (liší od source_price) = conflict, sale_price se NIKDY nepřepíše automaticky", () => {
+  const resolution = resolveImportPriceUpdate({ source: "manual", sourcePrice: 5100, salePrice: 5300 }, 5400);
+  assert.equal(resolution.action, "conflict");
+  assert.equal(resolution.nextSalePrice, undefined, "conflict nesmí nikdy navrhnout automatický zápis");
+  assert.equal(resolution.nextSourcePrice, undefined);
+  assert.equal(resolution.manualPrice, 5300);
+  assert.equal(resolution.sourcePrice, 5100);
+  assert.equal(resolution.incomingImportPrice, 5400);
+});
+
+test("resolveImportPriceUpdate: manuální sale_price se nikdy tiše nepřepíše — noop i conflict obě NIKDY nemají nextSalePrice", () => {
+  const noopCase = resolveImportPriceUpdate({ source: "manual", sourcePrice: 5100, salePrice: 5300 }, 5100);
+  const conflictCase = resolveImportPriceUpdate({ source: "manual", sourcePrice: 5100, salePrice: 5300 }, 9999);
+  assert.equal(noopCase.nextSalePrice, undefined);
+  assert.equal(conflictCase.nextSalePrice, undefined);
+});
+
+test("resolveImportPriceUpdate: zcela nová položka (current=undefined) je bezpečná k založení importem", () => {
+  const resolution = resolveImportPriceUpdate(undefined, 4500);
+  assert.equal(resolution.action, "update");
+  assert.equal(resolution.nextSalePrice, 4500);
+  assert.equal(resolution.nextSourcePrice, 4500);
+});
+
+// -----------------------------------------------------------------------------------------
+// UI — section 14 (structural/source-scan, matching this repo's established pattern for
+// React components without a rendering test harness)
+// -----------------------------------------------------------------------------------------
+
+test("UI: detail ceníku (PriceListPricingTable) zobrazuje původní cenu (sourcePrice)", () => {
+  const source = readFileSync(new URL("../components/workflow/PricingAdminPages.tsx", import.meta.url), "utf8");
+  assert.match(source, /Původní cena/u);
+  assert.match(source, /entry\.sourcePrice/u);
+});
+
+test("UI: Pricing Matrix zpřístupňuje původní hodnotu buňky během editace (before/after)", () => {
+  const source = readFileSync(new URL("../components/workflow/PricingAdminPages.tsx", import.meta.url), "utf8");
+  assert.match(source, /originalSalePrice/u);
+  assert.match(source, /bylo:/u);
+});
+
+test("UI: bulk preview tabulka má explicitní sloupce Původní cena / Nová cena / Původní mode / Nový mode", () => {
+  const source = readFileSync(new URL("../components/workflow/PricingAdminPages.tsx", import.meta.url), "utf8");
+  assert.match(source, /<th>Původní cena<\/th>/u);
+  assert.match(source, /<th>Nová cena<\/th>/u);
+  assert.match(source, /<th>Původní mode<\/th>/u);
+  assert.match(source, /<th>Nový mode<\/th>/u);
+});
+
+test("UI: manuální indikátor ('Ručně upraveno') je přítomný a decentní (ne alarmující 'chyba'/'error' text)", () => {
+  const source = readFileSync(new URL("../components/workflow/PricingAdminPages.tsx", import.meta.url), "utf8");
+  assert.match(source, /Ručně upraveno/u);
+  assert.doesNotMatch(source, /Ručně upraveno[^"]*(chyba|error|CHYBA)/iu);
+});
+
+// -----------------------------------------------------------------------------------------
+// DUPLICATE — protects copied prices from future silent import overwrite (section 10/11/14)
+// -----------------------------------------------------------------------------------------
+
+test("Duplicate PriceList: zkopírované entries mají source='manual' (nikdy import)", async () => {
+  const client = createFakeSupabaseClient({
+    price_lists: [priceListRow({ id: DECOR_CZK_LIST_ID, code: "DECOR-2026-CZK", currency: "CZK", name: "Decor 2026 CZK", year: 2026, event_id: "decor" })],
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: DECOR_CZK_LIST_ID, currency: "CZK", sale_price: 5100, event_id: "decor", source: "import", source_price: 5100 })],
+  });
+  const result = await duplicatePriceListAdmin(client as never, DECOR_CZK_LIST_ID, { name: "Decor 2027 CZK", code: "DECOR-2027-CZK", year: 2027, eventId: "decor", currency: "CZK", active: true });
+  const [copied] = await readPricingEntriesAdmin(client as never, { priceListIds: [result.priceList.id] });
+  assert.equal(copied?.source, "manual");
+  assert.equal(copied?.sourcePrice, 5100, "source_price přebírá referenci na poslední známou import cenu");
+  assert.equal(copied?.salePrice, 5100, "sale_price odpovídá aktuální ceně zdrojového ceníku");
+});
+
+test("Duplicate PriceList: zkopírovaná entry je chráněná před budoucím tichým přepsáním importem (resolveImportPriceUpdate nikdy nevrátí 'update')", async () => {
+  const client = createFakeSupabaseClient({
+    price_lists: [priceListRow({ id: DECOR_CZK_LIST_ID, code: "DECOR-2026-CZK", currency: "CZK", name: "Decor 2026 CZK", year: 2026, event_id: "decor" })],
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: DECOR_CZK_LIST_ID, currency: "CZK", sale_price: 5100, event_id: "decor", source: "import", source_price: 5100 })],
+  });
+  const result = await duplicatePriceListAdmin(client as never, DECOR_CZK_LIST_ID, { name: "Decor 2027 CZK", code: "DECOR-2027-CZK", year: 2027, eventId: "decor", currency: "CZK", active: true });
+  const [copied] = await readPricingEntriesAdmin(client as never, { priceListIds: [result.priceList.id] });
+  const sameIncoming = resolveImportPriceUpdate({ source: copied!.source, sourcePrice: copied!.sourcePrice, salePrice: copied!.salePrice }, 5100);
+  const changedIncoming = resolveImportPriceUpdate({ source: copied!.source, sourcePrice: copied!.sourcePrice, salePrice: copied!.salePrice }, 5900);
+  assert.notEqual(sameIncoming.action, "update");
+  assert.notEqual(changedIncoming.action, "update");
+  assert.equal(sameIncoming.action, "noop");
+  assert.equal(changedIncoming.action, "conflict");
+});
+
+test("Duplicate PriceList: entry bez známé source_price (manual bez reference) je také chráněná — nikdy 'update'", () => {
+  const resolution = resolveImportPriceUpdate({ source: "manual", sourcePrice: undefined, salePrice: 4000 }, 4000);
+  assert.notEqual(resolution.action, "update");
+});
+
+// -----------------------------------------------------------------------------------------
+// BATCH #2A — remains idempotent with the new audit columns (section 12/14)
+// -----------------------------------------------------------------------------------------
+
+test("Batch #2A resolvePricingEntryForApply zůstává noop beze změny — porovnání je pořád jen na salePrice, audit sloupce ho neovlivní", () => {
+  const existing: readonly ExistingPricingEntryRow[] = [
+    { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100 },
+  ];
+  const resolution = resolvePricingEntryForApply({ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100 }, existing);
+  assert.equal(resolution.action, "noop");
+});
+
+test("Batch #2A writer nastavuje source='import' a source_price na nově vkládané entries (kompatibilita s audit sloupci)", () => {
+  const source = readFileSync(new URL("../lib/db/importBatch2a.supabase.ts", import.meta.url), "utf8");
+  assert.match(source, /source:\s*"import"/u);
+  assert.match(source, /source_price:\s*entry\.salePrice/u);
+});
+
+test("Batch #2A existing-entries read nevybírá audit sloupce (source/source_price) — druhý dry-run se jimi nemůže nechat rozhodit", () => {
+  const source = readFileSync(new URL("../lib/db/importBatch2a.supabase.ts", import.meta.url), "utf8");
+  const selectMatch = source.match(/from\("pricing_entries"\)\s*\.select\("([^"]+)"\)/u);
+  assert.ok(selectMatch, "select(...) pro pricing_entries nenalezen");
+  assert.doesNotMatch(selectMatch![1]!, /source/u);
 });

@@ -5366,19 +5366,29 @@ select:focus {
 .pricingMatrixRowLabel { min-width: 190px; }
 .pricingMatrixRowLabel strong { display: block; }
 .pricingMatrixRowLabel span { color: #96999c; }
-.pricingCell { display: flex; align-items: center; gap: 6px; min-width: 140px; }
+.pricingCell { display: flex; align-items: flex-start; gap: 6px; min-width: 140px; }
 .pricingCell select { min-height: 26px; padding: 0 6px; font-size: 8px; }
 .pricingCell input[type="number"] { min-height: 26px; width: 84px; padding: 0 6px; font-size: 8px; }
 .pricingCell.pricingCellDirty { background: #fff8e8; border-radius: 5px; }
 .pricingCell.pricingCellDisabled { color: #b7babd; opacity: .55; }
+.pricingCellInputs { display: flex; flex-direction: column; gap: 3px; }
+.pricingCellInputs > div { display: flex; gap: 6px; }
+.pricingCellBefore { color: #9a8a4d; font-style: italic; }
 .pricingCellStatic { color: #767a7d; font-size: 8px; }
 .pricingMissing { color: #b0413e; font-style: italic; }
+.pricingSourceDot { display: inline-block; margin-top: 8px; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+.pricingSourceDot.import { background: #9aa3ad; }
+.pricingSourceDot.manual { background: #c99a3f; }
 
 .pricingModeBadge { display: inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 7px; font-weight: 700; letter-spacing: .6px; text-transform: uppercase; }
 .pricingModeBadge.fixed { background: #e9f3ec; color: #2f6d46; }
 .pricingModeBadge.individual { background: #eef1fb; color: #3a4c9e; }
 .pricingModeBadge.included { background: #f1f1f2; color: #55595c; }
 .pricingModeBadge.missing { background: #fbecec; color: #a24040; }
+
+.pricingSourceBadge { display: inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 7px; font-weight: 700; letter-spacing: .4px; }
+.pricingSourceBadge.import { background: #f1f2f3; color: #7c8085; }
+.pricingSourceBadge.manual { background: #fbf2df; color: #8a6a1f; }
 
 .pricingSaveBar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid #e2e3e4; border-radius: 8px; background: white; }
 .pricingSaveBar span { font-size: 8px; color: #767a7d; }

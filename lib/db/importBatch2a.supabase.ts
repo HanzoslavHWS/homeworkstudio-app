@@ -248,9 +248,14 @@ export async function applyBatch2aPlan(
         existingPricingEntries,
       );
       if (resolution.action === "insert") {
+        // Section 12 (audit-columns migration follow-up): an entry Batch #2A itself writes is,
+        // by definition, straight from the Excel source — source='import' and source_price
+        // mirrors the just-imported sale_price, exactly like the migration's backfill treats
+        // the already-existing 495 rows. Explicit here rather than relying on the column
+        // default so this stays correct even if the default ever changes.
         const { error } = await client
           .from("pricing_entries")
-          .insert({ catalog_item_id: catalogItemId, price_list_id: entry.priceListId, event_id: entry.eventId, currency: entry.currency, sale_price: entry.salePrice, price_mode: "fixed" });
+          .insert({ catalog_item_id: catalogItemId, price_list_id: entry.priceListId, event_id: entry.eventId, currency: entry.currency, sale_price: entry.salePrice, price_mode: "fixed", source: "import", source_price: entry.salePrice });
         if (error) throw error;
         pricingInserted += 1;
       } else if (resolution.action === "update") {
