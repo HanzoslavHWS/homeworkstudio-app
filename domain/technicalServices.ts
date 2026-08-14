@@ -20,6 +20,24 @@ export const TECHNICAL_SERVICE_IDS = {
   fullWrapGraphics: "service-graphics-full-wrap",
 } as const;
 
+/**
+ * Section 6/7 (Batch #2A follow-up): the real ABF-confirmed internal codes for cleaning and
+ * the electricity power options the app's UI already offers. Only EXACT_SAFE matches from
+ * the ABF matching report are here — never generated, never guessed. "custom"/"" electricity
+ * and any wattage not in this table intentionally has no entry: no safe catalog identity
+ * exists for it yet, so it stays a manual quote rather than a fabricated mapping.
+ */
+export const CLEANING_INTERNAL_CODES = {
+  oneTime: "U05", // "Úklid jednorázový"
+  daily: "U01", // "Úklid denní"
+} as const;
+
+export const ELECTRICITY_POWER_INTERNAL_CODES: Readonly<Partial<Record<"3kw" | "5kw" | "9kw", string>>> = {
+  "3kw": "L03",
+  "5kw": "L05",
+  "9kw": "L09",
+};
+
 export type EffectiveRequirement = Readonly<{
   requested: TechnicalRequirement["status"];
   effective: TechnicalRequirement["status"] | "included";
@@ -99,7 +117,10 @@ export function priceCleaning(
   const itemId = request.status === "daily"
     ? TECHNICAL_SERVICE_IDS.cleaningDaily
     : TECHNICAL_SERVICE_IDS.cleaningOneTime;
-  const definition = catalogItems.find((item) => item.id === itemId);
+  const internalCode = request.status === "daily" ? CLEANING_INTERNAL_CODES.daily : CLEANING_INTERNAL_CODES.oneTime;
+  // Prefer the real DB-backed catalog item (Batch #2A: U01/U05) when present; the static
+  // seed (id-based, pricingEntries: []) stays as the fallback until it's ever populated.
+  const definition = catalogItems.find((item) => item.internalCode === internalCode) ?? catalogItems.find((item) => item.id === itemId);
   const area = booth?.nominalDimensions
     ? nominalAreaSquareMeters(booth.nominalDimensions)
     : booth?.widthMm && booth.depthMm
@@ -130,6 +151,60 @@ export function priceCleaning(
     quantity: area * multiplier,
     unitPriceNet: entry.salePrice,
     totalNet: area * multiplier * entry.salePrice,
+  };
+}
+
+/**
+ * Section 5/6: L02 (2kW) is the flagship canonical identity but has no dropdown option in
+ * TechnicalRequirementsEditor today — only "3kw"/"5kw"/"9kw"/"custom"/"" exist, and adding a
+ * new option would be new UI scope, not "connecting existing options" (explicitly out of
+ * scope here). Only the powerOption values ELECTRICITY_POWER_INTERNAL_CODES actually lists
+ * (3/5/9 kW — all EXACT_SAFE per the ABF matching report) resolve to a real price; "custom"
+ * and "" never had a safe catalog identity to guess, so they always stay a manual quote.
+ */
+export function priceElectricity(
+  requirements: TechnicalRequirements,
+  catalogItems: readonly ComponentDefinition[],
+  context: PricingContext,
+): ServicePriceResult | undefined {
+  const request = requirements.electricity;
+  if (["unspecified", "notWanted"].includes(request.status)) return undefined;
+  const internalCode = ELECTRICITY_POWER_INTERNAL_CODES[request.powerOption as "3kw" | "5kw" | "9kw"];
+  if (request.status === "inquire") {
+    return { status: "needs-quote", itemId: "service-electricity", name: "Elektřina", unit: "ks", quantity: 1, warning: "Elektřina – nutno nacenit podle aktivního ceníku" };
+  }
+  if (!internalCode) {
+    return {
+      status: "needs-quote",
+      itemId: "service-electricity",
+      name: "Elektřina",
+      unit: "ks",
+      quantity: 1,
+      warning: request.powerOption === "custom" || !request.powerOption
+        ? "Elektřina – vlastní/neuvedený výkon nemá napojenou katalogovou identitu, nutno nacenit ručně."
+        : "Elektřina – tento výkon zatím nemá bezpečné napojení na katalog.",
+    };
+  }
+  const definition = catalogItems.find((item) => item.internalCode === internalCode);
+  const entry = priceFor(definition, context);
+  if (entry?.salePrice === undefined) {
+    return {
+      status: "needs-quote",
+      itemId: definition?.id ?? "service-electricity",
+      name: definition?.name ?? `Elektřina ${request.powerOption}`,
+      unit: "ks",
+      quantity: 1,
+      warning: `Elektřina ${request.powerOption} – chybí sazba v aktivním ceníku (event/měna).`,
+    };
+  }
+  return {
+    status: "priced",
+    itemId: definition!.id,
+    name: definition!.name,
+    unit: "ks",
+    quantity: 1,
+    unitPriceNet: entry.salePrice,
+    totalNet: entry.salePrice,
   };
 }
 

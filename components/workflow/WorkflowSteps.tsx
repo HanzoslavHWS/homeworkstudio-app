@@ -4,7 +4,7 @@ import {
   constructionFinishVariants,
   selectedFinish,
 } from "../../domain/finishes";
-import type { BoothType, PlacedComponent } from "../../domain/models";
+import type { BoothType, ComponentDefinition, PlacedComponent } from "../../domain/models";
 import { componentCatalogItems } from "../../data/components";
 import { calculateNetVatGross } from "../../domain/pricing";
 import {
@@ -12,7 +12,7 @@ import {
   groupCatalogSceneItems,
   loadCatalogPhoto,
 } from "../../domain/catalog";
-import type { EventDocument, Exhibition } from "../../domain/organizations";
+import type { EventDocument, Exhibition, PriceList } from "../../domain/organizations";
 import type { OrderInventoryItem } from "../../domain/order";
 import type {
   CommunicationLanguage,
@@ -99,6 +99,10 @@ type CommonProject = {
   customerNote: string;
   printSurfaceAssignments: readonly PrintSurfaceAssignment[];
   exportCalculationOptions: ExportCalculationOptions;
+  /** All PriceLists (needed to resolve the event's list for THIS project's currency — see domain/organizations.ts resolveEventPriceListForCurrency). */
+  priceLists: readonly PriceList[];
+  /** DB-backed technical-service catalog items (Batch #2A: M57/L02/22 technical services) — pricing-only, never merged into ComponentLibrary/scene placement. Merge with componentCatalogItems at call sites that price technical services. */
+  technicalCatalogItems: readonly ComponentDefinition[];
 };
 
 type TemporaryGraphicFile = Readonly<{ id: string; file: File }>;
@@ -204,7 +208,8 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
     generatedPlanOutputs: project.generatedPlanOutputs,
     visualizations: project.visualizations,
     options: project.exportCalculationOptions,
-    catalogItems: componentCatalogItems,
+    catalogItems: [...componentCatalogItems, ...project.technicalCatalogItems],
+    priceLists: project.priceLists,
   });
   const summary = summaryText(project, language);
   const activeDocuments = project.event?.documents.filter((document) => document.active) ?? [];
@@ -368,7 +373,7 @@ function stageLabel(stage: ProjectStage) { return stage === "quote" ? "Nabídka 
 function eventDate(event?: Exhibition) { return event?.eventFrom || event?.eventTo ? `${event.eventFrom || "?"}–${event.eventTo || "?"}` : "Termín neuveden"; }
 function safeName(value: string) { return (value || "Projekt").trim().replace(/[^a-zA-Z0-9ěščřžýáíéúůĚŠČŘŽÝÁÍÉÚŮ_-]+/g, "_"); }
 function formatBytes(size: number) { return size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 1024)} kB` : `${(size / 1024 / 1024).toFixed(1)} MB`; }
-function projectPricing(project: CommonProject) { const calculation = createCustomerCalculationViewModel({ company: project.company, customerProjectNote: project.customerNote, currency: project.currency, booth: project.booth, event: project.event, sceneObjects: project.sceneObjects, requirements: project.requirements, printSurfaceAssignments: project.printSurfaceAssignments, generatedPlanOutputs: [], visualizations: [], options: { ...project.exportCalculationOptions, includePricingTable: true, includeVatSummary: true, includeVisuals: false }, catalogItems: componentCatalogItems }); return { net: calculation.totals.net, vat: calculation.totals.vat ?? 0, gross: calculation.totals.gross ?? calculation.totals.net, vatRatePercent: calculation.totals.vatRatePercent ?? 21, warnings: calculation.warnings }; }
+function projectPricing(project: CommonProject) { const calculation = createCustomerCalculationViewModel({ company: project.company, customerProjectNote: project.customerNote, currency: project.currency, booth: project.booth, event: project.event, sceneObjects: project.sceneObjects, requirements: project.requirements, printSurfaceAssignments: project.printSurfaceAssignments, generatedPlanOutputs: [], visualizations: [], options: { ...project.exportCalculationOptions, includePricingTable: true, includeVatSummary: true, includeVisuals: false }, catalogItems: [...componentCatalogItems, ...project.technicalCatalogItems], priceLists: project.priceLists }); return { net: calculation.totals.net, vat: calculation.totals.vat ?? 0, gross: calculation.totals.gross ?? calculation.totals.net, vatRatePercent: calculation.totals.vatRatePercent ?? 21, warnings: calculation.warnings }; }
 function formatMoney(value: number, currency: CommonProject["currency"]) { return `${value.toLocaleString("cs-CZ")} ${currency}`; }
 function photoExtension(url: string) { const extension = url.split(/[?#]/, 1)[0]?.split(".").pop()?.toLowerCase(); return extension && ["jpg", "jpeg", "png", "webp"].includes(extension) ? extension : "jpg"; }
 function StepTitle({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) { return <div className="workspacePageHeader"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p></div></div>; }

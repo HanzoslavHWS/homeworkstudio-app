@@ -50,11 +50,14 @@ import { LocalPriceListRepository, type PriceListRepository } from "../domain/pr
 import { RemoteApiProjectRepository } from "../lib/db/projectRepository.remoteApi.client";
 import { RemoteApiEventRepository } from "../lib/db/eventRepository.remoteApi.client";
 import { RemoteApiPriceListRepository } from "../lib/db/priceListRepository.remoteApi.client";
+import { RemoteApiCatalogPricingRepository } from "../lib/db/catalogPricing.remoteApi.client";
 import { resolvePersistenceProbe } from "../lib/db/persistenceMode.client";
 import { ConcurrencyConflictError } from "../lib/db/concurrency";
 import { saveCameraView } from "../domain/workflow";
 import type { Exhibition, PriceList } from "../domain/organizations";
 import { resolveEventPriceListForCurrency } from "../domain/organizations";
+import type { CatalogItemSummary, PricingEntrySummary } from "../domain/catalogPricing";
+import { buildTechnicalCatalogItems } from "../domain/catalogPricing";
 import {
   carpetFinishVariants,
   constructionFinishVariants,
@@ -142,6 +145,10 @@ export default function BoothGenerator() {
   const [eventDirty, setEventDirty] = useState(false);
   const [adminPriceLists, setAdminPriceLists] = useState<PriceList[]>([...priceLists]);
   const [priceListsHydrated, setPriceListsHydrated] = useState(false);
+  // Section 3/4: DB catalog_items for TECHNICAL-SERVICE PRICING ONLY (Batch #2A) — never
+  // merged into ComponentLibrary/scene placement, which stays on data/components.ts.
+  const [dbCatalogItems, setDbCatalogItems] = useState<CatalogItemSummary[]>([]);
+  const [dbPricingEntries, setDbPricingEntries] = useState<PricingEntrySummary[]>([]);
   const [step, setStep] =
     useState(1);
 
@@ -333,6 +340,19 @@ export default function BoothGenerator() {
         setAdminPriceLists([...lists]);
         setPriceListsHydrated(true);
         setPersistenceMode("db");
+        // Section 3: DB catalog identity for technical-service pricing. Loaded once — the
+        // catalog_items list itself (unlike pricing_entries) doesn't depend on which event/
+        // currency is selected. Failure here is non-fatal: technicalCatalogItems just stays
+        // empty and technical services keep reporting "missing" price, same as before this
+        // step existed — never a hard blocker for the rest of the app.
+        try {
+          const remoteCatalogPricing = new RemoteApiCatalogPricingRepository();
+          const items = await remoteCatalogPricing.listCatalogItems();
+          if (cancelled) return;
+          setDbCatalogItems([...items]);
+        } catch (error) {
+          console.warn("[HomeworkStudio] Nepodařilo se načíst katalog technických služeb z DB.", error);
+        }
         return;
       }
 
@@ -396,6 +416,35 @@ export default function BoothGenerator() {
   const resolvedEventPriceList = selectedExhibition
     ? resolveEventPriceListForCurrency(selectedExhibition, adminPriceLists, currency)
     : undefined;
+  // Section 3/8: technical-service pricing entries are only ever loaded for the ONE PriceList
+  // this project's event+currency actually resolved to — no cross-currency/cross-event
+  // prefetching, so there is no risk of a stale EUR entry ever being visible while CZK is
+  // selected. Re-fetches whenever the resolved PriceList changes (event or currency switch).
+  const resolvedEventPriceListId = resolvedEventPriceList?.id;
+  useEffect(() => {
+    if (persistenceMode !== "db" || !resolvedEventPriceListId) {
+      setDbPricingEntries([]);
+      return;
+    }
+    let cancelled = false;
+    const remoteCatalogPricing = new RemoteApiCatalogPricingRepository();
+    remoteCatalogPricing
+      .listPricingEntries(resolvedEventPriceListId)
+      .then((entries) => {
+        if (!cancelled) setDbPricingEntries([...entries]);
+      })
+      .catch((error) => {
+        console.warn("[HomeworkStudio] Nepodařilo se načíst ceny technických služeb z DB.", error);
+        if (!cancelled) setDbPricingEntries([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [persistenceMode, resolvedEventPriceListId]);
+  // Section 3: DB catalog rows mapped into the same ComponentDefinition shape the existing
+  // pricing functions already understand — pricing-only, never merged into componentCatalogItems/
+  // ComponentLibrary (see workflowProject.technicalCatalogItems usage below).
+  const technicalCatalogItems = buildTechnicalCatalogItems(dbCatalogItems, dbPricingEntries);
   const selectedFair =
     fairs.find((fair) => fair.id === fairId) ??
     (selectedExhibition
@@ -592,6 +641,8 @@ export default function BoothGenerator() {
     customerNote: projectNotes.customerNote,
     printSurfaceAssignments,
     exportCalculationOptions,
+    priceLists: adminPriceLists,
+    technicalCatalogItems,
   };
 
   function ensureProjectStorageId(): string {

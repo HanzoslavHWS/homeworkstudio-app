@@ -4,7 +4,8 @@ import type {
   Currency,
   PlacedComponent,
 } from "./models.ts";
-import type { Exhibition } from "./organizations.ts";
+import type { Exhibition, PriceList } from "./organizations.ts";
+import { resolveEventPriceListForCurrency } from "./organizations.ts";
 import type {
   ExportCalculationOptions,
   GeneratedPlanOutput,
@@ -15,7 +16,7 @@ import type {
 } from "./project.ts";
 import { getBasePricingEntry, groupCatalogSceneItems } from "./catalog.ts";
 import { calculateNetVatGross } from "./pricing.ts";
-import { priceCleaning, priceContainer, priceGraphics } from "./technicalServices.ts";
+import { priceCleaning, priceContainer, priceElectricity, priceGraphics } from "./technicalServices.ts";
 import type { StoredAsset } from "./assets.ts";
 
 export type CalculationImageLayout = "one" | "two" | "three" | "four";
@@ -99,6 +100,8 @@ export type CustomerCalculationSource = Readonly<{
   visualizations: readonly VisualizationItem[];
   options: ExportCalculationOptions;
   catalogItems: readonly ComponentDefinition[];
+  /** Needed to resolve the event's PriceList for THIS project's currency (see pricingContext below) — never just event.defaultPriceListId, which is always the CZK list regardless of project currency. */
+  priceLists: readonly PriceList[];
   processedAt?: string;
 }>;
 
@@ -130,14 +133,21 @@ export function createCustomerCalculationViewModel(
       customerNotes: source.options.includeItemNotes ? [...new Set(notes)] : undefined,
     });
   }
+  // Section 8: event + project currency -> PriceList, never event.defaultPriceListId (that's
+  // always the CZK list regardless of which currency this project actually uses — see
+  // resolveEventPriceListForCurrency's own doc for why the two must never be conflated). No
+  // fallback to the other currency's list, no conversion — an event with no PriceList yet in
+  // this currency correctly yields priceListId: undefined, and every service below then
+  // reports "missing"/needs-quote rather than silently pricing against the wrong list.
   const pricingContext = {
-    priceListId: source.event?.defaultPriceListId,
+    priceListId: source.event ? resolveEventPriceListForCurrency(source.event, source.priceLists, source.currency)?.id : undefined,
     exhibitionId: source.event?.id,
     realizationCompanyId: source.event?.realizationCompanyId,
     currency: source.currency,
   } as const;
   const services = [
     priceCleaning(source.requirements, source.booth, source.catalogItems, pricingContext),
+    priceElectricity(source.requirements, source.catalogItems, pricingContext),
     priceContainer(source.requirements, source.currency),
     ...priceGraphics(source.requirements, source.booth, source.printSurfaceAssignments, source.catalogItems, pricingContext),
   ].filter((service): service is NonNullable<typeof service> => Boolean(service));

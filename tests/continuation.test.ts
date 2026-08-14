@@ -59,6 +59,7 @@ test("zákaznická kalkulace nepropustí purchase price ani interní poznámky",
     visualizations: [],
     options,
     catalogItems: componentCatalogItems,
+    priceLists: [],
     processedAt: "2026-08-12T10:00:00.000Z",
   });
   const serialized = JSON.stringify(result);
