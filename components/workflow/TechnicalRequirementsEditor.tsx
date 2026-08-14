@@ -71,6 +71,7 @@ export function TechnicalRequirementsEditor({ value, onChange, readOnly }: Props
                   }
                 >
                   <option value="">Výkon neuveden</option>
+                  <option value="2kw">2 kW</option>
                   <option value="3kw">3 kW</option>
                   <option value="5kw">5 kW</option>
                   <option value="9kw">9 kW</option>

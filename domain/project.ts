@@ -54,7 +54,7 @@ export type ContainerRequirement = Readonly<{
 
 export type ElectricityRequirement = TechnicalRequirement &
   Readonly<{
-    powerOption: "" | "3kw" | "5kw" | "9kw" | "custom";
+    powerOption: "" | "2kw" | "3kw" | "5kw" | "9kw" | "custom";
     customPower: string;
   }>;
 

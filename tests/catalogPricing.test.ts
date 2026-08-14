@@ -270,20 +270,78 @@ test("findCatalogItemByInternalCode: L02 se hledá podle internalCode, nikdy pod
 });
 
 // -----------------------------------------------------------------------------------------
-// Section 6: electricity wiring (3kw/5kw/9kw only — UI has no 2kw option, L02 stays a
-// resolver-level flagship case, never a fabricated dropdown entry).
+// Section 6/7 (2kW follow-up): 2kW now has its own Elektro dropdown option, using the same
+// canonical L02 mapping already proven end-to-end. 3/5/9 kW must keep working unchanged.
 // -----------------------------------------------------------------------------------------
 
-test("priceElectricity: 3kw/5kw/9kw jsou napojené na reálné DB internalCode (L03/L05/L09)", () => {
+test("priceElectricity: 2kw/3kw/5kw/9kw jsou napojené na reálné DB internalCode (L02/L03/L05/L09)", () => {
+  assert.equal(ELECTRICITY_POWER_INTERNAL_CODES["2kw"], "L02");
   assert.equal(ELECTRICITY_POWER_INTERNAL_CODES["3kw"], "L03");
   assert.equal(ELECTRICITY_POWER_INTERNAL_CODES["5kw"], "L05");
   assert.equal(ELECTRICITY_POWER_INTERNAL_CODES["9kw"], "L09");
+});
+
+test("2 kW existuje jako volba v Elektro dropdownu (TechnicalRequirementsEditor)", () => {
+  const source = readFileSync(new URL("../components/workflow/TechnicalRequirementsEditor.tsx", import.meta.url), "utf8");
+  assert.match(source, /<option value="2kw">2 kW<\/option>/u);
+});
+
+test("výchozí technické požadavky mají powerOption stále '' — přidání 2kW neměnilo default", () => {
+  assert.equal(createDefaultTechnicalRequirements().electricity.powerOption, "");
 });
 
 test("priceElectricity: 'custom' výkon nikdy nemá bezpečnou katalogovou identitu, zůstává needs-quote", () => {
   const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "custom" as const, customPower: "12kW" } };
   const result = priceElectricity(requirements, [], { currency: "CZK" });
   assert.equal(result?.status, "needs-quote");
+});
+
+test("priceElectricity: Beauty CZK + 2kw resolvuje skutečnou DB cenu L02 = 5100 CZK", () => {
+  const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "2kw" as const, customPower: "" } };
+  const technicalItems = buildTechnicalCatalogItems([l02Summary], l02Entries);
+  const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", currency: "CZK" });
+  assert.equal(result?.status, "priced");
+  assert.equal(result?.unitPriceNet, 5100);
+  assert.equal(result?.totalNet, 5100);
+});
+
+test("priceElectricity: Beauty EUR + 2kw resolvuje skutečnou DB cenu L02 = 231 EUR", () => {
+  const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "2kw" as const, customPower: "" } };
+  const technicalItems = buildTechnicalCatalogItems([l02Summary], l02Entries);
+  const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_EUR_LIST_ID, exhibitionId: "beauty", currency: "EUR" });
+  assert.equal(result?.status, "priced");
+  assert.equal(result?.unitPriceNet, 231);
+  assert.equal(result?.totalNet, 231);
+});
+
+test("priceElectricity: přepnutí měny u 2kw skutečně vrátí jinou skutečnou PricingEntry (CZK 5100 vs EUR 231)", () => {
+  const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "2kw" as const, customPower: "" } };
+  const technicalItems = buildTechnicalCatalogItems([l02Summary], l02Entries);
+  const czkResult = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", currency: "CZK" });
+  const eurResult = priceElectricity({ ...requirements }, technicalItems, { priceListId: BEAUTY_EUR_LIST_ID, exhibitionId: "beauty", currency: "EUR" });
+  assert.equal(czkResult?.unitPriceNet, 5100);
+  assert.equal(eurResult?.unitPriceNet, 231);
+  assert.notEqual(czkResult?.unitPriceNet, eurResult?.unitPriceNet);
+});
+
+test("priceElectricity: 2kw pro event/měnu bez PricingEntry je needs-quote, nikdy 0 a nikdy fallback na jinou měnu", () => {
+  const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "2kw" as const, customPower: "" } };
+  const czkOnlyEntries: readonly PricingEntrySummary[] = [{ id: "entry-czk-only", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100, priceMode: "fixed" }];
+  const technicalItems = buildTechnicalCatalogItems([l02Summary], czkOnlyEntries);
+  const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_EUR_LIST_ID, exhibitionId: "beauty", currency: "EUR" });
+  assert.equal(result?.status, "needs-quote");
+  assert.notEqual(result?.unitPriceNet, 0);
+  assert.equal(result?.unitPriceNet, undefined);
+});
+
+test("priceElectricity: 3kw stále resolvuje L03 se skutečnou cenou (nerozbité stávající zapojení)", () => {
+  const l03: CatalogItemSummary = { id: "l03-id", internalCode: "L03", kind: "service", lifecycleStatus: "needs_review", displayName: "Přípojka el. energie - 3kW", category: "T. služby", unit: "ks", generatorEligible: false };
+  const l03Entries: readonly PricingEntrySummary[] = [{ id: "entry-l03-czk", catalogItemId: "l03-id", priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5900, priceMode: "fixed" }];
+  const technicalItems = buildTechnicalCatalogItems([l03], l03Entries);
+  const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "3kw" as const, customPower: "" } };
+  const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", currency: "CZK" });
+  assert.equal(result?.status, "priced");
+  assert.equal(result?.unitPriceNet, 5900);
 });
 
 test("priceElectricity: 5kw s reálnou DB cenou vrátí status priced a skutečnou cenu", () => {
@@ -296,7 +354,17 @@ test("priceElectricity: 5kw s reálnou DB cenou vrátí status priced a skutečn
   assert.equal(result?.unitPriceNet, 6900);
 });
 
-test("priceCleaning: jednorázový úklid je napojený na reálný DB internalCode U05", () => {
+test("priceElectricity: 9kw stále resolvuje L09 se skutečnou cenou (nerozbité stávající zapojení)", () => {
+  const l09: CatalogItemSummary = { id: "l09-id", internalCode: "L09", kind: "service", lifecycleStatus: "needs_review", displayName: "Přípojka el. energie - 9kW", category: "T. služby", unit: "ks", generatorEligible: false };
+  const l09Entries: readonly PricingEntrySummary[] = [{ id: "entry-l09-czk", catalogItemId: "l09-id", priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 8900, priceMode: "fixed" }];
+  const technicalItems = buildTechnicalCatalogItems([l09], l09Entries);
+  const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "9kw" as const, customPower: "" } };
+  const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", currency: "CZK" });
+  assert.equal(result?.status, "priced");
+  assert.equal(result?.unitPriceNet, 8900);
+});
+
+test("priceCleaning: denní/jednorázový úklid zůstávají napojené na reálné DB internalCode U01/U05 (nerozbité 2kw změnou)", () => {
   assert.equal(CLEANING_INTERNAL_CODES.oneTime, "U05");
   assert.equal(CLEANING_INTERNAL_CODES.daily, "U01");
 });
@@ -306,9 +374,9 @@ test("priceCleaning: jednorázový úklid je napojený na reálný DB internalCo
 // purchasePrice/margin, even when the underlying technical-service catalog item carries them.
 // -----------------------------------------------------------------------------------------
 
-test("zákaznická kalkulace s DB technickou službou (L02) nikdy nepropustí internalCode/purchasePrice", () => {
+test("zákaznická kalkulace po objednání 2 kW vstoupí do Cena/CalculationPreview se skutečnou cenou, ale nikdy nezobrazí L02/internalCode/purchasePrice", () => {
   const [technicalItem] = buildTechnicalCatalogItems([l02Summary], l02Entries);
-  const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "" as const, customPower: "" } };
+  const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "2kw" as const, customPower: "" } };
   const result = createCustomerCalculationViewModel({
     company: "Test s.r.o.",
     customerProjectNote: "",
@@ -324,8 +392,15 @@ test("zákaznická kalkulace s DB technickou službou (L02) nikdy nepropustí in
     event: beautyEvent,
     processedAt: "2026-08-14T10:00:00.000Z",
   });
+  // Section 6: 2 kW after being ordered must land in the priced rows (→ Summary "Cena" totals
+  // and Export → CalculationPreview both read priceRows/totals from this same view model).
+  const electricityRow = result.priceRows.find((row) => row.unitPriceNet === 5100);
+  assert.ok(electricityRow, "2kW řádek se skutečnou cenou 5100 CZK chybí v priceRows");
+  assert.equal(electricityRow?.totalNet, 5100);
+  assert.equal(result.totals.net, 5100);
   const serialized = JSON.stringify(result);
   assert.doesNotMatch(serialized, /internalCode|purchasePrice|"margin"|sourceKey|sourceSystem/iu);
+  assert.doesNotMatch(serialized, /\bL02\b/u);
 });
 
 // -----------------------------------------------------------------------------------------
