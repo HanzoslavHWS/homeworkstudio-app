@@ -706,12 +706,54 @@ test("Duplicate PriceList: entry bez známé source_price (manual bez reference)
 });
 
 // -----------------------------------------------------------------------------------------
+// FAKE MANUAL OVERRIDE TEST — section 8 (exact scenario from the spec, no real DB write)
+// -----------------------------------------------------------------------------------------
+
+test("Fake manual override: L02 Beauty CZK source_price=5100/sale_price=5300/source=manual — incoming=5100 -> noop, sale_price zůstává 5300", async () => {
+  const client = createFakeSupabaseClient({
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, currency: "CZK", sale_price: 5300, source: "manual", source_price: 5100 })],
+  });
+  const [existing] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  const resolution = resolveImportPriceUpdate({ source: existing!.source, sourcePrice: existing!.sourcePrice, salePrice: existing!.salePrice }, 5100);
+  assert.equal(resolution.action, "noop");
+  // no write happened via the fake client — re-read proves sale_price is still untouched
+  const [reloaded] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  assert.equal(reloaded?.salePrice, 5300);
+  assert.equal(reloaded?.sourcePrice, 5100);
+});
+
+test("Fake manual override: stejná L02 Beauty CZK entry — incoming=5200 -> conflict, sale_price NIKDY nepřepsán na 5200", async () => {
+  const client = createFakeSupabaseClient({
+    pricing_entries: [pricingEntryRow({ id: "e1", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, currency: "CZK", sale_price: 5300, source: "manual", source_price: 5100 })],
+  });
+  const [existing] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  const resolution = resolveImportPriceUpdate({ source: existing!.source, sourcePrice: existing!.sourcePrice, salePrice: existing!.salePrice }, 5200);
+  assert.equal(resolution.action, "conflict");
+  assert.equal(resolution.nextSalePrice, undefined, "conflict nesmí nikdy navrhnout hodnotu k zápisu");
+  const [reloaded] = await readPricingEntriesAdmin(client as never, { priceListIds: [BEAUTY_CZK_LIST_ID] });
+  assert.equal(reloaded?.salePrice, 5300, "sale_price zůstává 5300, nikdy 5200");
+  assert.equal(reloaded?.sourcePrice, 5100, "source_price zůstává 5100");
+});
+
+test("Fake manual override: ani resolvePricingEntryForApply (Batch #2A úroveň) nikdy nenavrhne update pro manual entry se změněnou incoming cenou", () => {
+  const existing: readonly ExistingPricingEntryRow[] = [
+    { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5300, source: "manual", sourcePrice: 5100 },
+  ];
+  const noopResolution = resolvePricingEntryForApply({ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100 }, existing);
+  const conflictResolution = resolvePricingEntryForApply({ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5200 }, existing);
+  assert.notEqual(noopResolution.action, "update");
+  assert.notEqual(conflictResolution.action, "update");
+  assert.equal(noopResolution.action, "noop");
+  assert.equal(conflictResolution.action, "conflict");
+});
+
+// -----------------------------------------------------------------------------------------
 // BATCH #2A — remains idempotent with the new audit columns (section 12/14)
 // -----------------------------------------------------------------------------------------
 
-test("Batch #2A resolvePricingEntryForApply zůstává noop beze změny — porovnání je pořád jen na salePrice, audit sloupce ho neovlivní", () => {
+test("Batch #2A resolvePricingEntryForApply: nezměněná import cena (source=import, source_price=sale_price) zůstává noop po hardeningu na resolveImportPriceUpdate", () => {
   const existing: readonly ExistingPricingEntryRow[] = [
-    { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100 },
+    { id: "e1", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100, source: "import", sourcePrice: 5100 },
   ];
   const resolution = resolvePricingEntryForApply({ catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100 }, existing);
   assert.equal(resolution.action, "noop");
@@ -723,9 +765,26 @@ test("Batch #2A writer nastavuje source='import' a source_price na nově vkláda
   assert.match(source, /source_price:\s*entry\.salePrice/u);
 });
 
-test("Batch #2A existing-entries read nevybírá audit sloupce (source/source_price) — druhý dry-run se jimi nemůže nechat rozhodit", () => {
+test("Batch #2A existing-entries read (po hardeningu) TEĎ vybírá source/source_price — jsou nutné pro resolveImportPriceUpdate", () => {
   const source = readFileSync(new URL("../lib/db/importBatch2a.supabase.ts", import.meta.url), "utf8");
-  const selectMatch = source.match(/from\("pricing_entries"\)\s*\.select\("([^"]+)"\)/u);
-  assert.ok(selectMatch, "select(...) pro pricing_entries nenalezen");
-  assert.doesNotMatch(selectMatch![1]!, /source/u);
+  const selectMatch = source.match(/from\("pricing_entries"\)\s*\.select\("([^"]+)"\)\s*\.in\("catalog_item_id"/u);
+  assert.ok(selectMatch, "select(...) pro readExistingPricingEntriesForCatalogItems nenalezen");
+  assert.match(selectMatch![1]!, /\bsource\b/u);
+  assert.match(selectMatch![1]!, /\bsource_price\b/u);
+});
+
+test("Batch #2A UPDATE větev zapisuje sale_price i source_price na novou import cenu a nastavuje source='import' (section 3/5)", () => {
+  const source = readFileSync(new URL("../lib/db/importBatch2a.supabase.ts", import.meta.url), "utf8");
+  const updateMatch = source.match(/action === "update"[\s\S]{0,600}?\.update\(\{([^}]+)\}\)/u);
+  assert.ok(updateMatch, "UPDATE větev pro resolution.action === \"update\" nenalezena");
+  assert.match(updateMatch![1]!, /sale_price:\s*entry\.salePrice/u);
+  assert.match(updateMatch![1]!, /source_price:\s*entry\.salePrice/u);
+  assert.match(updateMatch![1]!, /source:\s*"import"/u);
+});
+
+test("Batch #2A CONFLICT větev nikdy nezapisuje do DB (žádné .update()/.insert() volání pro action === \"conflict\")", () => {
+  const source = readFileSync(new URL("../lib/db/importBatch2a.supabase.ts", import.meta.url), "utf8");
+  const conflictMatch = source.match(/\}\s*else if \(resolution\.action === "conflict"\) \{([\s\S]*?)\}\s*else \{/u);
+  assert.ok(conflictMatch, "CONFLICT větev nenalezena");
+  assert.doesNotMatch(conflictMatch![1]!, /\.update\(|\.insert\(/u);
 });

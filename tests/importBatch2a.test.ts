@@ -775,11 +775,22 @@ test("resolveCatalogItemForApply: insert pro neznámou položku, noop pro shodno
   );
 });
 
-test("resolvePricingEntryForApply: insert/noop/update podle existující ceny", () => {
-  const existing = [{ id: "pe-1", catalogItemId: "c1", priceListId: "pl-1", eventId: "e1", currency: "CZK" as const, salePrice: 5100 }];
+test("resolvePricingEntryForApply: insert/noop/update podle existující importované ceny", () => {
+  const existing = [{ id: "pe-1", catalogItemId: "c1", priceListId: "pl-1", eventId: "e1", currency: "CZK" as const, salePrice: 5100, source: "import" as const, sourcePrice: 5100 }];
   assert.equal(resolvePricingEntryForApply({ catalogItemId: "c1", priceListId: "pl-1", eventId: "e1", currency: "CZK", salePrice: 5100 }, existing).action, "noop");
   assert.equal(resolvePricingEntryForApply({ catalogItemId: "c1", priceListId: "pl-1", eventId: "e1", currency: "CZK", salePrice: 5200 }, existing).action, "update");
   assert.equal(resolvePricingEntryForApply({ catalogItemId: "c1", priceListId: "pl-1", eventId: "e2", currency: "CZK", salePrice: 5100 }, existing).action, "insert");
+});
+
+test("resolvePricingEntryForApply: manual cena beze změny incoming = noop, manual cena se změněným incoming = conflict (nikdy silent overwrite)", () => {
+  const existing = [{ id: "pe-1", catalogItemId: "c1", priceListId: "pl-1", eventId: "e1", currency: "CZK" as const, salePrice: 5300, source: "manual" as const, sourcePrice: 5100 }];
+  const noopResult = resolvePricingEntryForApply({ catalogItemId: "c1", priceListId: "pl-1", eventId: "e1", currency: "CZK", salePrice: 5100 }, existing);
+  assert.equal(noopResult.action, "noop");
+  const conflictResult = resolvePricingEntryForApply({ catalogItemId: "c1", priceListId: "pl-1", eventId: "e1", currency: "CZK", salePrice: 5200 }, existing);
+  assert.equal(conflictResult.action, "conflict");
+  assert.equal(conflictResult.manualPrice, 5300);
+  assert.equal(conflictResult.sourcePrice, 5100);
+  assert.equal(conflictResult.incomingImportPrice, 5200);
 });
 
 test("apply preview (section 12): prázdná DB navrhuje insert 24 catalog_items, 2 catalog_mappings, 495 pricing_entries", () => {
@@ -792,4 +803,6 @@ test("apply preview (section 12): prázdná DB navrhuje insert 24 catalog_items,
   assert.equal(preview.pricingEntries.insert, 495);
   assert.equal(preview.pricingEntries.update, 0);
   assert.equal(preview.pricingEntries.noop, 0);
+  assert.equal(preview.pricingEntries.conflicts, 0);
+  assert.deepEqual(preview.pricingConflicts, []);
 });

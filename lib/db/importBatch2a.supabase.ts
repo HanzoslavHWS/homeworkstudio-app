@@ -13,7 +13,9 @@ import {
   type ExistingPricingEntryRow,
   type PlannedCanonicalCatalogItem,
   type PlannedTechnicalService,
+  type PricingConflictReport,
 } from "../../domain/importBatch2a.ts";
+import type { PricingEntrySource } from "../../domain/pricingAdmin.ts";
 
 /**
  * NEVER CALLED against real Supabase in this session — code-complete for review, gated
@@ -70,12 +72,20 @@ type PricingEntryDbRow = Readonly<{
   event_id: string;
   currency: Currency;
   sale_price: number | null;
+  source: string;
+  source_price: number | null;
 }>;
 
-/** Scoped to known catalog_item_ids — pricing_entries has no other cheap way to narrow this, and the batch only ever cares about its own 24 catalog items. Empty input -> empty result, no query. */
+/**
+ * Scoped to known catalog_item_ids — pricing_entries has no other cheap way to narrow this,
+ * and the batch only ever cares about its own 24 catalog items. Empty input -> empty result,
+ * no query. Now also reads source/source_price (audit-columns migration) — resolvePricingEntryForApply
+ * needs them to tell an untouched import row apart from a manually-overridden one before ever
+ * proposing a write.
+ */
 export async function readExistingPricingEntriesForCatalogItems(client: SupabaseClient, catalogItemIds: readonly string[]): Promise<readonly ExistingPricingEntryRow[]> {
   if (catalogItemIds.length === 0) return [];
-  const { data, error } = await client.from("pricing_entries").select("id, catalog_item_id, price_list_id, event_id, currency, sale_price").in("catalog_item_id", catalogItemIds);
+  const { data, error } = await client.from("pricing_entries").select("id, catalog_item_id, price_list_id, event_id, currency, sale_price, source, source_price").in("catalog_item_id", catalogItemIds);
   if (error) throw error;
   return ((data ?? []) as PricingEntryDbRow[]).map((row) => ({
     id: row.id,
@@ -84,6 +94,8 @@ export async function readExistingPricingEntriesForCatalogItems(client: Supabase
     eventId: row.event_id,
     currency: row.currency,
     salePrice: row.sale_price,
+    source: row.source as PricingEntrySource,
+    sourcePrice: row.source_price,
   }));
 }
 
@@ -95,7 +107,8 @@ export type Batch2aApplyResult = Readonly<{
   batchId: string;
   catalogItems: Readonly<{ inserted: number; noop: number }>;
   catalogMappings: Readonly<{ inserted: number; noop: number }>;
-  pricingEntries: Readonly<{ inserted: number; updated: number; noop: number }>;
+  pricingEntries: Readonly<{ inserted: number; updated: number; noop: number; conflicts: number }>;
+  pricingConflicts: readonly PricingConflictReport[];
 }>;
 
 async function insertCanonicalCatalogItem(client: SupabaseClient, canonical: PlannedCanonicalCatalogItem): Promise<string> {
@@ -240,6 +253,8 @@ export async function applyBatch2aPlan(
     let pricingInserted = 0;
     let pricingUpdated = 0;
     let pricingNoop = 0;
+    let pricingConflictsCount = 0;
+    const pricingConflicts: PricingConflictReport[] = [];
     for (const entry of plan.pricing.entries) {
       const catalogItemId = idByRef.get(entry.catalogItemRef);
       if (!catalogItemId) throw new Error(`Interní chyba: catalog_item_id pro pricing entry (${entry.catalogItemRef}) nebyl resolvován — tento řádek se nezapíše, apply zastaven.`);
@@ -259,9 +274,29 @@ export async function applyBatch2aPlan(
         if (error) throw error;
         pricingInserted += 1;
       } else if (resolution.action === "update") {
-        const { error } = await client.from("pricing_entries").update({ sale_price: entry.salePrice }).eq("id", resolution.existingId);
+        // Hardening (this session): resolvePricingEntryForApply only ever returns "update" for
+        // an existing row whose source='import' AND the incoming price genuinely differs from
+        // its last known source_price (resolveImportPriceUpdate's case B) — a manually-edited
+        // row (source='manual') resolves to "noop" or "conflict" instead, never "update". So
+        // this write is always safe: sale_price AND source_price both move to the new import
+        // price, source stays 'import'.
+        const { error } = await client.from("pricing_entries").update({ sale_price: entry.salePrice, source_price: entry.salePrice, source: "import" }).eq("id", resolution.existingId);
         if (error) throw error;
         pricingUpdated += 1;
+      } else if (resolution.action === "conflict") {
+        // NEVER written — a manually-overridden price whose incoming import value no longer
+        // matches the last known source_price must go to human review, never a silent write.
+        pricingConflictsCount += 1;
+        pricingConflicts.push({
+          catalogItemId,
+          catalogItemRef: entry.catalogItemRef,
+          priceListId: entry.priceListId,
+          currency: entry.currency,
+          sourcePrice: resolution.sourcePrice,
+          manualPrice: resolution.manualPrice,
+          incomingImportPrice: resolution.incomingImportPrice ?? entry.salePrice,
+          reason: resolution.reason ?? "Ruční cena se liší od nové importní ceny.",
+        });
       } else {
         pricingNoop += 1;
       }
@@ -271,7 +306,8 @@ export async function applyBatch2aPlan(
     const summary = {
       catalogItems: { inserted: catalogItemsInserted, noop: catalogItemsNoop },
       catalogMappings: { inserted: catalogMappingsInserted, noop: catalogMappingsNoop },
-      pricingEntries: { inserted: pricingInserted, updated: pricingUpdated, noop: pricingNoop },
+      pricingEntries: { inserted: pricingInserted, updated: pricingUpdated, noop: pricingNoop, conflicts: pricingConflictsCount },
+      pricingConflicts,
       warnings: plan.warnings,
     };
     const { error: completeError } = await client.from("import_batches").update({ status: "applied", summary }).eq("id", batchId);
@@ -281,7 +317,8 @@ export async function applyBatch2aPlan(
       batchId,
       catalogItems: { inserted: catalogItemsInserted, noop: catalogItemsNoop },
       catalogMappings: { inserted: catalogMappingsInserted, noop: catalogMappingsNoop },
-      pricingEntries: { inserted: pricingInserted, updated: pricingUpdated, noop: pricingNoop },
+      pricingEntries: { inserted: pricingInserted, updated: pricingUpdated, noop: pricingNoop, conflicts: pricingConflictsCount },
+      pricingConflicts,
     };
   } catch (error) {
     await client.from("import_batches").update({ status: "failed", summary: { error: error instanceof Error ? error.message : String(error) } }).eq("id", batchId);

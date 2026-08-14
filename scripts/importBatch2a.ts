@@ -200,7 +200,13 @@ async function main() {
   console.log("=== APPLY PREVIEW (what a real --apply would do right now) ===");
   console.log(`catalog_items:     insert=${applyPreview.catalogItems.insert}  noop=${applyPreview.catalogItems.noop}  conflicts=${applyPreview.catalogItems.conflicts}`);
   console.log(`catalog_mappings:  insert=${applyPreview.catalogMappings.insert}  noop=${applyPreview.catalogMappings.noop}`);
-  console.log(`pricing_entries:   insert=${applyPreview.pricingEntries.insert}  update=${applyPreview.pricingEntries.update}  noop=${applyPreview.pricingEntries.noop}`);
+  console.log(`pricing_entries:   insert=${applyPreview.pricingEntries.insert}  update=${applyPreview.pricingEntries.update}  noop=${applyPreview.pricingEntries.noop}  conflicts=${applyPreview.pricingEntries.conflicts}`);
+  if (applyPreview.pricingConflicts.length > 0) {
+    console.log("\n=== PRICING CONFLICTS (manual price differs from new import price — NEVER auto-written, review needed) ===");
+    for (const conflict of applyPreview.pricingConflicts) {
+      console.log(`- ${conflict.catalogItemRef} @ priceList=${conflict.priceListId} (${conflict.currency}): sourcePrice=${conflict.sourcePrice} manualPrice=${conflict.manualPrice} incomingImportPrice=${conflict.incomingImportPrice} — ${conflict.reason}`);
+    }
+  }
   console.log();
 
   const outputPath = path.resolve(process.cwd(), "private-imports", "import-batch2a-plan.json");
@@ -240,6 +246,12 @@ async function main() {
   console.log("catalog_items:", JSON.stringify(result.catalogItems));
   console.log("catalog_mappings:", JSON.stringify(result.catalogMappings));
   console.log("pricing_entries:", JSON.stringify(result.pricingEntries));
+  if (result.pricingConflicts.length > 0) {
+    console.log("\n=== PRICING CONFLICTS (skipped, never written — needs manual review) ===");
+    for (const conflict of result.pricingConflicts) {
+      console.log(`- ${conflict.catalogItemRef} @ priceList=${conflict.priceListId} (${conflict.currency}): sourcePrice=${conflict.sourcePrice} manualPrice=${conflict.manualPrice} incomingImportPrice=${conflict.incomingImportPrice} — ${conflict.reason}`);
+    }
+  }
 }
 
 main().catch((error) => {

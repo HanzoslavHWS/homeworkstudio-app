@@ -27,6 +27,7 @@ import type { CatalogItemKind, ComponentDefinition, Currency } from "./models.ts
 import { evaluateCatalogReadiness, isGeneratorEligible, type ReadinessResult } from "./catalogReadiness.ts";
 import { buildMappingSourceKey, normalizedMappingName, type ImportPreview, type ImportTechnicalServiceRowPreview } from "./importBatch.ts";
 import type { MappingDecision } from "./importBatch1.ts";
+import { resolveImportPriceUpdate, type PricingEntrySource } from "./pricingAdmin.ts";
 
 const CANONICAL_INTERNAL_CODES = ["M57", "L02"] as const;
 export type CanonicalInternalCode = (typeof CANONICAL_INTERNAL_CODES)[number];
@@ -90,14 +91,35 @@ export function resolveCatalogItemForApply(
   return { action: "noop", existingId: existingRow.id };
 }
 
-export type PricingEntryResolution = Readonly<{ action: "insert" | "update" | "noop"; existingId?: string }>;
-export type ExistingPricingEntryRow = Readonly<{ id: string; catalogItemId: string; priceListId: string; eventId: string; currency: Currency; salePrice: number | null }>;
+export type PricingEntryResolution = Readonly<{
+  action: "insert" | "update" | "noop" | "conflict";
+  existingId?: string;
+  /** Populated for "conflict" (and informational on "noop") — see resolveImportPriceUpdate(). */
+  reason?: string;
+  sourcePrice?: number;
+  manualPrice?: number;
+  incomingImportPrice?: number;
+}>;
+export type ExistingPricingEntryRow = Readonly<{
+  id: string;
+  catalogItemId: string;
+  priceListId: string;
+  eventId: string;
+  currency: Currency;
+  salePrice: number | null;
+  source: PricingEntrySource;
+  sourcePrice: number | null;
+}>;
 
 /**
- * Section 9: "Stejná kombinace catalog item + price list + pricing context nesmí vytvořit
- * duplicate pricing_entry." pricing_entries has NO unique DB constraint on this natural key,
- * so idempotency is enforced here, at the application level, before every write — identical
- * price -> noop, changed price -> update (never a second row), no match -> insert.
+ * Section 9 (original Batch #2A spec) + this session's hardening: "Stejná kombinace catalog
+ * item + price list + pricing context nesmí vytvořit duplicate pricing_entry" — idempotency
+ * is still enforced here (no match -> insert). But an EXISTING row is no longer resolved by
+ * comparing salePrice alone: it goes through resolveImportPriceUpdate() (domain/pricingAdmin.ts),
+ * the same manual/import provenance resolver Pricing Administration and any future importer
+ * must share — so a manually-overridden price (source='manual') can never be silently
+ * overwritten by this or any other pricing importer. "conflict" is a NEW terminal action:
+ * the caller must skip the DB write and surface it for manual review, never write anything.
  */
 export function resolvePricingEntryForApply(
   candidate: Readonly<{ catalogItemId: string; priceListId: string; eventId: string; currency: Currency; salePrice: number }>,
@@ -107,8 +129,22 @@ export function resolvePricingEntryForApply(
     (row) => row.catalogItemId === candidate.catalogItemId && row.priceListId === candidate.priceListId && row.eventId === candidate.eventId && row.currency === candidate.currency,
   );
   if (!match) return { action: "insert" };
-  if (match.salePrice === candidate.salePrice) return { action: "noop", existingId: match.id };
-  return { action: "update", existingId: match.id };
+  const resolution = resolveImportPriceUpdate(
+    { source: match.source, sourcePrice: match.sourcePrice ?? undefined, salePrice: match.salePrice ?? undefined },
+    candidate.salePrice,
+  );
+  if (resolution.action === "conflict") {
+    return {
+      action: "conflict",
+      existingId: match.id,
+      reason: resolution.reason,
+      sourcePrice: resolution.sourcePrice,
+      manualPrice: resolution.manualPrice,
+      incomingImportPrice: resolution.incomingImportPrice,
+    };
+  }
+  if (resolution.action === "update") return { action: "update", existingId: match.id };
+  return { action: "noop", existingId: match.id };
 }
 
 export type PlannedCanonicalCatalogItem = Readonly<{
@@ -645,10 +681,26 @@ export function buildBatch2aPlan(
 
 export type ExistingCatalogMappingRow = Readonly<{ sourceSystem: string; sourceKey: string; catalogItemId: string }>;
 
+/**
+ * Section 6 (this session): what a real Excel reimport must show a reviewer BEFORE any write
+ * — enough to judge the conflict without guessing (never conflated with "update").
+ */
+export type PricingConflictReport = Readonly<{
+  catalogItemId: string;
+  catalogItemRef: string;
+  priceListId: string;
+  currency: Currency;
+  sourcePrice: number | undefined;
+  manualPrice: number | undefined;
+  incomingImportPrice: number;
+  reason: string;
+}>;
+
 export type Batch2aApplyPreview = Readonly<{
   catalogItems: Readonly<{ insert: number; noop: number; conflicts: number }>;
   catalogMappings: Readonly<{ insert: number; noop: number }>;
-  pricingEntries: Readonly<{ insert: number; update: number; noop: number }>;
+  pricingEntries: Readonly<{ insert: number; update: number; noop: number; conflicts: number }>;
+  pricingConflicts: readonly PricingConflictReport[];
 }>;
 
 export function previewBatch2aApply(
@@ -702,6 +754,8 @@ export function previewBatch2aApply(
   let pricingInsert = 0;
   let pricingUpdate = 0;
   let pricingNoop = 0;
+  let pricingConflictsCount = 0;
+  const pricingConflicts: PricingConflictReport[] = [];
   for (const entry of plan.pricing.entries) {
     const catalogItemId = resolvedIdByRef.get(entry.catalogItemRef);
     if (!catalogItemId) {
@@ -714,12 +768,25 @@ export function previewBatch2aApply(
     );
     if (resolution.action === "insert") pricingInsert += 1;
     else if (resolution.action === "update") pricingUpdate += 1;
-    else pricingNoop += 1;
+    else if (resolution.action === "conflict") {
+      pricingConflictsCount += 1;
+      pricingConflicts.push({
+        catalogItemId,
+        catalogItemRef: entry.catalogItemRef,
+        priceListId: entry.priceListId,
+        currency: entry.currency,
+        sourcePrice: resolution.sourcePrice,
+        manualPrice: resolution.manualPrice,
+        incomingImportPrice: resolution.incomingImportPrice ?? entry.salePrice,
+        reason: resolution.reason ?? "Ruční cena se liší od nové importní ceny.",
+      });
+    } else pricingNoop += 1;
   }
 
   return {
     catalogItems: { insert: catalogItemsInsert, noop: catalogItemsNoop, conflicts: catalogItemsConflicts },
     catalogMappings: { insert: catalogMappingsInsert, noop: catalogMappingsNoop },
-    pricingEntries: { insert: pricingInsert, update: pricingUpdate, noop: pricingNoop },
+    pricingEntries: { insert: pricingInsert, update: pricingUpdate, noop: pricingNoop, conflicts: pricingConflictsCount },
+    pricingConflicts,
   };
 }
