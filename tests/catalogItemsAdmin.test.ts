@@ -479,6 +479,77 @@ test("P86 = canonical ready item = eligible; ordinary needs_review stays ineligi
 });
 
 // -----------------------------------------------------------------------------------------
+// READINESS HARDENING (booth kind) — T04-shaped stub can never be activated without a 3D model,
+// even though it has confirmed identity + dimensions + a base price.
+// -----------------------------------------------------------------------------------------
+
+const T04_DOCUMENT: FakeRow = {
+  id: "batch2b-T04",
+  internalCode: "T04",
+  displayName: "Typový stánek octanorm - T4",
+  name: "Typový stánek octanorm - T4",
+  type: "booth",
+  category: "Typovky",
+  widthMm: 2000,
+  depthMm: 2000,
+  // heightMm deliberately absent — Txx footprint parsing only ever extracts width x depth.
+  unit: "ks",
+  sourceSystem: "excel-v6.6",
+  sourceKey: "pricelist::typovky::typovy-stanek-octanorm---t4",
+  lifecycleStatus: "needs_review",
+  catalogItemKind: "booth",
+  pricingEntries: [{ id: "batch2b-T04-base-czk", itemId: "batch2b-T04", currency: "CZK", salePrice: 4400 }],
+};
+
+function t04Row(overrides: Partial<FakeRow> = {}): FakeRow {
+  return {
+    id: "t04-uuid",
+    internal_code: "T04",
+    kind: "booth",
+    lifecycle_status: "needs_review",
+    display_name: "Typový stánek octanorm - T4",
+    official_name: null,
+    category: "Typovky",
+    unit: "ks",
+    document: T04_DOCUMENT,
+    created_at: "2026-08-14T19:16:38.000000+00:00",
+    updated_at: "2026-08-14T19:16:38.000000+00:00",
+    ...overrides,
+  };
+}
+
+test("T04 (real Batch #2B booth stub shape): confirmed internalCode + dimensions + base price alone never make it generatorEligible — missing 3D model blocks activation", async () => {
+  const item = toAdmin(t04Row());
+  const readiness = computeReadiness(item);
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_3d_asset") || readiness.issues.includes("missing_dimensions"));
+  assert.equal(computeGeneratorEligibleLive(item), false);
+
+  const client = createFakeSupabaseClient({ catalog_items: [t04Row()] });
+  await assert.rejects(
+    () => saveCatalogItemAdmin(client as never, "t04-uuid", { lifecycleStatus: "active" }, "2026-08-14T19:16:38.000000+00:00"),
+    (error) => error instanceof CatalogReadinessError,
+  );
+  const row = client.tables.get("catalog_items")!.find((r) => r.id === "t04-uuid")!;
+  assert.equal(row.lifecycle_status, "needs_review", "T04 must never end up active without a real 3D model");
+});
+
+test("construction scene item without required scene data is not ready, but a pricing-only construction item (no declared placement) is not forced to fabricate a GLB", () => {
+  const sceneWall = toAdmin(stubRow({
+    kind: "construction",
+    document: { ...STUB_DOCUMENT, catalogItemKind: "construction", showIn3D: true, modelUrl: undefined, assets: undefined, reviewedAt: "2026-08-14T00:00:00.000Z" },
+  }));
+  assert.equal(computeReadiness(sceneWall).ready, false);
+
+  const pricingOnlyConstruction = toAdmin(stubRow({
+    kind: "construction",
+    document: { ...STUB_DOCUMENT, catalogItemKind: "construction", showIn2D: undefined, showIn3D: undefined, reviewedAt: "2026-08-14T00:00:00.000Z" },
+  }));
+  const readiness = computeReadiness(pricingOnlyConstruction);
+  assert.equal(readiness.ready, true, `pricing-only construction item nesmí vyžadovat GLB, issues: ${readiness.issues.join(", ")}`);
+});
+
+// -----------------------------------------------------------------------------------------
 // API ROUTES — security (section 19) + behavior
 // -----------------------------------------------------------------------------------------
 

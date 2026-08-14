@@ -194,3 +194,156 @@ test("P86 included grafika límce nevytváří duplicitní účtování a odpov�
   const includedEntry = { id: "p86-fascia-included", itemId: graphics[0]!.itemId, currency: "CZK" as const, priceMode: "included" as const, salePrice: 0 };
   assert.equal(derivePricingAvailability(includedEntry), "included");
 });
+
+// =========================================================================================
+// READINESS HARDENING — booth/construction/floor_finish/other (previously fell through to a
+// near-empty default case, effectively "ready" once displayName+category were set). See
+// evaluateCatalogReadiness's kind-based switch.
+// =========================================================================================
+
+function boothLike(overrides: Partial<ComponentDefinition> = {}): ComponentDefinition {
+  return baseFurniture({
+    internalCode: "P86",
+    category: "typova-koje",
+    unit: undefined,
+    reviewedAt: undefined,
+    showIn2D: undefined,
+    showIn3D: undefined,
+    footprint2D: undefined,
+    modelUrl: "/models/booths/koje-2x2/master.glb",
+    widthMm: 2000,
+    depthMm: 2000,
+    heightMm: 2500,
+    catalogItemKind: "booth",
+    ...overrides,
+  });
+}
+
+test("booth: P86-shaped item s validním footprintem (šířka/hloubka/výška) a modelem je ready — bez unit/reviewedAt/scene flagů, protože BoothType je nemá", () => {
+  const result = evaluateCatalogReadiness(boothLike(), "booth");
+  assert.equal(result.ready, true);
+  assert.deepEqual(result.issues, []);
+});
+
+test("booth: PrintSurface není globálně vyžadován — P86-shaped item bez printSurfaces zůstává ready", () => {
+  const result = evaluateCatalogReadiness(boothLike({ printSurfaces: undefined }), "booth");
+  assert.equal(result.ready, true);
+});
+
+test("booth: chybějící výška (Txx footprint z 'WxD m' patternu nikdy neparsuje výšku) blokuje readiness stejně jako chybějící šířka/hloubka", () => {
+  const missingHeight = evaluateCatalogReadiness(boothLike({ heightMm: undefined }), "booth");
+  assert.ok(missingHeight.issues.includes("missing_dimensions"));
+  assert.equal(missingHeight.ready, false);
+
+  const missingFootprint = evaluateCatalogReadiness(boothLike({ widthMm: 0, depthMm: 0 }), "booth");
+  assert.ok(missingFootprint.issues.includes("missing_dimensions"));
+});
+
+test("booth: T04 bez 3D modelu (real Batch #2B stub shape) není ready a proto není generatorEligible, i s validními rozměry", () => {
+  const t04 = boothLike({ internalCode: "T04", modelUrl: undefined, assets: undefined, lifecycleStatus: "needs_review" });
+  const readiness = evaluateCatalogReadiness(t04, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
+  assert.equal(isGeneratorEligible(t04, "booth"), false);
+});
+
+test("booth: P86 canonical seed (skutečná data/booths.ts definice) je ready a generatorEligible přes reálný adaptér", () => {
+  const p86 = boothTypes.find((booth) => booth.internalCode === "P86")!;
+  const adapted = { ...p86, lifecycleStatus: "active" } as unknown as ComponentDefinition;
+  const readiness = evaluateCatalogReadiness(adapted, "booth");
+  assert.equal(readiness.ready, true, `P86 mělo být ready, issues: ${readiness.issues.join(", ")}`);
+  assert.equal(isGeneratorEligible(adapted, "booth"), true);
+});
+
+test("construction: scene-deklarovaná položka (showIn3D) bez 3D assetu není ready", () => {
+  const wall = baseFurniture({ internalCode: undefined, unit: undefined, showIn2D: false, showIn3D: true, modelUrl: undefined, assets: undefined, reviewedAt: "2026-08-13T00:00:00.000Z", catalogItemKind: "construction" });
+  const readiness = evaluateCatalogReadiness(wall, "construction");
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
+  assert.equal(readiness.ready, false);
+});
+
+test("construction: pricing-only položka (žádná scene capability deklarovaná, např. 'Stavba octanorm 1 m²') nikdy nevyžaduje GLB — jen review", () => {
+  const pricingOnly = baseFurniture({ internalCode: "S10", unit: "m²", showIn2D: undefined, showIn3D: undefined, modelUrl: undefined, assets: undefined, footprint2D: undefined, reviewedAt: undefined, catalogItemKind: "construction" });
+  const readiness = evaluateCatalogReadiness(pricingOnly, "construction");
+  assert.deepEqual(readiness.issues, ["requires_review"], "nedeklarovaná scene capability nikdy nesmí vynutit missing_3d_asset");
+  assert.equal(readiness.ready, false);
+
+  const reviewed = evaluateCatalogReadiness({ ...pricingOnly, reviewedAt: "2026-08-14T00:00:00.000Z" }, "construction");
+  assert.equal(reviewed.ready, true, "jednou zkontrolovaná pricing-only construction položka je ready bez GLB");
+});
+
+test("floor_finish: nevyžaduje GLB ani pevné width/depth (plocha je dána projektem) — jen unit a review", () => {
+  const carpet = baseFurniture({ internalCode: "M01", unit: "m²", widthMm: 0, depthMm: 0, showIn2D: undefined, showIn3D: undefined, modelUrl: undefined, footprint2D: undefined, reviewedAt: "2026-08-14T00:00:00.000Z", catalogItemKind: "floor_finish" });
+  const readiness = evaluateCatalogReadiness(carpet, "floor_finish");
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.issues, []);
+});
+
+test("floor_finish: chybějící unit blokuje readiness", () => {
+  const carpet = baseFurniture({ unit: undefined, widthMm: 0, depthMm: 0, showIn2D: undefined, showIn3D: undefined, modelUrl: undefined, footprint2D: undefined, reviewedAt: "2026-08-14T00:00:00.000Z", catalogItemKind: "floor_finish" });
+  const readiness = evaluateCatalogReadiness(carpet, "floor_finish");
+  assert.ok(readiness.issues.includes("missing_unit"));
+  assert.equal(readiness.ready, false);
+});
+
+test("other: nikdy se nestane ready jen podle displayName/category (konzervativní default) — vyžaduje explicitní review", () => {
+  const mystery = baseFurniture({ internalCode: undefined, unit: undefined, showIn2D: undefined, showIn3D: undefined, modelUrl: undefined, footprint2D: undefined, reviewedAt: undefined, catalogItemKind: "other" });
+  const readiness = evaluateCatalogReadiness(mystery, "other");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("requires_review"));
+});
+
+test("other: pokud deklaruje scene capability, stále vyžaduje odpovídající 2D/3D reprezentaci", () => {
+  const mystery = baseFurniture({ internalCode: undefined, unit: undefined, showIn2D: false, showIn3D: true, modelUrl: undefined, assets: undefined, reviewedAt: "2026-08-14T00:00:00.000Z", catalogItemKind: "other" });
+  const readiness = evaluateCatalogReadiness(mystery, "other");
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
+  assert.equal(readiness.ready, false);
+});
+
+// -----------------------------------------------------------------------------------------
+// Readiness ≠ identity/price/import-status — section 2 of the hardening spec.
+// -----------------------------------------------------------------------------------------
+
+test("internalCode samo o sobě nikdy nezpůsobí readiness — furniture/booth s kódem, ale bez zbytku dat, zůstává not ready", () => {
+  const furnitureWithCodeOnly = baseFurniture({ internalCode: "M99", unit: undefined, widthMm: 0, depthMm: 0, showIn2D: undefined, showIn3D: undefined, modelUrl: undefined, footprint2D: undefined, reviewedAt: undefined });
+  assert.equal(evaluateCatalogReadiness(furnitureWithCodeOnly, "furniture").ready, false);
+
+  const boothWithCodeOnly = boothLike({ modelUrl: undefined, assets: undefined, widthMm: 0, depthMm: 0, heightMm: undefined });
+  assert.equal(evaluateCatalogReadiness(boothWithCodeOnly, "booth").ready, false);
+});
+
+test("base cena sama o sobě nikdy nezpůsobí readiness — položka s pricingEntries, ale bez zbytku požadovaných dat, zůstává not ready", () => {
+  const pricedButIncomplete = baseFurniture({
+    unit: undefined,
+    widthMm: 0,
+    depthMm: 0,
+    showIn2D: undefined,
+    showIn3D: undefined,
+    modelUrl: undefined,
+    footprint2D: undefined,
+    reviewedAt: undefined,
+    pricingEntries: [{ id: "p1", itemId: "test", currency: "CZK", salePrice: 999 }],
+  });
+  assert.equal(evaluateCatalogReadiness(pricedButIncomplete, "furniture").ready, false);
+});
+
+test("EXACT_SAFE import status samo o sobě nikdy nezpůsobí readiness — čerstvě importovaná needs_review položka (identita + kategorie potvrzené, nic jiného) zůstává not ready ve všech dotčených kinds", () => {
+  const freshImport = baseFurniture({
+    internalCode: "M99",
+    category: "Nábytek",
+    unit: undefined,
+    widthMm: 0,
+    depthMm: 0,
+    showIn2D: undefined,
+    showIn3D: undefined,
+    modelUrl: undefined,
+    footprint2D: undefined,
+    reviewedAt: undefined,
+    lifecycleStatus: "needs_review",
+  });
+  for (const kind of ["furniture", "booth", "construction", "floor_finish", "other"] as const) {
+    const readiness = evaluateCatalogReadiness(freshImport, kind);
+    assert.equal(readiness.ready, false, `kind=${kind} nesmí být ready jen z EXACT_SAFE identity/kategorie`);
+    assert.equal(isGeneratorEligible(freshImport, kind), false);
+  }
+});

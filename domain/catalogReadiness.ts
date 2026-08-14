@@ -59,18 +59,42 @@ function has3DAsset(item: ComponentDefinition): boolean {
   return Boolean(item.modelUrl) || Boolean(item.assets?.models3d?.length);
 }
 
+/** Booth kind requires a real, placeable footprint — unlike furniture, height is mandatory too (mirrors BoothType's own NominalDimensions, where widthMm/depthMm/heightMm are all non-optional). */
+function hasBoothDimensions(item: ComponentDefinition): boolean {
+  return hasDimensions(item) && Number.isFinite(item.heightMm) && (item.heightMm as number) > 0;
+}
+
 /**
- * Readiness rules differ by item kind — a technical point never needs a GLB, a service
- * never needs 2D/3D at all. See section 7 of the catalog-readiness spec.
+ * Whether an item EXPLICITLY declares itself scene-placeable (showIn2D/showIn3D). Absence is
+ * ambiguous, not a negative claim: a catalog_item's document may simply never have set these
+ * flags. Kinds that are inherently always placed (booth) don't use this signal at all; kinds
+ * where placement is optional (construction/other) treat an undeclared capability as "unknown,
+ * needs a human", never as "confirmed non-placeable" — see the construction/other cases below.
+ */
+function declaresSceneCapability(item: ComponentDefinition): boolean {
+  return Boolean(item.showIn2D || item.showIn3D);
+}
+
+/**
+ * Readiness = "this item can be safely offered to the generator for its intended kind of use" —
+ * never merely "has an internalCode", "has a price", or "was an EXACT_SAFE import match". Rules
+ * are kind-based (dispatched by CatalogItemKind) but each rule itself checks CAPABILITY signals
+ * already on the model (showIn2D/showIn3D, modelUrl/assets, pricingUnit, reviewedAt) rather than
+ * a name/category heuristic — see section 9 of the readiness-hardening spec.
  *
- * Deliberately NOT checked here for service/graphics_service: a base sale price.
- * A service is a valid, activatable catalog item even with no fixed price — its price may
- * live entirely in Event → PriceList → PricingEntry (event-specific technical services),
- * be "individual" (e.g. Kontejner — quoted per case), or be "included" in a booth package
- * (e.g. P86 fascia graphics). Whether a *specific project/event* currently has a number to
- * charge is a separate, later concern — see domain/catalog.ts resolvePricingAvailability,
- * which returns "missing" / "individual" / "included" / "fixed" without ever touching
- * whether the CatalogItem itself is allowed to be active.
+ * Deliberately NOT checked anywhere for service/graphics_service/construction/floor_finish: a
+ * base sale price. A service (or a package-priced construction line) is a valid, activatable
+ * catalog item even with no fixed price — its price may live entirely in Event → PriceList →
+ * PricingEntry, be "individual" (e.g. Kontejner — quoted per case), or be "included" in a booth
+ * package (e.g. P86 fascia graphics). Whether a *specific project/event* currently has a number
+ * to charge is a separate, later concern — see domain/catalog.ts resolvePricingAvailability,
+ * which returns "missing"/"individual"/"included"/"fixed" without ever touching whether the
+ * CatalogItem itself is allowed to be active.
+ *
+ * Also deliberately NEVER checked anywhere: whether the item came from an EXACT_SAFE import
+ * match, or whether it has a confirmed base price — identity/pricing confidence is not the same
+ * thing as "safe to offer to the generator" (see domain/importBatch2b.ts: every EXACT_SAFE
+ * import still lands as lifecycleStatus=needs_review, generatorEligible=false).
  */
 export function evaluateCatalogReadiness(item: ComponentDefinition, kind: CatalogItemKind): ReadinessResult {
   const issues: ReadinessIssue[] = [];
@@ -80,22 +104,35 @@ export function evaluateCatalogReadiness(item: ComponentDefinition, kind: Catalo
   if (!hasText(item.category)) issues.push("missing_category");
 
   switch (kind) {
+    // Physical, placeable furniture — the strictest rule set (unchanged by this hardening
+    // pass; audited and found correct). Requires a real identity, unit, valid footprint, an
+    // explicitly declared scene capability with a matching representation, and human review.
     case "furniture": {
       if (!hasText(item.internalCode)) issues.push("missing_internal_code");
       if (!hasText(item.unit)) issues.push("missing_unit");
       if (!hasDimensions(item)) issues.push("missing_dimensions");
-      if (!item.showIn2D && !item.showIn3D) issues.push("missing_scene_capability");
+      if (!declaresSceneCapability(item)) issues.push("missing_scene_capability");
       if (item.showIn2D && !has2DRepresentation(item)) issues.push("missing_2d_representation");
       if (item.showIn3D && !has3DAsset(item)) issues.push("missing_3d_asset");
       if (!item.reviewedAt) issues.push("requires_review");
       break;
     }
+    // A scene point (electricity/water/waste marker) is never a GLB-requiring object unless it
+    // explicitly declares 3D placement.
     case "technical_point": {
-      if (!item.showIn2D && !item.showIn3D) issues.push("missing_scene_capability");
+      if (!declaresSceneCapability(item)) issues.push("missing_scene_capability");
       if (item.showIn2D && !has2DRepresentation(item)) issues.push("missing_2d_representation");
       if (item.showIn3D && !has3DAsset(item)) issues.push("missing_3d_asset");
       break;
     }
+    // Technical services never need a GLB — they are never placed in the scene. internalCode
+    // is deliberately NOT required here (unlike furniture): a legitimately catalog-ready
+    // service can still be individually/per-case priced without a confirmed ABF code (e.g.
+    // Kontejner — see the existing "individuálně cenová služba" test/domain precedent); what
+    // it does need is a real charging unit. reviewedAt is also deliberately NOT required for
+    // services — the coarser lifecycleStatus active/needs_review gate (isGeneratorEligible,
+    // not this function) already serves that purpose for this kind. L02 (unit="ks", no
+    // internalCode requirement, no reviewedAt) stays ready under this rule.
     case "service": {
       if (!hasText(item.unit)) issues.push("missing_unit");
       break;
@@ -104,12 +141,49 @@ export function evaluateCatalogReadiness(item: ComponentDefinition, kind: Catalo
       if (!item.pricingUnit) issues.push("missing_pricing_unit");
       break;
     }
-    case "construction":
-    case "floor_finish":
+    // A booth is ALWAYS the placed stage every other object sits in — there is no such thing
+    // as a non-placeable booth, so (unlike furniture/construction) placement itself is never
+    // gated behind a showIn2D/showIn3D flag: BoothType doesn't even model those fields. What
+    // genuinely matters is a real nominal footprint (width/depth/HEIGHT — a booth without a
+    // height is not a usable 3D volume) and a usable geometry asset. PrintSurfaces are
+    // deliberately NEVER required here — not every booth needs a print allowance.
+    case "booth": {
+      if (!hasBoothDimensions(item)) issues.push("missing_dimensions");
+      if (!has3DAsset(item)) issues.push("missing_3d_asset");
+      break;
+    }
+    // Construction line items split into two real uses the current model can't always tell
+    // apart from data alone: (A) a placeable scene component (a wall/rig with real geometry)
+    // vs (B) a pricing/package-only service (e.g. "Stavba octanorm 1 m²" — never placed,
+    // priced per m²). Forcing a GLB on every construction item would wrongly block (B); never
+    // requiring one would wrongly let (A) through. The safe answer: scene rules apply ONLY
+    // when the item itself declares placement (showIn2D/showIn3D) — an undeclared capability
+    // is treated as unknown, not as a confirmed "this is pricing-only", so it still requires a
+    // human review before it can ever be offered to the generator.
+    case "construction": {
+      if (item.showIn2D && !has2DRepresentation(item)) issues.push("missing_2d_representation");
+      if (item.showIn3D && !has3DAsset(item)) issues.push("missing_3d_asset");
+      if (!item.reviewedAt) issues.push("requires_review");
+      break;
+    }
+    // A floor finish (e.g. carpet) is applied in the generator as a surface/finish over an
+    // area the PROJECT determines — never its own placed 3D object with fixed dimensions of
+    // its own. No width/depth/GLB requirement here; only a real charging unit and review.
+    case "floor_finish": {
+      if (!hasText(item.unit)) issues.push("missing_unit");
+      if (!item.reviewedAt) issues.push("requires_review");
+      break;
+    }
+    // "other" is the catch-all — its generator use is, by definition, not well-defined. It
+    // must never become ready purely by having a name/category. If it happens to declare a
+    // scene capability, the matching representation is still required; either way it always
+    // needs an explicit human review before it can ever be considered ready. Conservative by
+    // design (section 8 of the spec) rather than guessing a use from its name/category.
     case "other":
     default: {
-      // Minimal generic requirement — kind-specific rules can be added as these
-      // catalog areas mature; nothing else is safe to assume yet.
+      if (item.showIn2D && !has2DRepresentation(item)) issues.push("missing_2d_representation");
+      if (item.showIn3D && !has3DAsset(item)) issues.push("missing_3d_asset");
+      if (!item.reviewedAt) issues.push("requires_review");
       break;
     }
   }
