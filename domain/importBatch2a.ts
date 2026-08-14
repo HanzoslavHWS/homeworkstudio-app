@@ -13,8 +13,10 @@
  * trace back to "which service", which is exactly what Batch #1 refused to write. See
  * section 6 of the Batch #2A follow-up spec.
  *
- * Deliberately has NO apply/writer counterpart (contrast with domain/importBatch1.ts +
- * lib/db/importBatch1.supabase.ts) — this batch is dry-run-only by explicit instruction.
+ * The apply writer counterpart lives in lib/db/importBatch2a.supabase.ts (thin I/O only) —
+ * every RESOLUTION decision (insert/noop/conflict for a catalog_item, insert/update/noop for
+ * a pricing_entry) is computed here as a pure function first, so it is fully unit-testable
+ * without touching Supabase, and the I/O layer just executes what these functions decide.
  * Pure, no I/O, no Date.now()/crypto — every function here takes plain data in (including
  * any timestamp it needs) and returns plain data out.
  *
@@ -38,7 +40,7 @@ export const BATCH2A_SOURCE_SYSTEM = "excel-v6.6";
 // 1. CANONICAL M57 / L02 — DB representation of the EXISTING hardcoded seeds.
 // ============================================================================
 
-export type ExistingCatalogItemRow = Readonly<{ id: string; internalCode?: string; sourceSystem?: string; sourceKey?: string }>;
+export type ExistingCatalogItemRow = Readonly<{ id: string; internalCode?: string; sourceSystem?: string; sourceKey?: string; kind?: CatalogItemKind }>;
 
 /**
  * Section 2 (stable reimport identity): "1. confirmed internalCode pokud existuje, 2. jinak
@@ -56,6 +58,57 @@ export function resolveExistingCatalogItem(
     if (byCode) return byCode;
   }
   return existing.find((row) => row.sourceSystem === candidate.sourceSystem && row.sourceKey === candidate.sourceKey);
+}
+
+export type CatalogItemResolution = Readonly<{
+  action: "insert" | "noop" | "conflict";
+  existingId?: string;
+  conflictReason?: string;
+}>;
+
+/**
+ * Section 3: "Pokud existující DB položka se stejným internalCode má jiný význam: STOP /
+ * conflict. Nikdy ji automaticky nepřepiš." — the apply writer NEVER blindly upserts a
+ * catalog_item; it always resolves first (pure, here) and only ever inserts a genuinely new
+ * row or no-ops onto a matching one. A same-identity row with a DIFFERENT kind (e.g. an
+ * internal_code accidentally reused for a different physical item) is a conflict, not a
+ * silent overwrite.
+ */
+export function resolveCatalogItemForApply(
+  candidate: Readonly<{ internalCode: string | null; sourceSystem: string; sourceKey: string; kind: CatalogItemKind }>,
+  existing: readonly ExistingCatalogItemRow[],
+): CatalogItemResolution {
+  const existingRow = resolveExistingCatalogItem(candidate, existing);
+  if (!existingRow) return { action: "insert" };
+  if (existingRow.kind && existingRow.kind !== candidate.kind) {
+    return {
+      action: "conflict",
+      existingId: existingRow.id,
+      conflictReason: `existující catalog_item (id=${existingRow.id}) má kind="${existingRow.kind}", očekáváno "${candidate.kind}" — internalCode/sourceKey kolize s jiným významem, apply zastaven.`,
+    };
+  }
+  return { action: "noop", existingId: existingRow.id };
+}
+
+export type PricingEntryResolution = Readonly<{ action: "insert" | "update" | "noop"; existingId?: string }>;
+export type ExistingPricingEntryRow = Readonly<{ id: string; catalogItemId: string; priceListId: string; eventId: string; currency: Currency; salePrice: number | null }>;
+
+/**
+ * Section 9: "Stejná kombinace catalog item + price list + pricing context nesmí vytvořit
+ * duplicate pricing_entry." pricing_entries has NO unique DB constraint on this natural key,
+ * so idempotency is enforced here, at the application level, before every write — identical
+ * price -> noop, changed price -> update (never a second row), no match -> insert.
+ */
+export function resolvePricingEntryForApply(
+  candidate: Readonly<{ catalogItemId: string; priceListId: string; eventId: string; currency: Currency; salePrice: number }>,
+  existing: readonly ExistingPricingEntryRow[],
+): PricingEntryResolution {
+  const match = existing.find(
+    (row) => row.catalogItemId === candidate.catalogItemId && row.priceListId === candidate.priceListId && row.eventId === candidate.eventId && row.currency === candidate.currency,
+  );
+  if (!match) return { action: "insert" };
+  if (match.salePrice === candidate.salePrice) return { action: "noop", existingId: match.id };
+  return { action: "update", existingId: match.id };
 }
 
 export type PlannedCanonicalCatalogItem = Readonly<{
@@ -431,6 +484,10 @@ export type PlannedCatalogMapping = Readonly<{
   confirmed: true;
   /** catalog_items.id doesn't exist yet (catalog_items = 0) — resolved by internalCode at apply time, never guessed here. */
   catalogItemRef: CanonicalInternalCode;
+  /** catalog_mappings.source_system/source_key — same identity Batch #1 already recorded for this exact decision in import_rows (see domain/importBatch1.ts planMappingDecisionRows). unique(source_system, source_key) in the DB makes this idempotent by construction. */
+  sourceSystem: string;
+  sourceKey: string;
+  normalizedName: string;
 }>;
 
 export type RejectedMappingAuditNote = Readonly<{
@@ -453,6 +510,9 @@ export function planMappings(decisions: readonly MappingDecision[]): MappingsPla
       canonicalInternalCode: decision.targetInternalCode as CanonicalInternalCode,
       confirmed: true as const,
       catalogItemRef: decision.targetInternalCode as CanonicalInternalCode,
+      sourceSystem: BATCH2A_SOURCE_SYSTEM,
+      sourceKey: buildMappingSourceKey(decision.identity),
+      normalizedName: normalizedMappingName(decision.identity.rawName),
     }));
   // Batch #1 already recorded this in import_rows (mapping_status='rejected') — Batch #2A
   // does not touch catalog_mappings for it and does not re-record it anywhere.
@@ -465,6 +525,66 @@ export function planMappings(decisions: readonly MappingDecision[]): MappingsPla
       recordedIn: "import_rows (Batch #1, already applied) — audit trail only, no catalog_mappings row",
     }));
   return { confirmed, rejected };
+}
+
+// ============================================================================
+// PREFLIGHT — section 11: everything checkable BEFORE the first write. Pure — reuses the
+// plan's own validation fields plus a dry-run resolution pass against real existing
+// catalog_items, so "0 duplicate internalCode conflict" / "0 duplicate source identity
+// conflict" are proven against the ACTUAL DB state, not just internal plan consistency.
+// ============================================================================
+
+export class CatalogItemConflictError extends Error {
+  readonly internalCode: string | null;
+  readonly sourceKey: string;
+  readonly existingId: string;
+
+  constructor(reason: string, details: Readonly<{ internalCode: string | null; sourceKey: string; existingId: string }>) {
+    super(reason);
+    this.name = "CatalogItemConflictError";
+    this.internalCode = details.internalCode;
+    this.sourceKey = details.sourceKey;
+    this.existingId = details.existingId;
+  }
+}
+
+export class Batch2aPreflightError extends Error {
+  readonly issues: readonly string[];
+
+  constructor(issues: readonly string[]) {
+    super(`Batch #2A preflight selhal (${issues.length} problém(y)), apply zastaven před prvním zápisem: ${issues.join(" | ")}`);
+    this.name = "Batch2aPreflightError";
+    this.issues = issues;
+  }
+}
+
+export type Batch2aPreflightResult = Readonly<{ ok: boolean; issues: readonly string[] }>;
+
+export function runBatch2aPreflight(plan: Batch2aPlan, existingCatalogItems: readonly ExistingCatalogItemRow[]): Batch2aPreflightResult {
+  const issues: string[] = [];
+  if (plan.pricing.validation.currencyMismatches.length > 0) issues.push(`${plan.pricing.validation.currencyMismatches.length} currency mismatch(es) v pricing plánu.`);
+  if (plan.pricing.validation.orphanPricingSourceKeys.length > 0) issues.push(`${plan.pricing.validation.orphanPricingSourceKeys.length} orphan pricing target(s) — chybějící event/price list.`);
+  if (plan.pricing.validation.catalogTargetMissing.length > 0) issues.push(`${plan.pricing.validation.catalogTargetMissing.length} pricing entries bez catalog targetu.`);
+  if (plan.reimport.duplicateInternalCodes.length > 0) issues.push(`Duplicitní internalCode uvnitř plánu: ${plan.reimport.duplicateInternalCodes.join(", ")}.`);
+  if (plan.reimport.duplicateSourceKeys.length > 0) issues.push(`Duplicitní sourceKey uvnitř plánu: ${plan.reimport.duplicateSourceKeys.join(", ")}.`);
+
+  for (const canonical of plan.canonicalCatalogItems) {
+    const resolution = resolveCatalogItemForApply(
+      { internalCode: canonical.internalCode, sourceSystem: BATCH2A_SOURCE_SYSTEM, sourceKey: canonical.internalCode, kind: canonical.kind },
+      existingCatalogItems,
+    );
+    if (resolution.action === "conflict") issues.push(`Canonical ${canonical.internalCode}: ${resolution.conflictReason}`);
+  }
+  for (const service of plan.technicalServices) {
+    if (!service.isNewCatalogItem) continue;
+    const resolution = resolveCatalogItemForApply(
+      { internalCode: service.internalCode, sourceSystem: service.sourceSystem, sourceKey: service.sourceKey, kind: service.kind },
+      existingCatalogItems,
+    );
+    if (resolution.action === "conflict") issues.push(`Technical service ${service.sourceKey}: ${resolution.conflictReason}`);
+  }
+
+  return { ok: issues.length === 0, issues };
 }
 
 // ============================================================================
@@ -514,4 +634,92 @@ export function buildBatch2aPlan(
   if (pricing.validation.catalogTargetMissing.length > 0) warnings.push(`POZOR: ${pricing.validation.catalogTargetMissing.length} pricing candidate(s) bez catalog targetu — viz pricing.validation.catalogTargetMissing.`);
 
   return { canonicalCatalogItems, technicalServices, catalogItemsSummary, pricing, mappings, reimport, warnings };
+}
+
+// ============================================================================
+// APPLY PREVIEW — section 12: what a real apply WOULD do against the current DB state,
+// computed with the exact same pure resolution functions the real writer uses
+// (lib/db/importBatch2a.supabase.ts), so the preview can never drift from apply behavior.
+// Pure — takes already-fetched existing rows, does no I/O itself.
+// ============================================================================
+
+export type ExistingCatalogMappingRow = Readonly<{ sourceSystem: string; sourceKey: string; catalogItemId: string }>;
+
+export type Batch2aApplyPreview = Readonly<{
+  catalogItems: Readonly<{ insert: number; noop: number; conflicts: number }>;
+  catalogMappings: Readonly<{ insert: number; noop: number }>;
+  pricingEntries: Readonly<{ insert: number; update: number; noop: number }>;
+}>;
+
+export function previewBatch2aApply(
+  plan: Batch2aPlan,
+  existingCatalogItems: readonly ExistingCatalogItemRow[],
+  existingCatalogMappings: readonly ExistingCatalogMappingRow[],
+  existingPricingEntries: readonly ExistingPricingEntryRow[],
+): Batch2aApplyPreview {
+  let catalogItemsInsert = 0;
+  let catalogItemsNoop = 0;
+  let catalogItemsConflicts = 0;
+  // Maps a pricing entry's symbolic catalogItemRef (internalCode or sourceKey) to the REAL
+  // resolved DB id — only populated for items that already exist (noop); an item still
+  // pending insert has no real id yet, so any pricing entry targeting it is trivially
+  // also "insert" (it cannot already exist for a catalog_item that doesn't exist).
+  const resolvedIdByRef = new Map<string, string>();
+
+  for (const canonical of plan.canonicalCatalogItems) {
+    const resolution = resolveCatalogItemForApply(
+      { internalCode: canonical.internalCode, sourceSystem: BATCH2A_SOURCE_SYSTEM, sourceKey: canonical.internalCode, kind: canonical.kind },
+      existingCatalogItems,
+    );
+    if (resolution.action === "insert") catalogItemsInsert += 1;
+    else if (resolution.action === "noop") {
+      catalogItemsNoop += 1;
+      resolvedIdByRef.set(canonical.internalCode, resolution.existingId!);
+    } else catalogItemsConflicts += 1;
+  }
+  for (const service of plan.technicalServices) {
+    if (!service.isNewCatalogItem) continue;
+    const resolution = resolveCatalogItemForApply(
+      { internalCode: service.internalCode, sourceSystem: service.sourceSystem, sourceKey: service.sourceKey, kind: service.kind },
+      existingCatalogItems,
+    );
+    if (resolution.action === "insert") catalogItemsInsert += 1;
+    else if (resolution.action === "noop") {
+      catalogItemsNoop += 1;
+      resolvedIdByRef.set(service.sourceKey, resolution.existingId!);
+      if (service.internalCode) resolvedIdByRef.set(service.internalCode, resolution.existingId!);
+    } else catalogItemsConflicts += 1;
+  }
+
+  const existingMappingKeys = new Set(existingCatalogMappings.map((m) => `${m.sourceSystem}::${m.sourceKey}`));
+  let catalogMappingsInsert = 0;
+  let catalogMappingsNoop = 0;
+  for (const mapping of plan.mappings.confirmed) {
+    if (existingMappingKeys.has(`${mapping.sourceSystem}::${mapping.sourceKey}`)) catalogMappingsNoop += 1;
+    else catalogMappingsInsert += 1;
+  }
+
+  let pricingInsert = 0;
+  let pricingUpdate = 0;
+  let pricingNoop = 0;
+  for (const entry of plan.pricing.entries) {
+    const catalogItemId = resolvedIdByRef.get(entry.catalogItemRef);
+    if (!catalogItemId) {
+      pricingInsert += 1;
+      continue;
+    }
+    const resolution = resolvePricingEntryForApply(
+      { catalogItemId, priceListId: entry.priceListId, eventId: entry.eventId, currency: entry.currency, salePrice: entry.salePrice },
+      existingPricingEntries,
+    );
+    if (resolution.action === "insert") pricingInsert += 1;
+    else if (resolution.action === "update") pricingUpdate += 1;
+    else pricingNoop += 1;
+  }
+
+  return {
+    catalogItems: { insert: catalogItemsInsert, noop: catalogItemsNoop, conflicts: catalogItemsConflicts },
+    catalogMappings: { insert: catalogMappingsInsert, noop: catalogMappingsNoop },
+    pricingEntries: { insert: pricingInsert, update: pricingUpdate, noop: pricingNoop },
+  };
 }

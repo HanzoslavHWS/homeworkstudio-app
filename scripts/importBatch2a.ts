@@ -1,13 +1,16 @@
 /**
  * Import Batch #2A: canonical M57/L02 catalog_items + 23 technical-service candidates +
- * 495 fixed pricing_entries — DRY-RUN ONLY.
+ * 495 fixed pricing_entries.
  *
- *   node scripts/importBatch2a.ts [path-to-xlsm]
+ *   node scripts/importBatch2a.ts [path-to-xlsm]              -> dry-run (DEFAULT, zero writes)
+ *   node scripts/importBatch2a.ts [path-to-xlsm] --dry-run     -> same, explicit
+ *   node scripts/importBatch2a.ts [path-to-xlsm] --apply       -> real writes (requires Supabase env)
  *
- * There is NO --apply mode in this script by design — Batch #2A is dry-run-only per
- * instruction. Reads (workbook + read-only remote DB) only, never writes anywhere: no
- * catalog_items, no pricing_entries, no catalog_mappings, no R2, no P86, no other PRICELIST
- * rows, no booths. See domain/importBatch2a.ts for the pure planning logic.
+ * Without --apply this NEVER calls applyBatch2aPlan — only reads (workbook + read-only
+ * remote DB) and prints/writes a plan + an apply PREVIEW (computed with the exact same pure
+ * resolution functions the real writer uses, so the preview can't drift from real behavior).
+ * See domain/importBatch2a.ts for the pure planning/resolution logic and
+ * lib/db/importBatch2a.supabase.ts for the writer.
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -16,13 +19,23 @@ import { buildImportPreview, fingerprintBytes } from "../domain/importBatch.ts";
 import type { MappingDecision } from "../domain/importBatch1.ts";
 import {
   buildBatch2aPlan,
+  previewBatch2aApply,
+  runBatch2aPreflight,
   type AbfTechnicalServiceMatch,
   type ExistingCatalogItemRow,
+  type ExistingCatalogMappingRow,
   type ExistingEventRow2A,
   type ExistingPriceListRow2A,
+  type ExistingPricingEntryRow,
 } from "../domain/importBatch2a.ts";
 import { extractSheetGrid, readWorkbookSheets } from "../lib/import/xlsxReader.server.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
+import {
+  applyBatch2aPlan,
+  readExistingCatalogItemsFull,
+  readExistingCatalogMappings,
+  readExistingPricingEntriesForCatalogItems,
+} from "../lib/db/importBatch2a.supabase.ts";
 
 /** Identical to Batch #1's human-confirmed decisions (scripts/importBatch1.ts) — same source session, same facts about V6.6, not re-derived. */
 const BATCH1_MAPPING_DECISIONS: readonly MappingDecision[] = [
@@ -54,12 +67,6 @@ function loadAbfTechnicalServiceMatches(): ReadonlyMap<string, AbfTechnicalServi
   return map;
 }
 
-async function readExistingCatalogItems(client: ReturnType<typeof createSupabaseServerClient>): Promise<readonly ExistingCatalogItemRow[]> {
-  const { data, error } = await client.from("catalog_items").select("id, internal_code");
-  if (error) throw error;
-  return (data ?? []).map((row: { id: string; internal_code: string | null }) => ({ id: row.id, internalCode: row.internal_code ?? undefined }));
-}
-
 async function readExistingEvents(client: ReturnType<typeof createSupabaseServerClient>): Promise<readonly ExistingEventRow2A[]> {
   const { data, error } = await client.from("events").select("id, source_key, year");
   if (error) throw error;
@@ -74,10 +81,7 @@ async function readExistingPriceLists(client: ReturnType<typeof createSupabaseSe
 
 async function main() {
   const args = process.argv.slice(2);
-  if (args.includes("--apply")) {
-    console.error("Batch #2A je DRY-RUN ONLY. Tento skript nemá --apply režim vůbec implementovaný — nic se nezapíše.");
-    process.exit(1);
-  }
+  const apply = args.includes("--apply");
   const filePath = args.find((arg) => !arg.startsWith("--")) ?? path.resolve(process.cwd(), "private-imports", "Ultimátní kalkulace V6.6.xlsm");
 
   const bytes = readFileSync(filePath);
@@ -94,7 +98,7 @@ async function main() {
   };
   const preview = buildImportPreview(sheets, componentCatalogItems);
 
-  console.log("=== IMPORT BATCH #2A — DRY-RUN ONLY (no --apply mode exists) ===");
+  console.log("=== IMPORT BATCH #2A —", apply ? "APPLY MODE" : "DRY-RUN (default, zero writes)", "===");
   console.log("sourceFileName:", fileName);
   console.log("sourceFingerprint:", fingerprint);
   console.log();
@@ -102,15 +106,17 @@ async function main() {
   let existingCatalogItems: readonly ExistingCatalogItemRow[] = [];
   let existingEvents: readonly ExistingEventRow2A[] = [];
   let existingPriceLists: readonly ExistingPriceListRow2A[] = [];
-  let dbStateSource = "unavailable (Supabase not reachable/configured) — treating as empty";
+  let existingCatalogMappings: readonly ExistingCatalogMappingRow[] = [];
+  let dbStateSource = "unavailable (Supabase not reachable/configured) — treating as empty, all rows classified as insert";
   try {
     const client = createSupabaseServerClient();
-    [existingCatalogItems, existingEvents, existingPriceLists] = await Promise.all([
-      readExistingCatalogItems(client),
+    [existingCatalogItems, existingEvents, existingPriceLists, existingCatalogMappings] = await Promise.all([
+      readExistingCatalogItemsFull(client),
       readExistingEvents(client),
       readExistingPriceLists(client),
+      readExistingCatalogMappings(client),
     ]);
-    dbStateSource = `read live from Supabase (read-only SELECT): ${existingCatalogItems.length} catalog_items, ${existingEvents.length} events, ${existingPriceLists.length} price_lists`;
+    dbStateSource = `read live from Supabase (read-only SELECT): ${existingCatalogItems.length} catalog_items, ${existingEvents.length} events, ${existingPriceLists.length} price_lists, ${existingCatalogMappings.length} catalog_mappings`;
   } catch (error) {
     if (!(error instanceof SupabaseConfigurationError)) console.error("Warning: could not read existing DB state:", error instanceof Error ? error.message : error);
   }
@@ -163,7 +169,7 @@ async function main() {
   console.log();
 
   console.log("=== MAPPINGS ===");
-  for (const mapping of plan.mappings.confirmed) console.log(`- confirmed: "${mapping.rawName}" -> ${mapping.canonicalInternalCode}`);
+  for (const mapping of plan.mappings.confirmed) console.log(`- confirmed: "${mapping.rawName}" -> ${mapping.canonicalInternalCode}  sourceKey=${mapping.sourceKey}`);
   for (const rejection of plan.mappings.rejected) console.log(`- rejected: "${rejection.rawName}" X ${rejection.rejectedInternalCode} (${rejection.recordedIn})`);
   console.log();
 
@@ -171,8 +177,30 @@ async function main() {
   for (const warning of plan.warnings) console.log("- " + warning);
   console.log();
 
-  console.log("=== DATABASE WRITES ===");
-  console.log("0 (dry-run only — this script has no apply path, nothing was written)");
+  // Section 11: preflight — everything checkable before the first write. Runs in BOTH modes;
+  // in --apply mode applyBatch2aPlan() re-runs this itself (fresh read) right before writing.
+  const preflight = runBatch2aPreflight(plan, existingCatalogItems);
+  console.log("=== PREFLIGHT ===");
+  console.log(preflight.ok ? "OK — no blocking issues found." : `BLOCKED — ${preflight.issues.length} issue(s):`);
+  for (const issue of preflight.issues) console.log("  - " + issue);
+  console.log();
+
+  // Section 12: apply PREVIEW — read-only, uses the exact same resolution functions the real
+  // writer uses, against whatever the DB actually looks like right now.
+  const catalogItemIdsForPricingPreview = existingCatalogItems.map((row) => row.id);
+  const existingPricingEntries: readonly ExistingPricingEntryRow[] = await (async () => {
+    try {
+      const client = createSupabaseServerClient();
+      return await readExistingPricingEntriesForCatalogItems(client, catalogItemIdsForPricingPreview);
+    } catch {
+      return [];
+    }
+  })();
+  const applyPreview = previewBatch2aApply(plan, existingCatalogItems, existingCatalogMappings, existingPricingEntries);
+  console.log("=== APPLY PREVIEW (what a real --apply would do right now) ===");
+  console.log(`catalog_items:     insert=${applyPreview.catalogItems.insert}  noop=${applyPreview.catalogItems.noop}  conflicts=${applyPreview.catalogItems.conflicts}`);
+  console.log(`catalog_mappings:  insert=${applyPreview.catalogMappings.insert}  noop=${applyPreview.catalogMappings.noop}`);
+  console.log(`pricing_entries:   insert=${applyPreview.pricingEntries.insert}  update=${applyPreview.pricingEntries.update}  noop=${applyPreview.pricingEntries.noop}`);
   console.log();
 
   const outputPath = path.resolve(process.cwd(), "private-imports", "import-batch2a-plan.json");
@@ -182,8 +210,10 @@ async function main() {
       {
         sourceFileName: fileName,
         sourceFingerprint: fingerprint,
-        mode: "dry-run-only",
+        mode: apply ? "apply" : "dry-run",
         dbStateSource,
+        preflight,
+        applyPreview,
         plan,
       },
       null,
@@ -192,9 +222,24 @@ async function main() {
     "utf8",
   );
   console.log("Plan written to:", outputPath);
+
+  if (!apply) {
+    console.log();
+    console.log("=== DATABASE WRITES ===");
+    console.log("0 (dry-run — nothing was written)");
+    console.log();
+    console.log("Dry-run complete. Re-run with --apply to write for real (requires SUPABASE_URL/SUPABASE_SECRET_KEY).");
+    return;
+  }
+
   console.log();
-  console.log("=== ZERO WRITES ASSERTION ===");
-  console.log("Supabase inserts: 0 | Supabase updates: 0 | Supabase deletes: 0 | R2 writes: 0 | P86 changes: 0 | full PRICELIST catalog import: 0");
+  console.log("=== APPLYING ===");
+  const client = createSupabaseServerClient();
+  const result = await applyBatch2aPlan(client, plan, { sourceFileName: fileName, sourceFingerprint: fingerprint, sourceVersion: "V6.6" });
+  console.log("import_batches id:", result.batchId);
+  console.log("catalog_items:", JSON.stringify(result.catalogItems));
+  console.log("catalog_mappings:", JSON.stringify(result.catalogMappings));
+  console.log("pricing_entries:", JSON.stringify(result.pricingEntries));
 }
 
 main().catch((error) => {
