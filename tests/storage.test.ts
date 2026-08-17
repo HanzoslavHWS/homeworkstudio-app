@@ -61,6 +61,32 @@ test("upload validace odmítne MIME mismatch a oversized soubor", () => {
   assert.throws(() => validateUploadInput({ category: "event-logo", ownerId: "event", originalFileName: "logo.png", mimeType: "image/png", size: 6_000_000 }), (error) => error instanceof AssetValidationError && error.code === "oversized");
 });
 
+// -----------------------------------------------------------------------------------------
+// Catalog item asset workflow — photo (jpg/jpeg/png/webp only) + GLB (model/gltf-binary only)
+// -----------------------------------------------------------------------------------------
+
+test("catalog-photo přijme jpg/png/webp a odmítne gif/svg (užší než sdílené IMAGE_TYPES pro eventy)", () => {
+  for (const [mimeType, fileName] of [["image/jpeg", "photo.jpg"], ["image/png", "photo.png"], ["image/webp", "photo.webp"]] as const) {
+    assert.doesNotThrow(() => validateUploadInput({ category: "catalog-photo", ownerId: "M99", originalFileName: fileName, mimeType, size: 1000 }));
+  }
+  assert.throws(() => validateUploadInput({ category: "catalog-photo", ownerId: "M99", originalFileName: "photo.gif", mimeType: "image/gif", size: 1000 }), (error) => error instanceof AssetValidationError && error.code === "invalid-mime");
+  assert.throws(() => validateUploadInput({ category: "catalog-photo", ownerId: "M99", originalFileName: "photo.svg", mimeType: "image/svg+xml", size: 1000 }), (error) => error instanceof AssetValidationError && error.code === "invalid-mime");
+});
+
+test("catalog-model přijme pouze .glb (model/gltf-binary) a odmítne application/octet-stream (dřív povolovalo i .skp)", () => {
+  assert.doesNotThrow(() => validateUploadInput({ category: "catalog-model", ownerId: "M99", originalFileName: "model.glb", mimeType: "model/gltf-binary", size: 1_000_000 }));
+  assert.throws(() => validateUploadInput({ category: "catalog-model", ownerId: "M99", originalFileName: "model.skp", mimeType: "application/octet-stream", size: 1_000_000 }), (error) => error instanceof AssetValidationError && error.code === "invalid-mime");
+  assert.throws(() => validateUploadInput({ category: "catalog-model", ownerId: "M99", originalFileName: "model.glb", mimeType: "application/octet-stream", size: 1_000_000 }), (error) => error instanceof AssetValidationError && error.code === "invalid-mime");
+  assert.throws(() => validateUploadInput({ category: "catalog-model", ownerId: "M99", originalFileName: "photo.jpg", mimeType: "image/jpeg", size: 1000 }), (error) => error instanceof AssetValidationError && error.code === "invalid-mime");
+});
+
+test("catalog-model storageKey odpovídá existující catalog/furniture/<id>/models konvenci (stejný prefix jako catalog-photo)", () => {
+  assert.equal(
+    createStorageKey({ category: "catalog-model", ownerId: "M99", originalFileName: "model.glb", mimeType: "model/gltf-binary" }, "fixed-uuid"),
+    "catalog/furniture/m99/models/fixed-uuid.glb",
+  );
+});
+
 test("R2 provider presignuje PutObject s bucketem, klíčem a Content-Type bez R2 object metadata", async () => {
   const commands: unknown[] = [];
   const client = { send: async (command: unknown) => { commands.push(command); return {}; } };

@@ -1,5 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { assertCanActivate } from "../../domain/catalogReadiness.ts";
+import { assertCanActivate, evaluateCatalogReadiness } from "../../domain/catalogReadiness.ts";
 import { ConcurrencyConflictError } from "./concurrency.ts";
 import {
   applyCatalogItemEdit,
@@ -83,15 +83,40 @@ export async function saveCatalogItemAdmin(
     throw new ConcurrencyConflictError("catalog_item", id);
   }
 
-  const nextDocument = applyCatalogItemEdit(current.document, edit);
+  let nextDocument = applyCatalogItemEdit(current.document, edit);
 
-  // Section 11: needs_review/draft/inactive/archived -> active must satisfy the SAME
-  // evaluateCatalogReadiness() rules the UI displays — never a parallel/looser server check,
-  // and never bypassable by calling this API directly. Re-saving an item that is ALREADY
-  // active (e.g. fixing a typo on M57's displayName) never re-triggers this guard — only a
-  // genuine transition into "active" does, so routine edits to M57/L02/P86 are unaffected.
+  // Section 9 (asset workflow spec): reviewedAt is ONLY ever set by this explicit flag —
+  // never as a side effect of an asset upload (edit.photoAsset/modelAsset are handled purely
+  // by applyCatalogItemEdit above and never touch reviewedAt). The server stamps the actual
+  // timestamp; a client-supplied date is never trusted.
+  if (edit.markReviewed === true) {
+    nextDocument = { ...nextDocument, reviewedAt: new Date().toISOString() };
+  }
+
+  // Section 11 (component admin spec): needs_review/draft/inactive/archived -> active must
+  // satisfy the SAME evaluateCatalogReadiness() rules the UI displays — never a parallel/
+  // looser server check, and never bypassable by calling this API directly. Re-saving an item
+  // that is ALREADY active (e.g. fixing a typo on M57's displayName) never re-triggers this
+  // guard — only a genuine transition into "active" does, so routine edits to M57/L02/P86 are
+  // unaffected.
   if (edit.lifecycleStatus === "active" && current.lifecycleStatus !== "active") {
     assertCanActivate({ ...nextDocument, lifecycleStatus: "active" } as ComponentDefinition, current.kind);
+  }
+
+  // Section 8 (asset workflow spec): removing a photo/model reference from an ALREADY active
+  // item must never leave it active+readiness=false. Scoped narrowly to explicit asset
+  // removal (photoAsset/modelAsset === null) — an unrelated edit to an already-active but
+  // legacy-imperfect item (like M57, missing reviewedAt) must never retroactively downgrade
+  // it, matching the activation-guard scoping immediately above. Auto-downgrade rather than
+  // blocking: the removal itself always succeeds, the item just safely falls back to
+  // needs_review instead of silently violating the active+ready invariant.
+  const removedAssetReference = edit.photoAsset === null || edit.modelAsset === null;
+  const resultingStatus = (nextDocument.lifecycleStatus as CatalogItemStatus | undefined) ?? current.lifecycleStatus;
+  if (removedAssetReference && resultingStatus === "active") {
+    const readiness = evaluateCatalogReadiness({ ...nextDocument, lifecycleStatus: "active" } as ComponentDefinition, current.kind);
+    if (!readiness.ready) {
+      nextDocument = { ...nextDocument, lifecycleStatus: "needs_review" };
+    }
   }
 
   const patch = {

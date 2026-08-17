@@ -5147,6 +5147,9 @@ select:focus {
 .readinessIssues { margin-top: 9px; padding: 8px; border: 1px dashed #e2b6ae; border-radius: 6px; background: #fdf4f3; font-size: 7px; color: #8a3f35; }
 .readinessIssues ul { margin: 4px 0 0 14px; }
 .catalogAdminSaveBar .primaryButton:disabled { opacity: .45; cursor: not-allowed; }
+.assetActions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.catalogAdminReviewActions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.catalogAdminReviewActions .primaryButton:disabled { opacity: .45; cursor: not-allowed; }
 .catalogPhotoPlaceholder { min-height: 180px; display: grid; place-items: center; margin-top: 8px; padding: 18px; border: 1px dashed #d5d8da; border-radius: 7px; background: #fbfbfb; color: #969a9d; font-size: 8px; text-align: center; }
 .calculationWorkspace { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: start; gap: 16px; margin-bottom: 18px; }
 .calculationOptions { position: sticky; top: 12px; }

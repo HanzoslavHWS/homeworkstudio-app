@@ -8,6 +8,11 @@ import {
   documentBasePricing,
   documentDimensions,
   documentHas3DAsset,
+  documentModelAsset,
+  documentModelUrl,
+  documentPhotoAsset,
+  documentPhotoUrl,
+  documentReviewedAt,
   documentSourceTraceability,
   filterCatalogItemsAdmin,
   CATALOG_ITEM_KIND_LABELS_CS,
@@ -20,6 +25,17 @@ import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../
 import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type CatalogItemKind, type CatalogItemStatus } from "../../domain/models";
 import { ConcurrencyConflictError } from "../../lib/db/concurrency";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
+import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
+import { useAssetUrl } from "../../hooks/useAssetUrl";
+
+const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp";
+const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
+const MODEL_EXTENSIONS = ["glb"];
+
+function hasAllowedExtension(fileName: string, allowed: readonly string[]): boolean {
+  const extension = fileName.toLowerCase().split(".").pop();
+  return Boolean(extension) && allowed.includes(extension!);
+}
 
 /**
  * Component Administration ("Administrace → Komponenty"), switched from the static
@@ -188,8 +204,95 @@ function ComponentAdminDetail({
   const trace = documentSourceTraceability(itemDocument);
   const readiness = computeReadiness(item);
   const generatorEligible = computeGeneratorEligibleLive(item);
-  const has3D = documentHas3DAsset(itemDocument);
-  const modelUrl = typeof itemDocument.modelUrl === "string" ? itemDocument.modelUrl : undefined;
+  const reviewedAt = documentReviewedAt(itemDocument);
+
+  const photoAsset = documentPhotoAsset(itemDocument);
+  const legacyPhotoUrl = documentPhotoUrl(itemDocument);
+  const hasPhoto = Boolean(photoAsset || legacyPhotoUrl);
+  const photoResolved = useAssetUrl(photoAsset, legacyPhotoUrl);
+
+  const modelAsset = documentModelAsset(itemDocument);
+  const legacyModelUrl = documentModelUrl(itemDocument);
+  const hasModel = documentHas3DAsset(itemDocument);
+
+  const [photoProgress, setPhotoProgress] = useState<UploadProgress | undefined>(undefined);
+  const [photoActionError, setPhotoActionError] = useState("");
+  const [modelProgress, setModelProgress] = useState<UploadProgress | undefined>(undefined);
+  const [modelActionError, setModelActionError] = useState("");
+  const [reviewBusy, setReviewBusy] = useState(false);
+  const [reviewError, setReviewError] = useState("");
+
+  const ownerId = item.internalCode ?? item.id;
+
+  async function handlePhotoUpload(file: File) {
+    setPhotoActionError("");
+    if (file.size === 0) {
+      setPhotoActionError("Soubor je prázdný.");
+      return;
+    }
+    if (!hasAllowedExtension(file.name, PHOTO_EXTENSIONS)) {
+      setPhotoActionError("Podporované formáty: jpg, jpeg, png, webp.");
+      return;
+    }
+    try {
+      // Section 7 — replacement safety: upload to R2 first, THEN save the new DB reference.
+      // If the save below fails, the OLD photoAsset in `item`/`current` is never touched —
+      // the new R2 object may become orphaned, which is accepted (no auto-cleanup here).
+      const asset = await uploadAsset(file, { category: "catalog-photo", ownerId }, setPhotoProgress);
+      await onSave({ photoAsset: asset });
+    } catch (uploadError) {
+      setPhotoActionError(uploadError instanceof Error ? uploadError.message : "Nahrání fotografie selhalo.");
+    }
+  }
+
+  async function handlePhotoRemove() {
+    setPhotoActionError("");
+    try {
+      // Metadata-only — never a physical R2 delete (mirrors /api/assets/delete's reference-safety no-op).
+      await onSave({ photoAsset: null });
+    } catch (removeError) {
+      setPhotoActionError(removeError instanceof Error ? removeError.message : "Odebrání fotografie selhalo.");
+    }
+  }
+
+  async function handleModelUpload(file: File) {
+    setModelActionError("");
+    if (file.size === 0) {
+      setModelActionError("Soubor je prázdný.");
+      return;
+    }
+    if (!hasAllowedExtension(file.name, MODEL_EXTENSIONS)) {
+      setModelActionError("Podporovaný formát: pouze .glb.");
+      return;
+    }
+    try {
+      const asset = await uploadAsset(file, { category: "catalog-model", ownerId }, setModelProgress);
+      await onSave({ modelAsset: asset });
+    } catch (uploadError) {
+      setModelActionError(uploadError instanceof Error ? uploadError.message : "Nahrání 3D modelu selhalo.");
+    }
+  }
+
+  async function handleModelRemove() {
+    setModelActionError("");
+    try {
+      await onSave({ modelAsset: null });
+    } catch (removeError) {
+      setModelActionError(removeError instanceof Error ? removeError.message : "Odebrání 3D modelu selhalo.");
+    }
+  }
+
+  async function handleMarkReviewed() {
+    setReviewBusy(true);
+    setReviewError("");
+    try {
+      await onSave({ markReviewed: true });
+    } catch (markError) {
+      setReviewError(markError instanceof Error ? markError.message : "Označení jako zkontrolované selhalo.");
+    } finally {
+      setReviewBusy(false);
+    }
+  }
 
   const initialWidth = dims.widthMm !== null ? String(dims.widthMm) : "";
   const initialDepth = dims.depthMm !== null ? String(dims.depthMm) : "";
@@ -302,6 +405,7 @@ function ComponentAdminDetail({
             <EditRow label="Jednotka">
               <input value={unit} onChange={(event) => { setUnit(event.target.value); setDirty(true); }} />
             </EditRow>
+            <Row label="Zdroj (traceability)" value={trace.sourceSystem ? `${trace.sourceSystem} · ${trace.sourceKey ?? "—"}` : "—"} />
           </dl>
         </section>
 
@@ -325,6 +429,7 @@ function ComponentAdminDetail({
           <dl>
             <Row label="Stav" value={CATALOG_ITEM_STATUS_LABELS_CS[item.lifecycleStatus]} />
             <Row label="Naposledy uloženo" value={new Date(item.updatedAt).toLocaleString("cs-CZ")} />
+            <Row label="Zkontrolováno" value={reviewedAt ? new Date(reviewedAt).toLocaleString("cs-CZ") : "Zatím nezkontrolováno"} />
             <Row label="Generator" value={generatorEligible ? "Připraveno" : "Nepřipraveno"} />
           </dl>
           {!readiness.ready && (
@@ -335,25 +440,92 @@ function ComponentAdminDetail({
               </ul>
             </div>
           )}
-          {item.lifecycleStatus !== "active" && (
-            <button
-              type="button"
-              className="primaryButton"
-              onClick={handleActivate}
-              disabled={!readiness.ready || busy !== "idle"}
-              title={!readiness.ready ? "Nelze aktivovat — položka nesplňuje readiness pravidla pro generátor." : undefined}
-            >
-              {busy === "activating" ? "Aktivuji…" : "Aktivovat"}
+          <div className="catalogAdminReviewActions">
+            <button type="button" className="secondaryButton" onClick={handleMarkReviewed} disabled={reviewBusy}>
+              {reviewBusy ? "Označuji…" : "Označit jako zkontrolované"}
             </button>
-          )}
+            {item.lifecycleStatus !== "active" && (
+              <button
+                type="button"
+                className="primaryButton"
+                onClick={handleActivate}
+                disabled={!readiness.ready || busy !== "idle"}
+                title={!readiness.ready ? "Nelze aktivovat — položka nesplňuje readiness pravidla pro generátor." : undefined}
+              >
+                {busy === "activating" ? "Aktivuji…" : "Aktivovat"}
+              </button>
+            )}
+          </div>
+          {reviewError && <small className="uploadError">{reviewError}</small>}
         </section>
 
         <section className="catalogDetailSection">
-          <h3>Assety</h3>
+          <h3>Fotografie</h3>
           <dl>
-            <Row label="3D model (GLB)" value={modelUrl ?? (has3D ? "Ano" : "3D model chybí")} />
-            <Row label="Zdroj (traceability)" value={trace.sourceSystem ? `${trace.sourceSystem} · ${trace.sourceKey ?? "—"}` : "—"} />
+            <Row label="Stav" value={hasPhoto ? "Fotografie existuje" : "Fotografie chybí"} />
+            <Row label="Soubor" value={photoAsset?.originalFileName ?? (legacyPhotoUrl ? legacyPhotoUrl.split("/").pop() : undefined)} />
           </dl>
+          {photoResolved.url && <img className="catalogPhotoPreview" src={photoResolved.url} alt={`Fotografie ${item.displayName}`} />}
+          <div className="assetActions">
+            <label className="smallUploadButton">
+              {hasPhoto ? "Nahradit" : "Nahrát"}
+              <input
+                type="file"
+                accept={PHOTO_ACCEPT}
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void handlePhotoUpload(file);
+                }}
+              />
+            </label>
+            {photoAsset && (
+              <button type="button" className="dangerText" onClick={handlePhotoRemove} disabled={photoProgress?.state === "uploading"}>
+                Odebrat referenci
+              </button>
+            )}
+          </div>
+          {photoProgress && (
+            <div className={`assetUploadState ${photoProgress.state}`}>
+              <progress max="100" value={photoProgress.percent} />
+              <span>{photoProgress.state === "uploading" ? `Nahrávám ${photoProgress.percent} %` : photoProgress.state === "success" ? "Nahráno do R2" : photoProgress.message}</span>
+            </div>
+          )}
+          {photoActionError && <small className="uploadError">{photoActionError}</small>}
+        </section>
+
+        <section className="catalogDetailSection">
+          <h3>3D model</h3>
+          <dl>
+            <Row label="Stav" value={hasModel ? "Model existuje" : "3D model chybí"} />
+            <Row label="Soubor" value={modelAsset?.originalFileName ?? (legacyModelUrl ? legacyModelUrl.split("/").pop() : undefined)} />
+          </dl>
+          <div className="assetActions">
+            <label className="smallUploadButton">
+              {hasModel ? "Nahradit GLB" : "Nahrát GLB"}
+              <input
+                type="file"
+                accept=".glb"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void handleModelUpload(file);
+                }}
+              />
+            </label>
+            {modelAsset && (
+              <button type="button" className="dangerText" onClick={handleModelRemove} disabled={modelProgress?.state === "uploading"}>
+                Odebrat referenci
+              </button>
+            )}
+          </div>
+          {modelProgress && (
+            <div className={`assetUploadState ${modelProgress.state}`}>
+              <progress max="100" value={modelProgress.percent} />
+              <span>{modelProgress.state === "uploading" ? `Nahrávám ${modelProgress.percent} %` : modelProgress.state === "success" ? "Nahráno do R2" : modelProgress.message}</span>
+            </div>
+          )}
+          {modelActionError && <small className="uploadError">{modelActionError}</small>}
         </section>
 
         <section className="catalogDetailSection">

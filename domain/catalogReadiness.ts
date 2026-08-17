@@ -56,7 +56,7 @@ function has2DRepresentation(item: ComponentDefinition): boolean {
 }
 
 function has3DAsset(item: ComponentDefinition): boolean {
-  return Boolean(item.modelUrl) || Boolean(item.assets?.models3d?.length);
+  return Boolean(item.modelUrl) || Boolean(item.assets?.models3d?.length) || Boolean(item.modelAsset?.storageKey);
 }
 
 /** Booth kind requires a real, placeable footprint — unlike furniture, height is mandatory too (mirrors BoothType's own NominalDimensions, where widthMm/depthMm/heightMm are all non-optional). */

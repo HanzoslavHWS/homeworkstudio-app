@@ -11,11 +11,15 @@ import {
   documentBasePricing,
   documentDimensions,
   documentHas3DAsset,
+  documentModelAsset,
+  documentPhotoAsset,
+  documentReviewedAt,
   filterCatalogItemsAdmin,
   matchesCatalogItemAdminSearch,
   parseCatalogItemAdminEdit,
   type CatalogItemAdmin,
 } from "../domain/catalogItemsAdmin.ts";
+import type { StoredAsset } from "../domain/assets.ts";
 import { CatalogReadinessError } from "../domain/catalogReadiness.ts";
 import {
   readCatalogItemsAdmin,
@@ -673,9 +677,11 @@ test("BoothGenerator.tsx: the 'components' admin section now renders ComponentAd
   assert.doesNotMatch(source, /<ComponentCatalogPage/u);
 });
 
-test("ComponentAdminPage.tsx never imports R2/asset-upload modules (section 15 — no functional upload button this session)", () => {
+test("ComponentAdminPage.tsx reuses the existing asset upload infrastructure (uploadAsset/useAssetUrl) — never a second/parallel upload system", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.doesNotMatch(source, /uploadAsset|assetClient|@aws-sdk/u);
+  assert.match(source, /import \{ uploadAsset, type UploadProgress \} from "\.\.\/\.\.\/lib\/storage\/assetClient"/u);
+  assert.match(source, /import \{ useAssetUrl \} from "\.\.\/\.\.\/hooks\/useAssetUrl"/u);
+  assert.doesNotMatch(source, /@aws-sdk/u, "never talks to R2 directly — only through the existing presign/download API routes");
 });
 
 // -----------------------------------------------------------------------------------------
@@ -700,9 +706,9 @@ test("UI: filters cover search/kind/lifecycle/readiness/asset (section 5)", () =
   assert.match(source, /Asset: vše/u);
 });
 
-test("UI: detail sections match Identita/Rozměry/Lifecycle/Assety/Ceny (section 6)", () => {
+test("UI: detail sections match Identita/Rozměry/Lifecycle/Fotografie/3D model/Ceny (section 6, extended with the asset workflow)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  for (const heading of ["Identita", "Rozměry", "Lifecycle", "Assety", "Ceny"]) {
+  for (const heading of ["Identita", "Rozměry", "Lifecycle", "Fotografie", "3D model", "Ceny"]) {
     assert.match(source, new RegExp(`<h3>${heading}</h3>`), `missing detail section "${heading}"`);
   }
 });
@@ -734,4 +740,291 @@ test("PricingAdminPage: accepts initialCatalogItemId and opens the matrix presel
   const source = readFileSync(new URL("../components/workflow/PricingAdminPages.tsx", import.meta.url), "utf8");
   assert.match(source, /initialCatalogItemId/u);
   assert.match(source, /openMatrix\(\[initialCatalogItemId\]\)/u);
+});
+
+// =========================================================================================
+// SECTION 18 — CATALOG ITEM ASSET WORKFLOW (photo + GLB upload/replace/remove, review,
+// activation safety, PrintSurface non-inference, concurrency).
+// =========================================================================================
+
+function storedAsset(overrides: Partial<StoredAsset> & Pick<StoredAsset, "id" | "storageKey">): StoredAsset {
+  return {
+    originalFileName: "file.bin",
+    mimeType: "application/octet-stream",
+    size: 12345,
+    createdAt: "2026-08-17T10:00:00.000Z",
+    category: "catalog-photo",
+    ...overrides,
+  };
+}
+
+const PHOTO_ASSET = storedAsset({ id: "photo-1", storageKey: "catalog/furniture/f01/photos/photo-1.jpg", originalFileName: "chair.jpg", mimeType: "image/jpeg", category: "catalog-photo" });
+const MODEL_ASSET = storedAsset({ id: "model-1", storageKey: "catalog/furniture/f01/models/model-1.glb", originalFileName: "chair.glb", mimeType: "model/gltf-binary", size: 2_000_000, category: "catalog-model" });
+
+// -----------------------------------------------------------------------------------------
+// PHOTO
+// -----------------------------------------------------------------------------------------
+
+test("PHOTO valid upload: parseCatalogItemAdminEdit accepts a well-shaped StoredAsset for photoAsset", () => {
+  const edit = parseCatalogItemAdminEdit({ photoAsset: PHOTO_ASSET });
+  assert.deepEqual(edit.photoAsset, PHOTO_ASSET);
+});
+
+test("PHOTO invalid: a malformed/incomplete photoAsset value (missing storageKey) is silently dropped, never merged", () => {
+  const edit = parseCatalogItemAdminEdit({ photoAsset: { id: "x", originalFileName: "photo.jpg" } });
+  assert.equal(edit.photoAsset, undefined);
+});
+
+test("PHOTO storageKey persisted: saveCatalogItemAdmin writes the exact storageKey into document.photoAsset", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { photoAsset: PHOTO_ASSET }, "2026-08-14T19:16:38.000000+00:00");
+  const persistedAsset = documentPhotoAsset(saved.document);
+  assert.equal(persistedAsset?.storageKey, PHOTO_ASSET.storageKey);
+});
+
+test("PHOTO signed URL never persisted: StoredAsset carries only a storageKey, never a resolved/signed URL field", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { photoAsset: PHOTO_ASSET }, "2026-08-14T19:16:38.000000+00:00");
+  const persistedAsset = documentPhotoAsset(saved.document) as unknown as Record<string, unknown>;
+  assert.ok(persistedAsset);
+  for (const key of Object.keys(persistedAsset)) assert.doesNotMatch(key.toLowerCase(), /signedurl|downloadurl|presigned/u);
+  assert.doesNotMatch(JSON.stringify(persistedAsset), /X-Amz-Signature|X-Amz-Credential/u);
+});
+
+// -----------------------------------------------------------------------------------------
+// GLB
+// -----------------------------------------------------------------------------------------
+
+test("GLB valid: parseCatalogItemAdminEdit accepts a well-shaped StoredAsset for modelAsset", () => {
+  const edit = parseCatalogItemAdminEdit({ modelAsset: MODEL_ASSET });
+  assert.deepEqual(edit.modelAsset, MODEL_ASSET);
+});
+
+test("GLB invalid: a malformed modelAsset value is silently dropped, never merged", () => {
+  const edit = parseCatalogItemAdminEdit({ modelAsset: "not-an-object" });
+  assert.equal(edit.modelAsset, undefined);
+});
+
+test("GLB storageKey persisted: saveCatalogItemAdmin writes the exact storageKey into document.modelAsset, and has3DAsset/readiness recognize it", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { modelAsset: MODEL_ASSET }, "2026-08-14T19:16:38.000000+00:00");
+  const persistedAsset = documentModelAsset(saved.document);
+  assert.equal(persistedAsset?.storageKey, MODEL_ASSET.storageKey);
+  assert.equal(documentHas3DAsset(saved.document), true);
+});
+
+test("GLB static model fallback remains functional: P86's legacy modelUrl (no modelAsset) still counts as has3DAsset and stays ready", () => {
+  const p86 = toAdmin(p86Row());
+  assert.equal(documentModelAsset(p86.document), undefined, "P86 seed never had an R2 modelAsset");
+  assert.equal(documentHas3DAsset(p86.document), true, "legacy modelUrl alone must still satisfy has3DAsset");
+  assert.equal(computeReadiness(p86).ready, true);
+});
+
+// -----------------------------------------------------------------------------------------
+// REPLACE — section 7: upload first, DB save second; old reference survives any failure.
+// -----------------------------------------------------------------------------------------
+
+test("REPLACE: stale updatedAt during a photo replace leaves the OLD photoAsset untouched in the DB (ConcurrencyConflictError, no overwrite)", async () => {
+  const existingPhoto = storedAsset({ id: "old-photo", storageKey: "catalog/furniture/f01/photos/old.jpg", category: "catalog-photo" });
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: { ...STUB_DOCUMENT, photoAsset: existingPhoto } })] });
+  await assert.rejects(
+    () => saveCatalogItemAdmin(client as never, "f01-uuid", { photoAsset: PHOTO_ASSET }, "2020-01-01T00:00:00.000000+00:00"),
+    (error) => error instanceof ConcurrencyConflictError,
+  );
+  const row = client.tables.get("catalog_items")!.find((r) => r.id === "f01-uuid")!;
+  assert.equal((row.document as FakeRow).photoAsset, existingPhoto, "old reference must survive a rejected concurrent replace untouched");
+});
+
+test("REPLACE: a mid-save DB failure (not preflight-detectable) never destroys the old modelAsset reference", async () => {
+  const existingModel = storedAsset({ id: "old-model", storageKey: "catalog/furniture/f01/models/old.glb", category: "catalog-model" });
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: { ...STUB_DOCUMENT, modelAsset: existingModel } })] });
+  const realFrom = client.from.bind(client);
+  client.from = ((tableName: string) => {
+    const builder = realFrom(tableName);
+    if (tableName === "catalog_items") {
+      const originalUpdate = builder.update.bind(builder);
+      builder.update = ((patch: FakeRow) => {
+        originalUpdate(patch);
+        // Simulate a genuine mid-run DB failure (e.g. transient network error) on the
+        // conditional UPDATE — something no upfront preflight check could have predicted.
+        builder.then = ((onFulfilled: (value: { data: unknown; error: unknown }) => unknown, onRejected?: (reason: unknown) => unknown) =>
+          Promise.resolve({ data: null, error: { message: "simulated transient DB error" } }).then(onFulfilled, onRejected)) as typeof builder.then;
+        return builder;
+      }) as typeof builder.update;
+    }
+    return builder;
+  }) as typeof client.from;
+
+  await assert.rejects(() => saveCatalogItemAdmin(client as never, "f01-uuid", { modelAsset: MODEL_ASSET }, "2026-08-14T19:16:38.000000+00:00"));
+  const row = client.tables.get("catalog_items")!.find((r) => r.id === "f01-uuid")!;
+  assert.equal((row.document as FakeRow).modelAsset, existingModel, "old modelAsset must remain after a failed save — new R2 object may become orphaned, that is accepted");
+});
+
+test("no physical R2 delete anywhere in the catalog-admin save path — replace/remove is always metadata-only", () => {
+  const repoSource = readFileSync(new URL("../lib/db/catalogItemsAdmin.supabase.ts", import.meta.url), "utf8");
+  const domainSource = readFileSync(new URL("../domain/catalogItemsAdmin.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(repoSource, /deleteObject|AssetStorageProvider|@aws-sdk/u);
+  assert.doesNotMatch(domainSource, /deleteObject|AssetStorageProvider|@aws-sdk/u);
+});
+
+// -----------------------------------------------------------------------------------------
+// REMOVE
+// -----------------------------------------------------------------------------------------
+
+test("REMOVE: photoAsset:null removes only that key — everything else in the document is untouched", () => {
+  const withPhoto = { ...STUB_DOCUMENT, photoAsset: PHOTO_ASSET, modelAsset: MODEL_ASSET };
+  const merged = applyCatalogItemEdit(withPhoto, { photoAsset: null });
+  assert.equal("photoAsset" in merged, false);
+  assert.deepEqual(merged.modelAsset, MODEL_ASSET, "modelAsset must survive a photoAsset removal");
+  assert.equal(merged.internalCode, "F01");
+  assert.equal(merged.sourceKey, STUB_DOCUMENT.sourceKey);
+});
+
+test("REMOVE: modelAsset:null on an ALREADY ACTIVE booth (P86-shaped) that has no other model reference auto-downgrades to needs_review instead of leaving active+not-ready", async () => {
+  // P86-shaped active booth whose ONLY 3D reference is the modelAsset being removed (no legacy modelUrl).
+  const activeBoothDoc = { ...P86_DOCUMENT, modelUrl: undefined, modelAsset: MODEL_ASSET };
+  const client = createFakeSupabaseClient({ catalog_items: [p86Row({ document: activeBoothDoc })] });
+  const saved = await saveCatalogItemAdmin(client as never, "p86-uuid", { modelAsset: null }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal("modelAsset" in saved.document, false, "reference must actually be removed");
+  assert.equal(saved.lifecycleStatus, "needs_review", "active+not-ready must never persist — safe auto-downgrade instead of blocking the removal");
+  const row = client.tables.get("catalog_items")!.find((r) => r.id === "p86-uuid")!;
+  assert.equal(row.lifecycle_status, "needs_review", "lifecycle_status column must be kept in sync with the document");
+});
+
+test("REMOVE: modelAsset:null on an active booth that STILL has a legacy modelUrl fallback stays active (readiness still satisfied)", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [p86Row({ document: { ...P86_DOCUMENT, modelAsset: MODEL_ASSET } })] });
+  const saved = await saveCatalogItemAdmin(client as never, "p86-uuid", { modelAsset: null }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal(saved.lifecycleStatus, "active", "legacy modelUrl still satisfies has3DAsset, so removal of the R2 asset alone must not break readiness");
+});
+
+test("REMOVE: unrelated edits to an already-active-but-imperfect item (M57) never retroactively downgrade it — auto-downgrade is scoped ONLY to explicit asset removal", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [m57Row()] });
+  const saved = await saveCatalogItemAdmin(client as never, "m57-uuid", { unit: "ks" }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.lifecycleStatus, "active", "a plain metadata edit must never trigger the asset-removal downgrade guard");
+});
+
+// -----------------------------------------------------------------------------------------
+// DOCUMENT — nested metadata survives asset edits (P86 sanity, extended to the asset workflow)
+// -----------------------------------------------------------------------------------------
+
+test("DOCUMENT: P86 parts/printSurfaces/pricingEntries/defaultCarpetFinishId survive a photoAsset AND modelAsset save untouched", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [p86Row()] });
+  const saved = await saveCatalogItemAdmin(client as never, "p86-uuid", { photoAsset: PHOTO_ASSET, modelAsset: MODEL_ASSET }, "2026-08-14T19:16:38.367959+00:00");
+  assert.deepEqual(saved.document.parts, P86_DOCUMENT.parts);
+  assert.deepEqual(saved.document.printSurfaces, P86_DOCUMENT.printSurfaces);
+  assert.deepEqual(saved.document.pricingEntries, P86_DOCUMENT.pricingEntries);
+  assert.equal(saved.document.defaultCarpetFinishId, "carpet-grey");
+});
+
+test("DOCUMENT: sourceKey/internalCode survive an asset save on an ordinary needs_review item", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { photoAsset: PHOTO_ASSET }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.internalCode, "F01");
+  assert.equal(saved.document.sourceKey, "pricelist::nabytek::testovaci-nabytek-1");
+  assert.equal(saved.document.sourceSystem, "excel-v6.6");
+});
+
+test("DOCUMENT: base pricing (document.pricingEntries) survives a GLB upload", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { modelAsset: MODEL_ASSET }, "2026-08-14T19:16:38.000000+00:00");
+  assert.deepEqual(saved.document.pricingEntries, STUB_DOCUMENT.pricingEntries);
+});
+
+// -----------------------------------------------------------------------------------------
+// REVIEW — section 9: reviewedAt is ONLY ever set by the explicit markReviewed action.
+// -----------------------------------------------------------------------------------------
+
+test("REVIEW: uploading a photo or GLB never sets reviewedAt as a side effect", () => {
+  const afterPhoto = applyCatalogItemEdit(STUB_DOCUMENT, { photoAsset: PHOTO_ASSET });
+  assert.equal(afterPhoto.reviewedAt, undefined);
+  const afterModel = applyCatalogItemEdit(STUB_DOCUMENT, { modelAsset: MODEL_ASSET });
+  assert.equal(afterModel.reviewedAt, undefined);
+});
+
+test("REVIEW: markReviewed:true stamps a real server-generated ISO timestamp, never a client-supplied one", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
+  const before = Date.now();
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { markReviewed: true }, "2026-08-14T19:16:38.000000+00:00");
+  const reviewedAt = documentReviewedAt(saved.document);
+  assert.ok(reviewedAt);
+  const reviewedAtMs = new Date(reviewedAt!).getTime();
+  assert.ok(reviewedAtMs >= before && reviewedAtMs <= Date.now() + 1000, "reviewedAt must be a real, current server timestamp");
+});
+
+test("REVIEW: a client-supplied reviewedAt string in the raw request body is ignored — only markReviewed:true is ever honored", () => {
+  const edit = parseCatalogItemAdminEdit({ reviewedAt: "2000-01-01T00:00:00.000Z", markReviewed: false });
+  assert.equal("reviewedAt" in edit, false);
+  assert.equal(edit.markReviewed, undefined);
+});
+
+test("REVIEW: complete data (dimensions + model, showIn3D declared) + explicit review together make an ordinary furniture item ready", async () => {
+  // showIn3D declared but modelAsset not uploaded yet -> missing_3d_asset + requires_review.
+  const almostThere = { ...STUB_DOCUMENT, widthMm: 600, depthMm: 400, showIn3D: true };
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: almostThere })] });
+  const beforeAssets = toAdmin(stubRow({ document: almostThere }));
+  assert.deepEqual([...computeReadiness(beforeAssets).issues].sort(), ["missing_3d_asset", "requires_review"]);
+
+  const afterAssets = await saveCatalogItemAdmin(client as never, "f01-uuid", { modelAsset: MODEL_ASSET }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(computeReadiness(afterAssets).ready, false, "GLB alone is not enough — still requires review");
+  assert.deepEqual(computeReadiness(afterAssets).issues, ["requires_review"]);
+
+  const afterReview = await saveCatalogItemAdmin(client as never, "f01-uuid", { markReviewed: true }, afterAssets.updatedAt);
+  assert.equal(computeReadiness(afterReview).ready, true, `issues: ${computeReadiness(afterReview).issues.join(",")}`);
+});
+
+// -----------------------------------------------------------------------------------------
+// ACTIVATION
+// -----------------------------------------------------------------------------------------
+
+test("ACTIVATION: an item missing only reviewedAt (assets+dimensions otherwise complete) still cannot activate", async () => {
+  const almostReady = { ...STUB_DOCUMENT, widthMm: 600, depthMm: 400, showIn2D: true, footprint2D: { shape: "rectangle" }, modelAsset: MODEL_ASSET };
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: almostReady })] });
+  await assert.rejects(
+    () => saveCatalogItemAdmin(client as never, "f01-uuid", { lifecycleStatus: "active" }, "2026-08-14T19:16:38.000000+00:00"),
+    (error) => error instanceof CatalogReadinessError,
+  );
+});
+
+test("ACTIVATION: once reviewed, the same previously-incomplete item can activate", async () => {
+  const readyDocument = { ...STUB_DOCUMENT, widthMm: 600, depthMm: 400, showIn2D: true, footprint2D: { shape: "rectangle" }, modelAsset: MODEL_ASSET, reviewedAt: "2026-08-17T00:00:00.000Z" };
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: readyDocument })] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { lifecycleStatus: "active" }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.lifecycleStatus, "active");
+});
+
+// -----------------------------------------------------------------------------------------
+// PRINT — section 12: GLB upload must NEVER create/infer a PrintSurface or printable flag.
+// -----------------------------------------------------------------------------------------
+
+test("PRINT: uploading a GLB never creates a PrintSurface — document without printSurfaces stays without any after a modelAsset edit", () => {
+  const merged = applyCatalogItemEdit(STUB_DOCUMENT, { modelAsset: MODEL_ASSET });
+  assert.equal("printSurfaces" in merged, false);
+  assert.equal("printable" in merged, false);
+});
+
+test("PRINT: P86's existing printSurfaces are neither duplicated nor mutated by a modelAsset upload", () => {
+  const merged = applyCatalogItemEdit(P86_DOCUMENT, { modelAsset: MODEL_ASSET });
+  assert.deepEqual(merged.printSurfaces, P86_DOCUMENT.printSurfaces);
+  assert.equal((merged.printSurfaces as unknown[]).length, 1, "must stay exactly the original one printSurface, never inferred/duplicated");
+});
+
+test("PRINT: color/material/geometry never implies printable — no code path assigns/derives printable or printSurfaces from an asset (doc-comment mentions of the field name are fine, only assignment syntax is checked)", () => {
+  const repoSource = readFileSync(new URL("../lib/db/catalogItemsAdmin.supabase.ts", import.meta.url), "utf8");
+  const domainSource = readFileSync(new URL("../domain/catalogItemsAdmin.ts", import.meta.url), "utf8");
+  const assignmentPattern = /\b(printable|printSurfaces)\s*[:=]/u;
+  assert.doesNotMatch(repoSource, assignmentPattern);
+  assert.doesNotMatch(domainSource, assignmentPattern);
+});
+
+// -----------------------------------------------------------------------------------------
+// CONCURRENCY — section 15/16: asset saves use the SAME expectedUpdatedAt token as any other save.
+// -----------------------------------------------------------------------------------------
+
+test("CONCURRENCY: stale updatedAt on a photo save via the API route returns 409, never silently overwriting", async () => {
+  const token = await createSessionToken(SECRET);
+  const response = await handleCatalogAdminItemsSave(
+    authenticatedRequest(token, "http://localhost/api/catalog-admin/items/save", { method: "POST", body: { id: "f01-uuid", edit: { photoAsset: PHOTO_ASSET }, expectedUpdatedAt: "stale" } }),
+    async () => { throw new ConcurrencyConflictError("catalog_item", "f01-uuid"); },
+  );
+  assert.equal(response.status, 409);
 });

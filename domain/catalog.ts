@@ -133,6 +133,20 @@ export function catalogImageUrl(
   return catalogImageCandidates(item).find((url) => !unavailable.has(url));
 }
 
+/** Mirrors catalogImageAsset — the R2-backed 3D model reference, preferred over the legacy modelUrl string by useAssetUrl. */
+export function catalogModelAsset(
+  item: Pick<ComponentDefinition, "modelAsset">,
+): StoredAsset | undefined {
+  return item.modelAsset;
+}
+
+/** Legacy static/public GLB path — used as the useAssetUrl fallback when no R2 modelAsset is set (e.g. P86's static seed). */
+export function catalogModelUrl(
+  item: Pick<ComponentDefinition, "modelUrl">,
+): string | undefined {
+  return item.modelUrl;
+}
+
 export type CatalogSceneSummaryItem = Readonly<{
   catalogItemId: string;
   internalCode?: string;

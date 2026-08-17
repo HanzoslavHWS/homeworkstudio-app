@@ -341,6 +341,8 @@ export type ComponentDefinition = Readonly<{
   sceneLabel: string;
   assets?: AssetReference;
   modelUrl?: string;
+  /** R2-backed GLB reference (source of truth = storageKey), resolved to a signed URL the same way photoAsset/thumbnailAsset already are — see domain/catalog.ts's catalogModelAsset/catalogModelUrl and hooks/useAssetUrl. Coexists with the legacy modelUrl string; never inferred from geometry/material. */
+  modelAsset?: StoredAsset;
   thumbnailUrl?: string;
   thumbnailAsset?: StoredAsset;
   photoUrl?: string;

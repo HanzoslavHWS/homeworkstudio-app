@@ -11,6 +11,7 @@
 import { CATALOG_ITEM_KINDS, type CatalogItemKind, type CatalogItemStatus, type ComponentDefinition, type PricingEntry } from "./models.ts";
 import { evaluateCatalogReadiness, isGeneratorEligible, isValidCatalogItemStatus, type ReadinessResult } from "./catalogReadiness.ts";
 import { getBasePricingEntry } from "./catalog.ts";
+import type { StoredAsset } from "./assets.ts";
 
 export const CATALOG_ITEM_KIND_LABELS_CS: Readonly<Record<CatalogItemKind, string>> = {
   booth: "Stánek",
@@ -71,10 +72,52 @@ export function documentDimensions(document: CatalogItemAdminDocument): Document
   };
 }
 
+/** True or false only — see documentModelAsset() below for the actual StoredAsset the UI needs to render/resolve a download URL for. */
 export function documentHas3DAsset(document: CatalogItemAdminDocument): boolean {
   if (readString(document, "modelUrl")) return true;
+  if (documentModelAsset(document)) return true;
   const assets = document.assets as { models3d?: readonly unknown[] } | undefined;
   return Boolean(assets?.models3d?.length);
+}
+
+function isStoredAssetShape(value: unknown): value is StoredAsset {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.storageKey === "string" &&
+    Boolean(candidate.storageKey) &&
+    typeof candidate.originalFileName === "string" &&
+    typeof candidate.mimeType === "string" &&
+    typeof candidate.size === "number" &&
+    typeof candidate.createdAt === "string" &&
+    typeof candidate.category === "string"
+  );
+}
+
+/** The R2-backed photo reference, if the document has a validly-shaped one — never a signed URL, only the stable storageKey-bearing StoredAsset. */
+export function documentPhotoAsset(document: CatalogItemAdminDocument): StoredAsset | undefined {
+  return isStoredAssetShape(document.photoAsset) ? document.photoAsset : undefined;
+}
+
+/** The R2-backed 3D model reference, if the document has a validly-shaped one. */
+export function documentModelAsset(document: CatalogItemAdminDocument): StoredAsset | undefined {
+  return isStoredAssetShape(document.modelAsset) ? document.modelAsset : undefined;
+}
+
+/** Legacy static/public photo URL fallback (pre-R2 seeds like M57). */
+export function documentPhotoUrl(document: CatalogItemAdminDocument): string | undefined {
+  return readString(document, "photoUrl");
+}
+
+/** Legacy static/public GLB URL fallback (P86's canonical seed). */
+export function documentModelUrl(document: CatalogItemAdminDocument): string | undefined {
+  return readString(document, "modelUrl");
+}
+
+/** Set exclusively by the explicit "Označit jako zkontrolované" action (section 9) — never as a side effect of an asset upload. */
+export function documentReviewedAt(document: CatalogItemAdminDocument): string | undefined {
+  return readString(document, "reviewedAt");
 }
 
 export type SourceTraceability = Readonly<{ sourceSystem: string | null; sourceKey: string | null }>;
@@ -199,10 +242,16 @@ export type CatalogItemAdminEdit = Readonly<{
   depthMm?: number;
   heightMm?: number;
   lifecycleStatus?: CatalogItemStatus;
+  /** undefined = leave unchanged; a StoredAsset = set/replace; null = explicit remove. Remove is ALWAYS metadata-only — see lib/db/catalogItemsAdmin.supabase.ts, never a physical R2 delete (mirrors app/api/assets/delete's reference-safety no-op). */
+  photoAsset?: StoredAsset | null;
+  modelAsset?: StoredAsset | null;
+  /** Section 9: the ONLY way reviewedAt is ever set — never as a side effect of an asset upload. The server stamps the actual timestamp (see saveCatalogItemAdmin); a client-supplied date is never trusted. */
+  markReviewed?: true;
 }>;
 
 const EDITABLE_STRING_KEYS = ["displayName", "name", "category", "unit"] as const;
 const EDITABLE_NUMBER_KEYS = ["widthMm", "depthMm", "heightMm"] as const;
+const EDITABLE_ASSET_KEYS = ["photoAsset", "modelAsset"] as const;
 
 /** Whitelists a raw (possibly attacker-controlled) JSON body — anything not explicitly listed here is silently dropped, never merged. */
 export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
@@ -218,6 +267,13 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
     if (typeof value === "number" && Number.isFinite(value)) edit[key] = value;
   }
   if (typeof raw.lifecycleStatus === "string" && isValidCatalogItemStatus(raw.lifecycleStatus)) edit.lifecycleStatus = raw.lifecycleStatus;
+  for (const key of EDITABLE_ASSET_KEYS) {
+    if (!(key in raw)) continue;
+    const value = raw[key];
+    if (value === null) edit[key] = null;
+    else if (isStoredAssetShape(value)) edit[key] = value;
+  }
+  if (raw.markReviewed === true) edit.markReviewed = true;
   return edit;
 }
 
@@ -237,6 +293,10 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
   if (edit.depthMm !== undefined) next.depthMm = edit.depthMm;
   if (edit.heightMm !== undefined) next.heightMm = edit.heightMm;
   if (edit.lifecycleStatus !== undefined) next.lifecycleStatus = edit.lifecycleStatus;
+  if (edit.photoAsset === null) delete next.photoAsset;
+  else if (edit.photoAsset !== undefined) next.photoAsset = edit.photoAsset;
+  if (edit.modelAsset === null) delete next.modelAsset;
+  else if (edit.modelAsset !== undefined) next.modelAsset = edit.modelAsset;
   return next;
 }
 

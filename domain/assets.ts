@@ -74,9 +74,15 @@ const CATEGORY_RULES: Readonly<Record<AssetCategory, CategoryRule>> = {
   "event-logo": { prefix: (id) => `events/${id}/logo`, maxBytes: 5_000_000, mimeTypes: IMAGE_TYPES },
   "event-cover": { prefix: (id) => `events/${id}/cover`, maxBytes: 15_000_000, mimeTypes: IMAGE_TYPES },
   "event-document": { prefix: (id) => `events/${id}/documents`, maxBytes: 40_000_000, mimeTypes: DOCUMENT_TYPES },
-  "catalog-photo": { prefix: (id) => `catalog/furniture/${id}/photos`, maxBytes: 15_000_000, mimeTypes: IMAGE_TYPES },
+  // Section 2 of the catalog-item asset workflow spec: photos are restricted to
+  // jpg/jpeg/png/webp only (narrower than the shared IMAGE_TYPES used by event-logo/cover,
+  // which also allow gif/svg — those stay untouched, this category is catalog-item-only).
+  "catalog-photo": { prefix: (id) => `catalog/furniture/${id}/photos`, maxBytes: 15_000_000, mimeTypes: ["image/jpeg", "image/png", "image/webp"] },
   "catalog-thumbnail": { prefix: (id) => `catalog/furniture/${id}/thumbnails`, maxBytes: 5_000_000, mimeTypes: IMAGE_TYPES },
-  "catalog-model": { prefix: (id) => `catalog/furniture/${id}/models`, maxBytes: 100_000_000, mimeTypes: ["model/gltf-binary", "application/octet-stream"] },
+  // GLB only — this category was previously unused anywhere, so narrowing it away from the
+  // generic "application/octet-stream" (which also covers .skp) is safe; nothing else relies
+  // on the broader list.
+  "catalog-model": { prefix: (id) => `catalog/furniture/${id}/models`, maxBytes: 100_000_000, mimeTypes: ["model/gltf-binary"] },
   "project-graphics": { prefix: (id) => `projects/${id}/graphics`, maxBytes: 100_000_000, mimeTypes: GRAPHICS_TYPES },
   "project-document": { prefix: (id) => `projects/${id}/documents`, maxBytes: 40_000_000, mimeTypes: DOCUMENT_TYPES },
   "project-visualization": { prefix: (id) => `projects/${id}/visualizations`, maxBytes: 25_000_000, mimeTypes: IMAGE_TYPES },
