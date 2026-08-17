@@ -5151,6 +5151,7 @@ select:focus {
 .checkboxRow { display: flex; align-items: center; gap: 7px; margin-top: 7px; font-size: 8px; color: #3c4042; }
 .checkboxRow input { width: auto; height: auto; }
 .fieldHint { margin-top: 8px; color: #96999c; font-size: 7px; }
+.capabilityStatus { margin: 3px 0 0 20px; color: #4d6b53; font-size: 7px; }
 .catalogAdminReviewActions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
 .catalogAdminReviewActions .primaryButton:disabled { opacity: .45; cursor: not-allowed; }
 .catalogPhotoPlaceholder { min-height: 180px; display: grid; place-items: center; margin-top: 8px; padding: 18px; border: 1px dashed #d5d8da; border-radius: 7px; background: #fbfbfb; color: #969a9d; font-size: 8px; text-align: center; }

@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   buildCatalogItemListEntry,
+  categoryLabelCs,
   computeGeneratorEligibleLive,
   computeReadiness,
   documentBasePricing,
   documentDimensions,
+  documentFootprint2D,
   documentHas3DAsset,
   documentModelAsset,
   documentModelUrl,
@@ -15,6 +17,7 @@ import {
   documentReviewedAt,
   documentSourceTraceability,
   filterCatalogItemsAdmin,
+  CATALOG_ITEM_CATEGORY_OPTIONS,
   CATALOG_ITEM_KIND_LABELS_CS,
   type CatalogItemAdmin,
   type CatalogItemAdminEdit,
@@ -31,6 +34,12 @@ import { useAssetUrl } from "../../hooks/useAssetUrl";
 const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp";
 const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
 const MODEL_EXTENSIONS = ["glb"];
+
+const FOOTPRINT_SHAPE_LABELS_CS: Readonly<Record<"rectangle" | "circle" | "symbol", string>> = {
+  rectangle: "Obdélník",
+  circle: "Kruh",
+  symbol: "Symbol",
+};
 
 /**
  * Kinds where showIn2D/showIn3D actually affect evaluateCatalogReadiness() (see
@@ -117,6 +126,7 @@ export function ComponentAdminPage({
             />
             {selected && (
               <ComponentAdminDetail
+                key={selected.id}
                 item={selected}
                 onSave={handleSave}
                 onOpenPricing={() => onOpenPricing(selected.id)}
@@ -185,7 +195,7 @@ function ComponentAdminList({
         <button key={entry.id} type="button" className={`catalogAdminRow ${entry.id === selectedId ? "active" : ""}`} onClick={() => onSelect(entry.id)}>
           <span>{entry.internalCode ?? "—"}</span>
           <span>{entry.displayName}</span>
-          <span>{CATALOG_ITEM_KIND_LABELS_CS[entry.kind]}{entry.category ? ` · ${entry.category}` : ""}</span>
+          <span>{CATALOG_ITEM_KIND_LABELS_CS[entry.kind]}{entry.category ? ` · ${categoryLabelCs(entry.category)}` : ""}</span>
           <span className={`lifecycleBadge ${entry.lifecycleStatus}`}>{CATALOG_ITEM_STATUS_LABELS_CS[entry.lifecycleStatus]}</span>
           <span>{entry.hasDimensions ? `${entry.widthMm} × ${entry.depthMm}${entry.heightMm ? ` × ${entry.heightMm}` : ""} mm` : "Chybí rozměry"}</span>
           <span>{entry.has3DAsset ? "3D ano" : "3D chybí"}</span>
@@ -223,6 +233,7 @@ function ComponentAdminDetail({
   const modelAsset = documentModelAsset(itemDocument);
   const legacyModelUrl = documentModelUrl(itemDocument);
   const hasModel = documentHas3DAsset(itemDocument);
+  const footprint2D = documentFootprint2D(itemDocument);
 
   const [photoProgress, setPhotoProgress] = useState<UploadProgress | undefined>(undefined);
   const [photoActionError, setPhotoActionError] = useState("");
@@ -416,7 +427,15 @@ function ComponentAdminDetail({
             <EditRow label="EN název"><span className="readOnlyField">Model zatím nepodporuje samostatný anglický název.</span></EditRow>
             <EditRow label="Kind"><span className="readOnlyField">{CATALOG_ITEM_KIND_LABELS_CS[item.kind]}</span></EditRow>
             <EditRow label="Kategorie">
-              <input value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }} />
+              <select value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
+                {category && !CATALOG_ITEM_CATEGORY_OPTIONS.some((option) => option.value === category) && (
+                  <option value={category}>{category} (nerozpoznaná hodnota, zachována)</option>
+                )}
+                {!category && <option value="">— nevybráno —</option>}
+                {CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
             </EditRow>
             <EditRow label="Jednotka">
               <input value={unit} onChange={(event) => { setUnit(event.target.value); setDirty(true); }} />
@@ -445,14 +464,24 @@ function ComponentAdminDetail({
             <h3>Použití v generátoru</h3>
             <label className="checkboxRow">
               <input type="checkbox" checked={showIn2D} onChange={(event) => { setShowIn2D(event.target.checked); setDirty(true); }} />
-              Zobrazovat ve 2D
+              2D
             </label>
+            {showIn2D && (
+              <p className="capabilityStatus">
+                <strong>2D:</strong> ✓ Zapnuto — Footprint: {footprint2D ? FOOTPRINT_SHAPE_LABELS_CS[footprint2D.shape] : "Chybí"}
+              </p>
+            )}
             <label className="checkboxRow">
               <input type="checkbox" checked={showIn3D} onChange={(event) => { setShowIn3D(event.target.checked); setDirty(true); }} />
-              Zobrazovat ve 3D
+              3D
             </label>
+            {showIn3D && (
+              <p className="capabilityStatus">
+                <strong>3D:</strong> ✓ Zapnuto — Model: {hasModel ? "Nahrán" : "Chybí"}
+              </p>
+            )}
             <p className="fieldHint">
-              Aspoň jedno zaškrtnutí je nutné pro generator readiness (jinak "Chybí nastavení zobrazení ve 2D/3D"). Zobrazovat ve 3D vyžaduje nahraný 3D model.
+              Aspoň jedno zaškrtnutí je nutné pro generator readiness (jinak "Chybí nastavení zobrazení ve 2D/3D"). Zobrazení ve 3D vyžaduje nahraný 3D model.
             </p>
           </section>
         )}

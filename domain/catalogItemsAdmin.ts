@@ -11,6 +11,7 @@
 import { CATALOG_ITEM_KINDS, type CatalogItemKind, type CatalogItemStatus, type ComponentDefinition, type PricingEntry } from "./models.ts";
 import { evaluateCatalogReadiness, isGeneratorEligible, isValidCatalogItemStatus, type ReadinessResult } from "./catalogReadiness.ts";
 import { getBasePricingEntry } from "./catalog.ts";
+import { catalogCategories } from "./catalogCategories.ts";
 import type { StoredAsset } from "./assets.ts";
 
 export const CATALOG_ITEM_KIND_LABELS_CS: Readonly<Record<CatalogItemKind, string>> = {
@@ -23,6 +24,37 @@ export const CATALOG_ITEM_KIND_LABELS_CS: Readonly<Record<CatalogItemKind, strin
   floor_finish: "Podlahová krytina",
   other: "Ostatní",
 };
+
+const reusedCategoryLabel = new Map(catalogCategories.map((entry) => [entry.id, entry.name]));
+
+/**
+ * Every category value actually present in the remote catalog_items table (live-audited,
+ * 81 rows, 2026-08) — a closed, curated set, never free text. "chairs"/"services" reuse the
+ * exact labels already declared in domain/catalogCategories.ts (M57/L02's original static
+ * seed values) rather than re-declaring them; the rest are the Czech PRICELIST sheet category
+ * names Batch #2A/#2B preserved verbatim on import — kept as their real canonical DB value,
+ * only the LABEL is translated/expanded for display.
+ */
+export const CATALOG_ITEM_CATEGORY_OPTIONS: readonly Readonly<{ value: string; label: string }>[] = [
+  { value: "chairs", label: reusedCategoryLabel.get("chairs") ?? "Židle" },
+  { value: "Nábytek", label: "Nábytek" },
+  { value: "Kuchyňka", label: "Kuchyňka" },
+  { value: "Octanorm", label: "Octanorm" },
+  { value: "Ostatní", label: "Ostatní" },
+  { value: "Stavba", label: "Stavba" },
+  { value: "Úvaz", label: "Úvaz (rigging)" },
+  { value: "Světlo", label: "Světlo" },
+  { value: "Typovky", label: "Typovky" },
+  { value: "Canonical", label: "Canonical" },
+  { value: "T. služby", label: "Technické služby" },
+  { value: "services", label: reusedCategoryLabel.get("services") ?? "Služby" },
+];
+
+/** Never hides/crashes on an unlisted value — falls back to the raw canonical string, same defensive spirit as categoryOptions()'s existing fallback in domain/catalogCategories.ts. */
+export function categoryLabelCs(value: string | null): string {
+  if (!value) return "—";
+  return CATALOG_ITEM_CATEGORY_OPTIONS.find((option) => option.value === value)?.label ?? value;
+}
 
 /** The document JSONB column stores EITHER a full ComponentDefinition OR a BoothType payload (see the catalog_items migration comment) — never assume one shape here, only read named fields defensively. */
 export type CatalogItemAdminDocument = Record<string, unknown>;
@@ -129,6 +161,18 @@ export function documentModelUrl(document: CatalogItemAdminDocument): string | u
 /** Set exclusively by the explicit "Označit jako zkontrolované" action (section 9) — never as a side effect of an asset upload. */
 export function documentReviewedAt(document: CatalogItemAdminDocument): string | undefined {
   return readString(document, "reviewedAt");
+}
+
+export type DocumentFootprint2D = Readonly<{ shape: "rectangle" | "circle" | "symbol"; symbol?: string }>;
+const FOOTPRINT_SHAPES = ["rectangle", "circle", "symbol"] as const;
+
+/** Mirrors evaluateCatalogReadiness's has2DRepresentation() check (Boolean(item.footprint2D)) — used for admin display only, never a second readiness rule. */
+export function documentFootprint2D(document: CatalogItemAdminDocument): DocumentFootprint2D | undefined {
+  const value = document.footprint2D;
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.shape !== "string" || !(FOOTPRINT_SHAPES as readonly string[]).includes(candidate.shape)) return undefined;
+  return { shape: candidate.shape as DocumentFootprint2D["shape"], symbol: typeof candidate.symbol === "string" ? candidate.symbol : undefined };
 }
 
 export type SourceTraceability = Readonly<{ sourceSystem: string | null; sourceKey: string | null }>;

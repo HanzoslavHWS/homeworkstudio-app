@@ -5,11 +5,14 @@ import { NextRequest } from "next/server.js";
 import {
   applyCatalogItemEdit,
   buildCatalogItemListEntry,
+  CATALOG_ITEM_CATEGORY_OPTIONS,
   CatalogItemAdminNotFoundError,
+  categoryLabelCs,
   computeGeneratorEligibleLive,
   computeReadiness,
   documentBasePricing,
   documentDimensions,
+  documentFootprint2D,
   documentHas3DAsset,
   documentModelAsset,
   documentPhotoAsset,
@@ -1139,4 +1142,98 @@ test("ACTIVE ITEM SAFETY: toggling capability on an active item that STAYS ready
   const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: activeReady, lifecycle_status: "active" })] });
   const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { showIn2D: true }, "2026-08-14T19:16:38.000000+00:00");
   assert.equal(saved.lifecycleStatus, "active", "a no-op-equivalent capability confirmation must never spuriously downgrade an already-ready item");
+});
+
+// =========================================================================================
+// 2D/3D STATUS READOUTS + STATE-LEAK FIX (section 8/12) — switching selected items must
+// remount the detail panel (key={item.id}), never carry over stale local state from the
+// previously-selected item. This was a real bug: ComponentAdminDetail had no `key` prop, so
+// React reused the same component instance across selections and useState never re-initialized.
+// -----------------------------------------------------------------------------------------
+
+test("documentFootprint2D reads a well-shaped footprint2D and rejects malformed/missing values", () => {
+  assert.deepEqual(documentFootprint2D({ footprint2D: { shape: "rectangle" } }), { shape: "rectangle", symbol: undefined });
+  assert.deepEqual(documentFootprint2D({ footprint2D: { shape: "symbol", symbol: "chair" } }), { shape: "symbol", symbol: "chair" });
+  assert.equal(documentFootprint2D({}), undefined);
+  assert.equal(documentFootprint2D({ footprint2D: { shape: "triangle" } }), undefined, "unknown shape values are rejected, never guessed");
+});
+
+test("showIn3D=true without a model resolves has3DAsset=false — the UI's 'Model: Chybí' status reflects the real domain check, not a separate UI rule", () => {
+  assert.equal(documentHas3DAsset(STUB_DOCUMENT), false);
+  assert.equal(documentHas3DAsset({ ...STUB_DOCUMENT, modelAsset: MODEL_ASSET }), true);
+});
+
+test("showIn2D=true with a saved footprint2D resolves a real shape label; without one resolves 'missing' — no UI-only fabrication", () => {
+  const withFootprint = { ...STUB_DOCUMENT, footprint2D: { shape: "rectangle" } };
+  assert.equal(documentFootprint2D(withFootprint)?.shape, "rectangle");
+  assert.equal(documentFootprint2D(STUB_DOCUMENT), undefined);
+});
+
+test("UI: ComponentAdminDetail is remounted per selected item (key={selected.id}) — the actual fix that prevents capability/category/dimension state leaking between items (e.g. M57 -> L02)", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /<ComponentAdminDetail\s+key=\{selected\.id\}/u);
+});
+
+test("UI: 2D/3D status readouts render real Footprint/Model status, not a hardcoded placeholder", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /Footprint:\s*\{footprint2D \? FOOTPRINT_SHAPE_LABELS_CS\[footprint2D\.shape\] : "Chybí"\}/u);
+  assert.match(source, /Model:\s*\{hasModel \? "Nahrán" : "Chybí"\}/u);
+});
+
+// -----------------------------------------------------------------------------------------
+// CATEGORY DROPDOWN (section 9/10/11)
+// -----------------------------------------------------------------------------------------
+
+test("CATALOG_ITEM_CATEGORY_OPTIONS matches the real, live-audited set of category values currently in catalog_items (81 rows, 2026-08) — a closed set, not invented", () => {
+  const values = CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => option.value).sort();
+  assert.deepEqual(values, ["Canonical", "Kuchyňka", "Nábytek", "Octanorm", "Ostatní", "Stavba", "Světlo", "T. služby", "Typovky", "Úvaz", "chairs", "services"].sort());
+});
+
+test("categoryLabelCs reuses domain/catalogCategories.ts's existing chairs/services labels rather than re-declaring them", () => {
+  assert.equal(categoryLabelCs("chairs"), "Židle");
+  assert.equal(categoryLabelCs("services"), "Služby");
+});
+
+test("categoryLabelCs translates the real Czech PRICELIST category values and gracefully falls back for null/unknown", () => {
+  assert.equal(categoryLabelCs("T. služby"), "Technické služby");
+  assert.equal(categoryLabelCs("Nábytek"), "Nábytek");
+  assert.equal(categoryLabelCs(null), "—");
+  assert.equal(categoryLabelCs("Nějaká budoucí hodnota"), "Nějaká budoucí hodnota", "unlisted value is shown as-is, never hidden or crashed on");
+});
+
+test("UI: Kategorie field is a <select> populated from CATALOG_ITEM_CATEGORY_OPTIONS, never a free-text <input>", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /<select value=\{category\}/u);
+  assert.match(source, /CATALOG_ITEM_CATEGORY_OPTIONS\.map/u);
+  assert.doesNotMatch(source, /EditRow label="Kategorie">\s*<input/u);
+});
+
+test("selecting a category persists the exact canonical DB value (label is display-only, never the stored value)", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { category: "Octanorm" }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.category, "Octanorm");
+  assert.equal(saved.document.category, "Octanorm");
+});
+
+test("category change never mutates kind — kind is not part of the editable whitelist at all", async () => {
+  const edit = parseCatalogItemAdminEdit({ category: "Stavba", kind: "booth" });
+  assert.equal("kind" in edit, false, "kind can never be smuggled through the edit whitelist, even alongside a legitimate category change");
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { category: "Stavba" }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.kind, "furniture", "kind column must be completely unaffected by a category edit");
+});
+
+test("M57 and L02 keep fully independent category values — reading one never leaks into the other (regression for the key-less state-leak bug)", async () => {
+  const client = createFakeSupabaseClient({
+    catalog_items: [
+      m57Row({ category: "chairs", document: { ...M57_DOCUMENT, category: "chairs" } }),
+      { ...m57Row(), id: "l02-uuid", internal_code: "L02", kind: "service", category: "services", document: { ...M57_DOCUMENT, internalCode: "L02", category: "services" } },
+    ],
+  });
+  const items = await readCatalogItemsAdmin(client as never);
+  const m57 = items.find((item) => item.internalCode === "M57")!;
+  const l02 = items.find((item) => item.internalCode === "L02")!;
+  assert.equal(m57.category, "chairs");
+  assert.equal(l02.category, "services");
+  assert.notEqual(m57.category, l02.category);
 });
