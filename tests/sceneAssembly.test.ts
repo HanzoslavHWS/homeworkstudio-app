@@ -28,8 +28,11 @@ test("typová booth (P86) resolves to exactly one master-reference 3D model — 
   assert.equal(master?.url, p86.modelUrl);
   const otherMasterEntries = p86.assets?.models3d?.filter((asset) => asset.role === "master-reference") ?? [];
   assert.equal(otherMasterEntries.length, 1, "exactly one master-reference GLB, not several composed parts");
+  // Booth-kind readiness never requires SKP (Part 27) — GLB alone is enough; P86 is ready with
+  // no sourceAssets evidenced at all, exactly matching the real data/booths.ts seed.
   const readiness = evaluateCatalogReadiness({ ...p86, lifecycleStatus: "active" } as unknown as ComponentDefinition, "booth");
-  assert.equal(readiness.ready, true);
+  assert.equal(readiness.ready, true, `P86 mělo být ready, issues: ${readiness.issues.join(", ")}`);
+  assert.deepEqual(readiness.issues, []);
 });
 
 test("Txx (typová booth family) without a real GLB stays not ready — no fake master.glb reference is ever invented", () => {

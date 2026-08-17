@@ -201,6 +201,20 @@ test("P86 included grafika límce nevytváří duplicitní účtování a odpov�
 // evaluateCatalogReadiness's kind-based switch.
 // =========================================================================================
 
+const fakeSketchupSource = {
+  id: "src-1",
+  kind: "sketchup" as const,
+  asset: {
+    id: "asset-1",
+    storageKey: "catalog/furniture/p86/source/abc.skp",
+    originalFileName: "p86.skp",
+    mimeType: "application/octet-stream",
+    size: 1234,
+    createdAt: "2026-08-13T00:00:00.000Z",
+    category: "catalog-source" as const,
+  },
+};
+
 function boothLike(overrides: Partial<ComponentDefinition> = {}): ComponentDefinition {
   return baseFurniture({
     internalCode: "P86",
@@ -247,12 +261,98 @@ test("booth: T04 bez 3D modelu (real Batch #2B stub shape) není ready a proto n
   assert.equal(isGeneratorEligible(t04, "booth"), false);
 });
 
-test("booth: P86 canonical seed (skutečná data/booths.ts definice) je ready a generatorEligible přes reálný adaptér", () => {
+// Booth (typový stánek) readiness rule, confirmed/finalized by QA (Part 27): GLB is mandatory,
+// SKP is explicitly NEVER required — booths were always meant to activate on GLB alone. DWG/
+// DXF/PDF/other source files are pure evidence/documentation and never gate readiness either.
+test("booth: SKP zdroj (sourceAssets) není nikdy vyžadován — booth s GLB a validním footprintem je ready i bez jakéhokoli sourceAssets záznamu", () => {
+  const readiness = evaluateCatalogReadiness(boothLike({ sourceAssets: undefined }), "booth");
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.issues, []);
+});
+
+test("booth: DWG/DXF/PDF/other zdrojové soubory nikdy neblokují aktivaci, ani samostatně, ani spolu se SKP", () => {
+  const onlyDwg = evaluateCatalogReadiness(
+    boothLike({ sourceAssets: [{ id: "src-2", kind: "dwg", asset: fakeSketchupSource.asset }] }),
+    "booth",
+  );
+  assert.equal(onlyDwg.ready, true);
+
+  const skpPlusExtras = evaluateCatalogReadiness(
+    boothLike({ sourceAssets: [fakeSketchupSource, { id: "src-3", kind: "dwg", asset: fakeSketchupSource.asset }] }),
+    "booth",
+  );
+  assert.equal(skpPlusExtras.ready, true);
+});
+
+test("booth: P86 canonical seed (skutečná data/booths.ts definice) je ready a generatorEligible bez jakéhokoli evidovaného SKP — typovky nikdy nevyžadovaly SketchUp source", () => {
   const p86 = boothTypes.find((booth) => booth.internalCode === "P86")!;
   const adapted = { ...p86, lifecycleStatus: "active" } as unknown as ComponentDefinition;
+  assert.equal("sourceAssets" in adapted, false, "P86 static seed genuinely has no sourceAssets — this test must exercise the real absence, not a mocked one");
   const readiness = evaluateCatalogReadiness(adapted, "booth");
   assert.equal(readiness.ready, true, `P86 mělo být ready, issues: ${readiness.issues.join(", ")}`);
+  assert.deepEqual(readiness.issues, []);
   assert.equal(isGeneratorEligible(adapted, "booth"), true);
+});
+
+// =========================================================================================
+// booth_component — individual booth-construction elements (sloupek/panel/dveře/límec/rastr/
+// koberec, ...) evidenced for future individual-booth assembly. Same GLB+SKP-mandatory rule as
+// booth, but no footprint-dimensions requirement (many of these elements don't have a single
+// meaningful width×depth×height) and no scene-capability requirement (never wired into the
+// live generator picker in this phase).
+// =========================================================================================
+
+function boothComponentLike(overrides: Partial<ComponentDefinition> = {}): ComponentDefinition {
+  return baseFurniture({
+    internalCode: "KOMP-SLOUPEK",
+    category: "Komponenty stánku",
+    unit: undefined,
+    reviewedAt: undefined,
+    showIn2D: undefined,
+    showIn3D: undefined,
+    footprint2D: undefined,
+    widthMm: 0,
+    depthMm: 0,
+    heightMm: undefined,
+    modelUrl: "/models/booth-components/sloupek.glb",
+    catalogItemKind: "booth_component",
+    sourceAssets: [fakeSketchupSource],
+    ...overrides,
+  });
+}
+
+test("booth_component: s GLB a SKP je ready i bez rozměrů (šířka/hloubka nejsou u komponent stánku vyžadovány)", () => {
+  const readiness = evaluateCatalogReadiness(boothComponentLike(), "booth_component");
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.issues, []);
+});
+
+test("booth_component: bez GLB modelu není ready", () => {
+  const readiness = evaluateCatalogReadiness(boothComponentLike({ modelUrl: undefined, assets: undefined }), "booth_component");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
+});
+
+test("booth_component: bez evidovaného SKP zdroje není ready, i s GLB modelem", () => {
+  const readiness = evaluateCatalogReadiness(boothComponentLike({ sourceAssets: undefined }), "booth_component");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_sketchup_source"));
+  assert.equal(isGeneratorEligible({ ...boothComponentLike({ sourceAssets: undefined }), lifecycleStatus: "active" }, "booth_component"), false);
+});
+
+test("booth_component: chybějící DWG, DXF nebo PDF nikdy neblokuje readiness — jen GLB a SKP jsou vyžadované", () => {
+  const glbSkpOnly = boothComponentLike({ sourceAssets: [fakeSketchupSource] });
+  assert.equal(evaluateCatalogReadiness(glbSkpOnly, "booth_component").ready, true);
+
+  const withAllKinds = boothComponentLike({
+    sourceAssets: [
+      fakeSketchupSource,
+      { id: "src-dwg", kind: "dwg", asset: fakeSketchupSource.asset },
+      { id: "src-dxf", kind: "dxf", asset: fakeSketchupSource.asset },
+      { id: "src-pdf", kind: "pdf", asset: fakeSketchupSource.asset },
+    ],
+  });
+  assert.equal(evaluateCatalogReadiness(withAllKinds, "booth_component").ready, true);
 });
 
 test("construction: scene-deklarovaná položka (showIn3D) bez 3D assetu není ready", () => {
@@ -341,7 +441,7 @@ test("EXACT_SAFE import status samo o sobě nikdy nezpůsobí readiness — čer
     reviewedAt: undefined,
     lifecycleStatus: "needs_review",
   });
-  for (const kind of ["furniture", "booth", "construction", "floor_finish", "other"] as const) {
+  for (const kind of ["furniture", "booth", "booth_component", "construction", "floor_finish", "other"] as const) {
     const readiness = evaluateCatalogReadiness(freshImport, kind);
     assert.equal(readiness.ready, false, `kind=${kind} nesmí být ready jen z EXACT_SAFE identity/kategorie`);
     assert.equal(isGeneratorEligible(freshImport, kind), false);

@@ -5148,6 +5148,10 @@ select:focus {
 .readinessIssues ul { margin: 4px 0 0 14px; }
 .catalogAdminSaveBar .primaryButton:disabled { opacity: .45; cursor: not-allowed; }
 .assetActions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
+.sourceAssetList { display: grid; gap: 6px; margin: 9px 0 0; padding: 0; list-style: none; }
+.sourceAssetListItem { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #eceeef; border-radius: 6px; background: white; font-size: 8px; }
+.sourceAssetListItem span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; color: #3c4042; }
+.sourceAssetKindBadge { padding: 2px 7px; border-radius: 999px; background: #eef0f1; color: #55595c; font-size: 7px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .checkboxRow { display: flex; align-items: center; gap: 7px; margin-top: 7px; font-size: 8px; color: #3c4042; }
 .checkboxRow input { width: auto; height: auto; }
 .fieldHint { margin-top: 8px; color: #96999c; font-size: 7px; }

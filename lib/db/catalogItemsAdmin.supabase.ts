@@ -113,7 +113,12 @@ export async function saveCatalogItemAdmin(
   // scoping immediately above. Auto-downgrade rather than blocking: the edit itself always
   // succeeds, the item just safely falls back to needs_review instead of silently violating
   // the active+ready invariant.
-  const mightAffectReadiness = edit.photoAsset === null || edit.modelAsset === null || edit.showIn2D !== undefined || edit.showIn3D !== undefined;
+  //
+  // removeSourceAssetId is included here too: removing the ONLY sketchup-kind entry from an
+  // active booth/booth_component would otherwise leave it active with missing_sketchup_source
+  // — same reasoning as photoAsset/modelAsset removal, checked unconditionally (cheap, and
+  // correctness must not depend on guessing which removed entry was the sketchup one).
+  const mightAffectReadiness = edit.photoAsset === null || edit.modelAsset === null || edit.showIn2D !== undefined || edit.showIn3D !== undefined || edit.removeSourceAssetId !== undefined;
   const resultingStatus = (nextDocument.lifecycleStatus as CatalogItemStatus | undefined) ?? current.lifecycleStatus;
   if (mightAffectReadiness && resultingStatus === "active") {
     const readiness = evaluateCatalogReadiness({ ...nextDocument, lifecycleStatus: "active" } as ComponentDefinition, current.kind);

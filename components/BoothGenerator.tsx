@@ -70,9 +70,9 @@ import {
   type ProjectAnnotation,
 } from "../domain/spatialAnnotations";
 import {
-  planView180ToWorld,
-  worldRotationToPlanView180,
-  worldToPlanView180,
+  planViewToWorld,
+  worldRotationToPlanView,
+  worldToPlanView,
 } from "../domain/planView";
 import { getMasterReferenceModel } from "../domain/cad3d";
 import {
@@ -117,10 +117,10 @@ import { ViewportToolbar } from "./configurator/ViewportToolbar";
 import { OrderImportPanel } from "./workflow/OrderImportPanel";
 import { TechnicalRequirementsEditor } from "./workflow/TechnicalRequirementsEditor";
 import {
-  BoothCatalogPage,
   ProjectsPage,
 } from "./workflow/AdminPages";
 import { ComponentAdminPage } from "./workflow/ComponentAdminPage";
+import { BoothAdminPage } from "./workflow/BoothAdminPage";
 import {
   ExportStep,
   SummaryStep,
@@ -728,7 +728,7 @@ export default function BoothGenerator() {
       x: Math.max(0, Math.min(selectedBooth.widthMm, ((event.clientX - rect.left) / rect.width) * selectedBooth.widthMm)),
       y: Math.max(0, Math.min(selectedBooth.depthMm, ((event.clientY - rect.top) / rect.height) * selectedBooth.depthMm)),
     };
-    const world = planView180ToWorld(display, selectedBooth.widthMm, selectedBooth.depthMm);
+    const world = planViewToWorld(display, selectedBooth.widthMm, selectedBooth.depthMm);
     return { x: Math.round(world.x / 40) * 40, y: Math.round(world.y / 40) * 40 };
   }
 
@@ -1224,7 +1224,7 @@ export default function BoothGenerator() {
       return;
     }
 
-    const pointer = planView180ToWorld(
+    const pointer = planViewToWorld(
       displayPointer,
       selectedBooth.widthMm,
       selectedBooth.depthMm,
@@ -1806,7 +1806,12 @@ export default function BoothGenerator() {
           />
         )}
 
-        {workspaceSection === "booths" && <BoothCatalogPage booths={boothTypes} />}
+        {workspaceSection === "booths" && (
+          <BoothAdminPage
+            repository={catalogItemsAdminRepositoryRef.current}
+            onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
+          />
+        )}
 
         {workspaceSection === "components" && (
           <ComponentAdminPage
@@ -3153,8 +3158,8 @@ export default function BoothGenerator() {
                       />
 
                       {editorTool === "measure" && measureHoverPoint && (() => {
-                        const hover = worldToPlanView180(measureHoverPoint, selectedBooth.widthMm!, selectedBooth.depthMm!);
-                        const start = pendingMeasurePoint ? worldToPlanView180(pendingMeasurePoint, selectedBooth.widthMm!, selectedBooth.depthMm!) : null;
+                        const hover = worldToPlanView(measureHoverPoint, selectedBooth.widthMm!, selectedBooth.depthMm!);
+                        const start = pendingMeasurePoint ? worldToPlanView(pendingMeasurePoint, selectedBooth.widthMm!, selectedBooth.depthMm!) : null;
                         return <div className="measurementPreview" aria-hidden="true"><svg viewBox={`0 0 ${selectedBooth.widthMm} ${selectedBooth.depthMm}`} preserveAspectRatio="none">{start && <line x1={start.x} y1={start.y} x2={hover.x} y2={hover.y} />}<circle cx={hover.x} cy={hover.y} r="24" />{start && <circle cx={start.x} cy={start.y} r="18" />}</svg></div>;
                       })()}
 
@@ -3200,9 +3205,9 @@ export default function BoothGenerator() {
                                   " "
                                 )}
                               style={{
-                                left: `${(worldToPlanView180({ x: item.xMm, y: item.yMm }, selectedBooth.widthMm!, selectedBooth.depthMm!).x / selectedBooth.widthMm!) * 100}%`,
+                                left: `${(worldToPlanView({ x: item.xMm, y: item.yMm }, selectedBooth.widthMm!, selectedBooth.depthMm!).x / selectedBooth.widthMm!) * 100}%`,
 
-                                top: `${(worldToPlanView180({ x: item.xMm, y: item.yMm }, selectedBooth.widthMm!, selectedBooth.depthMm!).y / selectedBooth.depthMm!) * 100}%`,
+                                top: `${(worldToPlanView({ x: item.xMm, y: item.yMm }, selectedBooth.widthMm!, selectedBooth.depthMm!).y / selectedBooth.depthMm!) * 100}%`,
 
                                 width: `${
                                   (item.widthMm /
@@ -3216,7 +3221,7 @@ export default function BoothGenerator() {
                                   100
                                 }%`,
 
-                                transform: `translate(-50%, -50%) rotate(${worldRotationToPlanView180(item.rotationDeg)}deg)`,
+                                transform: `translate(-50%, -50%) rotate(${worldRotationToPlanView(item.rotationDeg)}deg)`,
                                 zIndex: componentZIndex(item),
                               }}
                               onPointerDown={(
@@ -3273,8 +3278,8 @@ export default function BoothGenerator() {
                       )}
 
                       {showPlanDimensions && customDimensions.filter((dimension) => dimension.visible).map((dimension) => {
-                        const start = worldToPlanView180(dimension.start, selectedBooth.widthMm!, selectedBooth.depthMm!);
-                        const end = worldToPlanView180(dimension.end, selectedBooth.widthMm!, selectedBooth.depthMm!);
+                        const start = worldToPlanView(dimension.start, selectedBooth.widthMm!, selectedBooth.depthMm!);
+                        const end = worldToPlanView(dimension.end, selectedBooth.widthMm!, selectedBooth.depthMm!);
                         const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
                         return <div className="customDimension" key={dimension.id}>
                           <svg viewBox={`0 0 ${selectedBooth.widthMm} ${selectedBooth.depthMm}`} preserveAspectRatio="none"><line x1={start.x} y1={start.y} x2={end.x} y2={end.y} /><circle cx={start.x} cy={start.y} r="18" /><circle cx={end.x} cy={end.y} r="18" /></svg>
@@ -3286,7 +3291,7 @@ export default function BoothGenerator() {
                       })}
 
                       {annotations.filter((annotation) => annotation.visible).map((annotation) => {
-                        const point = worldToPlanView180(annotation.position, selectedBooth.widthMm!, selectedBooth.depthMm!);
+                        const point = worldToPlanView(annotation.position, selectedBooth.widthMm!, selectedBooth.depthMm!);
                         return <div
                           key={annotation.id}
                           role="button"

@@ -6,8 +6,8 @@ import type {
 } from "../domain/spatialAnnotations.ts";
 import { dimensionDisplayLabel } from "../domain/spatialAnnotations.ts";
 import {
-  worldRotationToPlanView180,
-  worldToPlanView180,
+  worldRotationToPlanView,
+  worldToPlanView,
 } from "../domain/planView.ts";
 import { sortComponentsFor2D } from "../domain/displayOrder.ts";
 
@@ -113,14 +113,14 @@ export async function renderTechnicalPlanPng(input: {
 
   for (const item of sortComponentsFor2D(sceneObjects)) {
     if (!item.visible || !item.showIn2D || !layers.includes(item.sceneLayer)) continue;
-    const point = worldToPlanView180(
+    const point = worldToPlanView(
       { x: item.xMm, y: item.yMm },
       booth.widthMm,
       booth.depthMm,
     );
     context.save();
     context.translate(originX + point.x * scale, originY + point.y * scale);
-    context.rotate((worldRotationToPlanView180(item.rotationDeg) * Math.PI) / 180);
+    context.rotate((worldRotationToPlanView(item.rotationDeg) * Math.PI) / 180);
     context.fillStyle = item.sceneLayer === "furniture" ? "#f5f5f4" : "#ffffff";
     context.strokeStyle = layerColor(item.sceneLayer);
     context.lineWidth = Math.max(2, scale * 12);
@@ -136,7 +136,7 @@ export async function renderTechnicalPlanPng(input: {
   if (layers.includes("annotations")) {
     context.textAlign = "center";
     annotations.filter((item) => item.visible).forEach((item) => {
-      const point = worldToPlanView180(item.position, booth.widthMm!, booth.depthMm!);
+      const point = worldToPlanView(item.position, booth.widthMm!, booth.depthMm!);
       const fontSize = PLAN_RENDER_CONFIG.annotationFontPx[item.textSize ?? "medium"];
       context.font = `600 ${fontSize}px Arial`;
       const metrics = context.measureText(item.text);
@@ -189,8 +189,8 @@ function drawDimensions(
   context.restore();
 
   customDimensions.filter((item) => item.visible).forEach((item) => {
-    const start = worldToPlanView180(item.start, booth.widthMm!, booth.depthMm!);
-    const end = worldToPlanView180(item.end, booth.widthMm!, booth.depthMm!);
+    const start = worldToPlanView(item.start, booth.widthMm!, booth.depthMm!);
+    const end = worldToPlanView(item.end, booth.widthMm!, booth.depthMm!);
     const x1 = originX + start.x * scale;
     const y1 = originY + start.y * scale;
     const x2 = originX + end.x * scale;

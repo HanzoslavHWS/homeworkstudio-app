@@ -10,6 +10,7 @@ import {
   getComponentModel,
   mmToSceneUnits,
   placedComponentToViewerTransform,
+  viewerPointToCad,
 } from "../../domain/cad3d";
 import type {
   CadModelAsset,
@@ -106,6 +107,10 @@ function fitCameraToObject(
     0.5,
     (sphere.radius / Math.sin(limitingFov / 2)) * 1.15,
   );
+  // Z stays positive so the default camera sits outside the booth's canonical FRONT boundary
+  // (Y=0mm → cadPointToViewer's three.z=0; the booth interior/back extend toward negative Z)
+  // rather than outside the back. Do not flip this sign without also re-checking
+  // tests/cad3d.test.ts's front/back boundary assertions.
   const isometricDirection = new THREE.Vector3(1, 0.78, 1).normalize();
 
   camera.position.copy(sphere.center).addScaledVector(isometricDirection, distance);
@@ -509,7 +514,8 @@ export function BoothCadViewer({
         onSelectPrintSurfaceRef.current?.(object?.userData.printSurfaceId ?? null);
         return;
       }
-      const point: readonly [number, number, number] = [hit.point.x / SCENE_UNITS_PER_MILLIMETER, -hit.point.z / SCENE_UNITS_PER_MILLIMETER, hit.point.y / SCENE_UNITS_PER_MILLIMETER];
+      const cadPoint = viewerPointToCad(hit.point);
+      const point: readonly [number, number, number] = [cadPoint.x, cadPoint.y, cadPoint.z];
       if (!measurementStart) setMeasurementStart(point);
       else {
         onMeasurementsChangeRef.current?.([...measurements, createMeasurement3D(`measurement-3d-${Date.now()}`, measurementStart, point)]);

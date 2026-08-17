@@ -80,6 +80,14 @@ test("catalog-model přijme pouze .glb (model/gltf-binary) a odmítne applicatio
   assert.throws(() => validateUploadInput({ category: "catalog-model", ownerId: "M99", originalFileName: "photo.jpg", mimeType: "image/jpeg", size: 1000 }), (error) => error instanceof AssetValidationError && error.code === "invalid-mime");
 });
 
+test("catalog-source přijme skp/dwg/dxf jako application/octet-stream a pdf jako application/pdf, odmítne obrázky", () => {
+  assert.doesNotThrow(() => validateUploadInput({ category: "catalog-source", ownerId: "sloupek", originalFileName: "sloupek.skp", mimeType: "application/octet-stream", size: 1_000_000 }));
+  assert.doesNotThrow(() => validateUploadInput({ category: "catalog-source", ownerId: "sloupek", originalFileName: "sloupek.dwg", mimeType: "application/octet-stream", size: 1_000_000 }));
+  assert.doesNotThrow(() => validateUploadInput({ category: "catalog-source", ownerId: "sloupek", originalFileName: "sloupek.dxf", mimeType: "application/octet-stream", size: 1_000_000 }));
+  assert.doesNotThrow(() => validateUploadInput({ category: "catalog-source", ownerId: "sloupek", originalFileName: "sloupek.pdf", mimeType: "application/pdf", size: 1_000_000 }));
+  assert.throws(() => validateUploadInput({ category: "catalog-source", ownerId: "sloupek", originalFileName: "photo.jpg", mimeType: "image/jpeg", size: 1000 }), (error) => error instanceof AssetValidationError && error.code === "invalid-mime");
+});
+
 test("catalog-model storageKey odpovídá existující catalog/furniture/<id>/models konvenci (stejný prefix jako catalog-photo)", () => {
   assert.equal(
     createStorageKey({ category: "catalog-model", ownerId: "M99", originalFileName: "model.glb", mimeType: "model/gltf-binary" }, "fixed-uuid"),

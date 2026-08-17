@@ -17,6 +17,7 @@ import {
   documentModelAsset,
   documentPhotoAsset,
   documentReviewedAt,
+  documentSourceAssets,
   filterCatalogItemsAdmin,
   matchesCatalogItemAdminSearch,
   parseCatalogItemAdminEdit,
@@ -105,6 +106,12 @@ function createFakeSupabaseClient(seed: Readonly<Record<string, readonly FakeRow
 // Fixtures — mirror the REAL shapes now living in remote catalog_items after Batch #2A/#2B.
 // ---------------------------------------------------------------------------------------
 
+const P86_SKETCHUP_SOURCE = {
+  id: "p86-skp-1",
+  kind: "sketchup",
+  asset: { id: "p86-skp-asset", storageKey: "catalog/furniture/koje-2x2/source/p86.skp", originalFileName: "koje-2x2.skp", mimeType: "application/octet-stream", size: 500_000, createdAt: "2026-08-01T00:00:00.000Z", category: "catalog-source" },
+};
+
 const P86_DOCUMENT: FakeRow = {
   id: "koje-2x2",
   code: "P86",
@@ -114,6 +121,10 @@ const P86_DOCUMENT: FakeRow = {
   heightMm: 2500,
   category: "typova-koje",
   modelUrl: "/models/booths/koje-2x2/master.glb",
+  // Deliberately NO sourceAssets — matches the real data/booths.ts P86 seed exactly. Booth-kind
+  // readiness never requires SKP/DWG/DXF/PDF (Part 27, confirmed by QA); P86 must stay ready
+  // and generatorEligible with no source files evidenced at all. Tests exercising sourceAssets
+  // behavior on a booth add it explicitly on top of this fixture.
   defaultCarpetFinishId: "carpet-grey",
   parts: [
     { id: "p86-carpet-grey", kind: "floor-finish", name: "Šedý koberec", unit: "m²", quantity: 4, includedInBasePrice: true, finishId: "carpet-grey" },
@@ -135,6 +146,35 @@ function p86Row(overrides: Partial<FakeRow> = {}): FakeRow {
     category: "Canonical",
     unit: "ks",
     document: P86_DOCUMENT,
+    created_at: "2026-08-01T00:00:00.000Z",
+    updated_at: "2026-08-14T19:16:38.367959+00:00",
+    ...overrides,
+  };
+}
+
+// A booth_component (individual booth-construction element) — unlike "booth", this kind DOES
+// require an evidenced SKP source for readiness (Part 28), so it fully evidences one by default.
+const SLOUPEK_DOCUMENT: FakeRow = {
+  id: "sloupek-1",
+  internalCode: "KOMP-SLOUPEK",
+  displayName: "Sloupek",
+  name: "Sloupek",
+  category: "Komponenty stánku",
+  modelUrl: "/models/booth-components/sloupek.glb",
+  sourceAssets: [P86_SKETCHUP_SOURCE],
+};
+
+function boothComponentRow(overrides: Partial<FakeRow> = {}): FakeRow {
+  return {
+    id: "sloupek-uuid",
+    internal_code: "KOMP-SLOUPEK",
+    kind: "booth_component",
+    lifecycle_status: "active",
+    display_name: "Sloupek",
+    official_name: null,
+    category: "Komponenty stánku",
+    unit: null,
+    document: SLOUPEK_DOCUMENT,
     created_at: "2026-08-01T00:00:00.000Z",
     updated_at: "2026-08-14T19:16:38.367959+00:00",
     ...overrides,
@@ -709,11 +749,40 @@ test("UI: filters cover search/kind/lifecycle/readiness/asset (section 5)", () =
   assert.match(source, /Asset: vše/u);
 });
 
-test("UI: detail sections match Identita/Rozměry/Lifecycle/Fotografie/3D model/Ceny (section 6, extended with the asset workflow)", () => {
+test("UI: detail sections match Identita/Rozměry/Lifecycle/Fotografie/3D model/Zdrojové a výrobní soubory/Ceny (section 6, extended with the asset + source-file workflow)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  for (const heading of ["Identita", "Rozměry", "Lifecycle", "Fotografie", "3D model", "Ceny"]) {
+  for (const heading of ["Identita", "Rozměry", "Lifecycle", "Fotografie", "3D model", "Zdrojové a výrobní soubory", "Ceny"]) {
     assert.match(source, new RegExp(`<h3>${heading}</h3>`), `missing detail section "${heading}"`);
   }
+});
+
+test("UI: source-file upload reuses the existing uploadAsset infrastructure with category 'catalog-source' — never a second/parallel upload system", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /uploadAsset\(file, \{ category: "catalog-source"/u);
+});
+
+test("UI: source-file removal is metadata-only (removeSourceAssetId), same reference-safety pattern as photoAsset/modelAsset removal", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /onSave\(\{ removeSourceAssetId: entry\.id \}\)/u);
+});
+
+test("UI: source-file section is gated by kind (dispatched, never a name/category heuristic) and excludes pure services", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  const constMatch = source.match(/const SOURCE_ASSET_APPLICABLE_KINDS[^;]+;/u);
+  assert.ok(constMatch, "expected SOURCE_ASSET_APPLICABLE_KINDS to be defined");
+  for (const kind of ["furniture", "booth", "booth_component", "construction"]) {
+    assert.match(constMatch![0], new RegExp(`"${kind}"`), `${kind} must be allowed to show source files`);
+  }
+  for (const kind of ["service", "graphics_service"]) {
+    assert.doesNotMatch(constMatch![0], new RegExp(`"${kind}"`), `${kind} (pure service, e.g. L02) must never show a CAD/source-file section`);
+  }
+  assert.match(source, /SOURCE_ASSET_APPLICABLE_KINDS\.includes\(item\.kind\) &&/u, "the section itself must be conditionally rendered based on kind");
+});
+
+test("UI: a furniture item (e.g. a chair) is allowed to show the source-file section — SKP/DWG/DXF/PDF are never Komponenty-stánku-only", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  const constMatch = source.match(/const SOURCE_ASSET_APPLICABLE_KINDS[^;]+;/u)![0];
+  assert.match(constMatch, /"furniture"/u);
 });
 
 test("UI: internalCode is rendered read-only (span), never as an editable input (section 7)", () => {
@@ -824,6 +893,109 @@ test("GLB static model fallback remains functional: P86's legacy modelUrl (no mo
 });
 
 // -----------------------------------------------------------------------------------------
+// BOOTH ADMIN PAGE — Part 2 of the request: "Stánky" now hosts both complete type-booths and
+// individual booth components, clearly separated, reusing the same DB-backed detail UI —
+// never a parallel model, never wired into the live generator picker.
+// -----------------------------------------------------------------------------------------
+
+test("BoothAdminPage.tsx reuses ComponentAdminList/ComponentAdminDetail exported from ComponentAdminPage.tsx — no parallel list/detail UI", () => {
+  const source = readFileSync(new URL("../components/workflow/BoothAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /import \{ ComponentAdminDetail, ComponentAdminList \} from "\.\/ComponentAdminPage"/u);
+});
+
+test("BoothAdminPage.tsx separates 'Typové stánky' (kind=booth) and 'Komponenty stánku' (kind=booth_component) as clearly labeled tabs", () => {
+  const source = readFileSync(new URL("../components/workflow/BoothAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /kind: "booth", label: "Typové stánky"/u);
+  assert.match(source, /kind: "booth_component", label: "Komponenty stánku"/u);
+});
+
+test("BoothAdminPage.tsx keeps the ComponentAdminDetail key={selected.id} stale-state fix — switching between selected items never leaks state", () => {
+  const source = readFileSync(new URL("../components/workflow/BoothAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /<ComponentAdminDetail\s+key=\{selected\.id\}/u);
+});
+
+test("BoothAdminPage.tsx never imports/renders ComponentLibrary — booth components stay evidence/readiness-only, never wired into the live generator picker", () => {
+  const source = readFileSync(new URL("../components/workflow/BoothAdminPage.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /import .*ComponentLibrary|<ComponentLibrary/u);
+});
+
+test("booth_component is a real CatalogItemKind with its own Czech label, never a category-only heuristic", () => {
+  const source = readFileSync(new URL("../domain/catalogItemsAdmin.ts", import.meta.url), "utf8");
+  assert.match(source, /booth_component: "Komponenta stánku"/u);
+});
+
+// -----------------------------------------------------------------------------------------
+// SOURCE ASSETS (SKP/DWG/DXF/PDF/other) — Part 3 of the generalized source/manufacturing-file
+// request. A LIST, unlike the single photoAsset/modelAsset — one edit either appends one entry
+// (addSourceAsset) or removes one entry by id (removeSourceAssetId), never a wholesale replace.
+// -----------------------------------------------------------------------------------------
+
+const SKP_ASSET: StoredAsset = { id: "skp-1", storageKey: "catalog/furniture/f01/source/skp-1.skp", originalFileName: "part.skp", mimeType: "application/octet-stream", size: 900_000, createdAt: "2026-08-14T00:00:00.000Z", category: "catalog-source" };
+const DWG_ASSET: StoredAsset = { id: "dwg-1", storageKey: "catalog/furniture/f01/source/dwg-1.dwg", originalFileName: "part.dwg", mimeType: "application/octet-stream", size: 400_000, createdAt: "2026-08-14T00:00:00.000Z", category: "catalog-source" };
+
+test("SOURCE ASSET valid: parseCatalogItemAdminEdit accepts a well-shaped addSourceAsset", () => {
+  const edit = parseCatalogItemAdminEdit({ addSourceAsset: { kind: "sketchup", asset: SKP_ASSET } });
+  assert.deepEqual(edit.addSourceAsset, { kind: "sketchup", asset: SKP_ASSET, label: undefined });
+});
+
+test("SOURCE ASSET invalid: an unknown kind or malformed asset is silently dropped, never merged", () => {
+  assert.equal(parseCatalogItemAdminEdit({ addSourceAsset: { kind: "cad-blueprint", asset: SKP_ASSET } }).addSourceAsset, undefined);
+  assert.equal(parseCatalogItemAdminEdit({ addSourceAsset: { kind: "sketchup", asset: { id: "x" } } }).addSourceAsset, undefined);
+});
+
+test("SOURCE ASSET: applyCatalogItemEdit appends addSourceAsset to the existing list, generating a fresh id, never overwriting other entries", () => {
+  const withDwg = { ...STUB_DOCUMENT, sourceAssets: [{ id: "existing-dwg", kind: "dwg", asset: DWG_ASSET }] };
+  const merged = applyCatalogItemEdit(withDwg, { addSourceAsset: { kind: "sketchup", asset: SKP_ASSET } });
+  const entries = documentSourceAssets(merged);
+  assert.equal(entries.length, 2);
+  assert.ok(entries.some((entry) => entry.kind === "dwg" && entry.id === "existing-dwg"));
+  const added = entries.find((entry) => entry.kind === "sketchup")!;
+  assert.equal(added.asset.storageKey, SKP_ASSET.storageKey);
+  assert.ok(added.id && added.id !== "existing-dwg");
+});
+
+test("SOURCE ASSET: removeSourceAssetId removes only the matching entry — everything else survives, metadata-only (no R2 delete)", () => {
+  const withTwo = { ...STUB_DOCUMENT, sourceAssets: [{ id: "keep-me", kind: "dwg", asset: DWG_ASSET }, { id: "remove-me", kind: "sketchup", asset: SKP_ASSET }] };
+  const merged = applyCatalogItemEdit(withTwo, { removeSourceAssetId: "remove-me" });
+  const entries = documentSourceAssets(merged);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]!.id, "keep-me");
+});
+
+test("SOURCE ASSET storageKey persisted end to end on a booth: saveCatalogItemAdmin writes the new entry, but SKP is pure evidence for booth kind — readiness/status are unaffected either way", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [p86Row({ document: P86_DOCUMENT })] });
+  const saved = await saveCatalogItemAdmin(client as never, "p86-uuid", { addSourceAsset: { kind: "sketchup", asset: SKP_ASSET } }, "2026-08-14T19:16:38.367959+00:00");
+  const entries = documentSourceAssets(saved.document);
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0]!.kind, "sketchup");
+  assert.equal(saved.lifecycleStatus, "active", "adding an (optional, for booth) SKP entry must never itself change lifecycle status");
+  assert.equal(computeReadiness(saved).ready, true);
+});
+
+test("SOURCE ASSET: removing the only sketchup entry on an ALREADY ACTIVE booth_component auto-downgrades to needs_review — booth_component DOES require SKP (Part 28), unlike booth", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [boothComponentRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "sloupek-uuid", { removeSourceAssetId: P86_SKETCHUP_SOURCE.id }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal(documentSourceAssets(saved.document).length, 0);
+  assert.equal(saved.lifecycleStatus, "needs_review", "active+not-ready (missing SKP on a booth_component) must never persist — safe auto-downgrade instead of blocking the removal");
+});
+
+test("SOURCE ASSET: removing the only sketchup entry on an ALREADY ACTIVE booth (kind=booth, not booth_component) never downgrades it — SKP is not required for booth readiness (Part 27)", async () => {
+  const withSkp = { ...P86_DOCUMENT, sourceAssets: [P86_SKETCHUP_SOURCE] };
+  const client = createFakeSupabaseClient({ catalog_items: [p86Row({ document: withSkp })] });
+  const saved = await saveCatalogItemAdmin(client as never, "p86-uuid", { removeSourceAssetId: P86_SKETCHUP_SOURCE.id }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal(documentSourceAssets(saved.document).length, 0);
+  assert.equal(saved.lifecycleStatus, "active", "booth readiness never depended on SKP — removing it must never downgrade an active booth");
+});
+
+test("SOURCE ASSET: removing a non-sketchup (e.g. DWG) entry from an active, otherwise-ready booth_component never downgrades it", async () => {
+  const withExtraDwg = { ...SLOUPEK_DOCUMENT, sourceAssets: [P86_SKETCHUP_SOURCE, { id: "extra-dwg", kind: "dwg", asset: DWG_ASSET }] };
+  const client = createFakeSupabaseClient({ catalog_items: [boothComponentRow({ document: withExtraDwg })] });
+  const saved = await saveCatalogItemAdmin(client as never, "sloupek-uuid", { removeSourceAssetId: "extra-dwg" }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal(saved.lifecycleStatus, "active");
+  assert.equal(documentSourceAssets(saved.document).some((entry) => entry.kind === "sketchup"), true);
+});
+
+// -----------------------------------------------------------------------------------------
 // REPLACE — section 7: upload first, DB save second; old reference survives any failure.
 // -----------------------------------------------------------------------------------------
 
@@ -904,6 +1076,32 @@ test("REMOVE: unrelated edits to an already-active-but-imperfect item (M57) neve
   const client = createFakeSupabaseClient({ catalog_items: [m57Row()] });
   const saved = await saveCatalogItemAdmin(client as never, "m57-uuid", { unit: "ks" }, "2026-08-14T19:16:38.000000+00:00");
   assert.equal(saved.lifecycleStatus, "active", "a plain metadata edit must never trigger the asset-removal downgrade guard");
+});
+
+test("FURNITURE + SKP: M57 (canonical furniture) can persist a SketchUp source alongside its GLB — readiness/generatorEligible/lifecycleStatus are completely unaffected either way (SKP never counts toward furniture readiness)", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [m57Row()] });
+  const before = client.tables.get("catalog_items")!.find((r) => r.id === "m57-uuid")!;
+  const beforeReadiness = computeReadiness(toAdmin(before));
+
+  const saved = await saveCatalogItemAdmin(client as never, "m57-uuid", { addSourceAsset: { kind: "sketchup", asset: SKP_ASSET } }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.lifecycleStatus, "active", "adding an SKP evidence file must never itself change lifecycle status");
+  assert.equal(documentSourceAssets(saved.document).some((entry) => entry.kind === "sketchup"), true, "furniture must be able to persist a SKP entry");
+  assert.equal(documentHas3DAsset(saved.document), documentHas3DAsset(before.document as never), "adding a SKP entry must never change has3DAsset — SKP is never a runtime GLB substitute");
+  assert.deepEqual(computeReadiness(saved).issues, beforeReadiness.issues, "furniture readiness rules never read sourceAssets — adding SKP changes nothing about readiness");
+});
+
+test("FURNITURE + optional source files: adding then removing a DWG on a FULLY READY, already-active furniture item never changes its lifecycleStatus/generatorEligible", async () => {
+  const readyFurnitureDoc = { ...STUB_DOCUMENT, widthMm: 500, depthMm: 500, showIn2D: true, showIn3D: true, footprint2D: { shape: "rectangle" }, modelUrl: "/models/test.glb", reviewedAt: "2026-08-14T00:00:00.000Z", lifecycleStatus: "active" };
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: readyFurnitureDoc, lifecycle_status: "active" })] });
+
+  const withDwg = await saveCatalogItemAdmin(client as never, "f01-uuid", { addSourceAsset: { kind: "dwg", asset: DWG_ASSET } }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(withDwg.lifecycleStatus, "active");
+  const dwgEntry = documentSourceAssets(withDwg.document).find((entry) => entry.kind === "dwg")!;
+  assert.ok(dwgEntry);
+
+  const afterRemove = await saveCatalogItemAdmin(client as never, "f01-uuid", { removeSourceAssetId: dwgEntry.id }, withDwg.updatedAt);
+  assert.equal(afterRemove.lifecycleStatus, "active", "removing an optional DWG from an item that is ready without it must never downgrade it");
+  assert.equal(computeGeneratorEligibleLive(afterRemove), true);
 });
 
 // -----------------------------------------------------------------------------------------

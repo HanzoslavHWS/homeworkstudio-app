@@ -5,6 +5,7 @@ export const ASSET_CATEGORIES = [
   "catalog-photo",
   "catalog-thumbnail",
   "catalog-model",
+  "catalog-source",
   "project-graphics",
   "project-document",
   "project-visualization",
@@ -25,6 +26,41 @@ export type StoredAsset = Readonly<{
   checksum?: string;
   displayName?: string;
   category: AssetCategory;
+}>;
+
+/**
+ * Generic source/manufacturing file kinds for catalog items — deliberately NOT a set of
+ * hardcoded fields (sketchupAsset/dwgAsset/dxfAsset/...) on the item itself. Each uploaded
+ * file becomes one SourceAssetEntry inside ComponentDefinition.sourceAssets[] (domain/
+ * models.ts), so adding a new kind later never needs a schema/field change — see
+ * domain/catalogReadiness.ts for which kinds are mandatory for activation (sketchup is; dwg/
+ * dxf/pdf/other never are).
+ */
+export const SOURCE_ASSET_KINDS = ["sketchup", "dwg", "dxf", "pdf", "other"] as const;
+export type SourceAssetKind = (typeof SOURCE_ASSET_KINDS)[number];
+
+export const SOURCE_ASSET_KIND_LABELS_CS: Readonly<Record<SourceAssetKind, string>> = {
+  sketchup: "SketchUp (.skp)",
+  dwg: "DWG",
+  dxf: "DXF",
+  pdf: "PDF",
+  other: "Ostatní",
+};
+
+/** Extensions accepted for each declared kind, used by the admin upload UI to pick/validate a file client-side. "other" accepts anything the catalog-source category itself allows. */
+export const SOURCE_ASSET_KIND_EXTENSIONS: Readonly<Record<SourceAssetKind, readonly string[]>> = {
+  sketchup: ["skp"],
+  dwg: ["dwg"],
+  dxf: ["dxf"],
+  pdf: ["pdf"],
+  other: ["skp", "dwg", "dxf", "pdf"],
+};
+
+export type SourceAssetEntry = Readonly<{
+  id: string;
+  kind: SourceAssetKind;
+  label?: string;
+  asset: StoredAsset;
 }>;
 
 export type AssetObjectMetadata = Readonly<{
@@ -83,6 +119,12 @@ const CATEGORY_RULES: Readonly<Record<AssetCategory, CategoryRule>> = {
   // generic "application/octet-stream" (which also covers .skp) is safe; nothing else relies
   // on the broader list.
   "catalog-model": { prefix: (id) => `catalog/furniture/${id}/models`, maxBytes: 100_000_000, mimeTypes: ["model/gltf-binary"] },
+  // Source/manufacturing files (SKP/DWG/DXF/PDF/other) — real-world browsers rarely report a
+  // specific MIME type for CAD authoring formats, so this accepts the generic binary type plus
+  // PDF; the actual kind (sketchup/dwg/dxf/pdf/other) is a caller-supplied label on the
+  // SourceAssetEntry, never sniffed from mimeType. Size ceiling matches project-export's
+  // precedent for large binary deliverables.
+  "catalog-source": { prefix: (id) => `catalog/furniture/${id}/source`, maxBytes: 150_000_000, mimeTypes: ["application/octet-stream", "application/pdf"] },
   "project-graphics": { prefix: (id) => `projects/${id}/graphics`, maxBytes: 100_000_000, mimeTypes: GRAPHICS_TYPES },
   "project-document": { prefix: (id) => `projects/${id}/documents`, maxBytes: 40_000_000, mimeTypes: DOCUMENT_TYPES },
   "project-visualization": { prefix: (id) => `projects/${id}/visualizations`, maxBytes: 25_000_000, mimeTypes: IMAGE_TYPES },
@@ -98,7 +140,7 @@ const MIME_EXTENSIONS: Readonly<Record<string, readonly string[]>> = {
   "application/vnd.ms-excel": ["xls"],
   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ["xlsx"],
   "text/plain": ["txt"], "application/postscript": ["ai", "eps", "ps"], "application/illustrator": ["ai"],
-  "model/gltf-binary": ["glb"], "application/octet-stream": ["glb", "skp"], "application/zip": ["zip"],
+  "model/gltf-binary": ["glb"], "application/octet-stream": ["glb", "skp", "dwg", "dxf"], "application/zip": ["zip"],
 };
 
 export class AssetValidationError extends Error {

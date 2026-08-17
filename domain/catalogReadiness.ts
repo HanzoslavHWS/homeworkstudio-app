@@ -22,6 +22,7 @@ export type ReadinessIssue =
   | "missing_scene_capability"
   | "missing_2d_representation"
   | "missing_3d_asset"
+  | "missing_sketchup_source"
   | "missing_pricing_unit"
   | "requires_review";
 
@@ -34,6 +35,7 @@ export const READINESS_ISSUE_LABELS_CS: Readonly<Record<ReadinessIssue, string>>
   missing_scene_capability: "Chybí nastavení zobrazení ve 2D/3D",
   missing_2d_representation: "Chybí platná 2D reprezentace",
   missing_3d_asset: "Chybí platný 3D model (GLB)",
+  missing_sketchup_source: "Chybí zdrojový SketchUp (.skp) soubor",
   missing_pricing_unit: "Chybí typ jednotky pro cenotvorbu",
   requires_review: "Čeká na kontrolu/schválení",
 };
@@ -70,6 +72,15 @@ function has3DAsset(item: ComponentDefinition): boolean {
   if (isRuntimeGlbReference(item.modelUrl)) return true;
   if (isRuntimeGlbReference(item.modelAsset?.storageKey)) return true;
   return Boolean(item.assets?.models3d?.some((asset) => isRuntimeGlbReference(asset.url)));
+}
+
+/**
+ * A real SketchUp authoring source has been evidenced via sourceAssets — see domain/assets.ts's
+ * SourceAssetEntry. Only a "sketchup"-kind entry counts; DWG/DXF/PDF/other never satisfy this,
+ * however many of them are attached (Part 3: those kinds are never mandatory for activation).
+ */
+function hasSketchupSource(item: ComponentDefinition): boolean {
+  return Boolean(item.sourceAssets?.some((entry) => entry.kind === "sketchup" && entry.asset?.storageKey));
 }
 
 /** Booth kind requires a real, placeable footprint — unlike furniture, height is mandatory too (mirrors BoothType's own NominalDimensions, where widthMm/depthMm/heightMm are all non-optional). */
@@ -160,9 +171,26 @@ export function evaluateCatalogReadiness(item: ComponentDefinition, kind: Catalo
     // genuinely matters is a real nominal footprint (width/depth/HEIGHT — a booth without a
     // height is not a usable 3D volume) and a usable geometry asset. PrintSurfaces are
     // deliberately NEVER required here — not every booth needs a print allowance.
+    //
+    // SKP is explicitly NOT required here (unlike booth_component below) — a complete type-booth
+    // (P86, T04, ...) was always planned to activate on GLB alone; DWG/DXF/PDF/other source
+    // files are evidence/documentation, never generator-readiness gates. P86 must stay
+    // ready=true / generatorEligible=true with no SKP evidenced at all.
     case "booth": {
       if (!hasBoothDimensions(item)) issues.push("missing_dimensions");
       if (!has3DAsset(item)) issues.push("missing_3d_asset");
+      break;
+    }
+    // An individual booth-construction element (sloupek/panel/dveře/límec/rastr/koberec, ...)
+    // evidenced for future individual-booth assembly — see domain/models.ts's CatalogItemKind
+    // doc comment. Only the two files Part 3 actually requires are mandatory: a runtime GLB and
+    // a SketchUp authoring source. No footprint-dimensions rule (unlike "booth" — many of these
+    // elements, e.g. límec/rastr, don't have a meaningful single width×depth×height the way a
+    // whole booth does), and no showIn2D/showIn3D scene-capability rule (never wired into the
+    // live generator picker in this phase — see SCENE_CAPABILITY_KINDS in ComponentAdminPage.tsx).
+    case "booth_component": {
+      if (!has3DAsset(item)) issues.push("missing_3d_asset");
+      if (!hasSketchupSource(item)) issues.push("missing_sketchup_source");
       break;
     }
     // Construction line items split into two real uses the current model can't always tell

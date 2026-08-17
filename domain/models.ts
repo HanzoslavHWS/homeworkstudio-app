@@ -1,4 +1,4 @@
-import type { StoredAsset } from "./assets.ts";
+import type { SourceAssetEntry, StoredAsset } from "./assets.ts";
 
 export type ProjectType = "typovy" | "individualni";
 export type Currency = "CZK" | "EUR";
@@ -22,9 +22,17 @@ export const CATALOG_ITEM_STATUSES = [
 ] as const;
 export type CatalogItemStatus = (typeof CATALOG_ITEM_STATUSES)[number];
 
-/** Classification used to select which readiness rules apply — see domain/catalogReadiness.ts. */
+/**
+ * Classification used to select which readiness rules apply — see domain/catalogReadiness.ts.
+ * "booth_component" is an individual booth-construction element (sloupek/panel/dveře/límec/
+ * rastr/koberec, ...) evidenced for future individual-booth assembly — distinct from "booth"
+ * (a complete, placeable type-booth) because it needs its OWN mandatory-asset rule (GLB+SKP)
+ * rather than booth's footprint-dimensions rule. Deliberately reuses the same ComponentDefinition
+ * document shape and the same catalog_items table as every other kind — never a parallel model.
+ */
 export const CATALOG_ITEM_KINDS = [
   "booth",
+  "booth_component",
   "construction",
   "furniture",
   "technical_point",
@@ -263,6 +271,8 @@ export type BoothType = Readonly<{
   photoAsset?: StoredAsset;
   modelUrl?: string;
   sketchupUrl?: string;
+  /** See ComponentDefinition.sourceAssets — same generic SKP/DWG/DXF/PDF/other model, reused verbatim for booths. */
+  sourceAssets?: readonly SourceAssetEntry[];
   printable?: boolean;
   printSurfaces?: readonly PrintSurface[];
   partDefinitions?: readonly PartDefinition[];
@@ -348,6 +358,13 @@ export type ComponentDefinition = Readonly<{
   photoUrl?: string;
   photoAsset?: StoredAsset;
   sketchupUrl?: string;
+  /**
+   * Generic source/manufacturing files (SKP authoring source, DWG/DXF/PDF production
+   * documents, other) — see domain/assets.ts's SourceAssetEntry/SourceAssetKind and
+   * domain/catalogReadiness.ts for which kinds are mandatory. Never a set of hardcoded
+   * per-kind fields; adding a new file kind never needs a model change.
+   */
+  sourceAssets?: readonly SourceAssetEntry[];
   footprint2D?: Readonly<{
     shape: "rectangle" | "circle" | "symbol";
     symbol?: string;

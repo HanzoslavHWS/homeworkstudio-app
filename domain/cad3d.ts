@@ -32,6 +32,20 @@ export function cadPointToViewer(pointMm: Point3): Point3 {
   };
 }
 
+/**
+ * Exact inverse of cadPointToViewer — converts a Three.js scene point back to CAD/project mm
+ * coordinates. The 3D viewer's `content`/`editorOverlays` groups carry no render-time
+ * rotation, so this is a direct inverse with no further undo step needed (see
+ * BoothCadViewer.tsx's raycast click handler).
+ */
+export function viewerPointToCad(pointSceneUnits: Point3): Point3 {
+  return {
+    x: sceneUnitsToMm(pointSceneUnits.x),
+    y: -sceneUnitsToMm(pointSceneUnits.z),
+    z: sceneUnitsToMm(pointSceneUnits.y),
+  };
+}
+
 export function getMasterReferenceModel(
   assets?: AssetReference,
 ): CadModelAsset | undefined {

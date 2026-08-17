@@ -12,10 +12,11 @@ import { CATALOG_ITEM_KINDS, type CatalogItemKind, type CatalogItemStatus, type 
 import { evaluateCatalogReadiness, isGeneratorEligible, isValidCatalogItemStatus, type ReadinessResult } from "./catalogReadiness.ts";
 import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
-import type { StoredAsset } from "./assets.ts";
+import { SOURCE_ASSET_KINDS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "./assets.ts";
 
 export const CATALOG_ITEM_KIND_LABELS_CS: Readonly<Record<CatalogItemKind, string>> = {
   booth: "Stánek",
+  booth_component: "Komponenta stánku",
   construction: "Konstrukce / Octanorm",
   furniture: "Mobiliář",
   technical_point: "Technický bod",
@@ -146,6 +147,22 @@ export function documentPhotoAsset(document: CatalogItemAdminDocument): StoredAs
 /** The R2-backed 3D model reference, if the document has a validly-shaped one. */
 export function documentModelAsset(document: CatalogItemAdminDocument): StoredAsset | undefined {
   return isStoredAssetShape(document.modelAsset) ? document.modelAsset : undefined;
+}
+
+function isSourceAssetEntryShape(value: unknown): value is SourceAssetEntry {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (
+    typeof candidate.id === "string" &&
+    (SOURCE_ASSET_KINDS as readonly string[]).includes(candidate.kind as string) &&
+    isStoredAssetShape(candidate.asset)
+  );
+}
+
+/** Every validly-shaped source/manufacturing file entry (SKP/DWG/DXF/PDF/other) on the document — see domain/assets.ts's SourceAssetEntry. Never a signed URL, only the stable storageKey-bearing StoredAsset per entry. */
+export function documentSourceAssets(document: CatalogItemAdminDocument): readonly SourceAssetEntry[] {
+  const value = document.sourceAssets;
+  return Array.isArray(value) ? value.filter(isSourceAssetEntryShape) : [];
 }
 
 /** Legacy static/public photo URL fallback (pre-R2 seeds like M57). */
@@ -300,6 +317,14 @@ export type CatalogItemAdminEdit = Readonly<{
   /** undefined = leave unchanged; a StoredAsset = set/replace; null = explicit remove. Remove is ALWAYS metadata-only — see lib/db/catalogItemsAdmin.supabase.ts, never a physical R2 delete (mirrors app/api/assets/delete's reference-safety no-op). */
   photoAsset?: StoredAsset | null;
   modelAsset?: StoredAsset | null;
+  /**
+   * Source/manufacturing files (SKP/DWG/DXF/PDF/other) are a LIST, unlike the single
+   * photo/model asset — one edit either appends one new entry or removes one existing entry by
+   * id, never a wholesale replace. Removal is metadata-only, same reference-safety guarantee as
+   * photoAsset/modelAsset above.
+   */
+  addSourceAsset?: Readonly<{ kind: SourceAssetKind; label?: string; asset: StoredAsset }>;
+  removeSourceAssetId?: string;
   /** Section 9: the ONLY way reviewedAt is ever set — never as a side effect of an asset upload. The server stamps the actual timestamp (see saveCatalogItemAdmin); a client-supplied date is never trusted. */
   markReviewed?: true;
   /**
@@ -342,6 +367,17 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
     else if (isStoredAssetShape(value)) edit[key] = value;
   }
   if (raw.markReviewed === true) edit.markReviewed = true;
+  if (raw.addSourceAsset && typeof raw.addSourceAsset === "object") {
+    const candidate = raw.addSourceAsset as Record<string, unknown>;
+    if ((SOURCE_ASSET_KINDS as readonly string[]).includes(candidate.kind as string) && isStoredAssetShape(candidate.asset)) {
+      edit.addSourceAsset = {
+        kind: candidate.kind as SourceAssetKind,
+        asset: candidate.asset,
+        label: typeof candidate.label === "string" ? candidate.label : undefined,
+      };
+    }
+  }
+  if (typeof raw.removeSourceAssetId === "string" && raw.removeSourceAssetId) edit.removeSourceAssetId = raw.removeSourceAssetId;
   return edit;
 }
 
@@ -374,6 +410,19 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
   else if (edit.photoAsset !== undefined) next.photoAsset = edit.photoAsset;
   if (edit.modelAsset === null) delete next.modelAsset;
   else if (edit.modelAsset !== undefined) next.modelAsset = edit.modelAsset;
+  if (edit.addSourceAsset || edit.removeSourceAssetId !== undefined) {
+    const existing: readonly SourceAssetEntry[] = Array.isArray(document.sourceAssets)
+      ? (document.sourceAssets as readonly SourceAssetEntry[])
+      : [];
+    let updated = existing;
+    if (edit.removeSourceAssetId !== undefined) {
+      updated = updated.filter((entry) => entry.id !== edit.removeSourceAssetId);
+    }
+    if (edit.addSourceAsset) {
+      updated = [...updated, { id: crypto.randomUUID(), kind: edit.addSourceAsset.kind, label: edit.addSourceAsset.label, asset: edit.addSourceAsset.asset }];
+    }
+    next.sourceAssets = updated;
+  }
   return next;
 }
 

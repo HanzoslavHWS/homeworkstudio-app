@@ -47,8 +47,8 @@ import {
   matchesCatalogSearch,
 } from "../domain/search.ts";
 import {
-  planView180ToWorld,
-  worldToPlanView180,
+  planViewToWorld,
+  worldToPlanView,
 } from "../domain/planView.ts";
 import { boothTypes } from "../data/booths.ts";
 import { createZip, textZipEntry } from "../lib/zip.ts";
@@ -344,11 +344,11 @@ test("search helpery filtrují projekty, stánky a katalog bez diakritiky", () =
   assert.equal(matchesCatalogSearch(componentCatalog.chair, "m57"), true);
 });
 
-test("otočení 2D pohledu o 180° je reverzibilní view transformace", () => {
+test("2D plan-view transform (back wall at top) is a reversible, X-preserving view transformation", () => {
   const world = { x: 250, y: 1600 };
-  const display = worldToPlanView180(world, 2000, 2000);
-  assert.deepEqual(display, { x: 1750, y: 400 });
-  assert.deepEqual(planView180ToWorld(display, 2000, 2000), world);
+  const display = worldToPlanView(world, 2000, 2000);
+  assert.deepEqual(display, { x: 250, y: 400 }, "X must be unchanged — only Y (depth-vs-screen-top) is flipped");
+  assert.deepEqual(planViewToWorld(display, 2000, 2000), world);
   assert.deepEqual(world, { x: 250, y: 1600 });
 });
 

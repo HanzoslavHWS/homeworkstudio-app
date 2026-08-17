@@ -15,6 +15,7 @@ import {
   documentPhotoAsset,
   documentPhotoUrl,
   documentReviewedAt,
+  documentSourceAssets,
   documentSourceTraceability,
   filterCatalogItemsAdmin,
   CATALOG_ITEM_CATEGORY_OPTIONS,
@@ -26,6 +27,7 @@ import {
 } from "../../domain/catalogItemsAdmin";
 import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../domain/catalogReadiness";
 import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type CatalogItemKind, type CatalogItemStatus } from "../../domain/models";
+import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind } from "../../domain/assets";
 import { ConcurrencyConflictError } from "../../lib/db/concurrency";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
 import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
@@ -49,6 +51,14 @@ const FOOTPRINT_SHAPE_LABELS_CS: Readonly<Record<"rectangle" | "circle" | "symbo
  * would be meaningless UI with zero effect on readiness, so the section is hidden for those.
  */
 const SCENE_CAPABILITY_KINDS: readonly CatalogItemKind[] = ["furniture", "technical_point", "construction", "other"];
+
+/**
+ * Kinds where source/manufacturing files (SKP/DWG/DXF/PDF/other) make sense — physical or
+ * scene-placeable catalog items. Pure services (service/graphics_service — e.g. L02 elektřina,
+ * internet, úklid) never get this section: they have no authoring/CAD source to evidence.
+ * Dispatched by kind/capability, never by name/category heuristic.
+ */
+const SOURCE_ASSET_APPLICABLE_KINDS: readonly CatalogItemKind[] = ["furniture", "booth", "booth_component", "construction", "technical_point", "floor_finish", "other"];
 
 function hasAllowedExtension(fileName: string, allowed: readonly string[]): boolean {
   const extension = fileName.toLowerCase().split(".").pop();
@@ -139,7 +149,8 @@ export function ComponentAdminPage({
   );
 }
 
-function ComponentAdminFilters({ filters, onChange }: { filters: CatalogItemAdminFilters; onChange: (filters: CatalogItemAdminFilters) => void }) {
+/** Exported so BoothAdminPage.tsx (kind-scoped "Stánky" admin) can reuse the exact same filter UI rather than a parallel one. */
+export function ComponentAdminFilters({ filters, onChange }: { filters: CatalogItemAdminFilters; onChange: (filters: CatalogItemAdminFilters) => void }) {
   return (
     <div className="adminFilters">
       <input value={filters.query ?? ""} onChange={(event) => onChange({ ...filters, query: event.target.value })} placeholder="Hledat interní kód nebo název…" />
@@ -169,7 +180,8 @@ function ComponentAdminFilters({ filters, onChange }: { filters: CatalogItemAdmi
   );
 }
 
-function ComponentAdminList({
+/** Exported so BoothAdminPage.tsx can reuse the exact same list rendering. */
+export function ComponentAdminList({
   entries,
   selectedId,
   onSelect,
@@ -207,7 +219,8 @@ function ComponentAdminList({
   );
 }
 
-function ComponentAdminDetail({
+/** Exported so BoothAdminPage.tsx renders the SAME detail view (Foto/GLB/SKP/source files/readiness/reviewed/activation) for type-booths and booth components — never a second, parallel detail UI. */
+export function ComponentAdminDetail({
   item,
   onSave,
   onOpenPricing,
@@ -234,6 +247,8 @@ function ComponentAdminDetail({
   const legacyModelUrl = documentModelUrl(itemDocument);
   const hasModel = documentHas3DAsset(itemDocument);
   const footprint2D = documentFootprint2D(itemDocument);
+  const sourceAssets = documentSourceAssets(itemDocument);
+  const hasSketchupSource = sourceAssets.some((entry) => entry.kind === "sketchup");
 
   const [photoProgress, setPhotoProgress] = useState<UploadProgress | undefined>(undefined);
   const [photoActionError, setPhotoActionError] = useState("");
@@ -241,6 +256,10 @@ function ComponentAdminDetail({
   const [modelActionError, setModelActionError] = useState("");
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState("");
+  const [sourceAssetKind, setSourceAssetKind] = useState<SourceAssetKind>("sketchup");
+  const [sourceAssetProgress, setSourceAssetProgress] = useState<UploadProgress | undefined>(undefined);
+  const [sourceAssetActionError, setSourceAssetActionError] = useState("");
+  const [sourceAssetRemovingId, setSourceAssetRemovingId] = useState<string | undefined>(undefined);
 
   const ownerId = item.internalCode ?? item.id;
 
@@ -299,6 +318,38 @@ function ComponentAdminDetail({
       await onSave({ modelAsset: null });
     } catch (removeError) {
       setModelActionError(removeError instanceof Error ? removeError.message : "Odebrání 3D modelu selhalo.");
+    }
+  }
+
+  async function handleSourceAssetUpload(file: File) {
+    setSourceAssetActionError("");
+    if (file.size === 0) {
+      setSourceAssetActionError("Soubor je prázdný.");
+      return;
+    }
+    const allowed = SOURCE_ASSET_KIND_EXTENSIONS[sourceAssetKind];
+    if (allowed.length > 0 && !hasAllowedExtension(file.name, allowed)) {
+      setSourceAssetActionError(`Zvolený typ (${SOURCE_ASSET_KIND_LABELS_CS[sourceAssetKind]}) očekává příponu: ${allowed.join(", ")}.`);
+      return;
+    }
+    try {
+      const asset = await uploadAsset(file, { category: "catalog-source", ownerId }, setSourceAssetProgress);
+      await onSave({ addSourceAsset: { kind: sourceAssetKind, asset } });
+    } catch (uploadError) {
+      setSourceAssetActionError(uploadError instanceof Error ? uploadError.message : "Nahrání souboru selhalo.");
+    }
+  }
+
+  async function handleSourceAssetRemove(entry: SourceAssetEntry) {
+    setSourceAssetActionError("");
+    setSourceAssetRemovingId(entry.id);
+    try {
+      // Metadata-only — never a physical R2 delete (mirrors photoAsset/modelAsset removal above).
+      await onSave({ removeSourceAssetId: entry.id });
+    } catch (removeError) {
+      setSourceAssetActionError(removeError instanceof Error ? removeError.message : "Odebrání souboru selhalo.");
+    } finally {
+      setSourceAssetRemovingId(undefined);
     }
   }
 
@@ -589,6 +640,59 @@ function ComponentAdminDetail({
           )}
           {modelActionError && <small className="uploadError">{modelActionError}</small>}
         </section>
+
+        {SOURCE_ASSET_APPLICABLE_KINDS.includes(item.kind) && (
+        <section className="catalogDetailSection">
+          <h3>Zdrojové a výrobní soubory</h3>
+          <dl>
+            <Row label="SKP (zdrojový soubor)" value={hasSketchupSource ? "Nahrán" : "Chybí"} />
+          </dl>
+          {sourceAssets.length > 0 && (
+            <ul className="sourceAssetList">
+              {sourceAssets.map((entry) => (
+                <li key={entry.id} className="sourceAssetListItem">
+                  <span className="sourceAssetKindBadge">{SOURCE_ASSET_KIND_LABELS_CS[entry.kind]}</span>
+                  <span>{entry.label || entry.asset.originalFileName}</span>
+                  <button type="button" className="dangerText" onClick={() => handleSourceAssetRemove(entry)} disabled={sourceAssetRemovingId === entry.id}>
+                    {sourceAssetRemovingId === entry.id ? "Odebírám…" : "Odebrat referenci"}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="assetActions">
+            <select value={sourceAssetKind} onChange={(event) => setSourceAssetKind(event.target.value as SourceAssetKind)}>
+              {SOURCE_ASSET_KINDS.map((kind) => (
+                <option key={kind} value={kind}>{SOURCE_ASSET_KIND_LABELS_CS[kind]}</option>
+              ))}
+            </select>
+            <label className="smallUploadButton">
+              Nahrát soubor
+              <input
+                type="file"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  event.target.value = "";
+                  if (file) void handleSourceAssetUpload(file);
+                }}
+              />
+            </label>
+          </div>
+          {sourceAssetProgress && (
+            <div className={`assetUploadState ${sourceAssetProgress.state}`}>
+              <progress max="100" value={sourceAssetProgress.percent} />
+              <span>{sourceAssetProgress.state === "uploading" ? `Nahrávám ${sourceAssetProgress.percent} %` : sourceAssetProgress.state === "success" ? "Nahráno do R2" : sourceAssetProgress.message}</span>
+            </div>
+          )}
+          {sourceAssetActionError && <small className="uploadError">{sourceAssetActionError}</small>}
+          <p className="fieldHint">
+            {item.kind === "booth_component"
+              ? "SKP je u komponent stánku povinný pro aktivaci (spolu s GLB)."
+              : "SKP je evidence/výrobní podklad — u tohoto druhu položky není pro aktivaci povinný."}
+            {" "}DWG, DXF, PDF a Ostatní nejsou nikdy vyžadované — jejich chybějící přítomnost aktivaci neblokuje.
+          </p>
+        </section>
+        )}
 
         <section className="catalogDetailSection">
           <h3>Ceny</h3>
