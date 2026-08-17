@@ -103,16 +103,19 @@ export async function saveCatalogItemAdmin(
     assertCanActivate({ ...nextDocument, lifecycleStatus: "active" } as ComponentDefinition, current.kind);
   }
 
-  // Section 8 (asset workflow spec): removing a photo/model reference from an ALREADY active
-  // item must never leave it active+readiness=false. Scoped narrowly to explicit asset
-  // removal (photoAsset/modelAsset === null) — an unrelated edit to an already-active but
-  // legacy-imperfect item (like M57, missing reviewedAt) must never retroactively downgrade
-  // it, matching the activation-guard scoping immediately above. Auto-downgrade rather than
-  // blocking: the removal itself always succeeds, the item just safely falls back to
-  // needs_review instead of silently violating the active+ready invariant.
-  const removedAssetReference = edit.photoAsset === null || edit.modelAsset === null;
+  // Section 8/9 (asset + capability workflow spec): removing a photo/model reference, OR
+  // changing showIn2D/showIn3D, on an ALREADY active item must never leave it
+  // active+readiness=false — capability edits can just as easily BREAK readiness as asset
+  // removal can (e.g. flipping showIn3D on with no model yet introduces a fresh
+  // missing_3d_asset that wasn't previously checked). Scoped narrowly to these specific edit
+  // kinds — an unrelated edit to an already-active but legacy-imperfect item (like M57,
+  // missing reviewedAt) must never retroactively downgrade it, matching the activation-guard
+  // scoping immediately above. Auto-downgrade rather than blocking: the edit itself always
+  // succeeds, the item just safely falls back to needs_review instead of silently violating
+  // the active+ready invariant.
+  const mightAffectReadiness = edit.photoAsset === null || edit.modelAsset === null || edit.showIn2D !== undefined || edit.showIn3D !== undefined;
   const resultingStatus = (nextDocument.lifecycleStatus as CatalogItemStatus | undefined) ?? current.lifecycleStatus;
-  if (removedAssetReference && resultingStatus === "active") {
+  if (mightAffectReadiness && resultingStatus === "active") {
     const readiness = evaluateCatalogReadiness({ ...nextDocument, lifecycleStatus: "active" } as ComponentDefinition, current.kind);
     if (!readiness.ready) {
       nextDocument = { ...nextDocument, lifecycleStatus: "needs_review" };

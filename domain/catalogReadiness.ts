@@ -55,8 +55,21 @@ function has2DRepresentation(item: ComponentDefinition): boolean {
   return Boolean(item.footprint2D);
 }
 
+/**
+ * Runtime 3D assets are always GLB (GLTFLoader-loadable) — a SketchUp authoring source (.skp)
+ * must never satisfy readiness, however it got set (hand-edited seed, manual DB edit, future
+ * field). Upload validation already keeps .skp out of R2 (domain/assets.ts's catalog-model
+ * category only accepts model/gltf-binary), so this is a defensive second layer at the
+ * resolution boundary, not a fix for an active bug.
+ */
+function isRuntimeGlbReference(value: string | undefined): boolean {
+  return Boolean(value) && !value!.toLowerCase().endsWith(".skp");
+}
+
 function has3DAsset(item: ComponentDefinition): boolean {
-  return Boolean(item.modelUrl) || Boolean(item.assets?.models3d?.length) || Boolean(item.modelAsset?.storageKey);
+  if (isRuntimeGlbReference(item.modelUrl)) return true;
+  if (isRuntimeGlbReference(item.modelAsset?.storageKey)) return true;
+  return Boolean(item.assets?.models3d?.some((asset) => isRuntimeGlbReference(asset.url)));
 }
 
 /** Booth kind requires a real, placeable footprint — unlike furniture, height is mandatory too (mirrors BoothType's own NominalDimensions, where widthMm/depthMm/heightMm are all non-optional). */

@@ -32,6 +32,15 @@ const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp";
 const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
 const MODEL_EXTENSIONS = ["glb"];
 
+/**
+ * Kinds where showIn2D/showIn3D actually affect evaluateCatalogReadiness() (see
+ * domain/catalogReadiness.ts's furniture/technical_point cases — required; construction/other
+ * — conditional if declared). booth never reads these fields (always implicitly placed) and
+ * service/graphics_service/floor_finish never read them either — showing the checkboxes there
+ * would be meaningless UI with zero effect on readiness, so the section is hidden for those.
+ */
+const SCENE_CAPABILITY_KINDS: readonly CatalogItemKind[] = ["furniture", "technical_point", "construction", "other"];
+
 function hasAllowedExtension(fileName: string, allowed: readonly string[]): boolean {
   const extension = fileName.toLowerCase().split(".").pop();
   return Boolean(extension) && allowed.includes(extension!);
@@ -297,6 +306,9 @@ function ComponentAdminDetail({
   const initialWidth = dims.widthMm !== null ? String(dims.widthMm) : "";
   const initialDepth = dims.depthMm !== null ? String(dims.depthMm) : "";
   const initialHeight = dims.heightMm !== null ? String(dims.heightMm) : "";
+  // Undefined (never declared) reads as unchecked — section 3: never auto-set true from kind/internalCode.
+  const initialShowIn2D = Boolean(itemDocument.showIn2D);
+  const initialShowIn3D = Boolean(itemDocument.showIn3D);
 
   const [displayName, setDisplayName] = useState(item.displayName);
   const [name, setName] = useState(initialName);
@@ -305,6 +317,8 @@ function ComponentAdminDetail({
   const [widthMm, setWidthMm] = useState(initialWidth);
   const [depthMm, setDepthMm] = useState(initialDepth);
   const [heightMm, setHeightMm] = useState(initialHeight);
+  const [showIn2D, setShowIn2D] = useState(initialShowIn2D);
+  const [showIn3D, setShowIn3D] = useState(initialShowIn3D);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<"idle" | "saving" | "activating">("idle");
   const [error, setError] = useState("");
@@ -327,6 +341,8 @@ function ComponentAdminDetail({
       const parsed = Number(heightMm);
       if (Number.isFinite(parsed)) edit.heightMm = parsed;
     }
+    if (showIn2D !== initialShowIn2D) edit.showIn2D = showIn2D;
+    if (showIn3D !== initialShowIn3D) edit.showIn3D = showIn3D;
     return edit;
   }
 
@@ -423,6 +439,23 @@ function ComponentAdminDetail({
             </EditRow>
           </dl>
         </section>
+
+        {SCENE_CAPABILITY_KINDS.includes(item.kind) && (
+          <section className="catalogDetailSection">
+            <h3>Použití v generátoru</h3>
+            <label className="checkboxRow">
+              <input type="checkbox" checked={showIn2D} onChange={(event) => { setShowIn2D(event.target.checked); setDirty(true); }} />
+              Zobrazovat ve 2D
+            </label>
+            <label className="checkboxRow">
+              <input type="checkbox" checked={showIn3D} onChange={(event) => { setShowIn3D(event.target.checked); setDirty(true); }} />
+              Zobrazovat ve 3D
+            </label>
+            <p className="fieldHint">
+              Aspoň jedno zaškrtnutí je nutné pro generator readiness (jinak "Chybí nastavení zobrazení ve 2D/3D"). Zobrazovat ve 3D vyžaduje nahraný 3D model.
+            </p>
+          </section>
+        )}
 
         <section className="catalogDetailSection">
           <h3>Lifecycle</h3>

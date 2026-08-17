@@ -1028,3 +1028,115 @@ test("CONCURRENCY: stale updatedAt on a photo save via the API route returns 409
   );
   assert.equal(response.status, 409);
 });
+
+// =========================================================================================
+// SCENE CAPABILITY EDITOR — closing the "Admin detail has no way to set showIn2D/showIn3D"
+// gap. Same whitelist/merge/concurrency machinery as every other field; never a parallel
+// readiness system.
+// =========================================================================================
+
+test("imported furniture can explicitly set scene capability via the admin edit whitelist", () => {
+  const edit = parseCatalogItemAdminEdit({ showIn2D: false, showIn3D: true });
+  assert.deepEqual(edit, { showIn2D: false, showIn3D: true });
+});
+
+test("no automatic showIn2D/showIn3D just from kind/internalCode — a freshly-imported EXACT_SAFE stub never has them set", () => {
+  assert.equal("showIn2D" in STUB_DOCUMENT, false);
+  assert.equal("showIn3D" in STUB_DOCUMENT, false);
+  const item = toAdmin(stubRow());
+  assert.equal(computeReadiness(item).issues.includes("missing_scene_capability"), true, "confirmed internalCode + base price alone never imply capability");
+});
+
+test("no capability declared at all -> missing_scene_capability (furniture)", () => {
+  const noCapability = { ...STUB_DOCUMENT, widthMm: 600, depthMm: 400, unit: "ks" };
+  const item = toAdmin(stubRow({ document: noCapability }));
+  assert.ok(computeReadiness(item).issues.includes("missing_scene_capability"));
+});
+
+test("showIn3D=true + no model = missing_3d_asset; uploading a valid model removes it", async () => {
+  const declared3DNoModel = { ...STUB_DOCUMENT, widthMm: 600, depthMm: 400, unit: "ks", showIn3D: true };
+  const withoutModel = toAdmin(stubRow({ document: declared3DNoModel }));
+  assert.ok(computeReadiness(withoutModel).issues.includes("missing_3d_asset"));
+
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: declared3DNoModel })] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { modelAsset: MODEL_ASSET }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(computeReadiness(saved).issues.includes("missing_3d_asset"), false);
+});
+
+test("capability change preserves nested document fields (P86-style parts/printSurfaces survive even though booth ignores showIn2D/showIn3D)", () => {
+  const merged = applyCatalogItemEdit(P86_DOCUMENT, { showIn3D: true });
+  assert.deepEqual(merged.parts, P86_DOCUMENT.parts);
+  assert.deepEqual(merged.printSurfaces, P86_DOCUMENT.printSurfaces);
+  assert.equal(merged.showIn3D, true);
+});
+
+test("capability change preserves modelAsset/photoAsset already on the document", () => {
+  const withAssets = { ...STUB_DOCUMENT, photoAsset: PHOTO_ASSET, modelAsset: MODEL_ASSET };
+  const merged = applyCatalogItemEdit(withAssets, { showIn2D: true, showIn3D: true });
+  assert.deepEqual(merged.photoAsset, PHOTO_ASSET);
+  assert.deepEqual(merged.modelAsset, MODEL_ASSET);
+});
+
+test("capability change preserves pricingEntries/sourceKey/internalCode", () => {
+  const merged = applyCatalogItemEdit(STUB_DOCUMENT, { showIn3D: true });
+  assert.deepEqual(merged.pricingEntries, STUB_DOCUMENT.pricingEntries);
+  assert.equal(merged.sourceKey, STUB_DOCUMENT.sourceKey);
+  assert.equal(merged.internalCode, "F01");
+});
+
+test("showIn2D=true without an existing footprint2D fills in the same minimal {shape:'rectangle'} default M57's own seed already uses — never a new SVG/thumbnail system", () => {
+  const merged = applyCatalogItemEdit(STUB_DOCUMENT, { showIn2D: true });
+  assert.deepEqual(merged.footprint2D, { shape: "rectangle" });
+});
+
+test("showIn2D=true never overwrites an already-set footprint2D", () => {
+  const withCustomFootprint = { ...STUB_DOCUMENT, footprint2D: { shape: "circle" } };
+  const merged = applyCatalogItemEdit(withCustomFootprint, { showIn2D: true });
+  assert.deepEqual(merged.footprint2D, { shape: "circle" });
+});
+
+test("M57 canonical capability (showIn2D=true, showIn3D=true) is untouched by an unrelated save", async () => {
+  const m57WithCapability = { ...M57_DOCUMENT, showIn2D: true, showIn3D: true, footprint2D: { shape: "rectangle" }, modelUrl: "/models/chairs/M57/model.glb" };
+  const client = createFakeSupabaseClient({ catalog_items: [m57Row({ document: m57WithCapability })] });
+  const saved = await saveCatalogItemAdmin(client as never, "m57-uuid", { unit: "ks" }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.document.showIn2D, true);
+  assert.equal(saved.document.showIn3D, true);
+});
+
+test("P86 readiness is unaffected by showIn2D/showIn3D — booth kind never reads them", () => {
+  const withCapabilityToggled = { ...P86_DOCUMENT, showIn2D: false, showIn3D: false };
+  const item = toAdmin(p86Row({ document: withCapabilityToggled }));
+  assert.equal(computeReadiness(item).ready, true, "booth readiness must stay true regardless of showIn2D/showIn3D");
+});
+
+test("UI: the scene-capability section is hidden for service/graphics_service/floor_finish/booth (L02 must never see nonsensical scene checkboxes)", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,40}=[\s\S]{0,120}\["furniture", "technical_point", "construction", "other"\]/u);
+  assert.doesNotMatch(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,200}"service"/u);
+  assert.doesNotMatch(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,200}"booth"/u);
+});
+
+test("UI: capability checkboxes use the real showIn2D/showIn3D fields, never a parallel field name", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /checked=\{showIn2D\}/u);
+  assert.match(source, /checked=\{showIn3D\}/u);
+  assert.match(source, /edit\.showIn2D\s*=\s*showIn2D/u);
+  assert.match(source, /edit\.showIn3D\s*=\s*showIn3D/u);
+});
+
+test("ACTIVE ITEM SAFETY: toggling showIn3D=true on an active item with no model auto-downgrades to needs_review instead of leaving active+invalid", async () => {
+  // Active furniture item (all other requirements satisfied) that only declares showIn2D today.
+  const activeReady = { ...STUB_DOCUMENT, widthMm: 600, depthMm: 400, unit: "ks", showIn2D: true, footprint2D: { shape: "rectangle" }, reviewedAt: "2026-08-17T00:00:00.000Z", lifecycleStatus: "active" };
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: activeReady, lifecycle_status: "active" })] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { showIn3D: true }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.lifecycleStatus, "needs_review", "declaring 3D placement without a model must never leave the item active+not-ready");
+  const row = client.tables.get("catalog_items")!.find((r) => r.id === "f01-uuid")!;
+  assert.equal(row.lifecycle_status, "needs_review");
+});
+
+test("ACTIVE ITEM SAFETY: toggling capability on an active item that STAYS ready never downgrades it", async () => {
+  const activeReady = { ...STUB_DOCUMENT, widthMm: 600, depthMm: 400, unit: "ks", showIn2D: true, footprint2D: { shape: "rectangle" }, reviewedAt: "2026-08-17T00:00:00.000Z", lifecycleStatus: "active" };
+  const client = createFakeSupabaseClient({ catalog_items: [stubRow({ document: activeReady, lifecycle_status: "active" })] });
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { showIn2D: true }, "2026-08-14T19:16:38.000000+00:00");
+  assert.equal(saved.lifecycleStatus, "active", "a no-op-equivalent capability confirmation must never spuriously downgrade an already-ready item");
+});

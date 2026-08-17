@@ -72,12 +72,23 @@ export function documentDimensions(document: CatalogItemAdminDocument): Document
   };
 }
 
-/** True or false only — see documentModelAsset() below for the actual StoredAsset the UI needs to render/resolve a download URL for. */
+function isRuntimeGlbReference(value: string | undefined): boolean {
+  return Boolean(value) && !value.toLowerCase().endsWith(".skp");
+}
+
+/**
+ * True or false only — see documentModelAsset() below for the actual StoredAsset the UI needs
+ * to render/resolve a download URL for. Mirrors domain/catalogReadiness.ts's has3DAsset — a
+ * .skp reference (SketchUp authoring source) never counts as a usable runtime model, however
+ * it got set.
+ */
 export function documentHas3DAsset(document: CatalogItemAdminDocument): boolean {
-  if (readString(document, "modelUrl")) return true;
-  if (documentModelAsset(document)) return true;
-  const assets = document.assets as { models3d?: readonly unknown[] } | undefined;
-  return Boolean(assets?.models3d?.length);
+  const modelUrl = readString(document, "modelUrl");
+  if (modelUrl && isRuntimeGlbReference(modelUrl)) return true;
+  const modelAsset = documentModelAsset(document);
+  if (modelAsset && isRuntimeGlbReference(modelAsset.storageKey)) return true;
+  const assets = document.assets as { models3d?: readonly { url?: unknown }[] } | undefined;
+  return Boolean(assets?.models3d?.some((asset) => typeof asset.url === "string" && isRuntimeGlbReference(asset.url)));
 }
 
 function isStoredAssetShape(value: unknown): value is StoredAsset {
@@ -247,10 +258,19 @@ export type CatalogItemAdminEdit = Readonly<{
   modelAsset?: StoredAsset | null;
   /** Section 9: the ONLY way reviewedAt is ever set — never as a side effect of an asset upload. The server stamps the actual timestamp (see saveCatalogItemAdmin); a client-supplied date is never trusted. */
   markReviewed?: true;
+  /**
+   * Explicit "used in generator" declaration — the SAME showIn2D/showIn3D fields
+   * evaluateCatalogReadiness() already reads (domain/catalogReadiness.ts's
+   * declaresSceneCapability/has2DRepresentation/has3DAsset checks). Never auto-set from kind
+   * or internalCode; only ever changed by an explicit admin action.
+   */
+  showIn2D?: boolean;
+  showIn3D?: boolean;
 }>;
 
 const EDITABLE_STRING_KEYS = ["displayName", "name", "category", "unit"] as const;
 const EDITABLE_NUMBER_KEYS = ["widthMm", "depthMm", "heightMm"] as const;
+const EDITABLE_BOOLEAN_KEYS = ["showIn2D", "showIn3D"] as const;
 const EDITABLE_ASSET_KEYS = ["photoAsset", "modelAsset"] as const;
 
 /** Whitelists a raw (possibly attacker-controlled) JSON body — anything not explicitly listed here is silently dropped, never merged. */
@@ -267,6 +287,10 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
     if (typeof value === "number" && Number.isFinite(value)) edit[key] = value;
   }
   if (typeof raw.lifecycleStatus === "string" && isValidCatalogItemStatus(raw.lifecycleStatus)) edit.lifecycleStatus = raw.lifecycleStatus;
+  for (const key of EDITABLE_BOOLEAN_KEYS) {
+    const value = raw[key];
+    if (typeof value === "boolean") edit[key] = value;
+  }
   for (const key of EDITABLE_ASSET_KEYS) {
     if (!(key in raw)) continue;
     const value = raw[key];
@@ -293,6 +317,15 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
   if (edit.depthMm !== undefined) next.depthMm = edit.depthMm;
   if (edit.heightMm !== undefined) next.heightMm = edit.heightMm;
   if (edit.lifecycleStatus !== undefined) next.lifecycleStatus = edit.lifecycleStatus;
+  if (edit.showIn2D !== undefined) next.showIn2D = edit.showIn2D;
+  if (edit.showIn3D !== undefined) next.showIn3D = edit.showIn3D;
+  // Section 5 of the capability-hardening spec: showIn2D=true needs SOME 2D representation
+  // (evaluateCatalogReadiness's has2DRepresentation just checks footprint2D presence) — reuse
+  // the exact minimal shape M57's own seed already uses ({shape:"rectangle"}), never a new
+  // SVG/thumbnail system. Only fills a gap; never overwrites an already-set footprint2D.
+  if (edit.showIn2D === true && !next.footprint2D) {
+    next.footprint2D = { shape: "rectangle" };
+  }
   if (edit.photoAsset === null) delete next.photoAsset;
   else if (edit.photoAsset !== undefined) next.photoAsset = edit.photoAsset;
   if (edit.modelAsset === null) delete next.modelAsset;
