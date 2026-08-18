@@ -1,6 +1,6 @@
 "use client";
 
-import type { CatalogItemAdmin, CatalogItemAdminEdit } from "../../domain/catalogItemsAdmin.ts";
+import type { CatalogItemAdmin, CatalogItemAdminCreateInput, CatalogItemAdminEdit } from "../../domain/catalogItemsAdmin.ts";
 import { ConcurrencyConflictError } from "./concurrency.ts";
 import { RemoteApiUnavailableError } from "./projectRepository.remoteApi.client.ts";
 
@@ -26,6 +26,18 @@ export class RemoteApiCatalogItemsAdminRepository {
     if (!response.ok) await throwForFailedResponse(response, "Nepodařilo se načíst katalogové položky z databáze.");
     const body = (await response.json()) as { catalogItems: readonly CatalogItemAdmin[] };
     return body.catalogItems;
+  }
+
+  async create(input: CatalogItemAdminCreateInput): Promise<CatalogItemAdmin> {
+    const response = await fetch("/api/catalog-admin/items/create", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ create: input }),
+    });
+    if (!response.ok) await throwForFailedResponse(response, "Vytvoření katalogové položky selhalo.");
+    const body = (await response.json()) as { catalogItem: CatalogItemAdmin };
+    return body.catalogItem;
   }
 
   async save(id: string, edit: CatalogItemAdminEdit, expectedUpdatedAt: string | null): Promise<CatalogItemAdmin> {

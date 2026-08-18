@@ -18,19 +18,25 @@ import {
   documentPhotoAsset,
   documentReviewedAt,
   documentSourceAssets,
+  documentSourceTraceability,
   filterCatalogItemsAdmin,
   matchesCatalogItemAdminSearch,
+  parseCatalogItemAdminCreateInput,
   parseCatalogItemAdminEdit,
+  InvalidCatalogItemAdminCreateInputError,
   type CatalogItemAdmin,
+  type CatalogItemAdminCreateInput,
 } from "../domain/catalogItemsAdmin.ts";
 import type { StoredAsset } from "../domain/assets.ts";
-import { CatalogReadinessError } from "../domain/catalogReadiness.ts";
+import { CatalogReadinessError, DuplicateInternalCodeError } from "../domain/catalogReadiness.ts";
 import {
+  createCatalogItemAdmin,
   readCatalogItemsAdmin,
   saveCatalogItemAdmin,
 } from "../lib/db/catalogItemsAdmin.supabase.ts";
 import { ConcurrencyConflictError } from "../lib/db/concurrency.ts";
 import { handleCatalogAdminItemsList } from "../app/api/catalog-admin/items/route.ts";
+import { handleCatalogAdminItemsCreate } from "../app/api/catalog-admin/items/create/route.ts";
 import { handleCatalogAdminItemsSave } from "../app/api/catalog-admin/items/save/route.ts";
 import { createSessionToken } from "../lib/auth/session.ts";
 import { SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
@@ -59,8 +65,10 @@ function createFakeSupabaseClient(seed: Readonly<Record<string, readonly FakeRow
     return tables.get(name)!;
   }
 
+  let nextFakeId = 1;
+
   function from(tableName: string) {
-    type Op = "select" | "update";
+    type Op = "select" | "update" | "insert";
     let op: Op = "select";
     let filters: Array<[string, unknown]> = [];
     let payload: FakeRow | undefined;
@@ -73,6 +81,7 @@ function createFakeSupabaseClient(seed: Readonly<Record<string, readonly FakeRow
     const builder = {
       select(_columns?: string) { return builder; },
       update(patch: FakeRow) { op = "update"; payload = patch; return builder; },
+      insert(row: FakeRow) { op = "insert"; payload = row; return builder; },
       eq(column: string, value: unknown) { filters = [...filters, [column, value]]; return builder; },
       maybeSingle() { singleMode = "maybeSingle"; return execute(); },
       single() { singleMode = "single"; return execute(); },
@@ -92,6 +101,17 @@ function createFakeSupabaseClient(seed: Readonly<Record<string, readonly FakeRow
         const matched = rows.filter(matches);
         for (const row of matched) Object.assign(row, payload);
         return { data: matched, error: null };
+      }
+      if (op === "insert") {
+        const inserted: FakeRow = {
+          created_at: "2026-08-18T00:00:00.000Z",
+          updated_at: "2026-08-18T00:00:00.000Z",
+          ...payload,
+          id: (payload as FakeRow)?.id ?? `fake-id-${nextFakeId++}`,
+        };
+        rows.push(inserted);
+        if (singleMode === "single" || singleMode === "maybeSingle") return { data: inserted, error: null };
+        return { data: [inserted], error: null };
       }
       return { data: null, error: null };
     }
@@ -705,6 +725,211 @@ test("POST /api/catalog-admin/items/save: request body cannot smuggle internalCo
 });
 
 // -----------------------------------------------------------------------------------------
+// CREATE — "Nová komponenta stánku" founding workflow (booth_component)
+// -----------------------------------------------------------------------------------------
+
+function boothComponentCreateInput(overrides: Partial<CatalogItemAdminCreateInput> = {}): CatalogItemAdminCreateInput {
+  return {
+    kind: "booth_component",
+    displayName: "Sloupek",
+    category: "Sloupky",
+    ...overrides,
+  };
+}
+
+test("CREATE: kind is always persisted as booth_component, lifecycle defaults to needs_review, reviewedAt is absent", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  assert.equal(created.kind, "booth_component");
+  assert.equal(created.lifecycleStatus, "needs_review");
+  assert.equal(documentReviewedAt(created.document), undefined);
+});
+
+test("CREATE: generatorEligible is computed false immediately after creation (missing GLB+SKP), never stored", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  assert.equal(computeGeneratorEligibleLive(created), false);
+  assert.equal("generatorEligible" in created.document, false);
+});
+
+test("CREATE: internalCode is optional — omitted input yields internalCode=null, DB id is always distinct from internalCode", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  assert.equal(created.internalCode, null);
+  assert.notEqual(created.id, created.internalCode);
+});
+
+test("CREATE: duplicate internalCode (pre-check against existing rows) is rejected with DuplicateInternalCodeError", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [boothComponentRow({ internal_code: "KOMP-SLOUPEK" })] });
+  await assert.rejects(
+    () => createCatalogItemAdmin(client as never, boothComponentCreateInput({ internalCode: "komp-sloupek" })),
+    DuplicateInternalCodeError,
+  );
+});
+
+test("CREATE: duplicate internalCode caught only by the DB's unique index (read/insert race) still surfaces as DuplicateInternalCodeError", async () => {
+  const raceClient = {
+    from(_table: string) {
+      const builder = {
+        select() { return builder; },
+        insert() {
+          return {
+            select: () => ({
+              single: async () => ({ data: null, error: { code: "23505", message: "duplicate key value violates unique constraint" } }),
+            }),
+          };
+        },
+        then(onFulfilled: (value: { data: unknown; error: unknown }) => unknown, onRejected?: (reason: unknown) => unknown) {
+          return Promise.resolve({ data: [], error: null }).then(onFulfilled, onRejected);
+        },
+      };
+      return builder;
+    },
+  };
+  await assert.rejects(
+    () => createCatalogItemAdmin(raceClient as never, boothComponentCreateInput({ internalCode: "KOMP-SLOUPEK" })),
+    DuplicateInternalCodeError,
+  );
+});
+
+test("CREATE: dimensions/category/unit/2D-3D capability round-trip into the document AND are mirrored into the top-level DB columns", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(
+    client as never,
+    boothComponentCreateInput({ unit: "ks", widthMm: 120, depthMm: 120, heightMm: 2500, showIn2D: true, showIn3D: false }),
+  );
+  const dims = documentDimensions(created.document);
+  assert.deepEqual(dims, { widthMm: 120, depthMm: 120, heightMm: 2500, hasDimensions: true });
+  assert.equal(created.document.showIn2D, true);
+  assert.equal(created.document.showIn3D, false);
+  assert.equal(created.category, "Sloupky");
+  assert.equal(created.unit, "ks");
+  assert.equal(created.displayName, "Sloupek");
+});
+
+test("CREATE: no fake import provenance — sourceSystem/sourceKey stay absent (manual/admin origin is never invented)", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  assert.deepEqual(documentSourceTraceability(created.document), { sourceSystem: null, sourceKey: null });
+});
+
+test("CREATE: the new item is visible via a kind-filtered read (Booth Components tab) and an unfiltered read (Admin Components) with the identical id", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  const all = await readCatalogItemsAdmin(client as never);
+  const unfiltered = all.find((item) => item.id === created.id);
+  const kindFiltered = all.filter((item) => item.kind === "booth_component").find((item) => item.id === created.id);
+  assert.ok(unfiltered, "must appear in the unfiltered admin list");
+  assert.ok(kindFiltered, "must appear in the booth_component-filtered tab");
+  assert.equal(unfiltered!.id, kindFiltered!.id);
+  assert.equal(unfiltered!.updatedAt, created.updatedAt);
+});
+
+test("CREATE: after creation, the existing GLB+SKP asset workflow (saveCatalogItemAdmin) still works and readiness becomes ready", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  const asset: StoredAsset = { id: "glb-1", storageKey: "catalog/booth-components/sloupek/model.glb", originalFileName: "sloupek.glb", mimeType: "model/gltf-binary", size: 100, createdAt: "2026-08-18T00:00:00.000Z", category: "catalog-model" };
+  const skpAsset: StoredAsset = { id: "skp-1", storageKey: "catalog/booth-components/sloupek/source/sloupek.skp", originalFileName: "sloupek.skp", mimeType: "application/octet-stream", size: 200, createdAt: "2026-08-18T00:00:00.000Z", category: "catalog-source" };
+  const withModel = await saveCatalogItemAdmin(client as never, created.id, { modelAsset: asset }, created.updatedAt);
+  const withSource = await saveCatalogItemAdmin(client as never, created.id, { addSourceAsset: { kind: "sketchup", asset: skpAsset } }, withModel.updatedAt);
+  assert.deepEqual(computeReadiness(withSource), { ready: true, issues: [] });
+});
+
+test("CREATE: missing GLB alone blocks readiness with exactly missing_3d_asset (SKP present)", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  const skpAsset: StoredAsset = { id: "skp-1", storageKey: "catalog/booth-components/sloupek/source/sloupek.skp", originalFileName: "sloupek.skp", mimeType: "application/octet-stream", size: 200, createdAt: "2026-08-18T00:00:00.000Z", category: "catalog-source" };
+  const withSource = await saveCatalogItemAdmin(client as never, created.id, { addSourceAsset: { kind: "sketchup", asset: skpAsset } }, created.updatedAt);
+  assert.deepEqual(computeReadiness(withSource).issues, ["missing_3d_asset"]);
+});
+
+test("CREATE: missing SKP alone blocks readiness with exactly missing_sketchup_source, even with a DWG attached (GLB present)", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  const asset: StoredAsset = { id: "glb-1", storageKey: "catalog/booth-components/sloupek/model.glb", originalFileName: "sloupek.glb", mimeType: "model/gltf-binary", size: 100, createdAt: "2026-08-18T00:00:00.000Z", category: "catalog-model" };
+  const dwgAsset: StoredAsset = { id: "dwg-1", storageKey: "catalog/booth-components/sloupek/source/sloupek.dwg", originalFileName: "sloupek.dwg", mimeType: "application/octet-stream", size: 300, createdAt: "2026-08-18T00:00:00.000Z", category: "catalog-source" };
+  const withModel = await saveCatalogItemAdmin(client as never, created.id, { modelAsset: asset }, created.updatedAt);
+  const withDwg = await saveCatalogItemAdmin(client as never, created.id, { addSourceAsset: { kind: "dwg", asset: dwgAsset } }, withModel.updatedAt);
+  assert.deepEqual(computeReadiness(withDwg).issues, ["missing_sketchup_source"]);
+});
+
+test("CREATE: parseCatalogItemAdminCreateInput never accepts a lifecycleStatus field — create can never activate by construction", () => {
+  const input = parseCatalogItemAdminCreateInput({ kind: "booth_component", displayName: "Sloupek", category: "Sloupky", lifecycleStatus: "active" });
+  assert.equal("lifecycleStatus" in input, false);
+});
+
+test("CREATE: markReviewed on a freshly-created item still never sets lifecycleStatus to active", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
+  const reviewed = await saveCatalogItemAdmin(client as never, created.id, { markReviewed: true }, created.updatedAt);
+  assert.equal(reviewed.lifecycleStatus, "needs_review");
+  assert.ok(documentReviewedAt(reviewed.document));
+});
+
+test("CREATE: parseCatalogItemAdminCreateInput rejects missing displayName/category as 400-worthy errors", () => {
+  assert.throws(() => parseCatalogItemAdminCreateInput({ kind: "booth_component", category: "Sloupky" }), InvalidCatalogItemAdminCreateInputError);
+  assert.throws(() => parseCatalogItemAdminCreateInput({ kind: "booth_component", displayName: "Sloupek" }), InvalidCatalogItemAdminCreateInputError);
+  assert.throws(() => parseCatalogItemAdminCreateInput({ displayName: "Sloupek", category: "Sloupky" }), InvalidCatalogItemAdminCreateInputError);
+});
+
+test("POST /api/catalog-admin/items/create: unauthenticated -> 401", async () => {
+  const response = await handleCatalogAdminItemsCreate(authenticatedRequest(undefined, "http://localhost/api/catalog-admin/items/create", { method: "POST", body: { create: boothComponentCreateInput() } }));
+  assert.equal(response.status, 401);
+});
+
+test("POST /api/catalog-admin/items/create: missing displayName -> 400", async () => {
+  const token = await createSessionToken(SECRET);
+  const response = await handleCatalogAdminItemsCreate(
+    authenticatedRequest(token, "http://localhost/api/catalog-admin/items/create", { method: "POST", body: { create: { kind: "booth_component", category: "Sloupky" } } }),
+  );
+  assert.equal(response.status, 400);
+});
+
+test("POST /api/catalog-admin/items/create: duplicate internalCode -> 409", async () => {
+  const token = await createSessionToken(SECRET);
+  const response = await handleCatalogAdminItemsCreate(
+    authenticatedRequest(token, "http://localhost/api/catalog-admin/items/create", { method: "POST", body: { create: boothComponentCreateInput({ internalCode: "KOMP-SLOUPEK" }) } }),
+    async () => { throw new DuplicateInternalCodeError("KOMP-SLOUPEK"); },
+  );
+  assert.equal(response.status, 409);
+});
+
+test("POST /api/catalog-admin/items/create: missing Supabase config -> 503", async () => {
+  const token = await createSessionToken(SECRET);
+  const response = await handleCatalogAdminItemsCreate(
+    authenticatedRequest(token, "http://localhost/api/catalog-admin/items/create", { method: "POST", body: { create: boothComponentCreateInput() } }),
+    async () => { throw new SupabaseConfigurationError(["SUPABASE_SECRET_KEY"]); },
+  );
+  assert.equal(response.status, 503);
+});
+
+test("POST /api/catalog-admin/items/create: generic DB error -> 502", async () => {
+  const token = await createSessionToken(SECRET);
+  const response = await handleCatalogAdminItemsCreate(
+    authenticatedRequest(token, "http://localhost/api/catalog-admin/items/create", { method: "POST", body: { create: boothComponentCreateInput() } }),
+    async () => { throw new Error("network error"); },
+  );
+  assert.equal(response.status, 502);
+});
+
+test("POST /api/catalog-admin/items/create: authenticated + valid -> 200, kind/lifecycle are never taken verbatim from an attacker-controlled body", async () => {
+  const token = await createSessionToken(SECRET);
+  let capturedInput: unknown;
+  const response = await handleCatalogAdminItemsCreate(
+    authenticatedRequest(token, "http://localhost/api/catalog-admin/items/create", {
+      method: "POST",
+      body: { create: { kind: "booth_component", displayName: "Sloupek", category: "Sloupky", lifecycleStatus: "active", reviewedAt: "2000-01-01T00:00:00.000Z" } },
+    }),
+    async (input) => {
+      capturedInput = input;
+      return toAdmin(boothComponentRow({ id: "new-sloupek-uuid" }));
+    },
+  );
+  assert.equal(response.status, 200);
+  assert.deepEqual(capturedInput, { kind: "booth_component", displayName: "Sloupek", category: "Sloupky" });
+});
+
+// -----------------------------------------------------------------------------------------
 // GENERATOR UNTOUCHED (section 18) — structural guard
 // -----------------------------------------------------------------------------------------
 
@@ -1310,11 +1535,11 @@ test("P86 readiness is unaffected by showIn2D/showIn3D — booth kind never read
   assert.equal(computeReadiness(item).ready, true, "booth readiness must stay true regardless of showIn2D/showIn3D");
 });
 
-test("UI: the scene-capability section is hidden for service/graphics_service/floor_finish/booth (L02 must never see nonsensical scene checkboxes)", () => {
+test("UI: the scene-capability section is hidden for service/graphics_service/floor_finish/booth (L02 must never see nonsensical scene checkboxes), but shown for booth_component (create-form parity)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,40}=[\s\S]{0,120}\["furniture", "technical_point", "construction", "other"\]/u);
+  assert.match(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,40}=[\s\S]{0,120}\["furniture", "technical_point", "construction", "other", "booth_component"\]/u);
   assert.doesNotMatch(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,200}"service"/u);
-  assert.doesNotMatch(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,200}"booth"/u);
+  assert.doesNotMatch(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,200}"booth"\]/u);
 });
 
 test("UI: capability checkboxes use the real showIn2D/showIn3D fields, never a parallel field name", () => {
@@ -1382,9 +1607,11 @@ test("UI: 2D/3D status readouts render real Footprint/Model status, not a hardco
 // CATEGORY DROPDOWN (section 9/10/11)
 // -----------------------------------------------------------------------------------------
 
-test("CATALOG_ITEM_CATEGORY_OPTIONS matches the real, live-audited set of category values currently in catalog_items (81 rows, 2026-08) — a closed set, not invented", () => {
+test("CATALOG_ITEM_CATEGORY_OPTIONS matches the real, live-audited set of category values currently in catalog_items (81 rows, 2026-08), extended with the booth_component founding-workflow categories (deliberately added, not invented drift) — still a closed set", () => {
   const values = CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => option.value).sort();
-  assert.deepEqual(values, ["Canonical", "Kuchyňka", "Nábytek", "Octanorm", "Ostatní", "Stavba", "Světlo", "T. služby", "Typovky", "Úvaz", "chairs", "services"].sort());
+  const liveAudited = ["Canonical", "Kuchyňka", "Nábytek", "Octanorm", "Ostatní", "Stavba", "Světlo", "T. služby", "Typovky", "Úvaz", "chairs", "services"];
+  const boothComponentCategories = ["Panely / stěny", "Sloupky", "Límce", "Dveře", "Zázemí / konstrukce", "Podlaha", "Osvětlení"];
+  assert.deepEqual(values, [...liveAudited, ...boothComponentCategories].sort());
 });
 
 test("categoryLabelCs reuses domain/catalogCategories.ts's existing chairs/services labels rather than re-declaring them", () => {

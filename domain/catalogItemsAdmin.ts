@@ -49,6 +49,13 @@ export const CATALOG_ITEM_CATEGORY_OPTIONS: readonly Readonly<{ value: string; l
   { value: "Canonical", label: "Canonical" },
   { value: "T. služby", label: "Technické služby" },
   { value: "services", label: reusedCategoryLabel.get("services") ?? "Služby" },
+  { value: "Panely / stěny", label: "Panely / stěny" },
+  { value: "Sloupky", label: "Sloupky" },
+  { value: "Límce", label: "Límce" },
+  { value: "Dveře", label: "Dveře" },
+  { value: "Zázemí / konstrukce", label: "Zázemí / konstrukce" },
+  { value: "Podlaha", label: "Podlaha" },
+  { value: "Osvětlení", label: "Osvětlení" },
 ];
 
 /** Never hides/crashes on an unlisted value — falls back to the raw canonical string, same defensive spirit as categoryOptions()'s existing fallback in domain/catalogCategories.ts. */
@@ -424,6 +431,98 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
     next.sourceAssets = updated;
   }
   return next;
+}
+
+// ============================================================================
+// CREATE — a brand-new catalog_items row (section: "Nová komponenta stánku" workflow). Always
+// lifecycle_status="needs_review" (enforced by the repository, this input has no such field at
+// all), never a fake import sourceSystem/sourceKey, internalCode never auto-generated.
+// ============================================================================
+
+export type CatalogItemAdminCreateInput = Readonly<{
+  kind: CatalogItemKind;
+  displayName: string;
+  internalCode?: string;
+  category: string;
+  unit?: string;
+  widthMm?: number;
+  depthMm?: number;
+  heightMm?: number;
+  showIn2D?: boolean;
+  showIn3D?: boolean;
+}>;
+
+export class InvalidCatalogItemAdminCreateInputError extends Error {
+  readonly field: string;
+  constructor(field: string, message: string) {
+    super(message);
+    this.name = "InvalidCatalogItemAdminCreateInputError";
+    this.field = field;
+  }
+}
+
+function requiredNonBlankString(raw: Record<string, unknown>, key: string): string {
+  const value = raw[key];
+  if (typeof value !== "string" || !value.trim()) {
+    throw new InvalidCatalogItemAdminCreateInputError(key, `Pole "${key}" je povinné.`);
+  }
+  return value.trim();
+}
+
+/** Whitelists a raw (possibly attacker-controlled) JSON body for creating a brand-new catalog item. Unlike parseCatalogItemAdminEdit, `kind`/`displayName`/`category` are required, not merely accepted-if-present. */
+export function parseCatalogItemAdminCreateInput(body: unknown): CatalogItemAdminCreateInput {
+  if (!body || typeof body !== "object") {
+    throw new InvalidCatalogItemAdminCreateInputError("body", "Chybí data pro vytvoření položky.");
+  }
+  const raw = body as Record<string, unknown>;
+
+  if (typeof raw.kind !== "string" || !isKnownCatalogItemKind(raw.kind)) {
+    throw new InvalidCatalogItemAdminCreateInputError("kind", "Neplatný nebo chybějící druh položky (kind).");
+  }
+  const displayName = requiredNonBlankString(raw, "displayName");
+  const category = requiredNonBlankString(raw, "category");
+
+  const input: { -readonly [K in keyof CatalogItemAdminCreateInput]?: CatalogItemAdminCreateInput[K] } = {
+    kind: raw.kind,
+    displayName,
+    category,
+  };
+
+  if (typeof raw.internalCode === "string" && raw.internalCode.trim()) input.internalCode = raw.internalCode.trim();
+  if (typeof raw.unit === "string" && raw.unit.trim()) input.unit = raw.unit;
+  if (typeof raw.widthMm === "number" && Number.isFinite(raw.widthMm)) input.widthMm = raw.widthMm;
+  if (typeof raw.depthMm === "number" && Number.isFinite(raw.depthMm)) input.depthMm = raw.depthMm;
+  if (typeof raw.heightMm === "number" && Number.isFinite(raw.heightMm)) input.heightMm = raw.heightMm;
+  if (typeof raw.showIn2D === "boolean") input.showIn2D = raw.showIn2D;
+  if (typeof raw.showIn3D === "boolean") input.showIn3D = raw.showIn3D;
+
+  return input as CatalogItemAdminCreateInput;
+}
+
+/**
+ * Builds the JSONB document for a brand-new catalog item. Deliberately omits internalCode (lives
+ * only in the DB column), sourceSystem/sourceKey (no fake import provenance — see
+ * documentSourceTraceability), reviewedAt (never auto-reviewed), and lifecycleStatus (the outer
+ * DB column is the single source of truth, matching saveCatalogItemAdmin's existing pattern).
+ */
+export function buildCatalogItemCreateDocument(input: CatalogItemAdminCreateInput): CatalogItemAdminDocument {
+  const document: CatalogItemAdminDocument = {
+    displayName: input.displayName,
+    name: input.displayName,
+    category: input.category,
+    catalogItemKind: input.kind,
+  };
+  if (input.unit !== undefined) document.unit = input.unit;
+  if (input.widthMm !== undefined) document.widthMm = input.widthMm;
+  if (input.depthMm !== undefined) document.depthMm = input.depthMm;
+  if (input.heightMm !== undefined) document.heightMm = input.heightMm;
+  if (input.showIn2D !== undefined) document.showIn2D = input.showIn2D;
+  if (input.showIn3D !== undefined) document.showIn3D = input.showIn3D;
+  // Section 5 of the capability-hardening spec (mirrored from applyCatalogItemEdit): showIn2D=true
+  // needs SOME 2D representation — fill the minimal shape so a freshly-created item is never left
+  // in the inconsistent "showIn2D=true, no footprint2D" state.
+  if (input.showIn2D === true) document.footprint2D = { shape: "rectangle" };
+  return document;
 }
 
 export class CatalogItemAdminNotFoundError extends Error {

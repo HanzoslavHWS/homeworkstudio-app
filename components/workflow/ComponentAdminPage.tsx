@@ -50,7 +50,7 @@ const FOOTPRINT_SHAPE_LABELS_CS: Readonly<Record<"rectangle" | "circle" | "symbo
  * service/graphics_service/floor_finish never read them either — showing the checkboxes there
  * would be meaningless UI with zero effect on readiness, so the section is hidden for those.
  */
-const SCENE_CAPABILITY_KINDS: readonly CatalogItemKind[] = ["furniture", "technical_point", "construction", "other"];
+const SCENE_CAPABILITY_KINDS: readonly CatalogItemKind[] = ["furniture", "technical_point", "construction", "other", "booth_component"];
 
 /**
  * Kinds where source/manufacturing files (SKP/DWG/DXF/PDF/other) make sense — physical or
@@ -667,7 +667,7 @@ export function ComponentAdminDetail({
               ))}
             </select>
             <label className="smallUploadButton">
-              Nahrát soubor
+              {sourceAssetKind === "sketchup" ? "Nahrát SKP" : "Nahrát soubor"}
               <input
                 type="file"
                 onChange={(event) => {

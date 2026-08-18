@@ -1,10 +1,12 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { assertCanActivate, evaluateCatalogReadiness } from "../../domain/catalogReadiness.ts";
+import { assertCanActivate, assertUniqueInternalCode, DuplicateInternalCodeError, evaluateCatalogReadiness } from "../../domain/catalogReadiness.ts";
 import { ConcurrencyConflictError } from "./concurrency.ts";
 import {
   applyCatalogItemEdit,
+  buildCatalogItemCreateDocument,
   CatalogItemAdminNotFoundError,
   type CatalogItemAdmin,
+  type CatalogItemAdminCreateInput,
   type CatalogItemAdminDocument,
   type CatalogItemAdminEdit,
 } from "../../domain/catalogItemsAdmin.ts";
@@ -59,6 +61,47 @@ export async function readCatalogItemAdminById(client: SupabaseClient, id: strin
   const { data, error } = await client.from("catalog_items").select(ADMIN_COLUMNS).eq("id", id).maybeSingle();
   if (error) throw error;
   return data ? rowToAdmin(data as CatalogItemAdminDbRow) : undefined;
+}
+
+/**
+ * Creates a brand-new catalog_items row (the "Nová komponenta stánku" workflow). Always inserts
+ * lifecycle_status="needs_review" (input has no such field at all — create can never activate by
+ * construction, not just by convention). `id` is never set — Postgres's gen_random_uuid() column
+ * default handles it.
+ */
+export async function createCatalogItemAdmin(client: SupabaseClient, input: CatalogItemAdminCreateInput): Promise<CatalogItemAdmin> {
+  const existing = await readCatalogItemsAdmin(client);
+  // assertUniqueInternalCode expects Pick<ComponentDefinition,"internalCode"> (string | undefined);
+  // CatalogItemAdmin.internalCode is string | null, so null must be mapped to undefined first.
+  assertUniqueInternalCode(
+    existing.map((item) => ({ internalCode: item.internalCode ?? undefined })),
+    input.internalCode,
+  );
+
+  const document = buildCatalogItemCreateDocument(input);
+  const { data, error } = await client
+    .from("catalog_items")
+    .insert({
+      internal_code: input.internalCode?.trim() || null,
+      kind: input.kind,
+      lifecycle_status: "needs_review",
+      display_name: input.displayName,
+      official_name: null,
+      category: input.category,
+      unit: input.unit ?? null,
+      document,
+    })
+    .select(ADMIN_COLUMNS)
+    .single();
+
+  if (error) {
+    // Backstop for the read->insert race against the DB's own partial unique index
+    // (catalog_items_internal_code_key) — remapped to the same DuplicateInternalCodeError the
+    // pre-check throws above, so callers need only one catch clause.
+    if ((error as { code?: string }).code === "23505") throw new DuplicateInternalCodeError(input.internalCode ?? "");
+    throw error;
+  }
+  return rowToAdmin(data as CatalogItemAdminDbRow);
 }
 
 /**

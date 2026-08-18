@@ -4,7 +4,9 @@ import { useEffect, useMemo, useState } from "react";
 import {
   buildCatalogItemListEntry,
   filterCatalogItemsAdmin,
+  CATALOG_ITEM_CATEGORY_OPTIONS,
   type CatalogItemAdmin,
+  type CatalogItemAdminCreateInput,
   type CatalogItemAdminEdit,
   type CatalogItemAdminFilters,
 } from "../../domain/catalogItemsAdmin";
@@ -39,6 +41,7 @@ export function BoothAdminPage({
   const [activeKind, setActiveKind] = useState<CatalogItemKind>("booth");
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [query, setQuery] = useState("");
+  const [showCreateForm, setShowCreateForm] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,6 +76,13 @@ export function BoothAdminPage({
   function selectTab(kind: CatalogItemKind) {
     setActiveKind(kind);
     setSelectedId(undefined);
+    setShowCreateForm(false);
+  }
+
+  function handleCreated(created: CatalogItemAdmin) {
+    setItems((current) => [...(current ?? []), created]);
+    setSelectedId(created.id);
+    setShowCreateForm(false);
   }
 
   const activeTab = BOOTH_ADMIN_TABS.find((tab) => tab.kind === activeKind) ?? BOOTH_ADMIN_TABS[0]!;
@@ -103,9 +113,21 @@ export function BoothAdminPage({
         <>
           <div className="adminFilters">
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat interní kód nebo název…" />
+            {activeKind === "booth_component" && (
+              <button type="button" className="primaryButton" onClick={() => { setShowCreateForm(true); setSelectedId(undefined); }}>
+                + Nová komponenta stánku
+              </button>
+            )}
           </div>
+          {showCreateForm && activeKind === "booth_component" && (
+            <BoothComponentCreateForm
+              repository={repository}
+              onCancel={() => setShowCreateForm(false)}
+              onCreated={handleCreated}
+            />
+          )}
           <div className="adminSplit">
-            <ComponentAdminList entries={filteredEntries} selectedId={selectedId} onSelect={setSelectedId} />
+            <ComponentAdminList entries={filteredEntries} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setShowCreateForm(false); }} />
             {selected && (
               <ComponentAdminDetail
                 key={selected.id}
@@ -117,6 +139,124 @@ export function BoothAdminPage({
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+/**
+ * Minimal founding form for a brand-new booth_component — kind is always "booth_component" here,
+ * never user-editable (that's decided by which admin tab this form is rendered in). On success,
+ * hands the new CatalogItemAdmin to the parent so it can immediately open the SAME
+ * ComponentAdminDetail used everywhere else — this form never touches assets/readiness itself.
+ */
+function BoothComponentCreateForm({
+  repository,
+  onCancel,
+  onCreated,
+}: {
+  repository: RemoteApiCatalogItemsAdminRepository;
+  onCancel: () => void;
+  onCreated: (created: CatalogItemAdmin) => void;
+}) {
+  const [displayName, setDisplayName] = useState("");
+  const [internalCode, setInternalCode] = useState("");
+  const [category, setCategory] = useState("");
+  const [unit, setUnit] = useState("");
+  const [widthMm, setWidthMm] = useState("");
+  const [depthMm, setDepthMm] = useState("");
+  const [heightMm, setHeightMm] = useState("");
+  const [showIn2D, setShowIn2D] = useState(false);
+  const [showIn3D, setShowIn3D] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  const canSubmit = displayName.trim().length > 0 && category.trim().length > 0 && !busy;
+
+  async function handleSubmit() {
+    setBusy(true);
+    setError("");
+    try {
+      const input: { -readonly [K in keyof CatalogItemAdminCreateInput]?: CatalogItemAdminCreateInput[K] } = {
+        kind: "booth_component",
+        displayName: displayName.trim(),
+        category,
+      };
+      if (internalCode.trim()) input.internalCode = internalCode.trim();
+      if (unit.trim()) input.unit = unit.trim();
+      const width = Number(widthMm);
+      if (widthMm.trim() && Number.isFinite(width)) input.widthMm = width;
+      const depth = Number(depthMm);
+      if (depthMm.trim() && Number.isFinite(depth)) input.depthMm = depth;
+      const height = Number(heightMm);
+      if (heightMm.trim() && Number.isFinite(height)) input.heightMm = height;
+      if (showIn2D) input.showIn2D = true;
+      if (showIn3D) input.showIn3D = true;
+
+      const created = await repository.create(input as CatalogItemAdminCreateInput);
+      onCreated(created);
+    } catch (createError) {
+      setError(createError instanceof Error ? createError.message : "Vytvoření komponenty selhalo.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="catalogDetailSection adminDetail">
+      <h3>Nová komponenta stánku</h3>
+      <dl>
+        <div className="catalogAdminEditRow">
+          <dt>Název *</dt>
+          <dd><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Např. Sloupek" /></dd>
+        </div>
+        <div className="catalogAdminEditRow">
+          <dt>Interní kód</dt>
+          <dd><input value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder="Ponechte prázdné, pokud kód neznáte" /></dd>
+        </div>
+        <div className="catalogAdminEditRow">
+          <dt>Kategorie *</dt>
+          <dd>
+            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+              <option value="">— vyberte —</option>
+              {CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </dd>
+        </div>
+        <div className="catalogAdminEditRow">
+          <dt>Jednotka</dt>
+          <dd><input value={unit} onChange={(event) => setUnit(event.target.value)} /></dd>
+        </div>
+        <div className="catalogAdminEditRow">
+          <dt>Šířka (mm)</dt>
+          <dd><input type="number" value={widthMm} onChange={(event) => setWidthMm(event.target.value)} placeholder="Neznámo" /></dd>
+        </div>
+        <div className="catalogAdminEditRow">
+          <dt>Hloubka (mm)</dt>
+          <dd><input type="number" value={depthMm} onChange={(event) => setDepthMm(event.target.value)} placeholder="Neznámo" /></dd>
+        </div>
+        <div className="catalogAdminEditRow">
+          <dt>Výška (mm)</dt>
+          <dd><input type="number" value={heightMm} onChange={(event) => setHeightMm(event.target.value)} placeholder="Neznámo" /></dd>
+        </div>
+      </dl>
+      <p className="fieldHint">Použití:</p>
+      <label className="checkboxRow">
+        <input type="checkbox" checked={showIn2D} onChange={(event) => setShowIn2D(event.target.checked)} />
+        2D
+      </label>
+      <label className="checkboxRow">
+        <input type="checkbox" checked={showIn3D} onChange={(event) => setShowIn3D(event.target.checked)} />
+        3D
+      </label>
+      <div className="catalogAdminReviewActions">
+        <button type="button" className="secondaryButton" onClick={onCancel} disabled={busy}>Zrušit</button>
+        <button type="button" className="primaryButton" onClick={handleSubmit} disabled={!canSubmit}>
+          {busy ? "Vytvářím…" : "Vytvořit"}
+        </button>
+      </div>
+      {error && <small className="uploadError">{error}</small>}
     </div>
   );
 }
