@@ -15,6 +15,7 @@ import {
   realizationProfiles,
 } from "../data/realizationProfiles";
 import type {
+  BoothType,
   Currency,
   ComponentDefinition,
   Notes,
@@ -74,7 +75,8 @@ import {
   worldRotationToPlanView,
   worldToPlanView,
 } from "../domain/planView";
-import { getMasterReferenceModel } from "../domain/cad3d";
+import { getMasterReferenceModel, isVariantAvailable, resolveBoothModelSource } from "../domain/cad3d";
+import { useAssetUrl } from "../hooks/useAssetUrl";
 import {
   componentZIndex,
   moveComponentDisplayOrder,
@@ -135,6 +137,25 @@ import { dataUrlToFile, uploadAsset, type UploadProgress } from "../lib/storage/
 import { PricingAdminPage } from "./workflow/PricingAdminPages";
 import { RemoteApiPricingAdminRepository } from "../lib/db/pricingAdmin.remoteApi.client";
 import { RemoteApiCatalogItemsAdminRepository } from "../lib/db/catalogItemsAdmin.remoteApi.client";
+
+/**
+ * Booth-selection card thumbnail — a real uploaded photoAsset (R2, resolved to a signed URL)
+ * always wins over the legacy static thumbnailUrl; the placeholder construction-outline shape is
+ * the last resort when neither is set. Never fabricates a photo. Extracted into its own component
+ * because useAssetUrl is a hook and boothTypes.map(...) renders one card per booth.
+ */
+function BoothTypeCardThumbnail({ booth }: { booth: Pick<BoothType, "name" | "photoAsset" | "thumbnailUrl"> }) {
+  const resolved = useAssetUrl(booth.photoAsset, booth.thumbnailUrl);
+  if (resolved.url) {
+    return <img src={resolved.url} alt={`Náhled ${booth.name}`} />;
+  }
+  return (
+    <div className="constructionShape">
+      <span className="constructionWallTop" />
+      <span className="constructionWallLeft" />
+    </div>
+  );
+}
 
 export default function BoothGenerator() {
   const repositoryRef = useRef<ProjectRepository | null>(null);
@@ -479,9 +500,28 @@ export default function BoothGenerator() {
         selectedBoothId
     );
 
-  const selectedBoothMasterModel = getMasterReferenceModel(
-    selectedBooth?.assets,
-  );
+  // Section "GENERÁTOR TYPOVEK" (2026-08-19): a booth with declared variants (T04..T25) NEVER
+  // falls back to its own parent GLB — resolveBoothModelSource requires the SELECTED variant's
+  // own modelAsset (or a demo/test fixture's explicit assetSourceBoothId), never a single shared
+  // parent model for every variant. P86 (no variants) is completely unaffected — same
+  // getMasterReferenceModel(selectedBooth?.assets) path as always.
+  const selectedBoothModelSource = selectedBooth
+    ? resolveBoothModelSource(selectedBooth, boothTypes, selectedVariantId)
+    : undefined;
+  const selectedBoothStoredModelAsset = selectedBoothModelSource?.kind === "stored" ? selectedBoothModelSource.asset : undefined;
+  const resolvedStoredModelUrl = useAssetUrl(selectedBoothStoredModelAsset, undefined);
+  const selectedBoothMasterModel =
+    selectedBoothModelSource?.kind === "legacy"
+      ? selectedBoothModelSource.asset
+      : selectedBoothModelSource?.kind === "stored" && resolvedStoredModelUrl.url
+        ? ({
+            id: selectedBoothStoredModelAsset!.id,
+            url: resolvedStoredModelUrl.url,
+            role: "master-reference",
+            unit: "mm",
+            axisSystem: "x-right-y-depth-z-up",
+          } as const)
+        : undefined;
 
   const selectedVariant =
     selectedBooth?.variants.find(
@@ -592,7 +632,7 @@ export default function BoothGenerator() {
         (
           selectedBooth.variants.length ===
             0 ||
-          selectedVariantId !== ""
+          (selectedVariantId !== "" && selectedBoothModelSource !== undefined)
         )
     );
 
@@ -2576,14 +2616,7 @@ export default function BoothGenerator() {
                             )}
 
                             <div className="constructionPreview">
-                              {booth.thumbnailUrl ? (
-                                <img src={booth.thumbnailUrl} alt={`Náhled ${booth.name}`} />
-                              ) : (
-                                <div className="constructionShape">
-                                  <span className="constructionWallTop" />
-                                  <span className="constructionWallLeft" />
-                                </div>
-                              )}
+                              <BoothTypeCardThumbnail booth={booth} />
                             </div>
 
                             <div className="boothTypeContent">
@@ -2677,6 +2710,11 @@ export default function BoothGenerator() {
                             const selected =
                               selectedVariantId ===
                               variant.id;
+                            // Section "GENERÁTOR TYPOVEK": a variant with no resolvable asset
+                            // source (neither its own modelAsset nor a legacy
+                            // assetSourceBoothId) must never present as a ready, pickable
+                            // option — see domain/cad3d.ts's isVariantAvailable.
+                            const available = isVariantAvailable(variant, boothTypes);
 
                             return (
                               <button
@@ -2684,10 +2722,14 @@ export default function BoothGenerator() {
                                   variant.id
                                 }
                                 type="button"
+                                disabled={!available}
+                                title={available ? undefined : "Tato varianta zatím nemá nahraný 3D model."}
                                 className={
-                                  selected
-                                    ? "variantCard selected"
-                                    : "variantCard"
+                                  [
+                                    "variantCard",
+                                    selected ? "selected" : "",
+                                    available ? "" : "variantUnavailable",
+                                  ].filter(Boolean).join(" ")
                                 }
                                 onClick={() =>
                                   handleVariantSelect(
@@ -3127,7 +3169,10 @@ export default function BoothGenerator() {
 
                     <div
                       className={
-                        ["boothCanvas", "planViewRotated", selectedConstructionPartId === "assembly" ? "constructionSelected" : "", editorTool === "measure" ? "measurementActive" : ""].filter(Boolean).join(" ")
+                        // The old whole-canvas-180°-rotation marker class was removed 2026-08-19
+                        // along with its orphaned CSS text counter-rotation — this canvas itself
+                        // was never actually rotated by any rule still active in globals.css.
+                        ["boothCanvas", selectedConstructionPartId === "assembly" ? "constructionSelected" : "", editorTool === "measure" ? "measurementActive" : ""].filter(Boolean).join(" ")
                       }
                       style={{
                         aspectRatio: `${selectedBooth.widthMm} / ${selectedBooth.depthMm}`,
@@ -3154,7 +3199,6 @@ export default function BoothGenerator() {
                         footprintDepthMm={selectedBooth.depthMm}
                         visible={constructionAssemblyVisible}
                         selected={selectedConstructionPartId !== null}
-                        rotateView180
                       />
 
                       {editorTool === "measure" && measureHoverPoint && (() => {
@@ -3245,13 +3289,18 @@ export default function BoothGenerator() {
                               }
                             >
                               {item.frontDirectionDeg !== undefined && (
+                                // ▼ (not ▲) to match .frontMarker's bottom-anchored baseline —
+                                // at frontDirectionDeg=0 it points straight toward the front/open
+                                // side (Y=0, plan-bottom), same "back at top" convention as
+                                // worldToPlanView. item.frontDirectionDeg itself is untouched —
+                                // this is purely which way the glyph points at its own zero.
                                 <i
                                   className="frontMarker"
                                   style={{
                                     transform: `translateX(-50%) rotate(${item.frontDirectionDeg}deg)`,
                                   }}
                                 >
-                                  ▲
+                                  ▼
                                 </i>
                               )}
 

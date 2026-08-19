@@ -267,3 +267,173 @@ test("no data-migration script or DB write is introduced by this transform chang
   const source = readFileSync(new URL("../domain/planView.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /supabase|createClient|\.update\(|\.insert\(|fetch\(/iu);
 });
+
+// =========================================================================================
+// PART H — BoothCadPlanView.tsx's top-down CAD-outline camera (2026-08-19 audit/fix): this is
+// a SEPARATE, hand-rolled orthographic camera (not cadPointToViewer/worldToPlanView) that
+// renders the booth's structural outline behind placed furniture in the 2D plan. Its old
+// up=(0,0,1) made its own screen-right equal world -X (a real mirror), compensated for by a
+// CSS `rotate(180deg)` + mirrored-position hack (`rotateView180` prop) whose X-compensation was
+// only exact when the model's bounding box was centered on the footprint — an untested, latent
+// left/right bug for any asymmetric master GLB. Root-cause fix: up=(0,0,-1) makes the raw
+// snapshot correctly oriented from the start, so no rotate/mirror compensation is needed at all.
+// =========================================================================================
+
+test("BoothCadPlanView's top-down CAD-outline camera: up=(0,0,-1) makes its own screen-right equal world +X — matching cadPointToViewer's viewer frame and the default front-facing camera (Part E), verified against the REAL THREE.Matrix4.lookAt construction, not just a sign assumption", () => {
+  // Mirrors BoothCadPlanView.tsx's actual camera setup: an orthographic camera positioned
+  // directly above the model's center (positive viewer-Y = up), looking straight down.
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 20);
+  const center = new THREE.Vector3(0.4, 0, -0.6); // arbitrary off-origin center, like a real model
+  camera.position.set(center.x, 2, center.z);
+  camera.up.set(0, 0, -1);
+  camera.lookAt(center.x, 0, center.z);
+  camera.updateMatrixWorld(true);
+
+  const cameraRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  assert.ok(cameraRight.x > 0.99, `camera-right must point toward +X (matching every other view in the app) — got ${cameraRight.x}`);
+
+  // Screen-up (camera local +Y) must point toward world -Z — the BACK direction, since
+  // cadPointToViewer maps depth (cad Y) to viewer Z = -cadY: larger depth = more negative Z.
+  const cameraImageUp = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+  assert.ok(cameraImageUp.z < -0.99, `camera's own screen-up must point toward -Z (the back-wall direction) — got ${cameraImageUp.z}`);
+});
+
+test("BoothCadPlanView's OLD up=(0,0,1) camera (pre-fix, reconstructed here only to document the bug) really did mirror X — proves the fix wasn't a no-op", () => {
+  const camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 20);
+  camera.position.set(0.4, 2, -0.6);
+  camera.up.set(0, 0, 1);
+  camera.lookAt(0.4, 0, -0.6);
+  camera.updateMatrixWorld(true);
+  const cameraRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  assert.ok(cameraRight.x < -0.99, `sanity check: the OLD up vector really did point camera-right toward -X — got ${cameraRight.x}`);
+});
+
+/** The exact placement formula BoothCadPlanView.tsx's DOM style and lib/planExport.ts's drawImage now both use — X-preserving, Y-flip-only, same convention as worldToPlanView. */
+function cadOutlinePlacement(bounds: { minX: number; minY: number; width: number; depth: number }, footprintWidthMm: number, footprintDepthMm: number) {
+  return {
+    left: bounds.minX,
+    top: footprintDepthMm - bounds.minY - bounds.depth,
+    width: bounds.width,
+    height: bounds.depth,
+  };
+}
+
+test("CAD-outline placement formula is exact for an ASYMMETRIC bounding box (model not centered on the footprint) — the old rotateView180 X-compensation was only exact when centered; this formula has no such dependency", () => {
+  const footprintWidthMm = 2000;
+  const footprintDepthMm = 2000;
+  // Model's bounds are NOT centered: minX=340 (not 0), width=1500 (center at 1090, not 1000).
+  const bounds = { minX: 340, minY: 100, width: 1500, depth: 1800 };
+  const placed = cadOutlinePlacement(bounds, footprintWidthMm, footprintDepthMm);
+
+  // Left edge stays exactly at the model's own minX — X is never touched, matching worldToPlanView.
+  assert.equal(placed.left, 340);
+  // Top edge: the model's back edge (minY+depth, closest to depthMm) maps to the SMALLEST
+  // top value (closest to the plan's top/back) — same worldToPlanView(depthMm - y) formula.
+  assert.equal(placed.top, footprintDepthMm - bounds.minY - bounds.depth);
+  assert.equal(placed.top, 100);
+});
+
+test("CAD-outline placement's Y-flip is self-consistent with worldToPlanView: the top-left corner of the model's raw bounding box maps to the SAME plan point worldToPlanView would give its back-left corner", () => {
+  const footprintWidthMm = 2000;
+  const footprintDepthMm = 2000;
+  const bounds = { minX: 340, minY: 100, width: 1500, depth: 1800 };
+  const placed = cadOutlinePlacement(bounds, footprintWidthMm, footprintDepthMm);
+  // The model rectangle's back-left corner in world/CAD terms is (minX, minY+depth).
+  const backLeftPlan = worldToPlanView({ x: bounds.minX, y: bounds.minY + bounds.depth }, footprintWidthMm, footprintDepthMm);
+  assert.equal(placed.left, backLeftPlan.x);
+  assert.equal(placed.top, backLeftPlan.y);
+});
+
+test("rotateView180 (the retired CSS-rotate/mirror-position compensation) no longer exists anywhere in the codebase", () => {
+  for (const path of ["../components/configurator/BoothCadPlanView.tsx", "../components/BoothGenerator.tsx", "../components/workflow/WorkflowSteps.tsx", "../components/workflow/AdminPages.tsx"]) {
+    const source = readFileSync(new URL(path, import.meta.url), "utf8");
+    assert.doesNotMatch(source, /rotateView180/u, `${path} must no longer reference the retired rotateView180 prop`);
+  }
+});
+
+test("lib/planExport.ts no longer applies a rotate(Math.PI) compensation when drawing the CAD outline snapshot — the snapshot is correctly oriented at the source", () => {
+  const source = readFileSync(new URL("../lib/planExport.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /rotate\(Math\.PI\)/u);
+});
+
+test("BoothCadPlanView.tsx's camera up vector is (0,0,-1), not the old mirroring (0,0,1)", () => {
+  const source = readFileSync(new URL("../components/configurator/BoothCadPlanView.tsx", import.meta.url), "utf8");
+  assert.match(source, /camera\.up\.set\(0,\s*0,\s*-1\)/u);
+  assert.doesNotMatch(source, /camera\.up\.set\(0,\s*0,\s*1\)/u);
+});
+
+// =========================================================================================
+// PART I — UI leftovers from the retired 180° convention (2026-08-19 follow-up session): the
+// core world<->plan transform was already fixed and is untouched here. These regressions cover
+// the presentation-only layers that still carried a stale compensation for it.
+// =========================================================================================
+
+test("front-direction marker (.frontMarker): CSS anchors it at the BOTTOM (not top) of its component — Y=0/front-open-side renders at the plan's bottom, so a marker meant to point 'front' must be anchored there at zero rotation", () => {
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  const rule = css.match(/\.frontMarker\s*\{[^}]*\}/u);
+  assert.ok(rule, "expected to find a .frontMarker rule");
+  assert.match(rule![0], /bottom:\s*3px/u);
+  assert.doesNotMatch(rule![0], /\btop:\s*3px/u);
+});
+
+test("front-direction marker glyph is ▼ (not ▲) in BoothGenerator.tsx — at frontDirectionDeg=0 a downward-pointing glyph anchored at the bottom edge points straight at the front/open side", () => {
+  const source = readFileSync(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
+  const markerMatch = source.match(/className="frontMarker"[\s\S]{0,400}?>\s*(.)\s*<\/i>/u);
+  assert.ok(markerMatch, "expected to find the frontMarker <i> element");
+  assert.equal(markerMatch![1], "▼");
+});
+
+test("front marker's zero orientation is consistent with worldToPlanView's own front/back convention — front (Y=0) is the LARGEST plan-Y (bottom), matching where .frontMarker is now anchored", () => {
+  const front = worldToPlanView({ x: 1000, y: 0 }, W, D);
+  const back = worldToPlanView({ x: 1000, y: D }, W, D);
+  assert.ok(front.y > back.y, "front must have a larger plan-Y (rendered lower/bottom) than back");
+});
+
+test("no orphaned whole-canvas 180° text counter-rotation remains — the retired '.planViewRotated .placedComponentName / small { rotate(180deg) }' rule (a leftover compensation for the OLD worldToPlanView180 convention) has been removed, not left silently applying an extra flip", () => {
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.doesNotMatch(css, /\.planViewRotated/u, "the retired marker class and its counter-rotation rule must both be gone");
+});
+
+test("BoothGenerator.tsx no longer applies the retired 'planViewRotated' class to the 2D canvas — nothing in the current CSS depends on it, so keeping it around would be a misleading dead artifact", () => {
+  const source = readFileSync(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /"planViewRotated"/u);
+});
+
+test("placed-component name/dimension labels rotate WITH their component (worldRotationToPlanView(item.rotationDeg) on the wrapper) and receive NO separate/extra rotation of their own — .placedComponentName and .placedComponent small carry no CSS transform at all", () => {
+  const css = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  const nameRule = css.match(/\.placedComponentName\s*\{[^}]*\}/u);
+  assert.ok(nameRule, "expected a .placedComponentName rule");
+  assert.doesNotMatch(nameRule![0], /transform\s*:/u);
+});
+
+test("editor annotations (.planAnnotation free-text notes) are position-only — ProjectAnnotation has no rotation field, and the live editor never applies a rotate() to .planAnnotation, so they stay upright by design, not by accidental compensation", () => {
+  const domainSource = readFileSync(new URL("../domain/spatialAnnotations.ts", import.meta.url), "utf8");
+  const annotationType = domainSource.match(/export type ProjectAnnotation = Readonly<\{[\s\S]*?\}>;/u);
+  assert.ok(annotationType);
+  assert.doesNotMatch(annotationType![0], /rotation|rotate/iu, "ProjectAnnotation intentionally has no rotation concept — never add one without an explicit product decision");
+
+  const generatorSource = readFileSync(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
+  const start = generatorSource.indexOf("annotations.filter((annotation) => annotation.visible)");
+  assert.ok(start >= 0, "expected to find the live .planAnnotation render block");
+  const end = generatorSource.indexOf('editorView === "3d"', start);
+  assert.ok(end > start);
+  const annotationBlock = generatorSource.slice(start, end);
+  assert.doesNotMatch(annotationBlock, /rotate\(/u);
+});
+
+test("export (renderTechnicalPlanPng) draws annotation text upright too — the annotations block never wraps its fillText in a context.rotate(), matching the editor's own unrotated .planAnnotation rendering", () => {
+  const source = readFileSync(new URL("../lib/planExport.ts", import.meta.url), "utf8");
+  const start = source.indexOf('if (layers.includes("annotations"))');
+  assert.ok(start >= 0, "expected to find the annotations export block");
+  const end = source.indexOf('if (layers.includes("dimensions"))', start);
+  assert.ok(end > start);
+  const annotationsBlock = source.slice(start, end);
+  assert.doesNotMatch(annotationsBlock, /context\.rotate\(/u);
+});
+
+test("export's placed-component labels use the SAME worldRotationToPlanView rotation as the live editor's CSS transform — one shared geometry convention across editor and export, not two", () => {
+  const exportSource = readFileSync(new URL("../lib/planExport.ts", import.meta.url), "utf8");
+  assert.match(exportSource, /context\.rotate\(\(worldRotationToPlanView\(item\.rotationDeg\) \* Math\.PI\) \/ 180\)/u);
+  const generatorSource = readFileSync(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
+  assert.match(generatorSource, /rotate\(\$\{worldRotationToPlanView\(item\.rotationDeg\)\}deg\)/u);
+});

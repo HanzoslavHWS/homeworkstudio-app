@@ -7,7 +7,7 @@ import {
   isGeneratorEligible,
 } from "../domain/catalogReadiness.ts";
 import { derivePricingAvailability, resolvePricingAvailability } from "../domain/catalog.ts";
-import type { ComponentDefinition } from "../domain/models.ts";
+import type { BoothVariant, ComponentDefinition } from "../domain/models.ts";
 import { componentCatalog, componentCatalogItems } from "../data/components.ts";
 import { boothTypes } from "../data/booths.ts";
 import { effectiveFasciaRequirement, priceGraphics } from "../domain/technicalServices.ts";
@@ -292,6 +292,118 @@ test("booth: P86 canonical seed (skutečná data/booths.ts definice) je ready a 
   assert.equal(readiness.ready, true, `P86 mělo být ready, issues: ${readiness.issues.join(", ")}`);
   assert.deepEqual(readiness.issues, []);
   assert.equal(isGeneratorEligible(adapted, "booth"), true);
+});
+
+// =========================================================================================
+// booth: multi-variant type-booth lines (T04..T25) — one catalog_item, several variants, each
+// with its OWN independent GLB. See domain/models.ts's BoothVariant (extended with
+// widthMm/depthMm/heightMm/modelAsset/photoAsset) and ComponentDefinition.variants.
+// =========================================================================================
+
+const variantModelAsset = {
+  id: "variant-model-1",
+  storageKey: "catalog/furniture/t04/models/v1.glb",
+  originalFileName: "t04-v1.glb",
+  mimeType: "model/gltf-binary" as const,
+  size: 900_000,
+  createdAt: "2026-08-19T00:00:00.000Z",
+  category: "catalog-model" as const,
+};
+
+const variantSketchupSource = {
+  id: "variant-skp-1",
+  kind: "sketchup" as const,
+  asset: {
+    id: "variant-skp-asset-1",
+    storageKey: "catalog/furniture/t04/source/v1.skp",
+    originalFileName: "t04-v1.skp",
+    mimeType: "application/octet-stream",
+    size: 400_000,
+    createdAt: "2026-08-19T00:00:00.000Z",
+    category: "catalog-source" as const,
+  },
+};
+
+/** Both GLB and SKP — the full "complete variant" requirement (mirrors booth_component's own GLB+SKP rule, scoped per variant). */
+function fourCompleteVariants(): readonly BoothVariant[] {
+  return fourVariants(() => ({ modelAsset: variantModelAsset, sourceAssets: [variantSketchupSource] }));
+}
+
+function fourVariants(overrideByIndex?: (index: number) => Partial<BoothVariant>): readonly BoothVariant[] {
+  return [0, 1, 2, 3].map((index) => ({ id: `t04-v${index + 1}`, name: `Varianta ${index + 1}`, ...(overrideByIndex?.(index) ?? {}) }));
+}
+
+test("booth + variants: declared variants but NONE have a GLB or SKP -> not ready, both missing_3d_asset AND missing_sketchup_source, even with valid parent footprint", () => {
+  const t04 = boothLike({ internalCode: "T04", modelUrl: undefined, variants: fourVariants() });
+  const readiness = evaluateCatalogReadiness(t04, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
+  assert.ok(readiness.issues.includes("missing_sketchup_source"));
+});
+
+test("booth + variants: 3 of 4 variants modelled (all with SKP) is STILL not ready — the parent must never look complete while one variant has no geometry", () => {
+  const t04 = boothLike({
+    internalCode: "T04",
+    modelUrl: undefined,
+    variants: fourVariants((index) => (index < 3 ? { modelAsset: variantModelAsset, sourceAssets: [variantSketchupSource] } : { sourceAssets: [variantSketchupSource] })),
+  });
+  const readiness = evaluateCatalogReadiness(t04, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
+  assert.equal(readiness.issues.includes("missing_sketchup_source"), false, "all 4 variants DO have SKP — only GLB is incomplete");
+});
+
+test("booth + variants: all 4 have GLB but only 3 of 4 have SKP -> still not ready, missing_sketchup_source (and NOT missing_3d_asset)", () => {
+  const t04 = boothLike({
+    internalCode: "T04",
+    modelUrl: undefined,
+    variants: fourVariants((index) => (index < 3 ? { modelAsset: variantModelAsset, sourceAssets: [variantSketchupSource] } : { modelAsset: variantModelAsset })),
+  });
+  const readiness = evaluateCatalogReadiness(t04, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_sketchup_source"));
+  assert.equal(readiness.issues.includes("missing_3d_asset"), false, "all 4 variants DO have GLB — only SKP is incomplete");
+});
+
+test("booth + variants: ready once ALL declared variants have their own GLB AND their own SKP, even though the PARENT itself has no modelUrl/modelAsset/sourceAssets at all", () => {
+  const t04 = boothLike({
+    internalCode: "T04",
+    modelUrl: undefined,
+    variants: fourCompleteVariants(),
+  });
+  const readiness = evaluateCatalogReadiness(t04, "booth");
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.issues, []);
+});
+
+test("booth + variants: parent dimensions (width/depth/height) are still required independently of variant readiness", () => {
+  const t04 = boothLike({
+    internalCode: "T04",
+    modelUrl: undefined,
+    heightMm: undefined,
+    variants: fourCompleteVariants(),
+  });
+  const readiness = evaluateCatalogReadiness(t04, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_dimensions"));
+  assert.equal(readiness.issues.includes("missing_3d_asset"), false, "all 4 variants ARE modelled — only the parent footprint is missing");
+});
+
+test("booth + empty variants array (P86-shaped, variants:[]) is unaffected by the variant rule — falls back to the parent's own has3DAsset exactly as before", () => {
+  const readiness = evaluateCatalogReadiness(boothLike({ variants: [] }), "booth");
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.issues, []);
+});
+
+test("booth + variants: a variant's own modelUrl-only shape doesn't exist — ONLY modelAsset.storageKey counts as a variant's GLB (mirrors the parent's own isRuntimeGlbReference rule, a .skp reference never counts)", () => {
+  const t04 = boothLike({
+    internalCode: "T04",
+    modelUrl: undefined,
+    variants: fourVariants((index) => (index === 0 ? { modelAsset: { ...variantModelAsset, storageKey: "catalog/furniture/t04/source/v1.skp" } } : {})),
+  });
+  const readiness = evaluateCatalogReadiness(t04, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
 });
 
 // =========================================================================================

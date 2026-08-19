@@ -8,7 +8,7 @@
  * domain/catalogReadiness.ts's evaluateCatalogReadiness()/isGeneratorEligible(), the exact
  * same functions the rest of the app already trusts. No parallel readiness logic.
  */
-import { CATALOG_ITEM_KINDS, type CatalogItemKind, type CatalogItemStatus, type ComponentDefinition, type PricingEntry } from "./models.ts";
+import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type ComponentDefinition, type PricingEntry } from "./models.ts";
 import { evaluateCatalogReadiness, isGeneratorEligible, isValidCatalogItemStatus, type ReadinessResult } from "./catalogReadiness.ts";
 import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
@@ -172,6 +172,33 @@ export function documentSourceAssets(document: CatalogItemAdminDocument): readon
   return Array.isArray(value) ? value.filter(isSourceAssetEntryShape) : [];
 }
 
+function isVariantShape(value: unknown): value is BoothVariant {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.id !== "string" || !candidate.id) return false;
+  if (typeof candidate.name !== "string" || !candidate.name) return false;
+  if (candidate.modelAsset !== undefined && !isStoredAssetShape(candidate.modelAsset)) return false;
+  if (candidate.photoAsset !== undefined && !isStoredAssetShape(candidate.photoAsset)) return false;
+  if (candidate.sourceAssets !== undefined && !(Array.isArray(candidate.sourceAssets) && candidate.sourceAssets.every(isSourceAssetEntryShape))) return false;
+  return true;
+}
+
+/** Every validly-shaped variant of a multi-variant type-booth line (T04..T25) — never array-index identity, always the variant's own stable `id`. Empty/absent means "not a variant line" (e.g. P86). */
+export function documentVariants(document: CatalogItemAdminDocument): readonly BoothVariant[] {
+  const value = document.variants;
+  return Array.isArray(value) ? value.filter(isVariantShape) : [];
+}
+
+/** Mirrors documentHas3DAsset but scoped to ONE variant's own modelAsset — never falls back to the parent's or another variant's. */
+export function variantHas3DAsset(variant: BoothVariant): boolean {
+  return isRuntimeGlbReference(variant.modelAsset?.storageKey);
+}
+
+/** Mirrors documentSourceTraceability's sketchup check but scoped to ONE variant's own sourceAssets — never the parent's. */
+export function variantHasSketchupSource(variant: BoothVariant): boolean {
+  return Boolean(variant.sourceAssets?.some((entry) => entry.kind === "sketchup" && entry.asset?.storageKey));
+}
+
 /** Legacy static/public photo URL fallback (pre-R2 seeds like M57). */
 export function documentPhotoUrl(document: CatalogItemAdminDocument): string | undefined {
   return readString(document, "photoUrl");
@@ -247,6 +274,9 @@ export type CatalogItemAdminListEntry = Readonly<{
   basePriceEur: number | null;
   readiness: ReadinessResult;
   generatorEligible: boolean;
+  /** The item's own canonical thumbnail source (never a signed URL) — see hooks/useAssetUrl for resolution. photoAsset wins when present; photoUrl is the legacy static fallback (e.g. M57). */
+  photoAsset: StoredAsset | undefined;
+  photoUrl: string | undefined;
 }>;
 
 export function buildCatalogItemListEntry(item: CatalogItemAdmin): CatalogItemAdminListEntry {
@@ -268,6 +298,8 @@ export function buildCatalogItemListEntry(item: CatalogItemAdmin): CatalogItemAd
     basePriceEur: pricing.eur,
     readiness: computeReadiness(item),
     generatorEligible: computeGeneratorEligibleLive(item),
+    photoAsset: documentPhotoAsset(item.document),
+    photoUrl: documentPhotoUrl(item.document),
   };
 }
 
@@ -308,6 +340,67 @@ export function filterCatalogItemsAdmin(entries: readonly CatalogItemAdminListEn
 }
 
 // ============================================================================
+// SORT — deterministic default list ordering, applied AFTER filtering (never before — filtering
+// must never depend on/disturb sort order, and sorting a filtered subset is cheaper than sorting
+// everything up front). NEVER trusts DB/API return order (created_at, updated_at, Supabase's own
+// row order): active items always first, then alphabetical (Czech-locale) or natural/numeric
+// order within each lifecycle group, with internalCode then id as final tie-breakers so the list
+// can never visibly reshuffle between renders for otherwise-identical entries.
+// ============================================================================
+
+const CZECH_TEXT_COLLATOR = new Intl.Collator("cs", { sensitivity: "base" });
+/** numeric:true makes "T4" < "T6" < "T10" compare correctly instead of lexicographic "T10" < "T4" — matters even though today's real Txx codes happen to already be zero-padded (T04, T06, ...). */
+const NATURAL_CODE_COLLATOR = new Intl.Collator("cs", { sensitivity: "base", numeric: true });
+
+/** active is always group 0; every other status keeps CATALOG_ITEM_STATUSES' own declared relative order (draft, needs_review, [active — already handled], inactive, archived). */
+function lifecycleGroupRank(status: CatalogItemStatus): number {
+  if (status === "active") return -1;
+  const declaredIndex = CATALOG_ITEM_STATUSES.indexOf(status);
+  return declaredIndex === -1 ? CATALOG_ITEM_STATUSES.length : declaredIndex;
+}
+
+function compareByLifecycleGroup<T extends Pick<CatalogItemAdminListEntry, "lifecycleStatus">>(a: T, b: T): number {
+  return lifecycleGroupRank(a.lifecycleStatus) - lifecycleGroupRank(b.lifecycleStatus);
+}
+
+function compareByIdentityTieBreak<T extends Pick<CatalogItemAdminListEntry, "internalCode" | "id">>(a: T, b: T): number {
+  return NATURAL_CODE_COLLATOR.compare(a.internalCode ?? "", b.internalCode ?? "") || NATURAL_CODE_COLLATOR.compare(a.id, b.id);
+}
+
+/**
+ * Default ordering for "Administrace → Komponenty" and "Knihovna stánků → Komponenty stánku":
+ * active first, then alphabetical (cs locale) by displayName within each lifecycle group,
+ * internalCode/id as final deterministic tie-breakers.
+ */
+export function sortCatalogItemsAdminByName<T extends Pick<CatalogItemAdminListEntry, "displayName" | "lifecycleStatus" | "internalCode" | "id">>(
+  entries: readonly T[],
+): readonly T[] {
+  return entries.slice().sort((a, b) =>
+    compareByLifecycleGroup(a, b) ||
+    CZECH_TEXT_COLLATOR.compare(a.displayName, b.displayName) ||
+    compareByIdentityTieBreak(a, b),
+  );
+}
+
+/**
+ * Default ordering for "Knihovna stánků → Typové stánky": active first, then natural/numeric
+ * order by internalCode within each lifecycle group (P86, P87, T04, T06, ... rather than a
+ * name-based sort) — internalCode is how this catalog identifies these lines, so it reads more
+ * naturally than alphabetizing "Kóje 2 × 2 m" against "Typový stánek octanorm - T4". Falls back
+ * to displayName then id for entries that somehow lack a code.
+ */
+export function sortCatalogItemsAdminByCode<T extends Pick<CatalogItemAdminListEntry, "displayName" | "lifecycleStatus" | "internalCode" | "id">>(
+  entries: readonly T[],
+): readonly T[] {
+  return entries.slice().sort((a, b) =>
+    compareByLifecycleGroup(a, b) ||
+    NATURAL_CODE_COLLATOR.compare(a.internalCode ?? "", b.internalCode ?? "") ||
+    CZECH_TEXT_COLLATOR.compare(a.displayName, b.displayName) ||
+    NATURAL_CODE_COLLATOR.compare(a.id, b.id),
+  );
+}
+
+// ============================================================================
 // EDIT — whitelisted fields only (section 7/8). internalCode/sourceSystem/sourceKey/document
 // wholesale are NEVER accepted here, no matter what a raw request body contains.
 // ============================================================================
@@ -332,6 +425,17 @@ export type CatalogItemAdminEdit = Readonly<{
    */
   addSourceAsset?: Readonly<{ kind: SourceAssetKind; label?: string; asset: StoredAsset }>;
   removeSourceAssetId?: string;
+  /**
+   * Sets/clears ONE variant's own GLB or photo by its stable `id` — never a wholesale replace of
+   * the variants array, and never able to create/remove a variant itself (that's a structural
+   * change made only by the canonical migration script, not the admin edit form). A variantId
+   * that matches nothing is a silent no-op, same reference-safety spirit as removeSourceAssetId.
+   */
+  setVariantModelAsset?: Readonly<{ variantId: string; asset: StoredAsset | null }>;
+  setVariantPhotoAsset?: Readonly<{ variantId: string; asset: StoredAsset | null }>;
+  /** Same list-semantics as addSourceAsset/removeSourceAssetId (append one / remove one by id), scoped to ONE variant's own sourceAssets by variantId. A variantId/sourceAssetId matching nothing is a silent no-op. */
+  addVariantSourceAsset?: Readonly<{ variantId: string; kind: SourceAssetKind; label?: string; asset: StoredAsset }>;
+  removeVariantSourceAssetId?: Readonly<{ variantId: string; sourceAssetId: string }>;
   /** Section 9: the ONLY way reviewedAt is ever set — never as a side effect of an asset upload. The server stamps the actual timestamp (see saveCatalogItemAdmin); a client-supplied date is never trusted. */
   markReviewed?: true;
   /**
@@ -385,6 +489,35 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
     }
   }
   if (typeof raw.removeSourceAssetId === "string" && raw.removeSourceAssetId) edit.removeSourceAssetId = raw.removeSourceAssetId;
+  for (const key of ["setVariantModelAsset", "setVariantPhotoAsset"] as const) {
+    const value = raw[key];
+    if (!value || typeof value !== "object") continue;
+    const candidate = value as Record<string, unknown>;
+    if (typeof candidate.variantId !== "string" || !candidate.variantId) continue;
+    if (candidate.asset === null) edit[key] = { variantId: candidate.variantId, asset: null };
+    else if (isStoredAssetShape(candidate.asset)) edit[key] = { variantId: candidate.variantId, asset: candidate.asset };
+  }
+  if (raw.addVariantSourceAsset && typeof raw.addVariantSourceAsset === "object") {
+    const candidate = raw.addVariantSourceAsset as Record<string, unknown>;
+    if (
+      typeof candidate.variantId === "string" && candidate.variantId &&
+      (SOURCE_ASSET_KINDS as readonly string[]).includes(candidate.kind as string) &&
+      isStoredAssetShape(candidate.asset)
+    ) {
+      edit.addVariantSourceAsset = {
+        variantId: candidate.variantId,
+        kind: candidate.kind as SourceAssetKind,
+        asset: candidate.asset,
+        label: typeof candidate.label === "string" ? candidate.label : undefined,
+      };
+    }
+  }
+  if (raw.removeVariantSourceAssetId && typeof raw.removeVariantSourceAssetId === "object") {
+    const candidate = raw.removeVariantSourceAssetId as Record<string, unknown>;
+    if (typeof candidate.variantId === "string" && candidate.variantId && typeof candidate.sourceAssetId === "string" && candidate.sourceAssetId) {
+      edit.removeVariantSourceAssetId = { variantId: candidate.variantId, sourceAssetId: candidate.sourceAssetId };
+    }
+  }
   return edit;
 }
 
@@ -429,6 +562,37 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
       updated = [...updated, { id: crypto.randomUUID(), kind: edit.addSourceAsset.kind, label: edit.addSourceAsset.label, asset: edit.addSourceAsset.asset }];
     }
     next.sourceAssets = updated;
+  }
+  if (edit.setVariantModelAsset || edit.setVariantPhotoAsset || edit.addVariantSourceAsset || edit.removeVariantSourceAssetId) {
+    const existingVariants = documentVariants(document);
+    next.variants = existingVariants.map((variant) => {
+      let nextVariant = variant;
+      if (edit.setVariantModelAsset && variant.id === edit.setVariantModelAsset.variantId) {
+        const { modelAsset: _unused, ...withoutModel } = nextVariant;
+        nextVariant = edit.setVariantModelAsset.asset === null ? withoutModel : { ...withoutModel, modelAsset: edit.setVariantModelAsset.asset };
+      }
+      if (edit.setVariantPhotoAsset && variant.id === edit.setVariantPhotoAsset.variantId) {
+        const { photoAsset: _unused, ...withoutPhoto } = nextVariant;
+        nextVariant = edit.setVariantPhotoAsset.asset === null ? withoutPhoto : { ...withoutPhoto, photoAsset: edit.setVariantPhotoAsset.asset };
+      }
+      const touchesSourceAssets =
+        (edit.addVariantSourceAsset && variant.id === edit.addVariantSourceAsset.variantId) ||
+        (edit.removeVariantSourceAssetId && variant.id === edit.removeVariantSourceAssetId.variantId);
+      if (touchesSourceAssets) {
+        let updatedSourceAssets: readonly SourceAssetEntry[] = nextVariant.sourceAssets ?? [];
+        if (edit.removeVariantSourceAssetId && variant.id === edit.removeVariantSourceAssetId.variantId) {
+          updatedSourceAssets = updatedSourceAssets.filter((entry) => entry.id !== edit.removeVariantSourceAssetId!.sourceAssetId);
+        }
+        if (edit.addVariantSourceAsset && variant.id === edit.addVariantSourceAsset.variantId) {
+          updatedSourceAssets = [
+            ...updatedSourceAssets,
+            { id: crypto.randomUUID(), kind: edit.addVariantSourceAsset.kind, label: edit.addVariantSourceAsset.label, asset: edit.addVariantSourceAsset.asset },
+          ];
+        }
+        nextVariant = { ...nextVariant, sourceAssets: updatedSourceAssets };
+      }
+      return nextVariant;
+    });
   }
   return next;
 }

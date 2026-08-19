@@ -17,7 +17,11 @@ import {
   documentReviewedAt,
   documentSourceAssets,
   documentSourceTraceability,
+  documentVariants,
+  variantHas3DAsset,
+  variantHasSketchupSource,
   filterCatalogItemsAdmin,
+  sortCatalogItemsAdminByName,
   CATALOG_ITEM_CATEGORY_OPTIONS,
   CATALOG_ITEM_KIND_LABELS_CS,
   type CatalogItemAdmin,
@@ -26,8 +30,8 @@ import {
   type CatalogItemAdminListEntry,
 } from "../../domain/catalogItemsAdmin";
 import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../domain/catalogReadiness";
-import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type CatalogItemKind, type CatalogItemStatus } from "../../domain/models";
-import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind } from "../../domain/assets";
+import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus } from "../../domain/models";
+import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "../../domain/assets";
 import { ConcurrencyConflictError } from "../../lib/db/concurrency";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
 import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
@@ -102,9 +106,21 @@ export function ComponentAdminPage({
     };
   }, [repository]);
 
-  const listEntries = useMemo(() => (items ?? []).map(buildCatalogItemListEntry), [items]);
-  const filteredEntries = useMemo(() => filterCatalogItemsAdmin(listEntries, filters), [listEntries, filters]);
-  const selected = items?.find((item) => item.id === selectedId);
+  // Complete type-booths (kind="booth" — P86, P87, T04..T25) live exclusively under "Knihovna
+  // stánků → Typové stánky" (BoothAdminPage.tsx) now — this generic admin view never lists them,
+  // so an operator can't accidentally edit a type-booth from the wrong screen. booth_component
+  // stays visible here too (it's still a legitimate global-catalog kind), and also has its own
+  // "Komponenty stánku" tab in BoothAdminPage.tsx — that intentional dual-visibility is unchanged.
+  const nonBoothItems = useMemo(() => (items ?? []).filter((item) => item.kind !== "booth"), [items]);
+  const listEntries = useMemo(() => nonBoothItems.map(buildCatalogItemListEntry), [nonBoothItems]);
+  // Filter first, then sort the (smaller) result — never the DB/API return order. See
+  // domain/catalogItemsAdmin.ts's sortCatalogItemsAdminByName: active items first, then A-Z
+  // (cs locale) within each lifecycle group.
+  const filteredEntries = useMemo(
+    () => sortCatalogItemsAdminByName(filterCatalogItemsAdmin(listEntries, filters)),
+    [listEntries, filters],
+  );
+  const selected = nonBoothItems.find((item) => item.id === selectedId);
 
   async function handleSave(edit: CatalogItemAdminEdit): Promise<void> {
     if (!selected) return;
@@ -119,7 +135,7 @@ export function ComponentAdminPage({
           <span className="eyebrow">ADMINISTRACE</span>
           <h1>Komponenty</h1>
         </div>
-        {items && <span className="catalogAdminCount">{filteredEntries.length} / {items.length} položek</span>}
+        {items && <span className="catalogAdminCount">{filteredEntries.length} / {nonBoothItems.length} položek</span>}
       </div>
 
       {loadError && <p className="uploadError persistenceBanner">Katalog se nepodařilo načíst z databáze: {loadError}</p>}
@@ -149,14 +165,14 @@ export function ComponentAdminPage({
   );
 }
 
-/** Exported so BoothAdminPage.tsx (kind-scoped "Stánky" admin) can reuse the exact same filter UI rather than a parallel one. */
+/** Renders the shared filter bar for ComponentAdminPage's list (kind=booth is never an option here — type-booths live exclusively in BoothAdminPage.tsx's "Typové stánky" tab). */
 export function ComponentAdminFilters({ filters, onChange }: { filters: CatalogItemAdminFilters; onChange: (filters: CatalogItemAdminFilters) => void }) {
   return (
     <div className="adminFilters">
       <input value={filters.query ?? ""} onChange={(event) => onChange({ ...filters, query: event.target.value })} placeholder="Hledat interní kód nebo název…" />
       <select value={filters.kind ?? ""} onChange={(event) => onChange({ ...filters, kind: event.target.value as CatalogItemKind | "" })}>
         <option value="">Kategorie: vše</option>
-        {CATALOG_ITEM_KINDS.map((kind) => (
+        {CATALOG_ITEM_KINDS.filter((kind) => kind !== "booth").map((kind) => (
           <option key={kind} value={kind}>{CATALOG_ITEM_KIND_LABELS_CS[kind]}</option>
         ))}
       </select>
@@ -193,6 +209,7 @@ export function ComponentAdminList({
   return (
     <div className="adminList catalogAdminTable">
       <div className="catalogAdminRow catalogAdminHeaderRow">
+        <span>Náhled</span>
         <span>Interní kód</span>
         <span>Název</span>
         <span>Kategorie / Kind</span>
@@ -205,6 +222,7 @@ export function ComponentAdminList({
       {entries.length === 0 && <p className="workspaceEmpty">Filtrům neodpovídá žádná položka.</p>}
       {entries.map((entry) => (
         <button key={entry.id} type="button" className={`catalogAdminRow ${entry.id === selectedId ? "active" : ""}`} onClick={() => onSelect(entry.id)}>
+          <ThumbnailCell photoAsset={entry.photoAsset} photoUrl={entry.photoUrl} label={entry.displayName} />
           <span>{entry.internalCode ?? "—"}</span>
           <span>{entry.displayName}</span>
           <span>{CATALOG_ITEM_KIND_LABELS_CS[entry.kind]}{entry.category ? ` · ${categoryLabelCs(entry.category)}` : ""}</span>
@@ -216,6 +234,16 @@ export function ComponentAdminList({
         </button>
       ))}
     </div>
+  );
+}
+
+/** List-row thumbnail — photoAsset (R2, resolved to a signed URL) wins when present, legacy static photoUrl is the fallback, otherwise a plain empty placeholder cell (never a fabricated image). */
+function ThumbnailCell({ photoAsset, photoUrl, label }: { photoAsset: StoredAsset | undefined; photoUrl: string | undefined; label: string }) {
+  const resolved = useAssetUrl(photoAsset, photoUrl);
+  return (
+    <span className="catalogThumbnailCell">
+      {resolved.url ? <img className="catalogThumbnailImg" src={resolved.url} alt={`Náhled ${label}`} /> : <span className="catalogThumbnailPlaceholder" aria-hidden="true" />}
+    </span>
   );
 }
 
@@ -249,6 +277,15 @@ export function ComponentAdminDetail({
   const footprint2D = documentFootprint2D(itemDocument);
   const sourceAssets = documentSourceAssets(itemDocument);
   const hasSketchupSource = sourceAssets.some((entry) => entry.kind === "sketchup");
+  /**
+   * A multi-variant type-booth line (T04..T25) has NO parent-level runtime model or source file
+   * of its own — every variant owns its own modelAsset/sourceAssets independently (see the
+   * "Varianty" section below). Both the parent "3D model" AND "Zdrojové a výrobní soubory"
+   * sections are gated by this SAME flag so they can never drift out of sync with each other.
+   * Parent displayName/description/photoAsset/lifecycle are completely unaffected — this only
+   * hides the two asset sections that would otherwise upload/show data nothing ever reads.
+   */
+  const isVariantBooth = item.kind === "booth" && documentVariants(itemDocument).length > 0;
 
   const [photoProgress, setPhotoProgress] = useState<UploadProgress | undefined>(undefined);
   const [photoActionError, setPhotoActionError] = useState("");
@@ -607,6 +644,10 @@ export function ComponentAdminDetail({
           {photoActionError && <small className="uploadError">{photoActionError}</small>}
         </section>
 
+        {/* See isVariantBooth above — a multi-variant type-booth line has no parent-level
+            runtime model at all; showing "Nahrát GLB" here would upload an asset nothing ever
+            reads. A booth WITHOUT variants (P86, P87, ...) keeps this section as before. */}
+        {!isVariantBooth && (
         <section className="catalogDetailSection">
           <h3>3D model</h3>
           <dl>
@@ -640,8 +681,26 @@ export function ComponentAdminDetail({
           )}
           {modelActionError && <small className="uploadError">{modelActionError}</small>}
         </section>
+        )}
 
-        {SOURCE_ASSET_APPLICABLE_KINDS.includes(item.kind) && (
+        {isVariantBooth && (
+          <section className="catalogDetailSection">
+            <h3>Varianty</h3>
+            <p className="fieldHint">
+              Tato typová řada má {documentVariants(itemDocument).length} varianty — každá má vlastní GLB a fotografii, nezávislé na ostatních variantách i na fotografii typové řady výše.
+            </p>
+            <div className="variantList">
+              {documentVariants(itemDocument).map((variant) => (
+                <VariantRow key={variant.id} variant={variant} ownerId={`${ownerId}-${variant.id}`} onSave={onSave} />
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* See isVariantBooth above — a multi-variant type-booth line's SKP/DWG/DXF/PDF/Other
+            files belong to each variant individually (see the "Varianty" section below), never
+            to the parent; showing this section here would be confusing/orphaned data. */}
+        {SOURCE_ASSET_APPLICABLE_KINDS.includes(item.kind) && !isVariantBooth && (
         <section className="catalogDetailSection">
           <h3>Zdrojové a výrobní soubory</h3>
           <dl>
@@ -702,6 +761,189 @@ export function ComponentAdminDetail({
           </dl>
           <button type="button" className="secondaryButton" onClick={onOpenPricing}>Upravit ceny</button>
         </section>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * One row of the "Varianty" section — uploads/removes GLB and photo for exactly ONE variant of a
+ * multi-variant type-booth line (T04..T25), by its stable id. Reuses the same uploadAsset/
+ * useAssetUrl infrastructure as the parent photo/GLB sections above — never a second/parallel
+ * upload system. Never creates/removes a variant itself (that's the canonical migration script's
+ * job, not the admin edit form).
+ */
+function VariantRow({
+  variant,
+  ownerId,
+  onSave,
+}: {
+  variant: BoothVariant;
+  ownerId: string;
+  onSave: (edit: CatalogItemAdminEdit) => Promise<void>;
+}) {
+  const hasModel = variantHas3DAsset(variant);
+  const hasSketchupSource = variantHasSketchupSource(variant);
+  const photoResolved = useAssetUrl(variant.photoAsset, undefined);
+  const [modelProgress, setModelProgress] = useState<UploadProgress | undefined>(undefined);
+  const [modelError, setModelError] = useState("");
+  const [photoProgress, setPhotoProgress] = useState<UploadProgress | undefined>(undefined);
+  const [photoError, setPhotoError] = useState("");
+  const [sourceAssetKind, setSourceAssetKind] = useState<SourceAssetKind>("sketchup");
+  const [sourceAssetProgress, setSourceAssetProgress] = useState<UploadProgress | undefined>(undefined);
+  const [sourceAssetError, setSourceAssetError] = useState("");
+  const [sourceAssetRemovingId, setSourceAssetRemovingId] = useState<string | undefined>(undefined);
+  const sourceAssets = variant.sourceAssets ?? [];
+
+  async function handleModelUpload(file: File) {
+    setModelError("");
+    if (file.size === 0) { setModelError("Soubor je prázdný."); return; }
+    if (!hasAllowedExtension(file.name, MODEL_EXTENSIONS)) { setModelError("Podporovaný formát: pouze .glb."); return; }
+    try {
+      const asset = await uploadAsset(file, { category: "catalog-model", ownerId }, setModelProgress);
+      await onSave({ setVariantModelAsset: { variantId: variant.id, asset } });
+    } catch (uploadError) {
+      setModelError(uploadError instanceof Error ? uploadError.message : "Nahrání 3D modelu selhalo.");
+    }
+  }
+
+  async function handleModelRemove() {
+    setModelError("");
+    try {
+      await onSave({ setVariantModelAsset: { variantId: variant.id, asset: null } });
+    } catch (removeError) {
+      setModelError(removeError instanceof Error ? removeError.message : "Odebrání 3D modelu selhalo.");
+    }
+  }
+
+  async function handlePhotoUpload(file: File) {
+    setPhotoError("");
+    if (file.size === 0) { setPhotoError("Soubor je prázdný."); return; }
+    if (!hasAllowedExtension(file.name, PHOTO_EXTENSIONS)) { setPhotoError("Podporované formáty: jpg, jpeg, png, webp."); return; }
+    try {
+      const asset = await uploadAsset(file, { category: "catalog-photo", ownerId }, setPhotoProgress);
+      await onSave({ setVariantPhotoAsset: { variantId: variant.id, asset } });
+    } catch (uploadError) {
+      setPhotoError(uploadError instanceof Error ? uploadError.message : "Nahrání fotografie selhalo.");
+    }
+  }
+
+  async function handlePhotoRemove() {
+    setPhotoError("");
+    try {
+      await onSave({ setVariantPhotoAsset: { variantId: variant.id, asset: null } });
+    } catch (removeError) {
+      setPhotoError(removeError instanceof Error ? removeError.message : "Odebrání fotografie selhalo.");
+    }
+  }
+
+  async function handleSourceAssetUpload(file: File) {
+    setSourceAssetError("");
+    if (file.size === 0) { setSourceAssetError("Soubor je prázdný."); return; }
+    const allowed = SOURCE_ASSET_KIND_EXTENSIONS[sourceAssetKind];
+    if (allowed.length > 0 && !hasAllowedExtension(file.name, allowed)) {
+      setSourceAssetError(`Zvolený typ (${SOURCE_ASSET_KIND_LABELS_CS[sourceAssetKind]}) očekává příponu: ${allowed.join(", ")}.`);
+      return;
+    }
+    try {
+      const asset = await uploadAsset(file, { category: "catalog-source", ownerId }, setSourceAssetProgress);
+      await onSave({ addVariantSourceAsset: { variantId: variant.id, kind: sourceAssetKind, asset } });
+    } catch (uploadError) {
+      setSourceAssetError(uploadError instanceof Error ? uploadError.message : "Nahrání souboru selhalo.");
+    }
+  }
+
+  async function handleSourceAssetRemove(entry: SourceAssetEntry) {
+    setSourceAssetError("");
+    setSourceAssetRemovingId(entry.id);
+    try {
+      await onSave({ removeVariantSourceAssetId: { variantId: variant.id, sourceAssetId: entry.id } });
+    } catch (removeError) {
+      setSourceAssetError(removeError instanceof Error ? removeError.message : "Odebrání souboru selhalo.");
+    } finally {
+      setSourceAssetRemovingId(undefined);
+    }
+  }
+
+  return (
+    <div className="variantRow">
+      <div className="variantRowHeader">
+        <strong>{variant.name}</strong>
+        <span className={`readinessBadge ${hasModel ? "ready" : "blocked"}`}>{hasModel ? "GLB nahráno" : "GLB chybí"}</span>
+        <span className={`readinessBadge ${hasSketchupSource ? "ready" : "blocked"}`}>{hasSketchupSource ? "SKP nahrán" : "SKP chybí"}</span>
+      </div>
+      {photoResolved.url && <img className="catalogPhotoPreview" src={photoResolved.url} alt={`Fotografie ${variant.name}`} />}
+      <div className="assetActions">
+        <label className="smallUploadButton">
+          {hasModel ? "Nahradit GLB" : "Nahrát GLB"}
+          <input type="file" accept=".glb" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void handleModelUpload(file); }} />
+        </label>
+        {variant.modelAsset && (
+          <button type="button" className="dangerText" onClick={handleModelRemove} disabled={modelProgress?.state === "uploading"}>Odebrat GLB</button>
+        )}
+        <label className="smallUploadButton">
+          {variant.photoAsset ? "Nahradit foto" : "Nahrát foto"}
+          <input type="file" accept={PHOTO_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void handlePhotoUpload(file); }} />
+        </label>
+        {variant.photoAsset && (
+          <button type="button" className="dangerText" onClick={handlePhotoRemove} disabled={photoProgress?.state === "uploading"}>Odebrat foto</button>
+        )}
+      </div>
+      {modelProgress && (
+        <div className={`assetUploadState ${modelProgress.state}`}>
+          <progress max="100" value={modelProgress.percent} />
+          <span>{modelProgress.state === "uploading" ? `Nahrávám ${modelProgress.percent} %` : modelProgress.state === "success" ? "Nahráno do R2" : modelProgress.message}</span>
+        </div>
+      )}
+      {modelError && <small className="uploadError">{modelError}</small>}
+      {photoProgress && (
+        <div className={`assetUploadState ${photoProgress.state}`}>
+          <progress max="100" value={photoProgress.percent} />
+          <span>{photoProgress.state === "uploading" ? `Nahrávám ${photoProgress.percent} %` : photoProgress.state === "success" ? "Nahráno do R2" : photoProgress.message}</span>
+        </div>
+      )}
+      {photoError && <small className="uploadError">{photoError}</small>}
+
+      <div className="variantSourceAssets">
+        {sourceAssets.length > 0 && (
+          <ul className="sourceAssetList">
+            {sourceAssets.map((entry) => (
+              <li key={entry.id} className="sourceAssetListItem">
+                <span className="sourceAssetKindBadge">{SOURCE_ASSET_KIND_LABELS_CS[entry.kind]}</span>
+                <span>{entry.label || entry.asset.originalFileName}</span>
+                <button type="button" className="dangerText" onClick={() => handleSourceAssetRemove(entry)} disabled={sourceAssetRemovingId === entry.id}>
+                  {sourceAssetRemovingId === entry.id ? "Odebírám…" : "Odebrat referenci"}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="assetActions">
+          <select value={sourceAssetKind} onChange={(event) => setSourceAssetKind(event.target.value as SourceAssetKind)}>
+            {SOURCE_ASSET_KINDS.map((kind) => (
+              <option key={kind} value={kind}>{SOURCE_ASSET_KIND_LABELS_CS[kind]}</option>
+            ))}
+          </select>
+          <label className="smallUploadButton">
+            {sourceAssetKind === "sketchup" ? "Nahrát SKP" : "Nahrát soubor"}
+            <input
+              type="file"
+              onChange={(event) => {
+                const file = event.target.files?.[0];
+                event.target.value = "";
+                if (file) void handleSourceAssetUpload(file);
+              }}
+            />
+          </label>
+        </div>
+        {sourceAssetProgress && (
+          <div className={`assetUploadState ${sourceAssetProgress.state}`}>
+            <progress max="100" value={sourceAssetProgress.percent} />
+            <span>{sourceAssetProgress.state === "uploading" ? `Nahrávám ${sourceAssetProgress.percent} %` : sourceAssetProgress.state === "success" ? "Nahráno do R2" : sourceAssetProgress.message}</span>
+          </div>
+        )}
+        {sourceAssetError && <small className="uploadError">{sourceAssetError}</small>}
+        <p className="fieldHint">SKP je u variant typové řady povinný pro aktivaci (spolu s GLB). DWG, DXF, PDF a Ostatní nejsou nikdy vyžadované.</p>
       </div>
     </div>
   );

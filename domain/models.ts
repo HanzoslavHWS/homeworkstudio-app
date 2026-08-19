@@ -201,6 +201,19 @@ export type BoothVariant = Readonly<{
   name: string;
   configurationBoothId?: string;
   assetSourceBoothId?: string;
+  widthMm?: number;
+  depthMm?: number;
+  heightMm?: number;
+  /** Own runtime GLB for this variant — independent of any other variant's/parent's modelAsset. */
+  modelAsset?: StoredAsset;
+  photoAsset?: StoredAsset;
+  /**
+   * Generic source/manufacturing files (SKP authoring source, DWG/DXF/PDF, other) — the SAME
+   * model as ComponentDefinition.sourceAssets (see domain/assets.ts's SourceAssetEntry), never a
+   * hardcoded skpAsset/dwgAsset/dxfAsset per-kind field. domain/catalogReadiness.ts's booth rule
+   * requires a "sketchup"-kind entry here per variant; dwg/dxf/pdf/other are always optional.
+   */
+  sourceAssets?: readonly SourceAssetEntry[];
 }>;
 
 export type CadAxisSystem = "x-right-y-depth-z-up";
@@ -392,6 +405,13 @@ export type ComponentDefinition = Readonly<{
   catalogItemKind?: CatalogItemKind;
   /** Set once a human has reviewed/approved this item for activation. */
   reviewedAt?: string;
+  /**
+   * A type-booth line with several distinct variants (e.g. T04..T25 — one catalog_item per
+   * line, four variants inside it) — see domain/catalogReadiness.ts for how this changes the
+   * booth 3D-asset rule. Reuses BoothType's own BoothVariant shape rather than a second variant
+   * type; absent/empty means "not a multi-variant line" (e.g. P86), never "4 unknown variants".
+   */
+  variants?: readonly BoothVariant[];
 }>;
 
 export type PlacedComponent = Notes & {

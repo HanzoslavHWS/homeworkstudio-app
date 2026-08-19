@@ -161,7 +161,24 @@ export async function saveCatalogItemAdmin(
   // active booth/booth_component would otherwise leave it active with missing_sketchup_source
   // — same reasoning as photoAsset/modelAsset removal, checked unconditionally (cheap, and
   // correctness must not depend on guessing which removed entry was the sketchup one).
-  const mightAffectReadiness = edit.photoAsset === null || edit.modelAsset === null || edit.showIn2D !== undefined || edit.showIn3D !== undefined || edit.removeSourceAssetId !== undefined;
+  //
+  // setVariantModelAsset/setVariantPhotoAsset (any variantId, set OR clear) are included
+  // unconditionally too: for a multi-variant booth line (T04..T25), evaluateCatalogReadiness's
+  // booth rule requires EVERY declared variant to have its own GLB AND SketchUp source —
+  // clearing one variant's model/source on an already-active line must downgrade it the same way
+  // removing the parent's sole modelAsset does; recomputing on a SET is harmless (it can only
+  // confirm readiness, never falsely break it). addVariantSourceAsset/removeVariantSourceAssetId
+  // follow the exact same reasoning, scoped per variant instead of per item.
+  const mightAffectReadiness =
+    edit.photoAsset === null ||
+    edit.modelAsset === null ||
+    edit.showIn2D !== undefined ||
+    edit.showIn3D !== undefined ||
+    edit.removeSourceAssetId !== undefined ||
+    edit.setVariantModelAsset !== undefined ||
+    edit.setVariantPhotoAsset !== undefined ||
+    edit.addVariantSourceAsset !== undefined ||
+    edit.removeVariantSourceAssetId !== undefined;
   const resultingStatus = (nextDocument.lifecycleStatus as CatalogItemStatus | undefined) ?? current.lifecycleStatus;
   if (mightAffectReadiness && resultingStatus === "active") {
     const readiness = evaluateCatalogReadiness({ ...nextDocument, lifecycleStatus: "active" } as ComponentDefinition, current.kind);

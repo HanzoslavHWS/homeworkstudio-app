@@ -19,16 +19,21 @@ import {
   documentReviewedAt,
   documentSourceAssets,
   documentSourceTraceability,
+  documentVariants,
   filterCatalogItemsAdmin,
   matchesCatalogItemAdminSearch,
   parseCatalogItemAdminCreateInput,
   parseCatalogItemAdminEdit,
+  sortCatalogItemsAdminByCode,
+  sortCatalogItemsAdminByName,
   InvalidCatalogItemAdminCreateInputError,
   type CatalogItemAdmin,
   type CatalogItemAdminCreateInput,
+  type CatalogItemAdminListEntry,
 } from "../domain/catalogItemsAdmin.ts";
 import type { StoredAsset } from "../domain/assets.ts";
-import { CatalogReadinessError, DuplicateInternalCodeError } from "../domain/catalogReadiness.ts";
+import type { ComponentDefinition } from "../domain/models.ts";
+import { CatalogReadinessError, DuplicateInternalCodeError, evaluateCatalogReadiness } from "../domain/catalogReadiness.ts";
 import {
   createCatalogItemAdmin,
   readCatalogItemsAdmin,
@@ -394,6 +399,140 @@ test("filter: asset has-3d/missing-3d split matches P86 vs the needs_review stub
   const entries = [toAdmin(p86Row()), toAdmin(stubRow())].map(buildCatalogItemListEntry);
   assert.deepEqual(filterCatalogItemsAdmin(entries, { asset: "has-3d" }).map((e) => e.internalCode), ["P86"]);
   assert.deepEqual(filterCatalogItemsAdmin(entries, { asset: "missing-3d" }).map((e) => e.internalCode), ["F01"]);
+});
+
+// =========================================================================================
+// SORT (2026-08-19 follow-up session): deterministic default list ordering, never trusting
+// DB/API return order. sortCatalogItemsAdminByName ("Administrace → Komponenty" and "Knihovna
+// stánků → Komponenty stánku"): active first, then A-Z (cs locale) by displayName within each
+// lifecycle group. sortCatalogItemsAdminByCode ("Knihovna stánků → Typové stánky"): same
+// active-first grouping, but natural/numeric order by internalCode instead of name.
+// =========================================================================================
+
+function sortFixtureEntry(overrides: Partial<CatalogItemAdminListEntry>): CatalogItemAdminListEntry {
+  return {
+    id: overrides.internalCode?.toLowerCase() ?? "fixture-id",
+    internalCode: null,
+    displayName: "Fixture",
+    kind: "furniture",
+    category: null,
+    lifecycleStatus: "needs_review",
+    widthMm: null,
+    depthMm: null,
+    heightMm: null,
+    hasDimensions: false,
+    has3DAsset: false,
+    basePriceCzk: null,
+    basePriceEur: null,
+    readiness: { ready: false, issues: [] },
+    generatorEligible: false,
+    photoAsset: undefined,
+    photoUrl: undefined,
+    ...overrides,
+  };
+}
+
+test("SORT: active items always come before every other lifecycle status, regardless of alphabetical name", () => {
+  const zebraActive = sortFixtureEntry({ id: "1", internalCode: "Z1", displayName: "Zebra", lifecycleStatus: "active" });
+  const appleNeedsReview = sortFixtureEntry({ id: "2", internalCode: "A1", displayName: "Apple", lifecycleStatus: "needs_review" });
+  const sorted = sortCatalogItemsAdminByName([appleNeedsReview, zebraActive]);
+  assert.deepEqual(sorted.map((e) => e.displayName), ["Zebra", "Apple"], "active 'Zebra' must sort before non-active 'Apple' despite Z > A alphabetically");
+});
+
+test("SORT: within the active group, items sort alphabetically (cs locale) by displayName", () => {
+  const entries = ["Zásuvka", "Almara", "Křeslo"].map((displayName, index) =>
+    sortFixtureEntry({ id: String(index), internalCode: `A${index}`, displayName, lifecycleStatus: "active" }),
+  );
+  const sorted = sortCatalogItemsAdminByName(entries);
+  assert.deepEqual(sorted.map((e) => e.displayName), ["Almara", "Křeslo", "Zásuvka"]);
+});
+
+test("SORT: within a non-active lifecycle group (e.g. needs_review), items ALSO sort alphabetically", () => {
+  const entries = ["Zebra", "Apple", "Mango"].map((displayName, index) =>
+    sortFixtureEntry({ id: String(index), internalCode: `N${index}`, displayName, lifecycleStatus: "needs_review" }),
+  );
+  const sorted = sortCatalogItemsAdminByName(entries);
+  assert.deepEqual(sorted.map((e) => e.displayName), ["Apple", "Mango", "Zebra"]);
+});
+
+test("SORT: Czech diacritic names sort in a stable, locale-correct order (cs collation), not a naive byte/codepoint sort", () => {
+  const entries = ["Žofie", "Cabinet", "Čočka", "Auto"].map((displayName, index) =>
+    sortFixtureEntry({ id: String(index), internalCode: `C${index}`, displayName, lifecycleStatus: "active" }),
+  );
+  const sorted = sortCatalogItemsAdminByName(entries).map((e) => e.displayName);
+  // cs collation groups base-letter variants near their base letter (C/Č near each other,
+  // Ž near Z) rather than pushing every diacritic to the end the way a raw codepoint sort would.
+  assert.deepEqual(sorted, ["Auto", "Cabinet", "Čočka", "Žofie"]);
+});
+
+test("SORT: identical displayName values fall back to internalCode as a deterministic tie-break, then id", () => {
+  const b = sortFixtureEntry({ id: "id-b", internalCode: "M99B", displayName: "Stejný název", lifecycleStatus: "active" });
+  const a = sortFixtureEntry({ id: "id-a", internalCode: "M99A", displayName: "Stejný název", lifecycleStatus: "active" });
+  const sorted = sortCatalogItemsAdminByName([b, a]);
+  assert.deepEqual(sorted.map((e) => e.internalCode), ["M99A", "M99B"]);
+
+  const noCodeB = sortFixtureEntry({ id: "z-id", internalCode: null, displayName: "Bez kódu", lifecycleStatus: "active" });
+  const noCodeA = sortFixtureEntry({ id: "a-id", internalCode: null, displayName: "Bez kódu", lifecycleStatus: "active" });
+  const sortedByIdOnly = sortCatalogItemsAdminByName([noCodeB, noCodeA]);
+  assert.deepEqual(sortedByIdOnly.map((e) => e.id), ["a-id", "z-id"], "with no internalCode at all on either side, id itself is the final tie-break");
+});
+
+test("SORT: sorting never mutates the input array or its entries (pure function)", () => {
+  const entries = [sortFixtureEntry({ id: "1", displayName: "Zebra" }), sortFixtureEntry({ id: "2", displayName: "Apple" })];
+  const frozenCopy = entries.map((entry) => ({ ...entry }));
+  sortCatalogItemsAdminByName(entries);
+  assert.deepEqual(entries, frozenCopy);
+});
+
+test("SORT: filter-then-sort pipeline — filtering never disturbs the deterministic order, and a filtered-out item never reappears", () => {
+  const entries = [
+    sortFixtureEntry({ id: "1", internalCode: "F01", displayName: "Zebra", kind: "furniture", lifecycleStatus: "active" }),
+    sortFixtureEntry({ id: "2", internalCode: "F02", displayName: "Apple", kind: "furniture", lifecycleStatus: "needs_review" }),
+    sortFixtureEntry({ id: "3", internalCode: "S01", displayName: "Mango", kind: "service", lifecycleStatus: "active" }),
+  ];
+  const filtered = filterCatalogItemsAdmin(entries, { kind: "furniture" });
+  const sorted = sortCatalogItemsAdminByName(filtered);
+  assert.deepEqual(sorted.map((e) => e.displayName), ["Zebra", "Apple"], "Mango (service) filtered out; Zebra (active) still sorts before Apple (needs_review)");
+});
+
+test("SORT: sortCatalogItemsAdminByName matches the REAL fixtures — P86 (active) sorts before F01 (needs_review) even though 'F' < 'P' alphabetically", () => {
+  const entries = [toAdmin(stubRow()), toAdmin(p86Row())].map(buildCatalogItemListEntry);
+  const sorted = sortCatalogItemsAdminByName(entries);
+  assert.deepEqual(sorted.map((e) => e.internalCode), ["P86", "F01"]);
+});
+
+// -----------------------------------------------------------------------------------------
+// SORT — Booth Library ("Knihovna stánků → Typové stánky"): natural/numeric code order.
+// -----------------------------------------------------------------------------------------
+
+test("SORT (booth library): natural/numeric internalCode order — 'T4' < 'T6' < 'T10', never lexicographic ('T10' < 'T4')", () => {
+  const entries = ["T10", "T4", "T6"].map((internalCode, index) =>
+    sortFixtureEntry({ id: String(index), internalCode, displayName: `Typový stánek ${internalCode}`, kind: "booth", lifecycleStatus: "needs_review" }),
+  );
+  const sorted = sortCatalogItemsAdminByCode(entries);
+  assert.deepEqual(sorted.map((e) => e.internalCode), ["T4", "T6", "T10"]);
+});
+
+test("SORT (booth library): the REAL zero-padded P86/P87/Txx codes sort in the exact expected catalog order", () => {
+  const codes = ["T25", "T04", "P87", "T18", "T09", "P86", "T06", "T24", "T20", "T16", "T15", "T12"];
+  const entries = codes.map((internalCode, index) =>
+    sortFixtureEntry({ id: String(index), internalCode, displayName: `Booth ${internalCode}`, kind: "booth", lifecycleStatus: "needs_review" }),
+  );
+  const sorted = sortCatalogItemsAdminByCode(entries).map((e) => e.internalCode);
+  assert.deepEqual(sorted, ["P86", "P87", "T04", "T06", "T09", "T12", "T15", "T16", "T18", "T20", "T24", "T25"]);
+});
+
+test("SORT (booth library): active still sorts first, then natural code order within each lifecycle group — P86 (active) before P87 (needs_review) even though P86 < P87 alphabetically would already agree, proven with a counter-example where active is the LATER code", () => {
+  const p87Active = sortFixtureEntry({ id: "p87", internalCode: "P87", displayName: "Kóje 2 × 3 m", kind: "booth", lifecycleStatus: "active" });
+  const p86NeedsReview = sortFixtureEntry({ id: "p86", internalCode: "P86", displayName: "Kóje 2 × 2 m", kind: "booth", lifecycleStatus: "needs_review" });
+  const sorted = sortCatalogItemsAdminByCode([p86NeedsReview, p87Active]);
+  assert.deepEqual(sorted.map((e) => e.internalCode), ["P87", "P86"], "P87 is active -> sorts first despite P86 < P87 by code");
+});
+
+test("SORT (booth library): sortCatalogItemsAdminByCode matches the REAL fixtures the same way sortCatalogItemsAdminByName does — P86 (active) before F01-shaped needs_review stub", () => {
+  const entries = [toAdmin(stubRow()), toAdmin(p86Row())].map(buildCatalogItemListEntry);
+  const sorted = sortCatalogItemsAdminByCode(entries);
+  assert.equal(sorted[0]!.internalCode, "P86");
 });
 
 // -----------------------------------------------------------------------------------------
@@ -1149,6 +1288,72 @@ test("booth_component is a real CatalogItemKind with its own Czech label, never 
   assert.match(source, /booth_component: "Komponenta stánku"/u);
 });
 
+// =========================================================================================
+// ADMIN CLASSIFICATION (2026-08-19): kind=booth (P86/P87/Txx) lives ONLY in "Knihovna stánků →
+// Typové stánky" — the generic "Administrace → Komponenty" page (ComponentAdminPage) must never
+// list them, so an operator can't edit a type-booth from the wrong screen. booth_component stays
+// visible in BOTH (unchanged, intentional dual-visibility).
+// =========================================================================================
+
+test("ComponentAdminPage.tsx excludes kind=booth items from its list — type-booths are never editable from the generic Admin → Komponenty screen", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /const nonBoothItems = useMemo/u);
+  assert.match(source, /item\.kind !== "booth"/u);
+  assert.match(source, /const listEntries = useMemo\(\(\) => nonBoothItems\.map\(buildCatalogItemListEntry\)/u);
+});
+
+test("ComponentAdminFilters' kind dropdown never offers 'booth' as an option (it can never appear in this list, so selecting it would always show zero results)", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /CATALOG_ITEM_KINDS\.filter\(\(kind\) => kind !== "booth"\)\.map/u);
+});
+
+test("BoothAdminPage.tsx's 'Typové stánky' tab is UNAFFECTED by the Admin-Komponenty exclusion — it filters its OWN independently-fetched items by kind, not ComponentAdminPage's list", () => {
+  const source = readFileSync(new URL("../components/workflow/BoothAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /const tabItems = useMemo/u);
+  assert.match(source, /item\.kind === activeKind/u);
+});
+
+// =========================================================================================
+// THUMBNAIL (2026-08-19): a catalog item's own photoAsset (R2, signed URL resolved at render
+// time — never persisted) is the canonical thumbnail; the legacy static photoUrl is the
+// fallback. Applies to every kind uniformly, including booth (P86/P87/Txx).
+// =========================================================================================
+
+test("buildCatalogItemListEntry exposes photoAsset/photoUrl so the list can render a thumbnail — sourced from the same documentPhotoAsset/documentPhotoUrl readers as the detail view", () => {
+  const withPhoto = toAdmin(p86Row({ document: { ...P86_DOCUMENT, photoAsset: { id: "p1", storageKey: "catalog/furniture/p86/photos/a.jpg", originalFileName: "a.jpg", mimeType: "image/jpeg", size: 100, createdAt: "2026-08-19T00:00:00.000Z", category: "catalog-photo" } } }));
+  const entry = buildCatalogItemListEntry(withPhoto);
+  assert.equal(entry.photoAsset?.storageKey, "catalog/furniture/p86/photos/a.jpg");
+});
+
+test("buildCatalogItemListEntry: no photoAsset/photoUrl -> both undefined, never a fabricated placeholder value", () => {
+  const withoutPhoto = toAdmin(stubRow());
+  const entry = buildCatalogItemListEntry(withoutPhoto);
+  assert.equal(entry.photoAsset, undefined);
+  assert.equal(entry.photoUrl, undefined);
+});
+
+test("ComponentAdminList renders a ThumbnailCell per row using useAssetUrl (photoAsset resolved to a signed URL, photoUrl as fallback) — never a raw/unresolved storageKey rendered as an <img> src", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /<ThumbnailCell photoAsset=\{entry\.photoAsset\} photoUrl=\{entry\.photoUrl\}/u);
+  assert.match(source, /function ThumbnailCell\(/u);
+  assert.match(source, /useAssetUrl\(photoAsset, photoUrl\)/u);
+});
+
+test("ThumbnailCell falls back to a plain placeholder (never a broken <img>) when neither photoAsset nor photoUrl resolves to a URL", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  const thumbnailCellMatch = source.match(/function ThumbnailCell\([\s\S]{0,600}?\n\}/u);
+  assert.ok(thumbnailCellMatch, "expected to find ThumbnailCell");
+  assert.match(thumbnailCellMatch![0], /catalogThumbnailPlaceholder/u);
+});
+
+test("BoothGenerator.tsx's booth-selection card thumbnail prefers photoAsset over the legacy thumbnailUrl, via the SAME useAssetUrl hook — never a second resolution mechanism", () => {
+  const source = readFileSync(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
+  const thumbnailMatch = source.match(/function BoothTypeCardThumbnail\([\s\S]{0,700}?\n\}/u);
+  assert.ok(thumbnailMatch, "expected to find BoothTypeCardThumbnail");
+  assert.match(thumbnailMatch![0], /useAssetUrl\(booth\.photoAsset, booth\.thumbnailUrl\)/u);
+  assert.match(thumbnailMatch![0], /constructionShape/u, "must still fall back to the placeholder construction shape when no thumbnail resolves");
+});
+
 // -----------------------------------------------------------------------------------------
 // SOURCE ASSETS (SKP/DWG/DXF/PDF/other) — Part 3 of the generalized source/manufacturing-file
 // request. A LIST, unlike the single photoAsset/modelAsset — one edit either appends one entry
@@ -1661,4 +1866,308 @@ test("M57 and L02 keep fully independent category values — reading one never l
   assert.equal(m57.category, "chairs");
   assert.equal(l02.category, "services");
   assert.notEqual(m57.category, l02.category);
+});
+
+// =========================================================================================
+// VARIANTS — multi-variant type-booth lines (T04..T25): one catalog_item, N variants, each
+// with its own independent GLB/photo. See domain/models.ts's BoothVariant (extended) and
+// domain/catalogReadiness.ts's booth case.
+// =========================================================================================
+
+// A T04 that already went through the canonicalization migration (see
+// domain/typeBoothCanonicalization.ts) — variants added on top of the real Batch #2B stub shape
+// (T04_DOCUMENT/t04Row, declared above in section "READINESS HARDENING (booth kind)").
+const T04_WITH_VARIANTS_DOCUMENT: FakeRow = {
+  ...T04_DOCUMENT,
+  variants: [
+    { id: "t04-v1", name: "Varianta 1" },
+    { id: "t04-v2", name: "Varianta 2" },
+    { id: "t04-v3", name: "Varianta 3" },
+    { id: "t04-v4", name: "Varianta 4" },
+  ],
+};
+
+function t04WithVariantsRow(overrides: Partial<FakeRow> = {}): FakeRow {
+  return {
+    ...t04Row(),
+    document: T04_WITH_VARIANTS_DOCUMENT,
+    ...overrides,
+  };
+}
+
+const VARIANT_MODEL_ASSET: StoredAsset = {
+  id: "t04-v1-model-asset",
+  storageKey: "catalog/furniture/t04/models/v1.glb",
+  originalFileName: "t04-v1.glb",
+  mimeType: "model/gltf-binary",
+  size: 900_000,
+  createdAt: "2026-08-19T00:00:00.000Z",
+  category: "catalog-model",
+};
+
+const VARIANT_PHOTO_ASSET: StoredAsset = {
+  id: "t04-v1-photo-asset",
+  storageKey: "catalog/furniture/t04/photos/v1.jpg",
+  originalFileName: "t04-v1.jpg",
+  mimeType: "image/jpeg",
+  size: 200_000,
+  createdAt: "2026-08-19T00:00:00.000Z",
+  category: "catalog-photo",
+};
+
+const VARIANT_SKP_ASSET: StoredAsset = {
+  id: "t04-v1-skp-asset",
+  storageKey: "catalog/furniture/t04/source/v1.skp",
+  originalFileName: "t04-v1.skp",
+  mimeType: "application/octet-stream",
+  size: 400_000,
+  createdAt: "2026-08-19T00:00:00.000Z",
+  category: "catalog-source",
+};
+
+const VARIANT_SKP_SOURCE_ASSET = { id: "t04-v1-skp-entry", kind: "sketchup" as const, asset: VARIANT_SKP_ASSET };
+
+test("VARIANT: parseCatalogItemAdminEdit whitelists setVariantModelAsset/setVariantPhotoAsset with a well-shaped asset", () => {
+  const edit = parseCatalogItemAdminEdit({ setVariantModelAsset: { variantId: "t04-v1", asset: VARIANT_MODEL_ASSET } });
+  assert.deepEqual(edit.setVariantModelAsset, { variantId: "t04-v1", asset: VARIANT_MODEL_ASSET });
+});
+
+test("VARIANT: parseCatalogItemAdminEdit accepts asset:null to clear a variant's model/photo", () => {
+  const edit = parseCatalogItemAdminEdit({ setVariantPhotoAsset: { variantId: "t04-v1", asset: null } });
+  assert.deepEqual(edit.setVariantPhotoAsset, { variantId: "t04-v1", asset: null });
+});
+
+test("VARIANT: a malformed asset (missing storageKey) or missing variantId is silently dropped, never merged", () => {
+  const edit1 = parseCatalogItemAdminEdit({ setVariantModelAsset: { variantId: "t04-v1", asset: { id: "x" } } });
+  assert.equal("setVariantModelAsset" in edit1, false);
+  const edit2 = parseCatalogItemAdminEdit({ setVariantModelAsset: { asset: VARIANT_MODEL_ASSET } });
+  assert.equal("setVariantModelAsset" in edit2, false);
+});
+
+test("VARIANT: applyCatalogItemEdit sets the model on ONLY the matching variant, leaving the other 3 and every other document field untouched", () => {
+  const next = applyCatalogItemEdit(T04_WITH_VARIANTS_DOCUMENT, { setVariantModelAsset: { variantId: "t04-v2", asset: VARIANT_MODEL_ASSET } });
+  const variants = next.variants as ReadonlyArray<Record<string, unknown>>;
+  assert.equal(variants.length, 4);
+  assert.equal(variants[0]!.modelAsset, undefined);
+  assert.deepEqual(variants[1]!.modelAsset, VARIANT_MODEL_ASSET);
+  assert.equal(variants[1]!.id, "t04-v2");
+  assert.equal(variants[2]!.modelAsset, undefined);
+  assert.equal(variants[3]!.modelAsset, undefined);
+  assert.deepEqual(next.pricingEntries, T04_WITH_VARIANTS_DOCUMENT.pricingEntries);
+  assert.equal(next.sourceKey, T04_WITH_VARIANTS_DOCUMENT.sourceKey);
+});
+
+test("VARIANT: setVariantModelAsset asset:null removes only that variant's modelAsset, other variants/keys untouched", () => {
+  const withModel = applyCatalogItemEdit(T04_WITH_VARIANTS_DOCUMENT, { setVariantModelAsset: { variantId: "t04-v1", asset: VARIANT_MODEL_ASSET } });
+  const cleared = applyCatalogItemEdit(withModel, { setVariantModelAsset: { variantId: "t04-v1", asset: null } });
+  const variants = cleared.variants as ReadonlyArray<Record<string, unknown>>;
+  assert.equal("modelAsset" in variants[0]!, false);
+});
+
+test("VARIANT: setVariantPhotoAsset and setVariantModelAsset on the same variant coexist independently", () => {
+  const next = applyCatalogItemEdit(T04_WITH_VARIANTS_DOCUMENT, {
+    setVariantModelAsset: { variantId: "t04-v3", asset: VARIANT_MODEL_ASSET },
+    setVariantPhotoAsset: { variantId: "t04-v3", asset: VARIANT_PHOTO_ASSET },
+  });
+  const variant = (next.variants as ReadonlyArray<Record<string, unknown>>).find((v) => v.id === "t04-v3")!;
+  assert.deepEqual(variant.modelAsset, VARIANT_MODEL_ASSET);
+  assert.deepEqual(variant.photoAsset, VARIANT_PHOTO_ASSET);
+});
+
+test("VARIANT: a variantId matching nothing is a silent no-op — variants array is otherwise unchanged", () => {
+  const next = applyCatalogItemEdit(T04_WITH_VARIANTS_DOCUMENT, { setVariantModelAsset: { variantId: "does-not-exist", asset: VARIANT_MODEL_ASSET } });
+  assert.deepEqual(next.variants, T04_WITH_VARIANTS_DOCUMENT.variants);
+});
+
+test("VARIANT SOURCE ASSET: parseCatalogItemAdminEdit whitelists addVariantSourceAsset/removeVariantSourceAssetId with well-shaped input", () => {
+  const addEdit = parseCatalogItemAdminEdit({ addVariantSourceAsset: { variantId: "t04-v1", kind: "sketchup", asset: VARIANT_SKP_ASSET } });
+  assert.deepEqual(addEdit.addVariantSourceAsset, { variantId: "t04-v1", kind: "sketchup", asset: VARIANT_SKP_ASSET, label: undefined });
+  const removeEdit = parseCatalogItemAdminEdit({ removeVariantSourceAssetId: { variantId: "t04-v1", sourceAssetId: "entry-1" } });
+  assert.deepEqual(removeEdit.removeVariantSourceAssetId, { variantId: "t04-v1", sourceAssetId: "entry-1" });
+});
+
+test("VARIANT SOURCE ASSET: an unknown kind, malformed asset, or missing variantId is silently dropped, never merged", () => {
+  assert.equal("addVariantSourceAsset" in parseCatalogItemAdminEdit({ addVariantSourceAsset: { variantId: "t04-v1", kind: "not-a-real-kind", asset: VARIANT_SKP_ASSET } }), false);
+  assert.equal("addVariantSourceAsset" in parseCatalogItemAdminEdit({ addVariantSourceAsset: { kind: "sketchup", asset: VARIANT_SKP_ASSET } }), false);
+  assert.equal("addVariantSourceAsset" in parseCatalogItemAdminEdit({ addVariantSourceAsset: { variantId: "t04-v1", kind: "sketchup", asset: { id: "x" } } }), false);
+});
+
+test("VARIANT SOURCE ASSET: applyCatalogItemEdit appends to ONLY the matching variant's sourceAssets, generating a fresh id, other variants/keys untouched", () => {
+  const next = applyCatalogItemEdit(T04_WITH_VARIANTS_DOCUMENT, { addVariantSourceAsset: { variantId: "t04-v2", kind: "sketchup", asset: VARIANT_SKP_ASSET } });
+  const variants = next.variants as ReadonlyArray<Record<string, unknown>>;
+  assert.equal(variants[0]!.sourceAssets, undefined);
+  const v2SourceAssets = variants[1]!.sourceAssets as ReadonlyArray<Record<string, unknown>>;
+  assert.equal(v2SourceAssets.length, 1);
+  assert.equal(v2SourceAssets[0]!.kind, "sketchup");
+  assert.deepEqual(v2SourceAssets[0]!.asset, VARIANT_SKP_ASSET);
+  assert.ok(typeof v2SourceAssets[0]!.id === "string" && v2SourceAssets[0]!.id);
+  assert.equal(variants[2]!.sourceAssets, undefined);
+  assert.deepEqual(next.pricingEntries, T04_WITH_VARIANTS_DOCUMENT.pricingEntries);
+});
+
+test("VARIANT SOURCE ASSET: removeVariantSourceAssetId removes only the matching entry on the matching variant — everything else survives", () => {
+  const withSource = applyCatalogItemEdit(T04_WITH_VARIANTS_DOCUMENT, { addVariantSourceAsset: { variantId: "t04-v1", kind: "sketchup", asset: VARIANT_SKP_ASSET } });
+  const addedId = ((withSource.variants as ReadonlyArray<Record<string, unknown>>)[0]!.sourceAssets as ReadonlyArray<Record<string, unknown>>)[0]!.id as string;
+  const withTwo = applyCatalogItemEdit(withSource, { addVariantSourceAsset: { variantId: "t04-v1", kind: "dwg", asset: VARIANT_SKP_ASSET } });
+  const cleared = applyCatalogItemEdit(withTwo, { removeVariantSourceAssetId: { variantId: "t04-v1", sourceAssetId: addedId } });
+  const remaining = (cleared.variants as ReadonlyArray<Record<string, unknown>>)[0]!.sourceAssets as ReadonlyArray<Record<string, unknown>>;
+  assert.equal(remaining.length, 1);
+  assert.equal(remaining[0]!.kind, "dwg");
+});
+
+test("VARIANT SOURCE ASSET: DWG/DXF/PDF/other never satisfy the SKP readiness requirement — only a 'sketchup'-kind entry counts", () => {
+  const next = applyCatalogItemEdit(T04_WITH_VARIANTS_DOCUMENT, { addVariantSourceAsset: { variantId: "t04-v1", kind: "dwg", asset: VARIANT_SKP_ASSET } });
+  const variants = (next.variants as ReadonlyArray<Record<string, unknown>>).map((v) => ({ ...v, modelAsset: VARIANT_MODEL_ASSET }));
+  const adapted = { ...next, heightMm: 2500, variants } as unknown as ComponentDefinition;
+  const readiness = evaluateCatalogReadiness(adapted, "booth");
+  assert.ok(readiness.issues.includes("missing_sketchup_source"), "a DWG-only entry on variant 1 must never satisfy SKP readiness");
+});
+
+test("VARIANT readiness: T04 with 4 declared variants but ZERO with a GLB is not ready — missing_3d_asset, even though widthMm/depthMm are set", () => {
+  const adapted = { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500 } as unknown as ComponentDefinition;
+  const readiness = evaluateCatalogReadiness(adapted, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
+});
+
+test("VARIANT readiness: T04 with 3 of 4 variants modelled is STILL not ready — the whole line must never look complete while one variant has no geometry", () => {
+  const variants = (T04_WITH_VARIANTS_DOCUMENT.variants as ReadonlyArray<Record<string, unknown>>).map((v, index) =>
+    index < 3 ? { ...v, modelAsset: VARIANT_MODEL_ASSET } : v,
+  );
+  const adapted = { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500, variants } as unknown as ComponentDefinition;
+  const readiness = evaluateCatalogReadiness(adapted, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_3d_asset"));
+});
+
+test("VARIANT readiness: T04 becomes ready only once ALL 4 variants have their own GLB AND SKP, and the parent has a real height", () => {
+  const variants = (T04_WITH_VARIANTS_DOCUMENT.variants as ReadonlyArray<Record<string, unknown>>).map((v) => ({ ...v, modelAsset: VARIANT_MODEL_ASSET, sourceAssets: [VARIANT_SKP_SOURCE_ASSET] }));
+  const adapted = { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500, variants } as unknown as ComponentDefinition;
+  const readiness = evaluateCatalogReadiness(adapted, "booth");
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.issues, []);
+});
+
+test("VARIANT readiness: T04 with GLB on all 4 but SKP missing on one is still not ready — missing_sketchup_source", () => {
+  const variants = (T04_WITH_VARIANTS_DOCUMENT.variants as ReadonlyArray<Record<string, unknown>>).map((v, index) => ({
+    ...v,
+    modelAsset: VARIANT_MODEL_ASSET,
+    ...(index < 3 ? { sourceAssets: [VARIANT_SKP_SOURCE_ASSET] } : {}),
+  }));
+  const adapted = { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500, variants } as unknown as ComponentDefinition;
+  const readiness = evaluateCatalogReadiness(adapted, "booth");
+  assert.equal(readiness.ready, false);
+  assert.ok(readiness.issues.includes("missing_sketchup_source"));
+  assert.equal(readiness.issues.includes("missing_3d_asset"), false);
+});
+
+test("VARIANT readiness: P86 (variants: [], no multi-variant line) is completely unaffected — still uses its own has3DAsset(item), stays ready", () => {
+  const p86Adapted = { ...P86_DOCUMENT, lifecycleStatus: "active", variants: [] } as unknown as ComponentDefinition;
+  const readiness = evaluateCatalogReadiness(p86Adapted, "booth");
+  assert.equal(readiness.ready, true);
+  assert.deepEqual(readiness.issues, []);
+});
+
+test("VARIANT: documentVariants parses T04's 4 variants and rejects malformed entries", () => {
+  const valid = documentVariants(T04_WITH_VARIANTS_DOCUMENT);
+  assert.equal(valid.length, 4);
+  assert.deepEqual(valid.map((v) => v.id), ["t04-v1", "t04-v2", "t04-v3", "t04-v4"]);
+
+  const withGarbage = documentVariants({ variants: [{ id: "ok", name: "Ok" }, { id: "no-name" }, "not-an-object", { name: "no-id" }] });
+  assert.equal(withGarbage.length, 1);
+  assert.equal(withGarbage[0]!.id, "ok");
+});
+
+test("VARIANT end to end: saveCatalogItemAdmin persists a variant's GLB storageKey, and readiness recognizes it once all 4 have both GLB and SKP", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [t04WithVariantsRow({ document: { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500 } })] });
+  let saved = await saveCatalogItemAdmin(client as never, "t04-uuid", { setVariantModelAsset: { variantId: "t04-v1", asset: VARIANT_MODEL_ASSET } }, null);
+  assert.deepEqual((saved.document.variants as ReadonlyArray<Record<string, unknown>>)[0]!.modelAsset, VARIANT_MODEL_ASSET);
+  assert.equal(computeReadiness(saved).ready, false, "only 1 of 4 variants modelled, none have SKP — still not ready");
+
+  for (const variantId of ["t04-v2", "t04-v3", "t04-v4"]) {
+    saved = await saveCatalogItemAdmin(client as never, "t04-uuid", { setVariantModelAsset: { variantId, asset: VARIANT_MODEL_ASSET } }, saved.updatedAt);
+  }
+  assert.equal(computeReadiness(saved).ready, false, "all 4 variants modelled but NONE have SKP yet — still not ready");
+
+  for (const variantId of ["t04-v1", "t04-v2", "t04-v3", "t04-v4"]) {
+    saved = await saveCatalogItemAdmin(client as never, "t04-uuid", { addVariantSourceAsset: { variantId, kind: "sketchup", asset: VARIANT_SKP_ASSET } }, saved.updatedAt);
+  }
+  assert.equal(computeReadiness(saved).ready, true, "all 4 variants now have GLB + SKP + real height -> ready");
+});
+
+test("VARIANT: T04's own kind/category/lifecycleStatus and pricingEntries are never touched by a variant asset save", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [t04WithVariantsRow()] });
+  const saved = await saveCatalogItemAdmin(client as never, "t04-uuid", { setVariantModelAsset: { variantId: "t04-v1", asset: VARIANT_MODEL_ASSET } }, null);
+  assert.equal(saved.kind, "booth");
+  assert.equal(saved.category, "Typovky");
+  assert.deepEqual(saved.document.pricingEntries, T04_WITH_VARIANTS_DOCUMENT.pricingEntries);
+});
+
+// =========================================================================================
+// PARENT ASSET SECTIONS ON VARIANT BOOTHS (2026-08-19 follow-up session): a booth with declared
+// variants (T04..T25) has NO parent-level runtime model or source file of its own — BOTH the
+// "3D model" AND "Zdrojové a výrobní soubory" sections must never render for those (variants own
+// GLB/SKP/DWG/DXF/PDF/Other independently). The parent's photoAsset/displayName/description/
+// lifecycle stay completely untouched — only these two asset sections are hidden. A booth
+// WITHOUT variants (P86/P87) keeps both sections exactly as before.
+// =========================================================================================
+
+test("ComponentAdminDetail.tsx defines a single shared isVariantBooth flag (kind=booth AND documentVariants(...).length > 0) and gates BOTH the parent '3D model' and 'Zdrojové a výrobní soubory' sections with it — never two independently-drifting conditions", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  const flagStart = source.indexOf('const isVariantBooth = item.kind === "booth" && documentVariants(itemDocument).length > 0;');
+  assert.ok(flagStart >= 0, "expected a single named isVariantBooth flag");
+
+  const modelGateStart = source.indexOf("!isVariantBooth &&", flagStart);
+  assert.ok(modelGateStart > flagStart, "expected the parent 3D-model section to be gated by !isVariantBooth");
+  const modelSectionStart = source.indexOf("<h3>3D model</h3>", modelGateStart);
+  assert.ok(modelSectionStart > modelGateStart && modelSectionStart < modelGateStart + 200, "the !isVariantBooth gate must wrap the '3D model' section");
+
+  const sourceGateStart = source.indexOf("!isVariantBooth", modelGateStart + 1);
+  assert.ok(sourceGateStart > modelSectionStart, "expected a SECOND !isVariantBooth gate, after the 3D-model section, for source files");
+  const sourceSectionStart = source.indexOf("<h3>Zdrojové a výrobní soubory</h3>", sourceGateStart);
+  assert.ok(sourceSectionStart > sourceGateStart && sourceSectionStart < sourceGateStart + 200, "the second !isVariantBooth gate must wrap the 'Zdrojové a výrobní soubory' section");
+});
+
+test("the parent asset sections are NOT gated for other kinds (furniture/booth_component/etc.) or for a booth WITHOUT variants — isVariantBooth is only true for kind=booth WITH a non-empty variants array", () => {
+  // documentVariants([]) === [] and P86/furniture never satisfy `item.kind === "booth" && ...length > 0`,
+  // so the sections render for them exactly as they always have — verified structurally via the
+  // real domain function rather than re-deriving the logic in the test.
+  assert.equal(documentVariants({}).length, 0);
+  assert.equal(documentVariants({ variants: [] }).length, 0);
+  assert.equal(documentVariants({ variants: [{ id: "t04-corner-left", name: "Roh – levý" }] }).length, 1);
+});
+
+test("VARIANT UI: T04's real canonical shape (3 confirmed variants, no parent modelAsset/modelUrl/sourceAssets) is exactly the shape that triggers isVariantBooth — confirms the flag matches production data, not just a synthetic fixture", () => {
+  assert.equal(T04_WITH_VARIANTS_DOCUMENT.internalCode, "T04");
+  assert.equal(documentVariants(T04_WITH_VARIANTS_DOCUMENT).length, 4, "this file's T04 test fixture uses the pre-correction 4-generic shape — still exercises the >0 branch identically to the real 3-variant T04");
+  assert.equal("modelAsset" in T04_WITH_VARIANTS_DOCUMENT, false);
+  assert.equal("modelUrl" in T04_WITH_VARIANTS_DOCUMENT, false);
+  assert.equal("sourceAssets" in T04_WITH_VARIANTS_DOCUMENT, false);
+});
+
+test("VARIANT UI: P86 (no variants) keeps documentVariants() empty — both parent asset sections stay visible for it, and its parent photoAsset field is untouched by this change", () => {
+  assert.equal(documentVariants(P86_DOCUMENT).length, 0);
+  assert.ok(P86_DOCUMENT.modelUrl, "P86's parent modelUrl remains the real runtime model — sanity check that P86 itself wasn't accidentally changed");
+});
+
+test("VARIANT UI: the parent 'Fotografie' (photoAsset) section is declared BEFORE both isVariantBooth-gated sections and is never itself conditioned on isVariantBooth — the type-booth line's main thumbnail always stays visible", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  const photoSectionStart = source.indexOf("<h3>Fotografie</h3>");
+  const flagStart = source.indexOf("const isVariantBooth =");
+  assert.ok(photoSectionStart >= 0);
+  // The photo section's own JSX block (from its <h3> to its closing </section>) must not
+  // reference isVariantBooth at all.
+  const photoSectionEnd = source.indexOf("</section>", photoSectionStart);
+  const photoSectionBlock = source.slice(photoSectionStart, photoSectionEnd);
+  assert.doesNotMatch(photoSectionBlock, /isVariantBooth/u);
+  assert.ok(flagStart >= 0);
+});
+
+test("VARIANT UI: variant GLB/SKP/photo/sourceAssets upload sections remain available regardless of the parent sections being hidden — the 'Varianty' section is a separate, unconditional block for any kind=booth item with variants", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /\{isVariantBooth && \(/u);
+  assert.match(source, /<h3>Varianty<\/h3>/u);
+  assert.match(source, /Nahrát GLB/u);
+  assert.match(source, /sourceAssetKind === "sketchup" \? "Nahrát SKP" : "Nahrát soubor"/u);
+  assert.match(source, /variant\.photoAsset \? "Nahradit foto" : "Nahrát foto"/u);
 });

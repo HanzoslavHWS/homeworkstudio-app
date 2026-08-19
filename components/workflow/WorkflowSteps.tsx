@@ -330,7 +330,7 @@ function PlanLayerPreview({ booth, sceneObjects, layers, annotations, customDime
     return () => { active = false; };
   }, [annotations, booth, cadSnapshot, customDimensions, depth, layers, onRendered, sceneObjects, width]);
   if (!width || !depth) return null;
-  return <div className={`planLayerPreview ${compact ? "compact" : ""}`}><div className="planLayerStage"><BoothCadPlanView asset={getMasterReferenceModel(booth.assets)} footprintWidthMm={width} footprintDepthMm={depth} visible={layers.includes("booth") && !rendered} selected={false} rotateView180 onSnapshot={setCadSnapshot} />{rendered ? <img className="planRenderedPreview" src={rendered} alt="Náhled technického půdorysu" /> : <span className="planRenderLoading">Připravuji CAD půdorys…</span>}</div></div>;
+  return <div className={`planLayerPreview ${compact ? "compact" : ""}`}><div className="planLayerStage"><BoothCadPlanView asset={getMasterReferenceModel(booth.assets)} footprintWidthMm={width} footprintDepthMm={depth} visible={layers.includes("booth") && !rendered} selected={false} onSnapshot={setCadSnapshot} />{rendered ? <img className="planRenderedPreview" src={rendered} alt="Náhled technického půdorysu" /> : <span className="planRenderLoading">Připravuji CAD půdorys…</span>}</div></div>;
 }
 
 function GeneratedOutputResults({ visualizations, plans, onUpdateVisualization, onDeleteVisualization, onUpdatePlan, onDeletePlan }: { visualizations: readonly VisualizationItem[]; plans: readonly GeneratedPlanOutput[]; onUpdateVisualization: (item: VisualizationItem) => void; onDeleteVisualization: (id: string) => void; onUpdatePlan: (item: GeneratedPlanOutput) => void; onDeletePlan: (id: string) => void }) {

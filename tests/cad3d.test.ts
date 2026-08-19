@@ -9,11 +9,14 @@ import {
   cadPointToViewer,
   getComponentModel,
   getMasterReferenceModel,
+  isVariantAvailable,
   mmToSceneUnits,
   placedComponentToViewerTransform,
+  resolveBoothModelSource,
   sceneUnitsToMm,
   viewerPointToCad,
 } from "../domain/cad3d.ts";
+import type { BoothVariant } from "../domain/models.ts";
 import { worldToPlanView } from "../domain/planView.ts";
 import { measuredDistance3DMm, measuredDistanceMm } from "../domain/spatialAnnotations.ts";
 
@@ -281,4 +284,90 @@ test("placedComponentToViewerTransform stays the pure, canonical mapping — nev
   // disagree about what "rotationDeg" means.
   const transform = placedComponentToViewerTransform({ xMm: 1250, yMm: 775, rotationDeg: 37 });
   assert.deepEqual(transform.position, { x: 1.25, y: 0, z: -0.775 });
+});
+
+// =========================================================================================
+// GENERÁTOR TYPOVEK (2026-08-19): resolveBoothModelSource / isVariantAvailable — a booth with
+// declared variants (T04..T25) must use the SELECTED variant's OWN modelAsset, never one shared
+// parent GLB for every variant. P86 (no variants) is completely unaffected.
+// =========================================================================================
+
+const storedGlbAsset = {
+  id: "variant-glb-1",
+  storageKey: "catalog/furniture/t04/models/v1.glb",
+  originalFileName: "t04-v1.glb",
+  mimeType: "model/gltf-binary" as const,
+  size: 500_000,
+  createdAt: "2026-08-19T00:00:00.000Z",
+  category: "catalog-model" as const,
+};
+
+const legacyMasterAsset = { id: "master", url: "/models/booths/koje-2x2/master.glb", role: "master-reference" as const, unit: "mm" as const, axisSystem: "x-right-y-depth-z-up" as const };
+
+test("resolveBoothModelSource: a booth with NO variants (P86) always resolves to its own master-reference asset, regardless of selectedVariantId — completely unaffected by the variant logic", () => {
+  const p86 = { variants: [] as readonly BoothVariant[], assets: { sourceId: "p86", scale: 1 as const, unit: "mm" as const, models3d: [legacyMasterAsset] } };
+  const resolved = resolveBoothModelSource(p86, [], undefined);
+  assert.deepEqual(resolved, { kind: "legacy", asset: legacyMasterAsset });
+});
+
+test("resolveBoothModelSource: a booth WITH variants never falls back to the parent's own assets — no variant selected yields undefined even if the parent has a master GLB", () => {
+  const boothWithParentAssets = { variants: [{ id: "v1", name: "V1" }] as readonly BoothVariant[], assets: { sourceId: "x", scale: 1 as const, unit: "mm" as const, models3d: [legacyMasterAsset] } };
+  const resolved = resolveBoothModelSource(boothWithParentAssets, [], undefined);
+  assert.equal(resolved, undefined, "no variant selected -> nothing to load, never the parent's own GLB");
+});
+
+test("resolveBoothModelSource: prefers the SELECTED variant's own modelAsset (StoredAsset) over the parent's assets", () => {
+  const variants: readonly BoothVariant[] = [{ id: "v1", name: "V1", modelAsset: storedGlbAsset }];
+  const booth = { variants, assets: { sourceId: "x", scale: 1 as const, unit: "mm" as const, models3d: [legacyMasterAsset] } };
+  const resolved = resolveBoothModelSource(booth, [], "v1");
+  assert.deepEqual(resolved, { kind: "stored", asset: storedGlbAsset });
+});
+
+test("resolveBoothModelSource: a variant with an explicit assetSourceBoothId (demo/test fixture pattern, e.g. T4-TEST borrowing P86's asset) still resolves via the legacy path when it has no own modelAsset", () => {
+  const variants: readonly BoothVariant[] = [{ id: "v1", name: "V1", assetSourceBoothId: "p86" }];
+  const booth = { variants, assets: undefined };
+  const allBooths = [{ id: "p86", assets: { sourceId: "p86", scale: 1 as const, unit: "mm" as const, models3d: [legacyMasterAsset] } }];
+  const resolved = resolveBoothModelSource(booth, allBooths, "v1");
+  assert.deepEqual(resolved, { kind: "legacy", asset: legacyMasterAsset });
+});
+
+test("resolveBoothModelSource: a variant with NEITHER its own modelAsset NOR an assetSourceBoothId resolves to undefined — never presents as available", () => {
+  const variants: readonly BoothVariant[] = [{ id: "v1", name: "V1" }];
+  const booth = { variants, assets: undefined };
+  const resolved = resolveBoothModelSource(booth, [], "v1");
+  assert.equal(resolved, undefined);
+});
+
+test("resolveBoothModelSource: configurationBoothId is accepted as an alias for assetSourceBoothId (both legacy fields point at a shared source booth)", () => {
+  const variants: readonly BoothVariant[] = [{ id: "v1", name: "V1", configurationBoothId: "p86" }];
+  const booth = { variants, assets: undefined };
+  const allBooths = [{ id: "p86", assets: { sourceId: "p86", scale: 1 as const, unit: "mm" as const, models3d: [legacyMasterAsset] } }];
+  const resolved = resolveBoothModelSource(booth, allBooths, "v1");
+  assert.deepEqual(resolved, { kind: "legacy", asset: legacyMasterAsset });
+});
+
+test("isVariantAvailable: true for a variant with its own modelAsset, true for one with a resolvable assetSourceBoothId, false when neither exists", () => {
+  const withOwnAsset: BoothVariant = { id: "v1", name: "V1", modelAsset: storedGlbAsset };
+  const withLegacySource: BoothVariant = { id: "v2", name: "V2", assetSourceBoothId: "p86" };
+  const withNothing: BoothVariant = { id: "v3", name: "V3" };
+  const allBooths = [{ id: "p86", assets: { sourceId: "p86", scale: 1 as const, unit: "mm" as const, models3d: [legacyMasterAsset] } }];
+
+  assert.equal(isVariantAvailable(withOwnAsset, allBooths), true);
+  assert.equal(isVariantAvailable(withLegacySource, allBooths), true);
+  assert.equal(isVariantAvailable(withNothing, allBooths), false);
+});
+
+test("resolveBoothModelSource: T04-shaped booth with 3 real variants (roh vlevo/roh vpravo/řadová) — an unmodelled variant is unavailable while a modelled one resolves to its own GLB, independent of the other variants' state", () => {
+  const t04Variants: readonly BoothVariant[] = [
+    { id: "t04-corner-left", name: "Roh – levý", modelAsset: storedGlbAsset },
+    { id: "t04-corner-right", name: "Roh – pravý" },
+    { id: "t04-inline", name: "Řada / přímý" },
+  ];
+  const t04 = { variants: t04Variants, assets: undefined };
+
+  assert.deepEqual(resolveBoothModelSource(t04, [], "t04-corner-left"), { kind: "stored", asset: storedGlbAsset });
+  assert.equal(resolveBoothModelSource(t04, [], "t04-corner-right"), undefined, "not yet modelled -> must never present as available");
+  assert.equal(isVariantAvailable(t04Variants[0]!, []), true);
+  assert.equal(isVariantAvailable(t04Variants[1]!, []), false);
+  assert.equal(isVariantAvailable(t04Variants[2]!, []), false);
 });

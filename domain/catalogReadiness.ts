@@ -1,5 +1,6 @@
 import {
   CATALOG_ITEM_STATUSES,
+  type BoothVariant,
   type CatalogItemKind,
   type CatalogItemStatus,
   type ComponentDefinition,
@@ -72,6 +73,16 @@ function has3DAsset(item: ComponentDefinition): boolean {
   if (isRuntimeGlbReference(item.modelUrl)) return true;
   if (isRuntimeGlbReference(item.modelAsset?.storageKey)) return true;
   return Boolean(item.assets?.models3d?.some((asset) => isRuntimeGlbReference(asset.url)));
+}
+
+/** A single variant's OWN runtime GLB — never falls back to the parent's/another variant's modelAsset. */
+function hasVariantModel(variant: BoothVariant): boolean {
+  return isRuntimeGlbReference(variant.modelAsset?.storageKey);
+}
+
+/** A single variant's OWN evidenced SketchUp source — same "sketchup"-kind sourceAssets entry rule as hasSketchupSource(item), scoped to one variant. */
+function hasVariantSketchupSource(variant: BoothVariant): boolean {
+  return Boolean(variant.sourceAssets?.some((entry) => entry.kind === "sketchup" && entry.asset?.storageKey));
 }
 
 /**
@@ -172,13 +183,34 @@ export function evaluateCatalogReadiness(item: ComponentDefinition, kind: Catalo
     // height is not a usable 3D volume) and a usable geometry asset. PrintSurfaces are
     // deliberately NEVER required here — not every booth needs a print allowance.
     //
-    // SKP is explicitly NOT required here (unlike booth_component below) — a complete type-booth
-    // (P86, T04, ...) was always planned to activate on GLB alone; DWG/DXF/PDF/other source
-    // files are evidence/documentation, never generator-readiness gates. P86 must stay
-    // ready=true / generatorEligible=true with no SKP evidenced at all.
+    // SKP is explicitly NOT required on the PARENT itself (unlike booth_component below, and
+    // unlike a variant — see below) — a single-geometry type-booth (P86) was always planned to
+    // activate on GLB alone; DWG/DXF/PDF/other source files are evidence/documentation, never
+    // generator-readiness gates. P86 must stay ready=true / generatorEligible=true with no SKP
+    // evidenced at all.
+    //
+    // Multi-variant type-booth lines (T04..T25 — one catalog_item, several variants, see
+    // ComponentDefinition.variants): the PARENT never carries its own single canonical GLB for
+    // these, so has3DAsset(item) would always be false and misleadingly blame "missing_3d_asset"
+    // even once every variant is fully modelled. Once variants are declared, the asset rule
+    // switches to per-variant: every declared variant needs its OWN GLB *and* its own evidenced
+    // SketchUp source (mirrors booth_component's GLB+SKP rule exactly, scoped per variant instead
+    // of per item) — this is deliberately strict (ALL, not ANY): a line where 3 of 4 variants are
+    // modelled must never read as fully ready, or an admin could activate T04 while one variant
+    // silently has no geometry/source at all. missing_3d_asset and missing_sketchup_source are
+    // reported independently so the admin UI can tell GLB-missing from SKP-missing. A booth with
+    // no variants declared (P86, or any future single-geometry type-booth) is completely
+    // unaffected — it keeps using its own has3DAsset(item)-only rule exactly as before, no SKP
+    // requirement at all.
     case "booth": {
       if (!hasBoothDimensions(item)) issues.push("missing_dimensions");
-      if (!has3DAsset(item)) issues.push("missing_3d_asset");
+      const variants = item.variants ?? [];
+      if (variants.length > 0) {
+        if (!variants.every(hasVariantModel)) issues.push("missing_3d_asset");
+        if (!variants.every(hasVariantSketchupSource)) issues.push("missing_sketchup_source");
+      } else if (!has3DAsset(item)) {
+        issues.push("missing_3d_asset");
+      }
       break;
     }
     // An individual booth-construction element (sloupek/panel/dveře/límec/rastr/koberec, ...)

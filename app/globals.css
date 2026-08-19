@@ -2082,6 +2082,12 @@ select:focus {
   border: 2px solid #18191b;
 }
 
+.variantCard.variantUnavailable {
+  opacity: 0.45;
+
+  cursor: not-allowed;
+}
+
 .variantPreview {
   height: 150px;
 
@@ -3935,10 +3941,19 @@ select:focus {
   background: #ffffff;
 }
 
+/**
+ * Anchored at the BOTTOM edge of its placed-component wrapper — front-open-side is Y=0, which
+ * renders at the plan's BOTTOM under the current back-at-top convention (domain/planView.ts).
+ * At rotationDeg=0/frontDirectionDeg=0 (no extra rotation), a component's own front therefore
+ * points toward the bottom of its box. Was `top: 3px` (pointing toward the TOP) until the 2026
+ * 2D-view-convention fix flipped which screen edge represents "front" — this is the matching
+ * marker-baseline correction, independent of and never touching worldToPlanView/
+ * worldRotationToPlanView themselves.
+ */
 .frontMarker {
   position: absolute;
 
-  top: 3px;
+  bottom: 3px;
   left: 50%;
 
   transform: translateX(-50%);
@@ -4053,7 +4068,12 @@ select:focus {
   min-height: 32px;
 
   display: grid;
-  grid-template-columns: 22px minmax(0, 1fr) 60px;
+  /* Actions column widened 60px -> 120px (2026-08-19): furniture rows render up to 4 action
+     buttons (eye, lock, move-down, move-up), but .sceneActions below was a 2x30px grid sized for
+     only 2 — the layer-order arrows were silently wrapping into a second row and getting clipped
+     by this container's own overflow:hidden, making them unclickable. Rows with only 2 buttons
+     (construction/floor items) just leave the extra space unused. */
+  grid-template-columns: 22px minmax(0, 1fr) 120px;
   align-items: stretch;
 
   overflow: hidden;
@@ -4126,10 +4146,10 @@ select:focus {
 }
 
 .sceneActions {
-  width: 60px;
+  width: 120px;
 
   display: grid;
-  grid-template-columns: repeat(2, 30px);
+  grid-template-columns: repeat(4, 30px);
   align-self: stretch;
 }
 
@@ -4934,9 +4954,6 @@ select:focus {
 .compactViewSwitch .viewButton { min-width: 38px; height: 28px; }
 .compactViewSwitch .viewButton.active { background: #18191b; color: white; }
 
-.planViewRotated .placedComponentName,
-.planViewRotated .placedComponent small { transform: rotate(180deg); }
-
 .projectFlags,
 .checkLabel { display: flex; align-items: center; gap: 18px; }
 .projectFlags label,
@@ -5129,11 +5146,14 @@ select:focus {
 
 .catalogAdminCount { color: #8a8e91; font-size: 8px; font-weight: 700; letter-spacing: .04em; }
 .catalogAdminTable { display: grid; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: white; }
-.catalogAdminRow { display: grid; grid-template-columns: 80px minmax(120px, 1.4fr) minmax(100px, 1.1fr) 90px minmax(90px, 1fr) 60px 90px 100px; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border-bottom: 1px solid #ededee; background: white; border-left: 0; border-right: 0; border-top: 0; text-align: left; font-size: 8px; cursor: pointer; }
+.catalogAdminRow { display: grid; grid-template-columns: 36px 80px minmax(120px, 1.4fr) minmax(100px, 1.1fr) 90px minmax(90px, 1fr) 60px 90px 100px; align-items: center; gap: 10px; min-height: 44px; padding: 8px 12px; border-bottom: 1px solid #ededee; background: white; border-left: 0; border-right: 0; border-top: 0; text-align: left; font-size: 8px; cursor: pointer; }
 .catalogAdminRow:last-child { border-bottom: 0; }
 .catalogAdminHeaderRow { background: #fafafa; color: #96999c; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; font-size: 7px; cursor: default; }
 .catalogAdminRow.active { background: #f3f6f4; }
 .catalogAdminRow span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.catalogThumbnailCell { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; }
+.catalogThumbnailImg { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; border: 1px solid #e3e4e5; }
+.catalogThumbnailPlaceholder { width: 36px; height: 36px; border-radius: 6px; background: #f0f1f1; border: 1px dashed #d7d9da; }
 .lifecycleBadge { width: fit-content; padding: 3px 7px; border-radius: 20px; background: #f0f1f1; color: #666a6d; font-size: 7px; white-space: nowrap; }
 .lifecycleBadge.active { background: #edf5ef; color: #45634f; }
 .lifecycleBadge.needs_review { background: #faf3e6; color: #8a6d2f; }

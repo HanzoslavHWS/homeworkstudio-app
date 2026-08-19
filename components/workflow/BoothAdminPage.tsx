@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import {
   buildCatalogItemListEntry,
   filterCatalogItemsAdmin,
+  sortCatalogItemsAdminByCode,
+  sortCatalogItemsAdminByName,
   CATALOG_ITEM_CATEGORY_OPTIONS,
   type CatalogItemAdmin,
   type CatalogItemAdminCreateInput,
@@ -64,7 +66,12 @@ export function BoothAdminPage({
   const tabItems = useMemo(() => (items ?? []).filter((item) => item.kind === activeKind), [items, activeKind]);
   const listEntries = useMemo(() => tabItems.map(buildCatalogItemListEntry), [tabItems]);
   const filters: CatalogItemAdminFilters = { query };
-  const filteredEntries = useMemo(() => filterCatalogItemsAdmin(listEntries, filters), [listEntries, query]);
+  // Filter first, then sort — never the DB/API return order. "Typové stánky" reads more
+  // naturally sorted by internalCode (P86, P87, T04, T06, ...) than by displayName; "Komponenty
+  // stánku" uses the same displayName A-Z rule as the generic Admin → Komponenty list. Both keep
+  // active items first within their own ordering (domain/catalogItemsAdmin.ts).
+  const sortEntries = activeKind === "booth" ? sortCatalogItemsAdminByCode : sortCatalogItemsAdminByName;
+  const filteredEntries = useMemo(() => sortEntries(filterCatalogItemsAdmin(listEntries, filters)), [listEntries, query, sortEntries]);
   const selected = items?.find((item) => item.id === selectedId && item.kind === activeKind);
 
   async function handleSave(edit: CatalogItemAdminEdit): Promise<void> {

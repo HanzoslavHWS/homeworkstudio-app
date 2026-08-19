@@ -95,20 +95,17 @@ export async function renderTechnicalPlanPng(input: {
       throw new Error("CAD půdorys ještě není připravený.");
     }
     const cadImage = await loadImage(cadSnapshot.imageDataUrl);
-    context.save();
-    context.translate(
-      originX + booth.widthMm * scale,
-      originY + booth.depthMm * scale,
-    );
-    context.rotate(Math.PI);
+    // Same X-preserving/Y-flipping placement as BoothCadPlanView.tsx's DOM style (both fixed
+    // together, 2026-08-19) — the snapshot is already rendered right-side-up and unmirrored by
+    // that component's camera setup, so this is a direct footprint-relative draw, never a
+    // translate+180-degree-rotate compensation. Exact regardless of the model's bounding-box symmetry.
     context.drawImage(
       cadImage,
-      cadSnapshot.bounds.minX * scale,
-      cadSnapshot.bounds.minY * scale,
+      originX + cadSnapshot.bounds.minX * scale,
+      originY + (booth.depthMm - cadSnapshot.bounds.minY - cadSnapshot.bounds.depth) * scale,
       cadSnapshot.bounds.width * scale,
       cadSnapshot.bounds.depth * scale,
     );
-    context.restore();
   }
 
   for (const item of sortComponentsFor2D(sceneObjects)) {

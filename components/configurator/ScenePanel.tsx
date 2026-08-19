@@ -66,8 +66,8 @@ function SceneItem(props: SceneItemProps) {
     <div className="sceneActions">
       <button type="button" className="sceneActionButton" disabled={props.visibilityDisabled} onClick={(event) => { event.stopPropagation(); props.onToggleVisibility(); }} title={props.visibilityDisabled ? "Viditelnost části bude dostupná po mapování GLB nodů" : props.visible ? "Skrýt prvek" : "Zobrazit prvek"}><Eye off={!props.visible} /></button>
       <button type="button" className="sceneActionButton" disabled={props.systemLocked} onClick={(event) => { event.stopPropagation(); props.onToggleLock(); }} title={props.systemLocked ? "Systémově zamčeno" : locked ? "Odemknout" : "Zamknout"}><Lock open={!locked} /></button>
-      {props.onMoveBackward && <button type="button" className="sceneActionButton sceneOrderButton" onClick={props.onMoveBackward} title="V 2D dozadu">↓</button>}
-      {props.onMoveForward && <button type="button" className="sceneActionButton sceneOrderButton" onClick={props.onMoveForward} title="V 2D dopředu">↑</button>}
+      {props.onMoveBackward && <button type="button" className="sceneActionButton sceneOrderButton" onClick={(event) => { event.stopPropagation(); props.onMoveBackward!(); }} title="V 2D dozadu">↓</button>}
+      {props.onMoveForward && <button type="button" className="sceneActionButton sceneOrderButton" onClick={(event) => { event.stopPropagation(); props.onMoveForward!(); }} title="V 2D dopředu">↑</button>}
     </div>
   </div>;
 }

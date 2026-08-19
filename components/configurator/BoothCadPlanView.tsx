@@ -28,7 +28,6 @@ type BoothCadPlanViewProps = {
   footprintDepthMm: number;
   visible: boolean;
   selected: boolean;
-  rotateView180?: boolean;
   onSnapshot?: (snapshot: CadPlanSnapshot) => void;
 };
 
@@ -48,7 +47,6 @@ export function BoothCadPlanView({
   footprintDepthMm,
   visible,
   selected,
-  rotateView180 = false,
   onSnapshot,
 }: BoothCadPlanViewProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
@@ -161,7 +159,16 @@ export function BoothCadPlanView({
           mmToSceneUnits(rawBounds.max.z) + 2,
           -mmToSceneUnits(rawCenter.y),
         );
-        camera.up.set(0, 0, 1);
+        // Root-cause fix (2026-08-19): up=(0,0,1) here made this top-down camera's own
+        // screen-right equal world -X (a real mirror — verified via THREE.Matrix4.lookAt's
+        // right = up × (eye-target) construction) while every OTHER view in the app
+        // (cadPointToViewer's viewer frame, the front-facing default 3D camera) keeps
+        // screen-right = world +X. up=(0,0,-1) is the correct up vector for THIS camera
+        // orientation (looking straight down -Y): it makes screen-right = +X (matching
+        // everywhere else) AND screen-up = the back-wall direction (matching the 2D plan's
+        // "back wall at top" convention) — both at once, with no CSS/canvas rotate needed
+        // downstream (see the DOM style below and lib/planExport.ts's drawImage call).
+        camera.up.set(0, 0, -1);
         camera.lookAt(
           mmToSceneUnits(rawCenter.x),
           0,
@@ -194,13 +201,18 @@ export function BoothCadPlanView({
     };
   }, [asset]);
 
+  // Same X-preserving/Y-flipping convention as domain/planView.ts's worldToPlanView — the
+  // raw snapshot is now rendered in the correct orientation by the camera setup above, so this
+  // is a direct footprint-relative placement, never a CSS rotate/mirror compensation. Exact
+  // regardless of whether the model's bounding box is centered on the footprint (the old
+  // "flip-then-180-rotate" compensation this replaced was only exact for a centered model —
+  // this formula has no such dependency).
   const style = bounds
     ? {
-        left: `${((rotateView180 ? footprintWidthMm - bounds.minX - bounds.width : bounds.minX) / footprintWidthMm) * 100}%`,
-        top: `${((rotateView180 ? footprintDepthMm - bounds.minY - bounds.depth : bounds.minY) / footprintDepthMm) * 100}%`,
+        left: `${(bounds.minX / footprintWidthMm) * 100}%`,
+        top: `${((footprintDepthMm - bounds.minY - bounds.depth) / footprintDepthMm) * 100}%`,
         width: `${(bounds.width / footprintWidthMm) * 100}%`,
         height: `${(bounds.depth / footprintDepthMm) * 100}%`,
-        transform: rotateView180 ? "rotate(180deg)" : undefined,
       }
     : { inset: 0 };
 
