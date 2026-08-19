@@ -412,6 +412,15 @@ export type ComponentDefinition = Readonly<{
    * type; absent/empty means "not a multi-variant line" (e.g. P86), never "4 unknown variants".
    */
   variants?: readonly BoothVariant[];
+  /**
+   * Whether `variants` represents real, human-confirmed catalog data (e.g. T04's 3 named
+   * variants) rather than a generic placeholder scaffold (e.g. T06..T25's 4 "Varianta N" stubs
+   * pending real construction data — see domain/typeBoothCanonicalization.ts's session decision
+   * log, 2026-08-19). Absent/false means unconfirmed. See domain/catalogReadiness.ts's booth
+   * case: a variants line can never become generatorEligible while this isn't strictly true,
+   * however complete its variants' individual GLB/SKP assets happen to be.
+   */
+  variantsConfirmed?: boolean;
 }>;
 
 export type PlacedComponent = Notes & {

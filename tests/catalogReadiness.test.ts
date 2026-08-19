@@ -365,15 +365,40 @@ test("booth + variants: all 4 have GLB but only 3 of 4 have SKP -> still not rea
   assert.equal(readiness.issues.includes("missing_3d_asset"), false, "all 4 variants DO have GLB — only SKP is incomplete");
 });
 
-test("booth + variants: ready once ALL declared variants have their own GLB AND their own SKP, even though the PARENT itself has no modelUrl/modelAsset/sourceAssets at all", () => {
+test("booth + variants: ready once ALL declared variants have their own GLB AND their own SKP AND the variant set itself is confirmed, even though the PARENT itself has no modelUrl/modelAsset/sourceAssets at all", () => {
   const t04 = boothLike({
     internalCode: "T04",
     modelUrl: undefined,
     variants: fourCompleteVariants(),
+    variantsConfirmed: true,
   });
   const readiness = evaluateCatalogReadiness(t04, "booth");
   assert.equal(readiness.ready, true);
   assert.deepEqual(readiness.issues, []);
+});
+
+test("booth + variants: complete GLB+SKP on every variant is STILL not ready while variantsConfirmed is not exactly true — an unconfirmed placeholder line (e.g. T06..T25) must never become production-ready just because someone uploaded assets onto it", () => {
+  const unconfirmed = evaluateCatalogReadiness(
+    boothLike({ internalCode: "T06", modelUrl: undefined, variants: fourCompleteVariants(), variantsConfirmed: false }),
+    "booth",
+  );
+  assert.equal(unconfirmed.ready, false);
+  assert.ok(unconfirmed.issues.includes("variants_unconfirmed"));
+  assert.equal(unconfirmed.issues.includes("missing_3d_asset"), false, "GLB is complete — only the confirmation gate is missing");
+  assert.equal(unconfirmed.issues.includes("missing_sketchup_source"), false, "SKP is complete — only the confirmation gate is missing");
+
+  const neverSet = evaluateCatalogReadiness(
+    boothLike({ internalCode: "T06", modelUrl: undefined, variants: fourCompleteVariants() }),
+    "booth",
+  );
+  assert.equal(neverSet.ready, false, "variantsConfirmed absent (undefined) must be treated the same as false — never implicitly confirmed");
+  assert.ok(neverSet.issues.includes("variants_unconfirmed"));
+});
+
+test("booth WITHOUT variants (P86) never reads variantsConfirmed at all — irrelevant field, never blocks readiness", () => {
+  const p86 = evaluateCatalogReadiness(boothLike({ variants: [], variantsConfirmed: false }), "booth");
+  assert.equal(p86.ready, true);
+  assert.deepEqual(p86.issues, []);
 });
 
 test("booth + variants: parent dimensions (width/depth/height) are still required independently of variant readiness", () => {

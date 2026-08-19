@@ -11,7 +11,7 @@ export const CATALOG_ITEM_STATUS_LABELS_CS: Readonly<Record<CatalogItemStatus, s
   needs_review: "K doplnění",
   active: "Aktivní",
   inactive: "Neaktivní",
-  archived: "Archiv",
+  archived: "Archivováno",
 };
 
 export type ReadinessIssue =
@@ -25,7 +25,8 @@ export type ReadinessIssue =
   | "missing_3d_asset"
   | "missing_sketchup_source"
   | "missing_pricing_unit"
-  | "requires_review";
+  | "requires_review"
+  | "variants_unconfirmed";
 
 export const READINESS_ISSUE_LABELS_CS: Readonly<Record<ReadinessIssue, string>> = {
   missing_internal_code: "Chybí interní kód",
@@ -39,6 +40,7 @@ export const READINESS_ISSUE_LABELS_CS: Readonly<Record<ReadinessIssue, string>>
   missing_sketchup_source: "Chybí zdrojový SketchUp (.skp) soubor",
   missing_pricing_unit: "Chybí typ jednotky pro cenotvorbu",
   requires_review: "Čeká na kontrolu/schválení",
+  variants_unconfirmed: "Varianty ještě nejsou potvrzené jako finální katalog",
 };
 
 export type ReadinessResult = Readonly<{
@@ -202,12 +204,22 @@ export function evaluateCatalogReadiness(item: ComponentDefinition, kind: Catalo
     // no variants declared (P86, or any future single-geometry type-booth) is completely
     // unaffected — it keeps using its own has3DAsset(item)-only rule exactly as before, no SKP
     // requirement at all.
+    //
+    // variantsConfirmed (2026-08-19, generator-DB-integration session): a variants line can NEVER
+    // become ready/generatorEligible while its variant SET ITSELF is still an unconfirmed
+    // placeholder (T06..T25's generic "Varianta N" scaffold, variantsConfirmed=false) — no matter
+    // how complete each individual variant's GLB/SKP happens to be. This is deliberate: uploading
+    // real assets onto a still-unconfirmed placeholder variant (wrong count/names) must never let
+    // that placeholder line quietly become production-selectable. Checked ONLY when variants
+    // exist; a variants-less booth (P86) never reads this field at all. This is the ONE central
+    // domain rule the live generator's booth picker relies on — never a separate UI-only filter.
     case "booth": {
       if (!hasBoothDimensions(item)) issues.push("missing_dimensions");
       const variants = item.variants ?? [];
       if (variants.length > 0) {
         if (!variants.every(hasVariantModel)) issues.push("missing_3d_asset");
         if (!variants.every(hasVariantSketchupSource)) issues.push("missing_sketchup_source");
+        if (item.variantsConfirmed !== true) issues.push("variants_unconfirmed");
       } else if (!has3DAsset(item)) {
         issues.push("missing_3d_asset");
       }

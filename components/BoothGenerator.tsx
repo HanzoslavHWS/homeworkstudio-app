@@ -6,7 +6,6 @@ import {
   useState,
   type PointerEvent as ReactPointerEvent,
 } from "react";
-import { boothTypes } from "../data/booths";
 import { componentCatalogItems, placeComponent } from "../data/components";
 import { fairs } from "../data/fairs";
 import { exhibitions, priceLists } from "../data/organizations";
@@ -16,6 +15,7 @@ import {
 } from "../data/realizationProfiles";
 import type {
   BoothType,
+  BoothVariant,
   Currency,
   ComponentDefinition,
   Notes,
@@ -76,6 +76,7 @@ import {
   worldToPlanView,
 } from "../domain/planView";
 import { getMasterReferenceModel, isVariantAvailable, resolveBoothModelSource } from "../domain/cad3d";
+import { resolveGeneratorBooth, resolveGeneratorVariant, selectGeneratorBooths } from "../domain/generatorBooths";
 import { useAssetUrl } from "../hooks/useAssetUrl";
 import {
   componentZIndex,
@@ -157,6 +158,25 @@ function BoothTypeCardThumbnail({ booth }: { booth: Pick<BoothType, "name" | "ph
   );
 }
 
+/**
+ * Variant-card thumbnail — fallback chain: the variant's OWN photoAsset, then the parent booth's
+ * photoAsset (the type-booth line's main photo), then the same placeholder shape used for a
+ * booth with no photo at all. Never fabricates a photo, never a broken <img>.
+ */
+function VariantCardThumbnail({ variant, parentPhotoAsset, label }: { variant: Pick<BoothVariant, "photoAsset">; parentPhotoAsset: BoothType["photoAsset"]; label: string }) {
+  const asset = variant.photoAsset ?? parentPhotoAsset;
+  const resolved = useAssetUrl(asset, undefined);
+  if (resolved.url) {
+    return <img src={resolved.url} alt={`Náhled ${label}`} />;
+  }
+  return (
+    <div className="constructionShape">
+      <span className="constructionWallTop" />
+      <span className="constructionWallLeft" />
+    </div>
+  );
+}
+
 export default function BoothGenerator() {
   const repositoryRef = useRef<ProjectRepository | null>(null);
   const eventRepositoryRef = useRef<EventRepository | null>(null);
@@ -176,6 +196,14 @@ export default function BoothGenerator() {
   // merged into ComponentLibrary/scene placement, which stays on data/components.ts.
   const [dbCatalogItems, setDbCatalogItems] = useState<CatalogItemSummary[]>([]);
   const [dbPricingEntries, setDbPricingEntries] = useState<PricingEntrySummary[]>([]);
+  // Generator booth picker (section "GENERÁTOR TYPOVÝCH STÁNKŮ Z DB", 2026-08-19): DB catalog_items
+  // (kind=booth) is now the single source of truth for THIS picker — data/booths.ts's static list
+  // is no longer read here at all. null = still loading; [] + boothsError = a real fetch failure
+  // (never silently fall back to stale static demo data); [] + no error = genuinely zero
+  // active+ready+generatorEligible booths right now.
+  const [dbBoothTypes, setDbBoothTypes] = useState<readonly BoothType[] | null>(null);
+  const [boothsError, setBoothsError] = useState("");
+  const boothTypes = dbBoothTypes ?? [];
   const [step, setStep] =
     useState(1);
 
@@ -380,12 +408,29 @@ export default function BoothGenerator() {
         } catch (error) {
           console.warn("[HomeworkStudio] Nepodařilo se načíst katalog technických služeb z DB.", error);
         }
+        // Generator booth picker: UNLIKE technical-service pricing above, a failure here must
+        // stay VISIBLE (boothsError), never silently leave the picker empty/stale — see section
+        // "API FAILURE": production must never quietly show static demo data as if it were live.
+        try {
+          const catalogItems = await catalogItemsAdminRepositoryRef.current.list();
+          if (cancelled) return;
+          setDbBoothTypes(selectGeneratorBooths(catalogItems));
+          setBoothsError("");
+        } catch (error) {
+          if (cancelled) return;
+          setBoothsError(error instanceof Error ? error.message : "Typové stánky se nepodařilo načíst.");
+          setDbBoothTypes([]);
+        }
         return;
       }
 
       if (probe.mode === "local-fallback") {
         useLocalFallback(true);
         setPersistenceMode("local-fallback");
+        // No DB in this mode — the picker must show a real error/empty state, never fall back to
+        // static demo data as if it were production truth.
+        setBoothsError("Typové stánky vyžadují databázové připojení.");
+        setDbBoothTypes([]);
         return;
       }
 
@@ -393,6 +438,8 @@ export default function BoothGenerator() {
       // return;` guards in saveProject/deleteProject already no-op safely; the banner below
       // and saveProject's explicit check make sure the UI never claims a save succeeded.
       setPersistenceMode("unavailable");
+      setBoothsError("Typové stánky vyžadují databázové připojení.");
+      setDbBoothTypes([]);
     }
 
     init();
@@ -493,12 +540,10 @@ export default function BoothGenerator() {
     projectNotes.internalNote.trim() || projectNotes.customerNote.trim(),
   );
 
-  const selectedBooth =
-    boothTypes.find(
-      (booth) =>
-        booth.id ===
-        selectedBoothId
-    );
+  // resolveGeneratorBooth (not a plain .find) so an OLDER saved project resolves correctly even
+  // if it stored an internalCode instead of the booth's own id — never a guess, undefined when
+  // truly nothing matches (e.g. the booth was archived since the project was saved).
+  const selectedBooth = resolveGeneratorBooth(boothTypes, selectedBoothId);
 
   // Section "GENERÁTOR TYPOVEK" (2026-08-19): a booth with declared variants (T04..T25) NEVER
   // falls back to its own parent GLB — resolveBoothModelSource requires the SELECTED variant's
@@ -2579,6 +2624,16 @@ export default function BoothGenerator() {
                     </p>
                   </div>
 
+                  {dbBoothTypes === null && (
+                    <p className="workspaceEmpty">Načítám typové stánky…</p>
+                  )}
+                  {dbBoothTypes !== null && boothsError && (
+                    <p className="uploadError persistenceBanner">Typové stánky se nepodařilo načíst: {boothsError}</p>
+                  )}
+                  {dbBoothTypes !== null && !boothsError && dbBoothTypes.length === 0 && (
+                    <p className="workspaceEmpty">Pro tento výběr nejsou dostupné žádné aktivní stánky.</p>
+                  )}
+                  {dbBoothTypes !== null && !boothsError && dbBoothTypes.length > 0 && (
                   <div className="boothTypeGrid">
                     {boothTypes.map(
                       (booth) => {
@@ -2669,6 +2724,7 @@ export default function BoothGenerator() {
                       }
                     )}
                   </div>
+                  )}
                 </section>
 
                 {selectedBooth &&
@@ -2738,15 +2794,7 @@ export default function BoothGenerator() {
                                 }
                               >
                                 <div className="variantPreview">
-                                  <div
-                                    className={`variantShape variantShape${
-                                      index +
-                                      1
-                                    }`}
-                                  >
-                                    <span className="variantWallA" />
-                                    <span className="variantWallB" />
-                                  </div>
+                                  <VariantCardThumbnail variant={variant} parentPhotoAsset={selectedBooth.photoAsset} label={variant.name} />
                                 </div>
 
                                 <div className="variantContent">

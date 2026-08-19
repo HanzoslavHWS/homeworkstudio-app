@@ -43,6 +43,7 @@ export function BoothAdminPage({
   const [activeKind, setActiveKind] = useState<CatalogItemKind>("booth");
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [query, setQuery] = useState("");
+  const [showArchived, setShowArchived] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
 
   useEffect(() => {
@@ -65,13 +66,13 @@ export function BoothAdminPage({
 
   const tabItems = useMemo(() => (items ?? []).filter((item) => item.kind === activeKind), [items, activeKind]);
   const listEntries = useMemo(() => tabItems.map(buildCatalogItemListEntry), [tabItems]);
-  const filters: CatalogItemAdminFilters = { query };
+  const filters: CatalogItemAdminFilters = { query, showArchived };
   // Filter first, then sort — never the DB/API return order. "Typové stánky" reads more
   // naturally sorted by internalCode (P86, P87, T04, T06, ...) than by displayName; "Komponenty
   // stánku" uses the same displayName A-Z rule as the generic Admin → Komponenty list. Both keep
   // active items first within their own ordering (domain/catalogItemsAdmin.ts).
   const sortEntries = activeKind === "booth" ? sortCatalogItemsAdminByCode : sortCatalogItemsAdminByName;
-  const filteredEntries = useMemo(() => sortEntries(filterCatalogItemsAdmin(listEntries, filters)), [listEntries, query, sortEntries]);
+  const filteredEntries = useMemo(() => sortEntries(filterCatalogItemsAdmin(listEntries, filters)), [listEntries, query, showArchived, sortEntries]);
   const selected = items?.find((item) => item.id === selectedId && item.kind === activeKind);
 
   async function handleSave(edit: CatalogItemAdminEdit): Promise<void> {
@@ -120,6 +121,10 @@ export function BoothAdminPage({
         <>
           <div className="adminFilters">
             <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat interní kód nebo název…" />
+            <label className="checkboxRow adminFiltersArchivedToggle">
+              <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
+              Zobrazit archivované
+            </label>
             {activeKind === "booth_component" && (
               <button type="button" className="primaryButton" onClick={() => { setShowCreateForm(true); setSelectedId(undefined); }}>
                 + Nová komponenta stánku

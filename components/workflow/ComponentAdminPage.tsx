@@ -192,6 +192,10 @@ export function ComponentAdminFilters({ filters, onChange }: { filters: CatalogI
         <option value="has-3d">Má 3D</option>
         <option value="missing-3d">Chybí 3D</option>
       </select>
+      <label className="checkboxRow adminFiltersArchivedToggle">
+        <input type="checkbox" checked={Boolean(filters.showArchived)} onChange={(event) => onChange({ ...filters, showArchived: event.target.checked })} />
+        Zobrazit archivované
+      </label>
     </div>
   );
 }
@@ -293,6 +297,8 @@ export function ComponentAdminDetail({
   const [modelActionError, setModelActionError] = useState("");
   const [reviewBusy, setReviewBusy] = useState(false);
   const [reviewError, setReviewError] = useState("");
+  const [archiveBusy, setArchiveBusy] = useState(false);
+  const [archiveError, setArchiveError] = useState("");
   const [sourceAssetKind, setSourceAssetKind] = useState<SourceAssetKind>("sketchup");
   const [sourceAssetProgress, setSourceAssetProgress] = useState<UploadProgress | undefined>(undefined);
   const [sourceAssetActionError, setSourceAssetActionError] = useState("");
@@ -399,6 +405,39 @@ export function ComponentAdminDetail({
       setReviewError(markError instanceof Error ? markError.message : "Označení jako zkontrolované selhalo.");
     } finally {
       setReviewBusy(false);
+    }
+  }
+
+  /**
+   * Archive/restore reuse the SAME lifecycleStatus edit field the "Aktivovat" button already
+   * uses — never a parallel isArchived boolean. Archiving is always allowed (no readiness check
+   * — an incomplete/broken item must still be archivable) and never touches document/pricing/
+   * assets/mappings/provenance, only the lifecycle_status column (see applyCatalogItemEdit).
+   * Restoring ALWAYS lands on needs_review, never active — re-activation still has to pass
+   * through the normal readiness/review/"Aktivovat" flow, enforced server-side by
+   * saveCatalogItemAdmin's existing assertCanActivate guard on any transition INTO active.
+   */
+  async function handleArchive() {
+    setArchiveBusy(true);
+    setArchiveError("");
+    try {
+      await onSave({ lifecycleStatus: "archived" });
+    } catch (archiveErr) {
+      setArchiveError(archiveErr instanceof Error ? archiveErr.message : "Archivace selhala.");
+    } finally {
+      setArchiveBusy(false);
+    }
+  }
+
+  async function handleRestore() {
+    setArchiveBusy(true);
+    setArchiveError("");
+    try {
+      await onSave({ lifecycleStatus: "needs_review" });
+    } catch (restoreErr) {
+      setArchiveError(restoreErr instanceof Error ? restoreErr.message : "Obnovení selhalo.");
+    } finally {
+      setArchiveBusy(false);
     }
   }
 
@@ -594,7 +633,7 @@ export function ComponentAdminDetail({
             <button type="button" className="secondaryButton" onClick={handleMarkReviewed} disabled={reviewBusy}>
               {reviewBusy ? "Označuji…" : "Označit jako zkontrolované"}
             </button>
-            {item.lifecycleStatus !== "active" && (
+            {item.lifecycleStatus !== "active" && item.lifecycleStatus !== "archived" && (
               <button
                 type="button"
                 className="primaryButton"
@@ -605,8 +644,18 @@ export function ComponentAdminDetail({
                 {busy === "activating" ? "Aktivuji…" : "Aktivovat"}
               </button>
             )}
+            {item.lifecycleStatus === "archived" ? (
+              <button type="button" className="secondaryButton" onClick={handleRestore} disabled={archiveBusy} title="Vrátí položku do stavu K doplnění — nikdy rovnou Aktivní.">
+                {archiveBusy ? "Obnovuji…" : "Obnovit"}
+              </button>
+            ) : (
+              <button type="button" className="dangerText" onClick={handleArchive} disabled={archiveBusy} title="Skryje položku z výchozího seznamu, zachová všechna data (ceny, assety, mappings, provenance). Nemaže nic.">
+                {archiveBusy ? "Archivuji…" : "Archivovat"}
+              </button>
+            )}
           </div>
           {reviewError && <small className="uploadError">{reviewError}</small>}
+          {archiveError && <small className="uploadError">{archiveError}</small>}
         </section>
 
         <section className="catalogDetailSection">

@@ -2040,12 +2040,20 @@ test("VARIANT readiness: T04 with 3 of 4 variants modelled is STILL not ready �
   assert.ok(readiness.issues.includes("missing_3d_asset"));
 });
 
-test("VARIANT readiness: T04 becomes ready only once ALL 4 variants have their own GLB AND SKP, and the parent has a real height", () => {
+test("VARIANT readiness: T04 becomes ready only once ALL 4 variants have their own GLB AND SKP, the parent has a real height, AND variantsConfirmed is true", () => {
   const variants = (T04_WITH_VARIANTS_DOCUMENT.variants as ReadonlyArray<Record<string, unknown>>).map((v) => ({ ...v, modelAsset: VARIANT_MODEL_ASSET, sourceAssets: [VARIANT_SKP_SOURCE_ASSET] }));
-  const adapted = { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500, variants } as unknown as ComponentDefinition;
+  const adapted = { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500, variants, variantsConfirmed: true } as unknown as ComponentDefinition;
   const readiness = evaluateCatalogReadiness(adapted, "booth");
   assert.equal(readiness.ready, true);
   assert.deepEqual(readiness.issues, []);
+});
+
+test("VARIANT readiness: complete GLB+SKP+height but variantsConfirmed still false/absent -> not ready, variants_unconfirmed", () => {
+  const variants = (T04_WITH_VARIANTS_DOCUMENT.variants as ReadonlyArray<Record<string, unknown>>).map((v) => ({ ...v, modelAsset: VARIANT_MODEL_ASSET, sourceAssets: [VARIANT_SKP_SOURCE_ASSET] }));
+  const adapted = { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500, variants } as unknown as ComponentDefinition;
+  const readiness = evaluateCatalogReadiness(adapted, "booth");
+  assert.equal(readiness.ready, false);
+  assert.deepEqual(readiness.issues, ["variants_unconfirmed"]);
 });
 
 test("VARIANT readiness: T04 with GLB on all 4 but SKP missing on one is still not ready — missing_sketchup_source", () => {
@@ -2078,8 +2086,8 @@ test("VARIANT: documentVariants parses T04's 4 variants and rejects malformed en
   assert.equal(withGarbage[0]!.id, "ok");
 });
 
-test("VARIANT end to end: saveCatalogItemAdmin persists a variant's GLB storageKey, and readiness recognizes it once all 4 have both GLB and SKP", async () => {
-  const client = createFakeSupabaseClient({ catalog_items: [t04WithVariantsRow({ document: { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500 } })] });
+test("VARIANT end to end: saveCatalogItemAdmin persists a variant's GLB storageKey, and readiness recognizes it once all 4 have GLB + SKP + a confirmed variant set", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [t04WithVariantsRow({ document: { ...T04_WITH_VARIANTS_DOCUMENT, heightMm: 2500, variantsConfirmed: true } })] });
   let saved = await saveCatalogItemAdmin(client as never, "t04-uuid", { setVariantModelAsset: { variantId: "t04-v1", asset: VARIANT_MODEL_ASSET } }, null);
   assert.deepEqual((saved.document.variants as ReadonlyArray<Record<string, unknown>>)[0]!.modelAsset, VARIANT_MODEL_ASSET);
   assert.equal(computeReadiness(saved).ready, false, "only 1 of 4 variants modelled, none have SKP — still not ready");
@@ -2092,7 +2100,23 @@ test("VARIANT end to end: saveCatalogItemAdmin persists a variant's GLB storageK
   for (const variantId of ["t04-v1", "t04-v2", "t04-v3", "t04-v4"]) {
     saved = await saveCatalogItemAdmin(client as never, "t04-uuid", { addVariantSourceAsset: { variantId, kind: "sketchup", asset: VARIANT_SKP_ASSET } }, saved.updatedAt);
   }
-  assert.equal(computeReadiness(saved).ready, true, "all 4 variants now have GLB + SKP + real height -> ready");
+  assert.equal(computeReadiness(saved).ready, true, "all 4 variants now have GLB + SKP + real height + confirmed variant set -> ready");
+});
+
+test("VARIANT end to end: the SAME fully-modelled T04 stays NOT ready if variantsConfirmed is false — matches the real T06..T25 placeholder state", async () => {
+  const client = createFakeSupabaseClient({
+    catalog_items: [t04WithVariantsRow({
+      document: {
+        ...T04_WITH_VARIANTS_DOCUMENT,
+        heightMm: 2500,
+        variantsConfirmed: false,
+        variants: (T04_WITH_VARIANTS_DOCUMENT.variants as ReadonlyArray<Record<string, unknown>>).map((v) => ({ ...v, modelAsset: VARIANT_MODEL_ASSET, sourceAssets: [VARIANT_SKP_SOURCE_ASSET] })),
+      },
+    })],
+  });
+  const saved = await saveCatalogItemAdmin(client as never, "t04-uuid", { markReviewed: true }, null);
+  assert.equal(computeReadiness(saved).ready, false);
+  assert.equal(computeGeneratorEligibleLive(saved), false);
 });
 
 test("VARIANT: T04's own kind/category/lifecycleStatus and pricingEntries are never touched by a variant asset save", async () => {
@@ -2170,4 +2194,133 @@ test("VARIANT UI: variant GLB/SKP/photo/sourceAssets upload sections remain avai
   assert.match(source, /Nahrát GLB/u);
   assert.match(source, /sourceAssetKind === "sketchup" \? "Nahrát SKP" : "Nahrát soubor"/u);
   assert.match(source, /variant\.photoAsset \? "Nahradit foto" : "Nahrát foto"/u);
+});
+
+// =========================================================================================
+// ARCHIVE (2026-08-19 follow-up session): reuses the EXISTING lifecycleStatus field/DB column —
+// no parallel isArchived boolean, no DB migration (catalog_items_lifecycle_status_check already
+// allows 'archived', see supabase/migrations/20260813120000_init_schema.sql). Archiving/restoring
+// is a pure lifecycle_status transition through the SAME save path every other edit uses —
+// document/pricing/sourceAssets/assets/mappings/provenance are completely untouched, and no R2
+// object is ever deleted (archiving only ever writes the lifecycle_status column).
+// =========================================================================================
+
+test("ARCHIVE: applyCatalogItemEdit({ lifecycleStatus: 'archived' }) changes ONLY lifecycleStatus — every other document field (pricingEntries, sourceKey, parts, printSurfaces, defaultCarpetFinishId) survives untouched, same P86-sanity guarantee as any other edit", () => {
+  const next = applyCatalogItemEdit(P86_DOCUMENT, { lifecycleStatus: "archived" });
+  assert.equal(next.lifecycleStatus, "archived");
+  assert.deepEqual(next.pricingEntries, P86_DOCUMENT.pricingEntries);
+  assert.deepEqual(next.parts, P86_DOCUMENT.parts);
+  assert.deepEqual(next.printSurfaces, P86_DOCUMENT.printSurfaces);
+  assert.equal(next.defaultCarpetFinishId, P86_DOCUMENT.defaultCarpetFinishId);
+});
+
+test("ARCHIVE: saveCatalogItemAdmin persists lifecycle_status='archived' via the normal save path — no special-cased archive column, no touch to internal_code/category/document keys beyond lifecycleStatus", async () => {
+  const client = createFakeSupabaseClient({ catalog_items: [p86Row()] });
+  const saved = await saveCatalogItemAdmin(client as never, "p86-uuid", { lifecycleStatus: "archived" }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal(saved.lifecycleStatus, "archived");
+  assert.equal(saved.internalCode, "P86");
+  assert.deepEqual(saved.document.parts, P86_DOCUMENT.parts);
+  assert.deepEqual(saved.document.printSurfaces, P86_DOCUMENT.printSurfaces);
+  assert.deepEqual(saved.document.pricingEntries, P86_DOCUMENT.pricingEntries);
+});
+
+test("ARCHIVE: an archived item preserves modelAsset/photoAsset/sourceAssets exactly — archiving is never a partial/'clean slate' rewrite", async () => {
+  const withAssets = {
+    ...SLOUPEK_DOCUMENT,
+    modelAsset: { id: "m1", storageKey: "catalog/furniture/sloupek/models/a.glb", originalFileName: "a.glb", mimeType: "model/gltf-binary", size: 1, createdAt: "2026-08-01T00:00:00.000Z", category: "catalog-model" },
+    photoAsset: { id: "p1", storageKey: "catalog/furniture/sloupek/photos/a.jpg", originalFileName: "a.jpg", mimeType: "image/jpeg", size: 1, createdAt: "2026-08-01T00:00:00.000Z", category: "catalog-photo" },
+  };
+  const client = createFakeSupabaseClient({ catalog_items: [boothComponentRow({ document: withAssets })] });
+  const saved = await saveCatalogItemAdmin(client as never, "sloupek-uuid", { lifecycleStatus: "archived" }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal(saved.lifecycleStatus, "archived");
+  assert.deepEqual(saved.document.modelAsset, withAssets.modelAsset);
+  assert.deepEqual(saved.document.photoAsset, withAssets.photoAsset);
+  assert.deepEqual(saved.document.sourceAssets, SLOUPEK_DOCUMENT.sourceAssets);
+});
+
+test("ARCHIVE: no R2 object is ever deleted by archiving — the save path never calls any storage-delete API, only writes the lifecycle_status column (metadata-only, same guarantee as photoAsset/modelAsset removal elsewhere)", () => {
+  const source = readFileSync(new URL("../lib/db/catalogItemsAdmin.supabase.ts", import.meta.url), "utf8");
+  assert.doesNotMatch(source, /deleteObject|r2\.delete|storage\.delete/iu);
+});
+
+test("ARCHIVE: an archived item is NEVER generatorEligible — isGeneratorEligible already treats any non-active lifecycleStatus as ineligible, so archived needs no extra rule", () => {
+  const archivedP86 = toAdmin(p86Row({ lifecycle_status: "archived", document: { ...P86_DOCUMENT, lifecycleStatus: "archived" } }));
+  assert.equal(computeGeneratorEligibleLive(archivedP86), false);
+  // Even though P86's own document is otherwise fully ready (booth readiness never depends on lifecycleStatus):
+  assert.equal(computeReadiness(archivedP86).ready, true, "readiness itself is about capability, not publication state — archived can still be 'ready', just never eligible");
+});
+
+test("ARCHIVE: an archived item cannot be reactivated without passing assertCanActivate — direct archived->active still requires real readiness, exactly like needs_review->active", async () => {
+  const notReadyArchived = stubRow({ lifecycle_status: "archived", document: { ...STUB_DOCUMENT, lifecycleStatus: "archived" } });
+  const client = createFakeSupabaseClient({ catalog_items: [notReadyArchived] });
+  await assert.rejects(
+    () => saveCatalogItemAdmin(client as never, "f01-uuid", { lifecycleStatus: "active" }, "2026-08-14T19:16:38.000000+00:00"),
+    (error) => error instanceof CatalogReadinessError,
+  );
+});
+
+test("ARCHIVE: default admin list hides archived items — filterCatalogItemsAdmin excludes lifecycleStatus='archived' unless showArchived is explicitly true", () => {
+  const active = buildCatalogItemListEntry(toAdmin(p86Row()));
+  const archived = buildCatalogItemListEntry(toAdmin(p86Row({ id: "archived-uuid", internal_code: "ARCH1", lifecycle_status: "archived", document: { ...P86_DOCUMENT, internalCode: "ARCH1", lifecycleStatus: "archived" } })));
+  const defaultView = filterCatalogItemsAdmin([active, archived], {});
+  assert.deepEqual(defaultView.map((e) => e.internalCode), ["P86"], "archived must be hidden by default");
+
+  const withShowArchived = filterCatalogItemsAdmin([active, archived], { showArchived: true });
+  assert.deepEqual(withShowArchived.map((e) => e.internalCode).sort(), ["ARCH1", "P86"], "showArchived:true reveals it alongside everything else");
+});
+
+test("ARCHIVE: showArchived combines correctly with other filters (e.g. kind) — archived items still respect every other active filter, they're not a bypass", () => {
+  const archivedFurniture = buildCatalogItemListEntry(toAdmin(m57Row({ lifecycle_status: "archived", document: { ...M57_DOCUMENT, lifecycleStatus: "archived" } })));
+  const archivedBooth = buildCatalogItemListEntry(toAdmin(p86Row({ id: "archived-booth", internal_code: "ARCH2", lifecycle_status: "archived", document: { ...P86_DOCUMENT, internalCode: "ARCH2", lifecycleStatus: "archived" } })));
+  const result = filterCatalogItemsAdmin([archivedFurniture, archivedBooth], { showArchived: true, kind: "furniture" });
+  assert.deepEqual(result.map((e) => e.internalCode), ["M57"]);
+});
+
+test("ARCHIVE: restoring sets lifecycleStatus to needs_review, never active — the exact same edit mechanism as archiving, just the other value", async () => {
+  const archivedP86 = p86Row({ lifecycle_status: "archived", document: { ...P86_DOCUMENT, lifecycleStatus: "archived" } });
+  const client = createFakeSupabaseClient({ catalog_items: [archivedP86] });
+  const restored = await saveCatalogItemAdmin(client as never, "p86-uuid", { lifecycleStatus: "needs_review" }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal(restored.lifecycleStatus, "needs_review");
+  assert.notEqual(restored.lifecycleStatus, "active");
+});
+
+test("ARCHIVE: a restored (needs_review) item is NOT generatorEligible until explicitly re-activated — restoring never silently re-publishes it", async () => {
+  const archivedP86 = p86Row({ lifecycle_status: "archived", document: { ...P86_DOCUMENT, lifecycleStatus: "archived" } });
+  const client = createFakeSupabaseClient({ catalog_items: [archivedP86] });
+  const restored = await saveCatalogItemAdmin(client as never, "p86-uuid", { lifecycleStatus: "needs_review" }, "2026-08-14T19:16:38.367959+00:00");
+  assert.equal(computeGeneratorEligibleLive(restored), false, "still needs_review -> not eligible until a real 'Aktivovat' happens");
+});
+
+test("ARCHIVE: restoring THEN activating goes through the exact same assertCanActivate readiness guard as any other needs_review->active transition (P86-shaped data passes, an incomplete stub does not)", async () => {
+  const archivedP86 = p86Row({ lifecycle_status: "archived", document: { ...P86_DOCUMENT, lifecycleStatus: "archived" } });
+  const client = createFakeSupabaseClient({ catalog_items: [archivedP86] });
+  const restored = await saveCatalogItemAdmin(client as never, "p86-uuid", { lifecycleStatus: "needs_review" }, "2026-08-14T19:16:38.367959+00:00");
+  const reactivated = await saveCatalogItemAdmin(client as never, "p86-uuid", { lifecycleStatus: "active" }, restored.updatedAt);
+  assert.equal(reactivated.lifecycleStatus, "active");
+  assert.equal(computeGeneratorEligibleLive(reactivated), true);
+});
+
+test("ARCHIVE: no DB migration is needed — catalog_items_lifecycle_status_check in the init migration already allows 'archived'", () => {
+  const source = readFileSync(new URL("../supabase/migrations/20260813120000_init_schema.sql", import.meta.url), "utf8");
+  assert.match(source, /catalog_items_lifecycle_status_check check \(lifecycle_status in \([^)]*'archived'/u);
+});
+
+test("ARCHIVE UI: ComponentAdminDetail shows 'Archivovat' for any non-archived item and 'Obnovit' for an archived one — mutually exclusive, never both", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /onClick=\{handleArchive\}/u);
+  assert.match(source, /onClick=\{handleRestore\}/u);
+  assert.match(source, /lifecycleStatus: "archived"/u);
+  assert.match(source, /lifecycleStatus: "needs_review"/u);
+});
+
+test("ARCHIVE UI: the 'Aktivovat' button is hidden for an archived item — direct archived->active is never offered in the UI, only Restore then a separate Activate", () => {
+  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(source, /item\.lifecycleStatus !== "active" && item\.lifecycleStatus !== "archived" && \(/u);
+});
+
+test("ARCHIVE UI: 'Zobrazit archivované' checkbox exists in both the generic Admin filters and BoothAdminPage's filter bar", () => {
+  const componentAdminSource = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
+  const boothAdminSource = readFileSync(new URL("../components/workflow/BoothAdminPage.tsx", import.meta.url), "utf8");
+  assert.match(componentAdminSource, /Zobrazit archivované/u);
+  assert.match(boothAdminSource, /Zobrazit archivované/u);
 });

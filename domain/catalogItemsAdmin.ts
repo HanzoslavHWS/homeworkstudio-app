@@ -314,6 +314,8 @@ export type CatalogItemAdminFilters = Readonly<{
   lifecycleStatus?: CatalogItemStatus | "";
   readiness?: "ready" | "not-ready" | "";
   asset?: "has-3d" | "missing-3d" | "";
+  /** Default false: archived items are hidden from every admin list unless explicitly shown — never deleted, just not cluttering the default view. */
+  showArchived?: boolean;
 }>;
 
 function normalizedText(value: string): string {
@@ -328,6 +330,9 @@ export function matchesCatalogItemAdminSearch(entry: Pick<CatalogItemAdminListEn
 
 export function filterCatalogItemsAdmin(entries: readonly CatalogItemAdminListEntry[], filters: CatalogItemAdminFilters): readonly CatalogItemAdminListEntry[] {
   return entries.filter((entry) => {
+    // Archived items are excluded from the default view regardless of any other filter —
+    // "Zobrazit archivované" is the one explicit switch that reveals them (section 3).
+    if (entry.lifecycleStatus === "archived" && !filters.showArchived) return false;
     if (filters.query && !matchesCatalogItemAdminSearch(entry, filters.query)) return false;
     if (filters.kind && entry.kind !== filters.kind) return false;
     if (filters.lifecycleStatus && entry.lifecycleStatus !== filters.lifecycleStatus) return false;
