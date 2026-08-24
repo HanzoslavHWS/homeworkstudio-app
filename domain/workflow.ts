@@ -1,10 +1,13 @@
 import type { PlacedComponent, SceneLayer } from "./models.ts";
 import type {
-  SavedCameraView,
+  VisualizationView,
   VisualizationItem,
 } from "./project.ts";
 
-export type ExportLayer = "booth" | SceneLayer | "dimensions";
+// "booth" now comes from SceneLayer itself (see domain/models.ts) rather than being unioned in
+// here separately — kept as one literal union member either way, this is just documentation of
+// where it now originates.
+export type ExportLayer = SceneLayer | "dimensions";
 
 export type ExportOptions = Readonly<{
   layers: readonly ExportLayer[];
@@ -102,11 +105,21 @@ export class TechnicalVisualizationProvider implements VisualizationProvider {
   }
 }
 
+let cameraViewSequence = 0;
+
 export function saveCameraView(
-  input: Omit<SavedCameraView, "id" | "createdAt">,
+  input: Pick<VisualizationView, "name" | "position" | "target"> &
+    Partial<Pick<VisualizationView, "fov" | "projectionMode" | "order">>,
   now = new Date().toISOString(),
-): SavedCameraView {
-  return { ...input, id: `view-${Date.now()}`, createdAt: now };
+): VisualizationView {
+  return {
+    ...input,
+    id: `view-${Date.now()}-${cameraViewSequence++}`,
+    projectionMode: input.projectionMode ?? "perspective",
+    type: "3d",
+    order: input.order ?? 0,
+    createdAt: now,
+  };
 }
 
 export function sceneObjectsForLayers(

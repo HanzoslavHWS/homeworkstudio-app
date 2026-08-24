@@ -10,6 +10,10 @@ import {
 } from "../domain/generatorBooths.ts";
 import type { CatalogItemAdmin } from "../domain/catalogItemsAdmin.ts";
 import { boothTypes } from "../data/booths.ts";
+import { componentCatalog, placeComponent } from "../data/components.ts";
+import { P86_CANONICAL_COLLISION_OBSTACLES } from "../domain/boothAssets.ts";
+import { P86_CANONICAL_PRINT_SURFACES } from "../domain/printSurfaces.ts";
+import { tryMoveComponent } from "../geometry/placement.ts";
 
 function fixture(overrides: Partial<CatalogItemAdmin> & { document?: Record<string, unknown> } = {}): CatalogItemAdmin {
   return {
@@ -144,16 +148,185 @@ test("isProductionReadyBooth: P86 (real canonical seed, no variants) is producti
 test("adaptCatalogItemToBoothType: P86 (full BoothType-shaped document) preserves parts/printSurfaces/pricingEntries/constructionParts verbatim — never a stub rewrite", () => {
   const adapted = adaptCatalogItemToBoothType(p86Fixture());
   assert.deepEqual(adapted.parts, p86RealDocument.parts);
-  assert.deepEqual(adapted.printSurfaces, p86RealDocument.printSurfaces);
+  assert.deepEqual(adapted.printSurfaces, P86_CANONICAL_PRINT_SURFACES);
   assert.deepEqual(adapted.pricingEntries, p86RealDocument.pricingEntries);
   assert.deepEqual(adapted.constructionParts, p86RealDocument.constructionParts);
   assert.deepEqual(adapted.collisionObstacles, p86RealDocument.collisionObstacles);
+});
+
+test("stale DB P86 fascia-only payload is normalized to the nine-surface canonical registry", () => {
+  const stalePrintSurfaces = [{
+    id: "fascia-print",
+    name: "Límec",
+    widthMm: 2000,
+    heightMm: 300,
+    active: true,
+  }];
+  const [runtimeBooth] = selectGeneratorBooths([
+    p86Fixture({
+      document: {
+        ...p86RealDocument,
+        lifecycleStatus: "active",
+        printSurfaces: stalePrintSurfaces,
+      } as unknown as Record<string, unknown>,
+    }),
+  ]);
+
+  assert.ok(runtimeBooth);
+  assert.deepEqual(runtimeBooth.printSurfaces, P86_CANONICAL_PRINT_SURFACES);
+  assert.equal(runtimeBooth.printSurfaces?.length, 9);
+});
+
+test("stale DB P86 collision payloads are normalized to the 30 mm physical model before generator placement", () => {
+  const staleObstacleFixtures = [
+    [
+      { id: "back-wall", x: 0, y: 0, width: 2000, height: 80 },
+      { id: "left-wall", x: 0, y: 0, width: 80, height: 1000 },
+      { id: "right-wall", x: 1920, y: 0, width: 80, height: 1000 },
+    ],
+    [
+      { id: "back-wall", x: 0, y: 1920, width: 2000, height: 80 },
+      { id: "left-wall", x: 0, y: 1000, width: 80, height: 1000 },
+      { id: "right-wall", x: 1920, y: 1000, width: 80, height: 1000 },
+    ],
+  ] as const;
+
+  for (const [fixtureIndex, collisionObstacles] of staleObstacleFixtures.entries()) {
+    const [runtimeBooth] = selectGeneratorBooths([
+      p86Fixture({
+        document: {
+          ...p86RealDocument,
+          lifecycleStatus: "active",
+          collisionObstacles,
+        } as unknown as Record<string, unknown>,
+      }),
+    ]);
+
+    assert.ok(runtimeBooth);
+    assert.deepEqual(
+      runtimeBooth.collisionObstacles,
+      P86_CANONICAL_COLLISION_OBSTACLES,
+    );
+
+    const m57 = placeComponent(
+      componentCatalog.chair,
+      `m57-stale-db-runtime-${fixtureIndex}`,
+      1000,
+      1000,
+    );
+    assert.equal(tryMoveComponent(runtimeBooth, m57, 348, 389).accepted, true);
+  }
+});
+
+test("P86 compatibility normalization does not rewrite another full booth document", () => {
+  const foreignObstacles = [
+    { id: "foreign-wall", x: 10, y: 20, width: 30, height: 40 },
+  ];
+  const foreignPrintSurfaces = [{
+    id: "foreign-surface",
+    name: "Foreign surface",
+    widthMm: 300,
+    heightMm: 400,
+    active: true,
+  }];
+  const adapted = adaptCatalogItemToBoothType(
+    p86Fixture({
+      id: "p87-uuid",
+      internalCode: "P87",
+      document: {
+        ...p86RealDocument,
+        id: "another-full-booth",
+        code: "P87",
+        internalCode: "P87",
+        collisionObstacles: foreignObstacles,
+        printSurfaces: foreignPrintSurfaces,
+      } as unknown as Record<string, unknown>,
+    }),
+  );
+
+  assert.deepEqual(adapted.collisionObstacles, foreignObstacles);
+  assert.deepEqual(adapted.printSurfaces, foreignPrintSurfaces);
+});
+
+test("P86 printable-registry JSONB migration is append-only, narrowly targeted and keeps fascia-print", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260824160000_p86_print_surface_registry.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+  assert.match(migration, /where kind = 'booth'/u);
+  assert.match(migration, /internal_code = 'P86'/u);
+  assert.match(migration, /document->>'id' = 'koje-2x2'/u);
+  assert.match(migration, /is distinct from canonical\.surfaces/u);
+  for (const surface of P86_CANONICAL_PRINT_SURFACES) {
+    assert.ok(migration.includes(`\"id\":\"${surface.id}\"`));
+    assert.ok(migration.includes(`\"nodeName\":\"${surface.sceneBinding?.nodeName}\"`));
+  }
+});
+
+test("P86 physical-collision JSONB migration is append-only, narrowly targeted and carries the canonical obstacles", () => {
+  const migration = readFileSync(
+    new URL(
+      "../supabase/migrations/20260824150000_p86_physical_collision_footprint.sql",
+      import.meta.url,
+    ),
+    "utf8",
+  );
+
+  assert.match(migration, /where kind = 'booth'/u);
+  assert.match(migration, /internal_code = 'P86'/u);
+  assert.match(migration, /document->>'id' = 'koje-2x2'/u);
+  assert.match(migration, /is distinct from canonical\.obstacles/u);
+  for (const obstacle of P86_CANONICAL_COLLISION_OBSTACLES) {
+    assert.ok(
+      migration.includes(
+        `{"id":"${obstacle.id}","x":${obstacle.x},"y":${obstacle.y},"width":${obstacle.width},"height":${obstacle.height}}`,
+      ),
+    );
+  }
 });
 
 test("adaptCatalogItemToBoothType: P86's id stays the legacy static 'koje-2x2' — the document's OWN id field wins, so old saved projects keep resolving", () => {
   const adapted = adaptCatalogItemToBoothType(p86Fixture());
   assert.equal(adapted.id, "koje-2x2");
   assert.equal(adapted.internalCode, "P86");
+});
+
+test("adaptCatalogItemToBoothType derives the canonical P86 asset for an older stored catalog document", () => {
+  const legacyDocument = {
+    ...p86RealDocument,
+    boothAsset: undefined,
+    modelUrl: "/models/booths/koje-2x2/master.glb",
+    assets: {
+      sourceId: "booth-koje-2x2",
+      scale: 1,
+      unit: "mm",
+      models3d: [
+        {
+          id: "koje-2x2-master",
+          url: "/models/booths/koje-2x2/master.glb",
+          role: "master-reference",
+          unit: "mm",
+          axisSystem: "x-right-y-depth-z-up",
+        },
+      ],
+    },
+  };
+  const adapted = adaptCatalogItemToBoothType(
+    p86Fixture({
+      document: legacyDocument as unknown as Readonly<Record<string, unknown>>,
+    }),
+  );
+
+  assert.equal(adapted.boothAsset?.assetId, "HWS_BOOTH_KOJE_2000x2000");
+  assert.equal(
+    adapted.modelUrl,
+    "/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+  );
+  assert.equal(adapted.assets?.models3d?.[0]?.unit, "m");
+  assert.equal(adapted.pricingEntries?.[0]?.salePrice, 3640);
 });
 
 test("adaptCatalogItemToBoothType: T04 (minimal ComponentDefinition-shaped document) synthesizes ONLY structural scaffold fields — size/area are DERIVED from real widthMm/depthMm, never fabricated", () => {
@@ -306,7 +479,7 @@ test("BoothGenerator.tsx's variant card thumbnail falls back variant.photoAsset 
   assert.match(match![0], /useAssetUrl\(/u);
 });
 
-test("BoothGenerator.tsx's selectedBooth lookup uses resolveGeneratorBooth (id-or-internalCode compatibility), not a plain .find", () => {
+test("BoothGenerator.tsx's selectedBooth lookup uses resolveGeneratorBooth (id-or-internalCode compatibility), not a plain .find — still true for typovka now that individualni resolves via createIndividualBooth instead", () => {
   const source = readFileSync(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
-  assert.match(source, /const selectedBooth = resolveGeneratorBooth\(boothTypes, selectedBoothId\);/u);
+  assert.match(source, /const selectedBooth =\s*\n?\s*type === "individualni" \? individualBooth : resolveGeneratorBooth\(boothTypes, selectedBoothId\);/u);
 });

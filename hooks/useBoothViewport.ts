@@ -13,6 +13,7 @@ import {
   fitWorldToViewport,
   fitBoundsToViewport,
   panViewport,
+  resolveInitialViewportFit,
   screenToWorld,
   zoomAroundScreenPoint,
   type ViewportSize,
@@ -24,6 +25,27 @@ type UseBoothViewportOptions = {
   worldWidthMm: number;
   worldHeightMm: number;
   enabled: boolean;
+  /**
+   * The bounds the INITIAL auto-fit (and any re-fit triggered by fitKey changing) should target,
+   * if different from the full worldWidthMm×worldHeightMm rectangle — e.g. Individual mode's
+   * real (usually much smaller) plot polygon inside a large 10×10 m workspace canvas. Omitted =
+   * unchanged behavior (fit to the full world rectangle), which is what typovka always uses.
+   */
+  fitBounds?: WorldBounds;
+  /**
+   * Changing this value forces a fresh auto-fit on the NEXT size measurement, even if the
+   * viewport element's pixel size hasn't actually changed. Needed because this hook is called
+   * ONCE per owning component (React hooks can't be conditional) while the DOM element it
+   * measures can be conditionally mounted/unmounted by the caller (e.g. Individual mode's
+   * Konstrukce/Mobiliář tabs share one call to this hook but their .configuratorWorkspace only
+   * mounts once a plan/3D-bearing tab is entered) — without this, re-entering a tab whose
+   * container just remounted would silently keep the STALE transform from before, since neither
+   * `enabled` nor worldWidthMm/worldHeightMm necessarily changed. Typovka never passes this, so
+   * its behavior is completely unaffected.
+   */
+  fitKey?: string | number;
+  /** Initial auto-fit waits until the booth's current visual (GLB or fallback) is ready. */
+  initialFitReady?: boolean;
 };
 
 type PanSession = {
@@ -38,6 +60,9 @@ export function useBoothViewport({
   worldWidthMm,
   worldHeightMm,
   enabled,
+  fitBounds,
+  fitKey,
+  initialFitReady = true,
 }: UseBoothViewportOptions) {
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const initializedRef = useRef(false);
@@ -57,7 +82,7 @@ export function useBoothViewport({
 
   useEffect(() => {
     initializedRef.current = false;
-  }, [worldWidthMm, worldHeightMm]);
+  }, [worldWidthMm, worldHeightMm, fitKey]);
 
   useEffect(() => {
     if (!enabled) {
@@ -76,9 +101,16 @@ export function useBoothViewport({
       };
       setViewportSize(nextSize);
 
-      if (!initializedRef.current && nextSize.width > 0 && nextSize.height > 0) {
+      const initialFit = resolveInitialViewportFit({
+        initialized: initializedRef.current,
+        visualReady: initialFitReady,
+        viewport: nextSize,
+        world: worldSize,
+        fitBounds,
+      });
+      if (initialFit) {
         initializedRef.current = true;
-        setTransform(fitWorldToViewport(nextSize, worldSize));
+        setTransform(initialFit);
       }
     };
 
@@ -86,7 +118,7 @@ export function useBoothViewport({
     const observer = new ResizeObserver(updateSize);
     observer.observe(element);
     return () => observer.disconnect();
-  }, [enabled, worldWidthMm, worldHeightMm]);
+  }, [enabled, worldWidthMm, worldHeightMm, fitKey, initialFitReady]);
 
   useEffect(() => {
     if (!enabled) {
@@ -99,10 +131,11 @@ export function useBoothViewport({
     }
 
     const handleWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) {
-        return;
-      }
-
+      // Scoped to THIS element only (addEventListener below, not window/document) — plain wheel
+      // zooms the plan directly, and Ctrl+wheel over this element is handled the exact same way
+      // (never left to fall through to the browser's own page-zoom) since preventDefault always
+      // runs here. Wheel/trackpad events outside this element are never touched — the browser
+      // behaves completely normally there.
       event.preventDefault();
       const rect = element.getBoundingClientRect();
       const anchor = {
@@ -117,7 +150,13 @@ export function useBoothViewport({
 
     element.addEventListener("wheel", handleWheel, { passive: false });
     return () => element.removeEventListener("wheel", handleWheel);
-  }, [enabled]);
+    // fitKey (not just `enabled`) so this re-attaches when the DOM element this hook measures
+    // gets freshly (re)mounted by a conditionally-rendered caller — see the fitKey doc comment
+    // above. Without it, `enabled` can already be true (and this effect already have run once,
+    // finding viewportRef.current still null) BEFORE the element actually mounts, permanently
+    // skipping the listener for the element's entire later lifetime — this was the exact cause
+    // of "wheel does nothing over the 2D plan" for Individual mode's Konstrukce/Mobiliář tabs.
+  }, [enabled, fitKey]);
 
   useEffect(() => {
     if (!enabled) {

@@ -2,12 +2,25 @@ import type { PlacedComponent, SceneLayer } from "./models.ts";
 import type { WorldBounds } from "../geometry/viewport.ts";
 
 export const PLAN_LAYER_PRIORITY: Readonly<Record<SceneLayer, number>> = {
+  // The booth's own structure renders BEHIND furniture (furniture sits inside/on top of it),
+  // which renders behind technical-point symbols, which render behind annotations.
+  booth: 20,
   furniture: 30,
   electrical: 40,
   water: 40,
   waste: 40,
   annotations: 60,
 };
+
+/**
+ * Layers that are always tiny fixed-size 2D SYMBOL markers (a circle badge, e.g. "E"/"V"/"O")
+ * rather than a real placed volume with a meaningful footprint — see app/globals.css's
+ * .technicalComponent. "furniture" and "booth" are both real placed volumes (a chair, a sloupek,
+ * a panel) and must never be rendered/filled like a technical-point symbol.
+ */
+export function isTechnicalPointLayer(layer: SceneLayer): boolean {
+  return layer === "electrical" || layer === "water" || layer === "waste" || layer === "annotations";
+}
 
 export function componentZIndex(
   component: Pick<PlacedComponent, "sceneLayer" | "displayOrder2D">,

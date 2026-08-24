@@ -3,6 +3,7 @@ import type {
   ConstructionPart,
   PlanViewType,
 } from "./models.ts";
+import { resolveBoothAssetDefinition } from "./boothAssets.ts";
 
 export type ConstructionVisibility = Readonly<Record<string, boolean>>;
 
@@ -26,6 +27,23 @@ export function isConstructionPartVisible(
   assemblyVisible = true,
 ): boolean {
   return assemblyVisible && (visibility[part.id] ?? part.visible);
+}
+
+export function isBoothConstructionPartVisible(
+  booth: Pick<BoothType, "id" | "code" | "internalCode" | "boothAsset" | "visible">,
+  part: ConstructionPart,
+  visibility: ConstructionVisibility,
+  assemblyVisible = visibility.assembly ?? booth.visible,
+): boolean {
+  const assemblyId = resolveBoothAssetDefinition(booth)?.assemblies.find(
+    (assembly) => assembly.constructionPartId === part.id,
+  )?.id;
+  return (
+    assemblyVisible &&
+    (visibility[part.id] ??
+      (assemblyId ? visibility[assemblyId] : undefined) ??
+      part.visible)
+  );
 }
 
 export function getVisiblePlanConstructionParts(

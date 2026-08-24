@@ -9,9 +9,8 @@ import {
   documentBasePricing,
   documentDimensions,
   documentFootprint2D,
-  documentHas3DAsset,
+  documentEffectiveModelReference,
   documentModelAsset,
-  documentModelUrl,
   documentPhotoAsset,
   documentPhotoUrl,
   documentReviewedAt,
@@ -276,8 +275,8 @@ export function ComponentAdminDetail({
   const photoResolved = useAssetUrl(photoAsset, legacyPhotoUrl);
 
   const modelAsset = documentModelAsset(itemDocument);
-  const legacyModelUrl = documentModelUrl(itemDocument);
-  const hasModel = documentHas3DAsset(itemDocument);
+  const effectiveModel = documentEffectiveModelReference(itemDocument);
+  const hasModel = Boolean(effectiveModel);
   const footprint2D = documentFootprint2D(itemDocument);
   const sourceAssets = documentSourceAssets(itemDocument);
   const hasSketchupSource = sourceAssets.some((entry) => entry.kind === "sketchup");
@@ -701,7 +700,7 @@ export function ComponentAdminDetail({
           <h3>3D model</h3>
           <dl>
             <Row label="Stav" value={hasModel ? "Model existuje" : "3D model chybí"} />
-            <Row label="Soubor" value={modelAsset?.originalFileName ?? (legacyModelUrl ? legacyModelUrl.split("/").pop() : undefined)} />
+            <Row label="Soubor" value={effectiveModel?.fileName} />
           </dl>
           <div className="assetActions">
             <label className="smallUploadButton">

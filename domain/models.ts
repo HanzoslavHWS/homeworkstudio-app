@@ -5,8 +5,19 @@ export type Currency = "CZK" | "EUR";
 export type RotationControlMode = "free" | "snap";
 export type PlanViewType = "ground" | "overhead";
 export type PlanRenderStyle2D = "solid" | "dashed" | "hatched";
+/**
+ * "booth" = the physical booth structure itself — a typovka's captured CAD snapshot (see
+ * ExportLayer's pre-existing "booth" literal, domain/workflow.ts) OR, for Individual mode, the
+ * individually placed kind=booth_component instances (sloupky/panely/dveře/...). Deliberately
+ * the SAME literal ExportLayer already used for the booth's own CAD snapshot toggle — both are
+ * "the booth's own build", just realized two different ways depending on project type — rather
+ * than a second, parallel "construction" layer. See domain/generatorBoothComponents.ts for where
+ * new booth_component instances are given this layer, and domain/catalogReadiness.ts's
+ * booth_component case for why it's kept separate from "furniture" (Phase 1 vs Phase 2).
+ */
 export type SceneLayer =
   | "furniture"
+  | "booth"
   | "electrical"
   | "water"
   | "waste"
@@ -85,12 +96,39 @@ export type PartRole =
   | "fascia"
   | "furniture_body";
 
+export type PrintSurfaceFace = "front" | "back";
+
+/**
+ * Explicit authored-scene binding for one business print-surface id. FRONT/BACK are resolved
+ * in the GLB node's local component coordinates, never from a wall's current WORLD rotation or
+ * from the camera. `localNormalAxis` makes the physical side unambiguous even when a GLB only
+ * declares printable_front/printable_back booleans without naming the corresponding axis.
+ */
+export type PrintSurfaceSceneBinding = Readonly<{
+  nodeName: string;
+  face: PrintSurfaceFace;
+  coordinateSpace: "node-local";
+  localNormalAxis: "-y" | "+y";
+}>;
+
+export type PrintSurfaceGroup = Readonly<{
+  id: string;
+  name: string;
+  order: number;
+}>;
+
 export type PrintSurface = Readonly<{
   id: string;
   name: string;
   widthMm: number;
   heightMm: number;
+  /** Legacy whole-node binding. New authored booth surfaces use sceneBinding. */
   nodeName?: string;
+  sceneBinding?: PrintSurfaceSceneBinding;
+  group?: PrintSurfaceGroup;
+  order?: number;
+  /** Absent keeps the legacy automatic project-assignment behavior. */
+  assignmentMode?: "automatic" | "on-demand";
   materialRole?: MaterialRole;
   orientation?: "portrait" | "landscape" | "custom";
   active: boolean;
@@ -226,9 +264,30 @@ export type CadModelAsset = Readonly<{
   id: string;
   url: string;
   role: CadModelRole;
-  unit: "mm";
+  /** Unit used by numeric vertex/node transforms inside the GLB. */
+  unit: "mm" | "m";
   axisSystem: CadAxisSystem;
   anchor?: "cad-origin" | "footprint-center-floor";
+}>;
+
+export type BoothAssemblyDefinition = Readonly<{
+  /** Case-sensitive canonical GLB node name. */
+  id: string;
+  /** Existing Scene tree / constructionVisibility key. */
+  constructionPartId: string;
+  defaultVisible: boolean;
+}>;
+
+export type BoothAssetDefinition = Readonly<{
+  /** Case-sensitive canonical HWS asset id (without extension). */
+  assetId: string;
+  catalogItemId: string;
+  boothCode: string;
+  glbAssetPath: string;
+  nominalDimensions: NominalDimensions;
+  originConvention: "completed-physical-footprint-center-floor";
+  assemblies: readonly BoothAssemblyDefinition[];
+  printableSurfaceCapability: "gltf-node-metadata";
 }>;
 
 export type AssetReference = Readonly<{
@@ -272,6 +331,7 @@ export type BoothType = Readonly<{
   collisionObstacles: readonly CollisionRect[];
   pricing: ConstructionPricingPolicy;
   assets?: AssetReference;
+  boothAsset?: BoothAssetDefinition;
   internalCode?: string;
   thumbnailUrl?: string;
   thumbnailAsset?: StoredAsset;
@@ -421,11 +481,60 @@ export type ComponentDefinition = Readonly<{
    * however complete its variants' individual GLB/SKP assets happen to be.
    */
   variantsConfirmed?: boolean;
+  /**
+   * Individual-mode construction-assembly foundation (booth_component kind): explicit,
+   * human-authored connection/socket metadata — NEVER derived from the GLB's bounding box,
+   * material, color, or file name, and NEVER auto-populated for existing catalog rows (a
+   * booth_component with no connectionPoints is simply not yet assembly-aware; it stays fully
+   * placeable/rotatable/movable on its own). See ConnectionPoint's own doc comment for why this
+   * is deliberately separate from the GLB anchor/pivot.
+   */
+  connectionPoints?: readonly ConnectionPoint[];
+}>;
+
+/**
+ * A single Octanorm-style connection socket on a booth_component — e.g. one of a ~40×40 mm
+ * sloupek's 8 radial grooves, or a panel's left/right endpoint. Deliberately modeled SEPARATELY
+ * from the GLB pivot/anchor (domain/models.ts's CadModelAsset.anchor, always
+ * "footprint-center-floor" for booth_component per the existing convention): the anchor is where
+ * the RUNTIME centers/floors the loaded mesh, while a connection point is a construction-logic
+ * position that can be anywhere on the component relative to that anchor. This split is what
+ * lets a future smart-assembly/snapping engine be built WITHOUT ever having to re-author or
+ * re-anchor existing GLB files.
+ *
+ * This session only introduces the data shape and a pure world-position resolver (domain/
+ * connectionPoints.ts) — there is deliberately no automatic snapping/matching engine yet (see
+ * the Individual-mode foundation report's "not yet implemented" section).
+ */
+export type ConnectionPoint = Readonly<{
+  id: string;
+  /**
+   * Position in mm, relative to the component's OWN local origin (the same local space its GLB
+   * anchor centers to) at rotationDeg=0 — NOT a world coordinate. See domain/connectionPoints.ts's
+   * resolveConnectionPointWorldPosition for the rotationDeg/xMm/yMm transform into world space.
+   */
+  localPosition: Readonly<{ x: number; y: number }>;
+  /**
+   * Direction this socket faces, in degrees, measured the SAME way as PlacedComponent.rotationDeg
+   * (about the vertical/up axis) at the component's own rotationDeg=0. An Octanorm column socket
+   * uses one of the 8 values 0/45/90/135/180/225/270/315 — see
+   * domain/generatorBoothComponents.ts's DEFAULT_BOOTH_COMPONENT_ROTATION for why 45° is this
+   * kind's own default rotation step. Not restricted to those 8 values at the type level (a panel
+   * endpoint might face any single direction), but never free/continuous in practice for a
+   * construction socket.
+   */
+  directionDeg: number;
+  /** Freeform, human-authored construction role (e.g. "octanorm-column", "panel-edge") — never inferred from geometry/material/file name. Optional: a socket can exist before its role is decided. */
+  role?: string;
+  /** Freeform compatibility tags a future matching/snapping engine could use to decide which sockets may connect to each other — never auto-inferred, never required. */
+  compatibility?: readonly string[];
 }>;
 
 export type PlacedComponent = Notes & {
   id: string;
   definitionId: string;
+  /** Stable catalog identity used by asset-specific runtime policies. */
+  internalCode?: string;
   type: string;
   name: string;
   category: string;
@@ -446,6 +555,17 @@ export type PlacedComponent = Notes & {
   frontDirectionDeg?: number;
   sceneLabel: string;
   assets?: AssetReference;
+  /**
+   * Per-instance runtime GLB reference, propagated verbatim from the ComponentDefinition this
+   * instance was placed from (data/components.ts's placeComponent) — the SAME two fields
+   * ComponentDefinition itself carries, never a third shape. `assets.models3d[role="component"]`
+   * (legacy static-file convention) is the final fallback for a
+   * DB-catalog-sourced item (e.g. a real booth_component uploaded via Admin) that has no
+   * models3d[] entry at all — see components/configurator/BoothCadViewer.tsx's per-component
+   * model resolution and domain/cad3d.ts's resolveComponentModelReference.
+   */
+  modelUrl?: string;
+  modelAsset?: StoredAsset;
   showIn2D: boolean;
   showIn3D: boolean;
   sceneLayer: SceneLayer;

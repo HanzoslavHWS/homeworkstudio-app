@@ -12,6 +12,7 @@ import {
   computeReadiness,
   documentBasePricing,
   documentDimensions,
+  documentEffectiveModelReference,
   documentFootprint2D,
   documentHas3DAsset,
   documentModelAsset,
@@ -176,6 +177,25 @@ function p86Row(overrides: Partial<FakeRow> = {}): FakeRow {
     ...overrides,
   };
 }
+
+test("admin resolves P86 to the canonical boothAsset before its legacy master.glb fallback", () => {
+  assert.deepEqual(documentEffectiveModelReference(P86_DOCUMENT), {
+    kind: "booth-asset",
+    url: "/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+    fileName: "HWS_BOOTH_KOJE_2000x2000.glb",
+  });
+});
+
+test("admin keeps a legacy modelUrl fallback for catalog items without boothAsset metadata", () => {
+  assert.deepEqual(
+    documentEffectiveModelReference({ id: "legacy-booth", modelUrl: "/models/legacy/master.glb" }),
+    {
+      kind: "legacy-url",
+      url: "/models/legacy/master.glb",
+      fileName: "master.glb",
+    },
+  );
+});
 
 // A booth_component (individual booth-construction element) — unlike "booth", this kind DOES
 // require an evidenced SKP source for readiness (Part 28), so it fully evidences one by default.

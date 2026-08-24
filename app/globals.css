@@ -1073,8 +1073,12 @@ select:focus {
 .visualizationWorkspace { height: min(65vh, 690px); margin-bottom: 18px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
 .visualizationWorkspace .cadViewer { height: 100%; }
 .cadViewButtons { display: flex; flex-wrap: wrap; gap: 5px; }
-.savedViewAction { display: inline-flex; }
-.savedViewAction button { border-radius: 0; }
+.visualizationViewCard { display: grid; gap: 5px; padding: 7px; border: 1px solid #e5e6e6; border-radius: 6px; background: #fff; }
+.visualizationViewCard > label { padding: 0; border: 0; }
+.visualizationViewCard > button { min-height: 28px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 8px; font-weight: 700; }
+.visualizationViewActions { display: grid; grid-template-columns: 1fr auto auto 1fr; gap: 4px; }
+.visualizationViewActions button { min-height: 25px; padding: 0 6px; border: 1px solid #e2e3e4; border-radius: 4px; background: white; font-size: 7px; }
+.visualizationViewActions button:disabled { opacity: 0.38; }
 .visualizationGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
 .visualizationGrid figure { overflow: hidden; border: 1px solid #e4e5e5; border-radius: 8px; }
 .visualizationGrid img { width: 100%; display: block; }
@@ -2267,20 +2271,30 @@ select:focus {
   font-size: 10px;
 }
 
-.individualPlaceholder {
-  min-height: 300px;
-
+.individualPlotSection .individualPlotForm {
   display: flex;
-  flex-direction: column;
-  justify-content: center;
+  flex-wrap: wrap;
 
-  padding: 35px;
+  gap: 20px;
 
-  border: 1px dashed #c8cacc;
+  max-width: 420px;
 
-  border-radius: 14px;
+  margin-top: 18px;
+}
 
-  color: #96999b;
+.individualPlotSection .individualPlotForm .coordinateField {
+  flex: 1 1 160px;
+  grid-template-columns: 60px minmax(0, 1fr);
+}
+
+.individualPlotSection .individualPlotForm .coordinateInputWrap {
+  height: 42px;
+
+  font-size: 13px;
+}
+
+.individualPlotSection .individualPlotForm .coordinateInputWrap input {
+  font-size: 14px;
 }
 
 /* ================================================= */
@@ -2851,19 +2865,6 @@ select:focus {
   font-size: 8px;
 
   letter-spacing: 0;
-}
-
-.planToolbarInfo .collisionOn {
-  padding: 5px 7px;
-
-  border-radius: 4px;
-
-  background: #18191b;
-  color: white;
-
-  font-size: 7px;
-
-  letter-spacing: 0.8px;
 }
 
 .viewportToolbar {
@@ -3481,6 +3482,430 @@ select:focus {
   touch-action: none;
 }
 
+/* ================================================= */
+/* PLOT / FLOOR ZONE POLYGON EDITOR                 */
+/* ================================================= */
+
+.individualSubStepNav {
+  display: flex;
+  gap: 8px;
+
+  margin-bottom: 18px;
+}
+
+.individualSubStepTab {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  padding: 9px 16px;
+
+  border: 1px solid #dedfe0;
+  border-radius: 999px;
+
+  background: white;
+  color: #6b6f73;
+
+  font-size: 11px;
+  font-weight: 700;
+
+  cursor: pointer;
+}
+
+.individualSubStepTab span {
+  display: grid;
+  place-items: center;
+
+  width: 18px;
+  height: 18px;
+
+  border-radius: 50%;
+
+  background: #f0f0f0;
+  color: #6b6f73;
+
+  font-size: 9px;
+}
+
+.individualSubStepTab.active {
+  border-color: #18191b;
+
+  background: #18191b;
+  color: white;
+}
+
+.individualSubStepTab.active span {
+  background: rgba(255, 255, 255, 0.18);
+  color: white;
+}
+
+.subStepWarning {
+  color: #b3413d;
+  font-style: normal;
+}
+
+.subStepDone {
+  color: #2f7d4f;
+  font-style: normal;
+}
+
+.individualPlotLockBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+
+  gap: 12px;
+
+  margin-top: 14px;
+}
+
+.individualStepStatusConfirmed {
+  font-size: 11px;
+  color: #2f7d4f;
+}
+
+.individualSubStepPanel {
+  margin-bottom: 20px;
+
+  padding: 18px;
+
+  border: 1px solid #e3e4e5;
+  border-radius: 12px;
+
+  background: #fbfbfb;
+}
+
+.floorZoneSummary {
+  display: flex;
+  flex-wrap: wrap;
+
+  gap: 16px;
+
+  margin-bottom: 14px;
+
+  font-size: 11px;
+  color: #6b6f73;
+}
+
+.floorZoneSummary strong {
+  color: #18191b;
+}
+
+.floorZoneList {
+  display: flex;
+  flex-direction: column;
+
+  gap: 8px;
+
+  margin-bottom: 16px;
+}
+
+.floorZoneRow {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  padding: 6px;
+
+  border: 1px solid #e3e4e5;
+  border-radius: 8px;
+
+  background: white;
+}
+
+.floorZoneRow.active {
+  border-color: #18191b;
+}
+
+.floorZoneRow select {
+  height: 30px;
+
+  border: 1px solid #dedfe0;
+  border-radius: 6px;
+
+  font-size: 10px;
+}
+
+.floorZoneColorInput {
+  height: 30px;
+  width: 140px;
+
+  padding: 0 8px;
+
+  border: 1px solid #dedfe0;
+  border-radius: 6px;
+
+  font-size: 10px;
+}
+
+.primitiveBuilder {
+  margin-bottom: 14px;
+
+  padding: 12px;
+
+  border: 1px solid #e3e4e5;
+  border-radius: 10px;
+
+  background: #fbfbfb;
+}
+
+.primitiveList {
+  display: flex;
+  flex-direction: column;
+
+  gap: 8px;
+
+  margin: 8px 0;
+}
+
+.primitiveRow {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+
+  gap: 8px;
+
+  padding: 6px;
+
+  border: 1px solid #e3e4e5;
+  border-radius: 8px;
+
+  background: white;
+}
+
+.primitiveRowLabel {
+  min-width: 20px;
+
+  font-size: 10px;
+  font-weight: 700;
+  color: #6b6f73;
+}
+
+.primitiveMoveGroup {
+  display: flex;
+  gap: 2px;
+}
+
+.primitiveActionsBar {
+  display: flex;
+  gap: 8px;
+}
+
+.plotPrimitiveShape {
+  fill: rgba(63, 101, 110, 0.1);
+  stroke: #3f656e;
+  stroke-dasharray: 3 3;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.plotPolygonEditor {
+  display: flex;
+  flex-direction: column;
+
+  gap: 14px;
+}
+
+.plotEditorToolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+
+  gap: 10px;
+}
+
+.plotQuickRectangle {
+  display: flex;
+  align-items: center;
+
+  gap: 8px;
+
+  margin-left: auto;
+}
+
+.plotQuickRectangle .coordinateField {
+  width: 120px;
+}
+
+.individualWorkspaceSizeBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+
+  gap: 10px;
+
+  margin-bottom: 10px;
+}
+
+.individualWorkspaceSizeLabel {
+  margin-right: 4px;
+
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: #6b6f73;
+}
+
+.plotAreaSummary {
+  display: flex;
+  gap: 20px;
+
+  padding: 10px 14px;
+
+  border: 1px solid #e3e4e5;
+  border-radius: 8px;
+
+  background: #fafafa;
+
+  font-size: 11px;
+  color: #6b6f73;
+}
+
+.plotAreaSummary strong {
+  color: #18191b;
+}
+
+.plotEditorSecondaryBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+
+  gap: 10px;
+}
+
+/*
+ * Dedicated, SELF-CONTAINED viewport classes — deliberately NOT boothViewport/canvasArea/
+ * viewportStage. Those shared names carry a global override several thousand lines below
+ * (.boothViewport { height: 100%; min-height: 0 } in the "WORKFLOW DENSITY" section) that only
+ * resolves correctly because the typovka configurator's .canvasArea sits inside
+ * .configuratorWorkspace's CSS grid, which stretches it to a definite height first. This editor
+ * is mounted standalone (Individual mode's Plocha/Podlaha tabs, outside that grid), so reusing
+ * those classes silently collapsed to 0px height — the root cause of "the drawing canvas isn't
+ * visible" (see the foundation report). Every dimension here is explicit and self-contained.
+ */
+.plotEditorViewportArea {
+  position: relative;
+}
+
+.plotEditorViewport {
+  position: relative;
+
+  width: 100%;
+  height: min(62vh, 650px);
+  min-height: 460px;
+
+  overflow: hidden;
+
+  cursor: default;
+
+  border: 1px solid #dfe1e2;
+  border-radius: 10px;
+
+  background: #f5f6f6;
+}
+
+.plotEditorViewport.panReady {
+  cursor: grab;
+}
+
+.plotEditorViewport.panning {
+  cursor: grabbing;
+}
+
+.plotEditorViewportStage {
+  position: absolute;
+
+  top: 0;
+  left: 0;
+
+  transform-origin: 0 0;
+
+  will-change: transform;
+}
+
+.plotEditorCanvas {
+  position: absolute;
+  inset: 0;
+
+  width: 100%;
+  height: 100%;
+
+  background: #ffffff;
+
+  touch-action: none;
+}
+
+.plotGridLine {
+  /* 250mm (finest) tier — Turn 5 LIVE QA section 1: lightened slightly further so the 1000mm
+     tier reads as clearly dominant at any zoom level, not just "a bit darker". */
+  stroke: #e7e9ea;
+  vector-effect: non-scaling-stroke;
+}
+
+.plotGridLine-medium {
+  stroke: #cfd2d3;
+  stroke-width: 1.4;
+}
+
+.plotGridLine-strong {
+  /* 1000mm tier — must stay unambiguously dominant over 250/500mm even zoomed far out (report
+     section 1); darkened from #b3b6b8 and widened from 1.8 for that. Snap itself is unaffected —
+     this is purely visual (LOD tier selection stays in PlotPolygonEditor.tsx, untouched). */
+  stroke: #6b6f73;
+  stroke-width: 2.2;
+}
+
+.plotOutsideMask {
+  fill: rgba(120, 123, 128, 0.16);
+  pointer-events: none;
+}
+
+.plotShape {
+  fill: rgba(24, 25, 27, 0.06);
+  stroke: #18191b;
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.plotShape.drawing {
+  fill: rgba(24, 25, 27, 0.03);
+  stroke-dasharray: 6 4;
+}
+
+.plotShape.invalid {
+  stroke: #b3413d;
+}
+
+.plotReferenceShape {
+  fill: none;
+  stroke: #9599a0;
+  stroke-dasharray: 4 4;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.plotPreviewEdge {
+  stroke: #18191b;
+  stroke-dasharray: 3 3;
+  stroke-width: 1.4;
+  vector-effect: non-scaling-stroke;
+}
+
+.plotVertex {
+  fill: #18191b;
+  stroke: #ffffff;
+  stroke-width: 6;
+  vector-effect: non-scaling-stroke;
+  cursor: grab;
+}
+
+.plotVertex.closable {
+  fill: #4a8f5c;
+}
+
 .viewportStage .boothCanvas {
   position: absolute;
 
@@ -3586,6 +4011,39 @@ select:focus {
   color: #8a5959;
 
   font-size: 6px;
+}
+
+.canonicalBoothPlanLayer {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease, filter 0.15s ease;
+}
+
+.canonicalBoothPlanLayer.hidden {
+  opacity: 0;
+}
+
+.canonicalBoothPlanLayer.selected {
+  filter: drop-shadow(0 0 2px rgba(24, 25, 27, 0.72));
+}
+
+.canonicalBoothPlanLayer svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+.canonicalBoothConstructionArea {
+  fill: #24272a;
+  stroke: none;
+}
+
+.canonicalBoothConstructionProfile {
+  fill: #111315;
+  stroke: none;
 }
 
 .fixedWall {
@@ -3939,6 +4397,13 @@ select:focus {
   border-radius: 12%;
 
   background: #ffffff;
+}
+
+/** Individual-mode booth_component instances (sloupky/panely/dveře/...) — a real placed volume like furniture, but visually distinct so Phase 1 (construction) never reads as Phase 2 (mobiliář). */
+.constructionComponent {
+  border-color: #6b6f73;
+
+  background: #eceeef;
 }
 
 /**
@@ -5230,6 +5695,24 @@ select:focus {
 .printSurfaceInspector { margin: 10px 12px; padding: 10px; border: 1px solid #dedfe0; border-radius: 7px; background: #fafafa; }
 .printSurfaceActions { display: flex; gap: 5px; margin-top: 8px; }
 .printSurfaceActions button { min-height: 27px; padding: 0 7px; border: 1px solid #d8dadd; border-radius: 4px; background: white; font-size: 7px; }
+.graphicsSurfacePanel { display: grid; gap: 9px; margin: 10px 12px; padding: 10px; border: 1px solid #dedfe0; border-radius: 7px; background: #fafafa; }
+.graphicsSurfacePanelHeader { display: grid; gap: 4px; }
+.graphicsSurfacePanelHeader small { color: #85898c; font-size: 7px; line-height: 1.4; }
+.graphicsSurfaceGroup { display: grid; gap: 5px; }
+.graphicsSurfaceGroup > strong { color: #6d7174; font-size: 8px; }
+.graphicsSurfaceRow { display: grid; gap: 7px; padding: 7px; border: 1px solid #e2e4e5; border-radius: 5px; background: white; cursor: pointer; }
+.graphicsSurfaceRow.selected { border-color: #8c795c; box-shadow: inset 2px 0 #8c795c; }
+.graphicsSurfaceIdentity { display: grid; gap: 2px; min-width: 0; }
+.graphicsSurfaceIdentity > strong { font-size: 8px; }
+.graphicsSurfaceIdentity > span { overflow: hidden; color: #575b5e; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.graphicsSurfaceIdentity > small { color: #96999c; font-size: 6px; line-height: 1.35; }
+.graphicsSurfaceActions { display: flex; flex-wrap: wrap; gap: 4px; }
+.graphicsSurfaceActions button,
+.graphicsSurfaceActions select,
+.graphicsSurfaceActions .filePicker.compact { min-height: 25px; max-width: 100%; padding: 0 6px; border: 1px solid #d8dadd; border-radius: 4px; background: white; color: #5c6063; font-size: 7px; }
+.graphicsSurfaceActions select { min-width: 0; flex: 1 1 110px; }
+.graphicsSurfaceActions .filePicker.compact { display: inline-flex; align-items: center; margin: 0; cursor: pointer; }
+.graphicsSurfaceActions .filePicker.compact input { display: none; }
 .sceneOrderButton { font-size: 9px; }
 .cadViewerToolbars { position: absolute; z-index: 8; top: 10px; left: 10px; right: 10px; display: grid; gap: 5px; pointer-events: none; }
 .cadViewerToolbars .cadViewerToolbar { position: static; pointer-events: auto; }
@@ -5345,6 +5828,23 @@ select:focus {
 .measurementPreview svg { width: 100%; height: 100%; overflow: visible; }
 .measurementPreview line { stroke: #3f656e; stroke-width: 3; stroke-dasharray: 12 8; vector-effect: non-scaling-stroke; }
 .measurementPreview circle { fill: rgba(255,255,255,.9); stroke: #3f656e; stroke-width: 3; vector-effect: non-scaling-stroke; }
+.plotOutlineOverlay { position: absolute; z-index: 5; inset: 0; pointer-events: none; }
+.plotOutlineOverlay svg { width: 100%; height: 100%; overflow: visible; }
+.plotOutlineShape { fill: none; stroke: #18191b; stroke-width: 2.5; stroke-dasharray: 10 6; vector-effect: non-scaling-stroke; }
+.plotOutlineFloorZone { fill: rgba(74, 143, 92, 0.08); stroke: #4a8f5c; stroke-width: 1.4; stroke-dasharray: 4 4; vector-effect: non-scaling-stroke; }
+/* Report section 24: the "uncovered" (bez krytiny) booth area — deliberately a neutral, flat
+   technical fill, never styled to look like a chosen material/carpet. Confirmed zones (below)
+   are drawn on top of this in z-order, so the visible remainder is correct with no polygon
+   difference math needed for rendering. */
+.plotUncoveredFill { fill: #f2f2f2; stroke: none; }
+/* Report section 25: each confirmed finish gets its own distinguishable, still-neutral swatch —
+   real material/color selection is future scope (report section 19/20's swatch foundation); this
+   is only enough to tell zones apart from each other and from the uncovered area at a glance. */
+.plotFloorZoneFill-carpet { fill: #d8c9b8; stroke: #8a715a; stroke-dasharray: none; }
+.plotFloorZoneFill-vinyl { fill: #c3d3da; stroke: #4d6b78; stroke-dasharray: none; }
+.plotFloorZoneFill-laminate { fill: #e0d2ab; stroke: #8a7541; stroke-dasharray: none; }
+.plotFloorZoneFill-other { fill: #d6cee0; stroke: #6f5f82; stroke-dasharray: none; }
+.plotFloorZoneFill-none { fill: #eceeee; stroke: #9599a0; stroke-dasharray: none; }
 .generatedOutputSection { display: grid; gap: 8px; margin-top: 12px; }
 .generatedOutputSection h3 { margin: 0; color: #85898c; font-size: 8px; letter-spacing: .06em; }
 .generatedOutputFigure .outputPreviewButton { display: block; width: 100%; padding: 0; border: 0; background: #f4f5f5; cursor: zoom-in; }

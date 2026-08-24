@@ -6,6 +6,7 @@ import type {
   PlacedComponent,
 } from "../../domain/models";
 import { groupConstructionParts } from "../../domain/construction";
+import { hasAssemblyMapping } from "../../domain/boothAssets";
 
 type ScenePanelProps = {
   booth: BoothType;
@@ -18,6 +19,13 @@ type ScenePanelProps = {
   carpetVariants?: readonly FinishVariant[];
   carpetFinishId?: string;
   onCarpetFinishChange?: (finishId: string) => void;
+  /**
+   * Report section 21/22: the legacy single-carpet control below is superseded, for Individual
+   * projects, by the Podlaha step's per-zone floorZones (domain/floorZones.ts) — showing both
+   * would give two independent places that could set flooring. Defaults to true so Typovka
+   * (which has no Podlaha step) keeps this control exactly as before.
+   */
+  showFloorControl?: boolean;
   onSelectComponent: (componentId: string) => void;
   onSelectConstructionPart: (partId: string) => void;
   onToggleComponentLock: (componentId: string) => void;
@@ -77,12 +85,18 @@ function TreeHeader({ label, open, onToggle }: { label: string; open: boolean; o
 }
 
 export function ScenePanel(props: ScenePanelProps) {
-  const [openGroups, setOpenGroups] = useState({ construction: true, overhead: true, floor: true, furniture: true });
+  const [openGroups, setOpenGroups] = useState({ construction: true, overhead: true, floor: true, boothComponents: true, furniture: true });
   const toggle = (key: keyof typeof openGroups) => setOpenGroups((value) => ({ ...value, [key]: !value[key] }));
   const assemblyName = props.variant ? `${props.booth.name} / ${props.variant.name}` : props.booth.name;
   const groups = groupConstructionParts(props.booth.constructionParts);
   const assemblyVisible = props.constructionVisibility.assembly ?? props.booth.visible;
-  const perPartVisibilityAvailable = Boolean(props.booth.partDefinitions?.length);
+  const mappedAssemblies = props.booth.boothAsset?.assemblies;
+  // Individual-mode booth_component instances (sloupky/panely/dveře/...) get their OWN "Konstrukce
+  // stánku" group — never lumped under "Mobiliář" below, so Phase 1 (construction) stays visibly
+  // separate from the future Phase 2 (furniture). Typovka never places a "booth"-layer instance,
+  // so boothComponents is always empty there and this group simply never renders.
+  const boothComponents = props.components.filter((item) => item.sceneLayer === "booth");
+  const furnitureAndOtherComponents = props.components.filter((item) => item.sceneLayer !== "booth");
 
   return <div className="scenePanel">
     <span className="propertySectionTitle">SCÉNA</span>
@@ -90,21 +104,28 @@ export function ScenePanel(props: ScenePanelProps) {
       <TreeHeader label="Konstrukce" open={openGroups.construction} onToggle={() => toggle("construction")} />
       {openGroups.construction && <div className="sceneTreeChildren">
         <SceneItem kind="construction" label={assemblyName} selected={props.selectedConstructionPartId === "assembly"} visible={assemblyVisible} systemLocked={props.booth.systemLocked} userLocked={props.constructionUserLocks.assembly ?? props.booth.userLocked} onSelect={() => props.onSelectConstructionPart("assembly")} onToggleVisibility={() => props.onToggleConstructionVisibility("assembly")} onToggleLock={() => props.onToggleConstructionLock("assembly")} />
-        {groups.ground.map((part) => <SceneItem key={part.id} nested kind="construction" label={part.name} selected={props.selectedConstructionPartId === part.id} visible={props.constructionVisibility[part.id] ?? part.visible} systemLocked={part.systemLocked} userLocked={props.constructionUserLocks[part.id] ?? part.userLocked} visibilityDisabled={!perPartVisibilityAvailable} onSelect={() => props.onSelectConstructionPart(part.id)} onToggleVisibility={() => props.onToggleConstructionVisibility(part.id)} onToggleLock={() => props.onToggleConstructionLock(part.id)} />)}
+        {groups.ground.map((part) => <SceneItem key={part.id} nested kind="construction" label={part.name} selected={props.selectedConstructionPartId === part.id} visible={props.constructionVisibility[part.id] ?? part.visible} systemLocked={part.systemLocked} userLocked={props.constructionUserLocks[part.id] ?? part.userLocked} visibilityDisabled={!hasAssemblyMapping(mappedAssemblies, part.id)} onSelect={() => props.onSelectConstructionPart(part.id)} onToggleVisibility={() => props.onToggleConstructionVisibility(part.id)} onToggleLock={() => props.onToggleConstructionLock(part.id)} />)}
         {groups.overhead.length > 0 && <div className="sceneNestedGroup">
           <TreeHeader label="Horní konstrukce" open={openGroups.overhead} onToggle={() => toggle("overhead")} />
-          {openGroups.overhead && groups.overhead.map((part) => <SceneItem key={part.id} nested kind="overhead" label={part.name} selected={props.selectedConstructionPartId === part.id} visible={props.constructionVisibility[part.id] ?? part.visible} systemLocked={part.systemLocked} userLocked={props.constructionUserLocks[part.id] ?? part.userLocked} visibilityDisabled={!perPartVisibilityAvailable} onSelect={() => props.onSelectConstructionPart(part.id)} onToggleVisibility={() => props.onToggleConstructionVisibility(part.id)} onToggleLock={() => props.onToggleConstructionLock(part.id)} />)}
+          {openGroups.overhead && groups.overhead.map((part) => <SceneItem key={part.id} nested kind="overhead" label={part.name} selected={props.selectedConstructionPartId === part.id} visible={props.constructionVisibility[part.id] ?? part.visible} systemLocked={part.systemLocked} userLocked={props.constructionUserLocks[part.id] ?? part.userLocked} visibilityDisabled={!hasAssemblyMapping(mappedAssemblies, part.id)} onSelect={() => props.onSelectConstructionPart(part.id)} onToggleVisibility={() => props.onToggleConstructionVisibility(part.id)} onToggleLock={() => props.onToggleConstructionLock(part.id)} />)}
         </div>}
       </div>}
     </div>
-    <div className="sceneTreeGroup">
+    {props.showFloorControl !== false && <div className="sceneTreeGroup">
       <TreeHeader label="Podlaha" open={openGroups.floor} onToggle={() => toggle("floor")} />
       {openGroups.floor && <div className="sceneFloorControl"><span className="sceneTypeIcon"><Icon kind="floor" /></span><label><span>Koberec</span><select value={props.carpetFinishId ?? "none"} onChange={(event) => props.onCarpetFinishChange?.(event.target.value)}>{props.carpetVariants?.map((variant) => <option key={variant.id} value={variant.id}>{variant.name}</option>)}</select></label></div>}
-    </div>
+    </div>}
+    {boothComponents.length > 0 && <div className="sceneTreeGroup">
+      <TreeHeader label="Konstrukce stánku" open={openGroups.boothComponents} onToggle={() => toggle("boothComponents")} />
+      {openGroups.boothComponents && <div className="sceneTreeChildren">{boothComponents.map((component, index) => {
+        const number = boothComponents.slice(0, index + 1).filter((item) => item.sceneLabel === component.sceneLabel).length;
+        return <SceneItem key={component.id} kind="construction" label={`${component.sceneLabel} ${String(number).padStart(2, "0")}`} selected={props.selectedComponentId === component.id} visible={component.visible} systemLocked={component.systemLocked} userLocked={component.userLocked} onSelect={() => props.onSelectComponent(component.id)} onToggleVisibility={() => props.onToggleComponentVisibility(component.id)} onToggleLock={() => props.onToggleComponentLock(component.id)} onMoveBackward={() => props.onMoveComponentDisplayOrder(component.id, "backward")} onMoveForward={() => props.onMoveComponentDisplayOrder(component.id, "forward")} />;
+      })}</div>}
+    </div>}
     <div className="sceneTreeGroup">
       <TreeHeader label="Mobiliář" open={openGroups.furniture} onToggle={() => toggle("furniture")} />
-      {openGroups.furniture && <div className="sceneTreeChildren">{props.components.length === 0 ? <span className="sceneEmpty">Žádné vložené prvky</span> : props.components.map((component, index) => {
-        const number = props.components.slice(0, index + 1).filter((item) => item.sceneLabel === component.sceneLabel).length;
+      {openGroups.furniture && <div className="sceneTreeChildren">{furnitureAndOtherComponents.length === 0 ? <span className="sceneEmpty">Žádné vložené prvky</span> : furnitureAndOtherComponents.map((component, index) => {
+        const number = furnitureAndOtherComponents.slice(0, index + 1).filter((item) => item.sceneLabel === component.sceneLabel).length;
         return <SceneItem key={component.id} kind="furniture" label={`${component.sceneLabel} ${String(number).padStart(2, "0")}`} selected={props.selectedComponentId === component.id} visible={component.visible} systemLocked={component.systemLocked} userLocked={component.userLocked} onSelect={() => props.onSelectComponent(component.id)} onToggleVisibility={() => props.onToggleComponentVisibility(component.id)} onToggleLock={() => props.onToggleComponentLock(component.id)} onMoveBackward={() => props.onMoveComponentDisplayOrder(component.id, "backward")} onMoveForward={() => props.onMoveComponentDisplayOrder(component.id, "forward")} />;
       })}</div>}
     </div>

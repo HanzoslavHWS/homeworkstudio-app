@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   carpetFinishVariants,
   constructionFinishVariants,
@@ -24,7 +24,7 @@ import type {
   ProjectMode,
   ProjectStage,
   PrintSurfaceAssignment,
-  SavedCameraView,
+  VisualizationView,
   TechnicalRequirements,
   VisualizationItem,
 } from "../../domain/project";
@@ -55,10 +55,14 @@ import {
 } from "../../domain/workflow";
 import { createProjectPackage, packageFolderPath } from "../../domain/projectPackage";
 import { getMasterReferenceModel } from "../../domain/cad3d";
-import { downloadDataUrl, downloadText, renderTechnicalPlanPng, type CadPlanSnapshot } from "../../lib/planExport";
+import { createVisualizationCameraPresets } from "../../domain/visualization";
+import { downloadDataUrl, downloadText, renderTechnicalPlanPng } from "../../lib/planExport";
 import { createZip, dataUrlZipEntry, textZipEntry, type ZipEntry } from "../../lib/zip";
-import { BoothCadPlanView } from "../configurator/BoothCadPlanView";
-import { BoothCadViewer } from "../configurator/BoothCadViewer";
+import {
+  BoothCadViewer,
+  type BoothCadCameraControls,
+  type BoothCadCameraSnapshot,
+} from "../configurator/BoothCadViewer";
 import { EventLogo } from "./CatalogManagementPages";
 import { requirementStatusLabels } from "./TechnicalRequirementsEditor";
 
@@ -82,7 +86,7 @@ type CommonProject = {
   requirements: TechnicalRequirements;
   order?: ImportedOrder;
   inventory: readonly OrderInventoryItem[];
-  savedViews: readonly SavedCameraView[];
+  visualizationViews: readonly VisualizationView[];
   visualizations: readonly VisualizationItem[];
   generatedPlanOutputs: readonly GeneratedPlanOutput[];
   selectedOutputIds: readonly string[];
@@ -95,6 +99,7 @@ type CommonProject = {
   customDimensions: readonly CustomDimension[];
   carpetFinishId: string;
   constructionFinishId: string;
+  constructionVisibility: Readonly<Record<string, boolean>>;
   internalNote?: string;
   customerNote: string;
   printSurfaceAssignments: readonly PrintSurfaceAssignment[];
@@ -107,9 +112,11 @@ type CommonProject = {
 
 type TemporaryGraphicFile = Readonly<{ id: string; file: File }>;
 
-export function VisualizationStep({ project, onSaveView, onDeleteView, onAddVisualization, onAddPlanOutput, onUpdateVisualization, onDeleteVisualization, onUpdatePlanOutput, onDeletePlanOutput, onSelectedViewsChange, onPurposeChange, on2DLayersChange, onContinue }: {
+export function VisualizationStep({ project, onSaveView, onRenameView, onMoveView, onDeleteView, onAddVisualization, onAddPlanOutput, onUpdateVisualization, onDeleteVisualization, onUpdatePlanOutput, onDeletePlanOutput, onSelectedViewsChange, onPurposeChange, on2DLayersChange, onContinue }: {
   project: CommonProject;
-  onSaveView: (view: Omit<SavedCameraView, "id" | "createdAt">) => void;
+  onSaveView: (view: BoothCadCameraSnapshot) => void;
+  onRenameView: (id: string, name: string) => void;
+  onMoveView: (id: string, direction: -1 | 1) => void;
   onDeleteView: (id: string) => void;
   onAddVisualization: (item: VisualizationItem) => void;
   onAddPlanOutput: (item: GeneratedPlanOutput) => void;
@@ -123,10 +130,25 @@ export function VisualizationStep({ project, onSaveView, onDeleteView, onAddVisu
   onContinue: () => void;
 }) {
   const [planPreviewDataUrl, setPlanPreviewDataUrl] = useState("");
+  const visualizationCameraControlsRef = useRef<BoothCadCameraControls | null>(null);
   const booth = project.booth;
   const provider = new TechnicalVisualizationProvider();
+  const cameraPresets = useMemo(
+    () => booth?.widthMm && booth.depthMm
+      ? createVisualizationCameraPresets({
+          widthMm: booth.widthMm,
+          depthMm: booth.depthMm,
+          heightMm: booth.heightMm ?? booth.nominalDimensions?.heightMm ?? 2500,
+          originConvention: booth.boothAsset?.originConvention,
+        })
+      : [],
+    [booth?.boothAsset?.originConvention, booth?.depthMm, booth?.heightMm, booth?.nominalDimensions?.heightMm, booth?.widthMm],
+  );
+  const views = useMemo(
+    () => [...project.visualizationViews].sort((left, right) => left.order - right.order),
+    [project.visualizationViews],
+  );
   if (!booth?.widthMm || !booth.depthMm) return <StepEmpty title="Vizualizace" text="Nejprve vyberte konfigurovatelný stánek." />;
-  const views = [...(booth.defaultViews ?? []).map((view) => ({ id: view.id, name: view.name, type: "Výchozí" })), ...project.savedViews.map((view) => ({ id: view.id, name: view.name, type: "Vlastní" }))];
   const toggleView = (id: string) => onSelectedViewsChange(project.selectedVisualizationViewIds.includes(id) ? project.selectedVisualizationViewIds.filter((value) => value !== id) : [...project.selectedVisualizationViewIds, id]);
   const toggleLayer = (layer: ExportLayer) => on2DLayersChange(project.visualization2DLayers.includes(layer) ? project.visualization2DLayers.filter((value) => value !== layer) : [...project.visualization2DLayers, layer]);
   const layers = project.visualization2DLayers as ExportLayer[];
@@ -148,10 +170,55 @@ export function VisualizationStep({ project, onSaveView, onDeleteView, onAddVisu
   return <div className="workflowStepPage">
     <StepTitle eyebrow="KROK 3" title="Vizualizace" text="Připravte a uložte konkrétní 3D pohledy i 2D půdorysy. AI se nespouští automaticky." />
     <div className="visualizationStaging">
-      <section className="workflowCard visualizationSources"><h2>3D zdroje</h2><div className="viewSelectionList">{views.map((view) => <label key={view.id}><input type="checkbox" checked={project.selectedVisualizationViewIds.includes(view.id)} onChange={() => toggleView(view.id)} /><span><strong>{view.name}</strong><small>{view.type}</small></span></label>)}</div><label className="purposeSelect"><span>Kategorie vizualizace</span><select value={project.visualizationPurpose} onChange={(event) => onPurposeChange(event.target.value as typeof project.visualizationPurpose)}><option value="working">Pracovní návrh</option><option value="presentation">Vizu / prezentační vizualizace</option></select></label><button type="button" disabled>Vytvořit AI vizualizace · budoucí provider</button><p className="workflowMuted">Technický snímek je lokální Three.js capture.</p></section>
-      <div className="visualizationWorkspace"><BoothCadViewer asset={getMasterReferenceModel(booth.assets)} footprintWidthMm={booth.widthMm} footprintDepthMm={booth.depthMm} components={project.sceneObjects} defaultViews={booth.defaultViews} savedViews={project.savedViews} nominalDimensions={booth.nominalDimensions} printSurfaces={booth.printSurfaces} printSurfaceAssignments={project.printSurfaceAssignments} showPrintPlaceholder={project.printSurfaceAssignments.some((assignment) => assignment.selectedForPrint && assignment.artworkStatus === "missing")} carpetFinish={selectedFinish(booth.carpetVariants ?? carpetFinishVariants, project.carpetFinishId)} constructionFinish={selectedFinish(booth.finishVariants ?? constructionFinishVariants, project.constructionFinishId)} partDefinitions={booth.partDefinitions} onSaveView={onSaveView} onDeleteView={onDeleteView} onCapture={async ({ imageDataUrl, view }) => onAddVisualization(await provider.create({ name: `Technický vizu ${project.visualizations.length + 1}`, sourceViewId: view.name, technicalRenderDataUrl: imageDataUrl, purpose: project.visualizationPurpose }))} /></div>
+      <section className="workflowCard visualizationSources">
+        <h2>Uložené 3D pohledy</h2>
+        <div className="viewSelectionList">
+          {views.length === 0 && <p className="emptyState">Zatím není uložen žádný pohled.</p>}
+          {views.map((view, index) => (
+            <article className="visualizationViewCard" key={view.id}>
+              <label>
+                <input type="checkbox" checked={project.selectedVisualizationViewIds.includes(view.id)} onChange={() => toggleView(view.id)} />
+                <span><strong>{view.name}</strong><small>3D · Perspektiva</small></span>
+              </label>
+              <button type="button" onClick={() => visualizationCameraControlsRef.current?.applyView(view)}>Otevřít</button>
+              <div className="visualizationViewActions">
+                <button type="button" onClick={() => { const name = window.prompt("Název pohledu", view.name); if (name !== null) onRenameView(view.id, name); }}>Přejmenovat</button>
+                <button type="button" aria-label={`Posunout ${view.name} nahoru`} disabled={index === 0} onClick={() => onMoveView(view.id, -1)}>↑</button>
+                <button type="button" aria-label={`Posunout ${view.name} dolů`} disabled={index === views.length - 1} onClick={() => onMoveView(view.id, 1)}>↓</button>
+                <button type="button" onClick={() => onDeleteView(view.id)}>Smazat</button>
+              </div>
+            </article>
+          ))}
+        </div>
+        <label className="purposeSelect"><span>Kategorie vizualizace</span><select value={project.visualizationPurpose} onChange={(event) => onPurposeChange(event.target.value as typeof project.visualizationPurpose)}><option value="working">Pracovní návrh</option><option value="presentation">Vizu / prezentační vizualizace</option></select></label>
+        <button type="button" disabled>Vytvořit AI vizualizace · budoucí provider</button>
+        <p className="workflowMuted">Pohled ukládá pouze kameru; scéna zůstává živá. Technický snímek je lokální Three.js capture.</p>
+      </section>
+      <div className="visualizationWorkspace">
+        <BoothCadViewer
+          asset={getMasterReferenceModel(booth.assets)}
+          boothAsset={booth.boothAsset}
+          constructionVisibility={project.constructionVisibility}
+          boothVisible={project.constructionVisibility.assembly ?? booth.visible}
+          footprintWidthMm={booth.widthMm}
+          footprintDepthMm={booth.depthMm}
+          components={project.sceneObjects}
+          defaultViews={cameraPresets}
+          cameraControlsRef={visualizationCameraControlsRef}
+          nominalDimensions={booth.nominalDimensions}
+          printSurfaces={booth.printSurfaces}
+          printSurfaceAssignments={project.printSurfaceAssignments}
+          graphicsFiles={project.graphicsFiles}
+          showPrintPlaceholder={project.printSurfaceAssignments.some((assignment) => assignment.selectedForPrint && assignment.artworkStatus === "missing")}
+          carpetFinish={selectedFinish(booth.carpetVariants ?? carpetFinishVariants, project.carpetFinishId)}
+          constructionFinish={selectedFinish(booth.finishVariants ?? constructionFinishVariants, project.constructionFinishId)}
+          partDefinitions={booth.partDefinitions}
+          onSaveView={onSaveView}
+          onCapture={async ({ imageDataUrl, view }) => onAddVisualization(await provider.create({ name: `Technický vizu ${project.visualizations.length + 1}`, sourceViewId: view.name, technicalRenderDataUrl: imageDataUrl, purpose: project.visualizationPurpose }))}
+        />
+      </div>
     </div>
-    <section className="workflowCard visualization2D"><div><h2>2D zdroj</h2><p>Vyberte vrstvy a vytvořte samostatný uložený výstup.</p><div className="layerOptions">{allLayers.map((layer) => <label key={layer}><input type="checkbox" checked={layers.includes(layer)} onChange={() => toggleLayer(layer)} /> {EXPORT_LAYER_LABELS[layer]}</label>)}</div><button className="primaryButton" type="button" onClick={createPlanOutput} disabled={!planPreviewDataUrl}>Vytvořit půdorys</button></div><PlanLayerPreview booth={booth} sceneObjects={project.sceneObjects} layers={layers} annotations={project.annotations} customDimensions={project.customDimensions} onRendered={setPlanPreviewDataUrl} /></section>
+    <section className="workflowCard visualization2D"><div><h2>2D zdroj</h2><p>Vyberte vrstvy a vytvořte samostatný uložený výstup.</p><div className="layerOptions">{allLayers.map((layer) => <label key={layer}><input type="checkbox" checked={layers.includes(layer)} onChange={() => toggleLayer(layer)} /> {EXPORT_LAYER_LABELS[layer]}</label>)}</div><button className="primaryButton" type="button" onClick={createPlanOutput} disabled={!planPreviewDataUrl}>Vytvořit půdorys</button></div><PlanLayerPreview booth={booth} sceneObjects={project.sceneObjects} layers={layers} constructionVisibility={project.constructionVisibility} annotations={project.annotations} customDimensions={project.customDimensions} onRendered={setPlanPreviewDataUrl} /></section>
     <GeneratedOutputResults visualizations={project.visualizations} plans={project.generatedPlanOutputs} onUpdateVisualization={onUpdateVisualization} onDeleteVisualization={onDeleteVisualization} onUpdatePlan={onUpdatePlanOutput} onDeletePlan={onDeletePlanOutput} />
     <StepActions onContinue={onContinue} />
   </div>;
@@ -277,7 +344,7 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
     </section>
     <div className="exportSettings"><label><span>Jazyk výstupu</span><select value={language} onChange={(event) => setLanguage(event.target.value as ExportLanguage)}><option value="cs">Čeština</option><option value="en">English</option></select><small>Výchozí: {project.communicationLanguage === "cs" ? "Čeština" : "English"}; změna neovlivní projekt.</small></label><label className="checkLabel"><input type="checkbox" checked={includeFurniturePhotos} onChange={(event) => setIncludeFurniturePhotos(event.target.checked)} /> Zahrnout fotografie mobiliáře</label></div>
     <div className="exportGrid">
-      <section className="workflowCard"><div className="workflowCardHeader"><div><span>2D EXPORT</span><strong>Technický půdorys PNG</strong></div></div><div className="exportPresets">{EXPORT_PRESETS.map((preset) => <button key={preset.id} onClick={() => setLayers([...preset.options.layers])}>{preset.name}</button>)}</div><div className="layerOptions">{allLayers.map((layer) => <label key={layer}><input type="checkbox" checked={layers.includes(layer)} onChange={() => toggleLayer(layer)} /> {EXPORT_LAYER_LABELS[layer]}</label>)}</div>{booth?.widthMm && booth.depthMm && <PlanLayerPreview booth={booth} sceneObjects={project.sceneObjects} layers={layers} annotations={project.annotations} customDimensions={project.customDimensions} onRendered={setPlanPreviewDataUrl} compact />}<button className="primaryButton" onClick={exportPlan} disabled={!booth || !planPreviewDataUrl}>Stáhnout 2D PNG</button></section>
+      <section className="workflowCard"><div className="workflowCardHeader"><div><span>2D EXPORT</span><strong>Technický půdorys PNG</strong></div></div><div className="exportPresets">{EXPORT_PRESETS.map((preset) => <button key={preset.id} onClick={() => setLayers([...preset.options.layers])}>{preset.name}</button>)}</div><div className="layerOptions">{allLayers.map((layer) => <label key={layer}><input type="checkbox" checked={layers.includes(layer)} onChange={() => toggleLayer(layer)} /> {EXPORT_LAYER_LABELS[layer]}</label>)}</div>{booth?.widthMm && booth.depthMm && <PlanLayerPreview booth={booth} sceneObjects={project.sceneObjects} layers={layers} constructionVisibility={project.constructionVisibility} annotations={project.annotations} customDimensions={project.customDimensions} onRendered={setPlanPreviewDataUrl} compact />}<button className="primaryButton" onClick={exportPlan} disabled={!booth || !planPreviewDataUrl}>Stáhnout 2D PNG</button></section>
       <section className="workflowCard"><div className="workflowCardHeader"><div><span>ULOŽENÉ VÝSTUPY</span><strong>Výběr pro balíček</strong></div></div><OutputSelection project={project} toggleOutput={toggleOutput} /></section>
       <section className="workflowCard"><div className="workflowCardHeader"><div><span>PŘÍLOHY EVENTU</span><strong>Dokumenty</strong></div></div>{activeDocuments.length ? activeDocuments.map((document) => <label className="outputSelectionRow" key={document.id}><input type="checkbox" checked={project.selectedEventDocumentIds.includes(document.id)} onChange={() => toggleDocument(document.id)} /><span><strong>{document.title}</strong><small>{document.fileName} · {document.availability === "temporary-session" ? "dočasné" : "uložené"}</small></span></label>) : <p className="emptyState">Event nemá dostupné dokumenty.</p>}</section>
       <section className="workflowCard packageExport"><div className="workflowCardHeader"><div><span>PROJECT PACKAGE</span><strong>Celý projekt</strong></div></div><PackageTree projectPackage={projectPackage} /><button className="primaryButton" onClick={downloadPackage} disabled={!booth}>Stáhnout celý projekt jako ZIP</button><p className="workflowMuted">ZIP obsahuje jen skutečně dostupné a vybrané soubory.</p></section>
@@ -312,15 +379,14 @@ function CalculationPreview({ calculation, currency }: { calculation: CustomerCa
 
 const allLayers: readonly ExportLayer[] = ["booth", "furniture", "electrical", "water", "waste", "annotations", "dimensions"];
 
-function PlanLayerPreview({ booth, sceneObjects, layers, annotations, customDimensions, onRendered, compact = false }: { booth: BoothType; sceneObjects: readonly PlacedComponent[]; layers: readonly ExportLayer[]; annotations: readonly ProjectAnnotation[]; customDimensions: readonly CustomDimension[]; onRendered: (dataUrl: string) => void; compact?: boolean }) {
-  const [cadSnapshot, setCadSnapshot] = useState<CadPlanSnapshot>();
+function PlanLayerPreview({ booth, sceneObjects, layers, constructionVisibility, annotations, customDimensions, onRendered, compact = false }: { booth: BoothType; sceneObjects: readonly PlacedComponent[]; layers: readonly ExportLayer[]; constructionVisibility: Readonly<Record<string, boolean>>; annotations: readonly ProjectAnnotation[]; customDimensions: readonly CustomDimension[]; onRendered: (dataUrl: string) => void; compact?: boolean }) {
   const [rendered, setRendered] = useState("");
   const width = booth.widthMm;
   const depth = booth.depthMm;
   useEffect(() => {
-    if (!width || !depth || (layers.includes("booth") && !cadSnapshot)) return;
+    if (!width || !depth) return;
     let active = true;
-    renderTechnicalPlanPng({ booth, sceneObjects, layers, annotations, customDimensions, cadSnapshot }).then((dataUrl) => {
+    renderTechnicalPlanPng({ booth, sceneObjects, layers, constructionVisibility, annotations, customDimensions }).then((dataUrl) => {
       if (!active) return;
       setRendered(dataUrl);
       onRendered(dataUrl);
@@ -328,9 +394,9 @@ function PlanLayerPreview({ booth, sceneObjects, layers, annotations, customDime
       if (active) { setRendered(""); onRendered(""); }
     });
     return () => { active = false; };
-  }, [annotations, booth, cadSnapshot, customDimensions, depth, layers, onRendered, sceneObjects, width]);
+  }, [annotations, booth, constructionVisibility, customDimensions, depth, layers, onRendered, sceneObjects, width]);
   if (!width || !depth) return null;
-  return <div className={`planLayerPreview ${compact ? "compact" : ""}`}><div className="planLayerStage"><BoothCadPlanView asset={getMasterReferenceModel(booth.assets)} footprintWidthMm={width} footprintDepthMm={depth} visible={layers.includes("booth") && !rendered} selected={false} onSnapshot={setCadSnapshot} />{rendered ? <img className="planRenderedPreview" src={rendered} alt="Náhled technického půdorysu" /> : <span className="planRenderLoading">Připravuji CAD půdorys…</span>}</div></div>;
+  return <div className={`planLayerPreview ${compact ? "compact" : ""}`}><div className="planLayerStage">{rendered ? <img className="planRenderedPreview" src={rendered} alt="Náhled technického půdorysu" /> : <span className="planRenderLoading">Připravuji půdorys…</span>}</div></div>;
 }
 
 function GeneratedOutputResults({ visualizations, plans, onUpdateVisualization, onDeleteVisualization, onUpdatePlan, onDeletePlan }: { visualizations: readonly VisualizationItem[]; plans: readonly GeneratedPlanOutput[]; onUpdateVisualization: (item: VisualizationItem) => void; onDeleteVisualization: (id: string) => void; onUpdatePlan: (item: GeneratedPlanOutput) => void; onDeletePlan: (id: string) => void }) {

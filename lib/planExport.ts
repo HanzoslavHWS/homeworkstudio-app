@@ -9,17 +9,19 @@ import {
   worldRotationToPlanView,
   worldToPlanView,
 } from "../domain/planView.ts";
-import { sortComponentsFor2D } from "../domain/displayOrder.ts";
-
-export type CadPlanSnapshot = Readonly<{
-  imageDataUrl: string;
-  bounds: Readonly<{
-    minX: number;
-    minY: number;
-    width: number;
-    depth: number;
-  }>;
-}>;
+import { isTechnicalPointLayer, sortComponentsFor2D } from "../domain/displayOrder.ts";
+import {
+  resolveBoothPlanPresentation,
+  resolveBoothPlanVisualMode,
+  shouldRenderBoothCollisionOverlay,
+  type BoothPlanPresentation,
+} from "../domain/boothPlan.ts";
+import { resolveBoothAssetDefinition } from "../domain/boothAssets.ts";
+import {
+  BOOTH_PLAN_VISUAL_PADDING_MM,
+  getMasterReferenceModel,
+} from "../domain/cad3d.ts";
+import { renderBoothPlanGlbToCanvas } from "./boothPlanGlbRenderer.ts";
 
 export const PLAN_RENDER_CONFIG = {
   canvasSizePx: 1600,
@@ -50,13 +52,52 @@ export function createPlanRenderLayout(
   } as const;
 }
 
+export function resolveTechnicalPlanContent(input: {
+  booth: BoothType;
+  sceneObjects: readonly PlacedComponent[];
+  layers: readonly ExportLayer[];
+  constructionVisibility?: Readonly<Record<string, boolean>>;
+  includeCollisionOverlay?: boolean;
+}): Readonly<{
+  boothPlan: BoothPlanPresentation;
+  sceneObjects: readonly PlacedComponent[];
+}> {
+  const boothPlan = input.layers.includes("booth")
+    ? resolveBoothPlanPresentation(
+        input.booth,
+        input.constructionVisibility ?? {},
+      )
+    : {
+        constructionAreas: [],
+        constructionProfiles: [],
+        collisionLines: [],
+      };
+  return {
+    boothPlan: {
+      ...boothPlan,
+      collisionLines: shouldRenderBoothCollisionOverlay("export", {
+        includeInExport: input.includeCollisionOverlay,
+      })
+        ? boothPlan.collisionLines
+        : [],
+    },
+    sceneObjects: sortComponentsFor2D(input.sceneObjects).filter(
+      (item) =>
+        item.visible &&
+        item.showIn2D &&
+        input.layers.includes(item.sceneLayer),
+    ),
+  };
+}
+
 export async function renderTechnicalPlanPng(input: {
   booth: BoothType;
   sceneObjects: readonly PlacedComponent[];
   layers: readonly ExportLayer[];
   annotations?: readonly ProjectAnnotation[];
   customDimensions?: readonly CustomDimension[];
-  cadSnapshot?: CadPlanSnapshot;
+  constructionVisibility?: Readonly<Record<string, boolean>>;
+  includeCollisionOverlay?: boolean;
   sizePx?: number;
 }): Promise<string> {
   const {
@@ -65,7 +106,8 @@ export async function renderTechnicalPlanPng(input: {
     layers,
     annotations = [],
     customDimensions = [],
-    cadSnapshot,
+    constructionVisibility = {},
+    includeCollisionOverlay = false,
     sizePx = PLAN_RENDER_CONFIG.canvasSizePx,
   } = input;
   if (!booth.widthMm || !booth.depthMm) {
@@ -90,26 +132,74 @@ export async function renderTechnicalPlanPng(input: {
     booth.depthMm * scale,
   );
 
-  if (layers.includes("booth")) {
-    if (!cadSnapshot) {
-      throw new Error("CAD půdorys ještě není připravený.");
+  const content = resolveTechnicalPlanContent({
+    booth,
+    sceneObjects,
+    layers,
+    constructionVisibility,
+    includeCollisionOverlay,
+  });
+
+  let renderedBoothGlb = false;
+  const boothModel = getMasterReferenceModel(booth.assets);
+  if (
+    layers.includes("booth") &&
+    resolveBoothPlanVisualMode(booth, boothModel) === "glb-top-view" &&
+    boothModel
+  ) {
+    const paddingPx = BOOTH_PLAN_VISUAL_PADDING_MM * scale;
+    try {
+      const rendered = await renderBoothPlanGlbToCanvas(
+        {
+          asset: boothModel,
+          boothAsset: resolveBoothAssetDefinition(booth),
+          constructionVisibility,
+          footprintWidthMm: booth.widthMm,
+          footprintDepthMm: booth.depthMm,
+          visible: constructionVisibility.assembly ?? booth.visible,
+        },
+        Math.ceil((booth.widthMm + BOOTH_PLAN_VISUAL_PADDING_MM * 2) * scale),
+        Math.ceil((booth.depthMm + BOOTH_PLAN_VISUAL_PADDING_MM * 2) * scale),
+      );
+      try {
+        context.drawImage(
+          rendered.canvas,
+          originX - paddingPx,
+          originY - paddingPx,
+          (booth.widthMm + BOOTH_PLAN_VISUAL_PADDING_MM * 2) * scale,
+          (booth.depthMm + BOOTH_PLAN_VISUAL_PADDING_MM * 2) * scale,
+        );
+        renderedBoothGlb = true;
+      } finally {
+        rendered.dispose();
+      }
+    } catch {
+      // WebGL/GLB failure is expected to degrade to deterministic canonical vectors below.
     }
-    const cadImage = await loadImage(cadSnapshot.imageDataUrl);
-    // Same X-preserving/Y-flipping placement as BoothCadPlanView.tsx's DOM style (both fixed
-    // together, 2026-08-19) — the snapshot is already rendered right-side-up and unmirrored by
-    // that component's camera setup, so this is a direct footprint-relative draw, never a
-    // translate+180-degree-rotate compensation. Exact regardless of the model's bounding-box symmetry.
-    context.drawImage(
-      cadImage,
-      originX + cadSnapshot.bounds.minX * scale,
-      originY + (booth.depthMm - cadSnapshot.bounds.minY - cadSnapshot.bounds.depth) * scale,
-      cadSnapshot.bounds.width * scale,
-      cadSnapshot.bounds.depth * scale,
-    );
   }
 
-  for (const item of sortComponentsFor2D(sceneObjects)) {
-    if (!item.visible || !item.showIn2D || !layers.includes(item.sceneLayer)) continue;
+  if (layers.includes("booth") && !renderedBoothGlb) {
+    context.fillStyle = "#24272a";
+    for (const { rect } of content.boothPlan.constructionAreas) {
+      context.fillRect(
+        originX + rect.x * scale,
+        originY + rect.y * scale,
+        rect.width * scale,
+        rect.height * scale,
+      );
+    }
+    context.fillStyle = "#111315";
+    for (const { rect } of content.boothPlan.constructionProfiles) {
+      context.fillRect(
+        originX + rect.x * scale,
+        originY + rect.y * scale,
+        rect.width * scale,
+        rect.height * scale,
+      );
+    }
+  }
+
+  for (const item of content.sceneObjects) {
     const point = worldToPlanView(
       { x: item.xMm, y: item.yMm },
       booth.widthMm,
@@ -118,7 +208,9 @@ export async function renderTechnicalPlanPng(input: {
     context.save();
     context.translate(originX + point.x * scale, originY + point.y * scale);
     context.rotate((worldRotationToPlanView(item.rotationDeg) * Math.PI) / 180);
-    context.fillStyle = item.sceneLayer === "furniture" ? "#f5f5f4" : "#ffffff";
+    // Both furniture and the booth's own construction pieces are real solid volumes; only true
+    // technical-point symbols (electrical/water/waste/annotations) render hollow/white.
+    context.fillStyle = isTechnicalPointLayer(item.sceneLayer) ? "#ffffff" : "#f5f5f4";
     context.strokeStyle = layerColor(item.sceneLayer);
     context.lineWidth = Math.max(2, scale * 12);
     context.fillRect(-item.widthMm * scale / 2, -item.depthMm * scale / 2, item.widthMm * scale, item.depthMm * scale);
@@ -127,6 +219,18 @@ export async function renderTechnicalPlanPng(input: {
     context.font = "600 24px Arial";
     context.textAlign = "center";
     context.fillText(item.name, 0, 8);
+    context.restore();
+  }
+
+  for (const { x1, y1, x2, y2 } of content.boothPlan.collisionLines) {
+    context.save();
+    context.strokeStyle = "rgba(91, 101, 106, 0.48)";
+    context.lineWidth = 1;
+    context.setLineDash([5, 5]);
+    context.beginPath();
+    context.moveTo(originX + x1 * scale, originY + y1 * scale);
+    context.lineTo(originX + x2 * scale, originY + y2 * scale);
+    context.stroke();
     context.restore();
   }
 
@@ -207,15 +311,6 @@ function drawDimensionLine(context: CanvasRenderingContext2D, x1: number, y1: nu
   context.moveTo(x2 - tick, y2 - tick);
   context.lineTo(x2 + tick, y2 + tick);
   context.stroke();
-}
-
-function loadImage(source: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error("CAD snapshot nelze načíst."));
-    image.src = source;
-  });
 }
 
 function layerColor(layer: PlacedComponent["sceneLayer"]): string {

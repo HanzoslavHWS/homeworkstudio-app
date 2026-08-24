@@ -6,26 +6,71 @@ import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { boothTypes } from "../data/booths.ts";
 import { componentCatalog, placeComponent } from "../data/components.ts";
 import {
+  BOOTH_PLAN_VISUAL_PADDING_MM,
+  applyBoothAssemblyVisibility,
+  applyBoothModelTransform,
+  applyComponentModelMaterialPolicy,
+  cameraPositionAtDistance,
+  cameraStateFromView,
+  cameraZoomPercent,
   cadPointToViewer,
+  createTopDownBoothPlanFrame,
+  distanceBetween3DPoints,
+  findPrintableModelNodes,
+  fitPerspectiveCameraState,
   getComponentModel,
   getMasterReferenceModel,
   isVariantAvailable,
   mmToSceneUnits,
+  modelUnitScaleToScene,
+  modelUnitsToMillimeters,
   placedComponentToViewerTransform,
+  resolveBoothAssemblyVisibility,
   resolveBoothModelSource,
+  resolveComponentModelReference,
   sceneUnitsToMm,
   viewerPointToCad,
 } from "../domain/cad3d.ts";
+import {
+  resolveBoothPlanVisualMode,
+  shouldRenderCanonicalBoothConstruction,
+} from "../domain/boothPlan.ts";
+import { createProjectRecord, normalizeProjectRecord } from "../domain/project.ts";
+import {
+  P86_CANONICAL_PRINT_SURFACES,
+  P86_FASCIA_PRINT_HEIGHT_MM,
+  P86_FASCIA_PRINT_WIDTH_MM,
+  P86_PANEL_PRINT_HEIGHT_MM,
+  P86_PANEL_PRINT_SURFACES,
+  P86_PANEL_PRINT_WIDTH_MM,
+  P86_PRINT_SURFACE_NODE_NAMES,
+  resolvePrintSurfaceBinding,
+} from "../domain/printSurfaces.ts";
+import type { PrintSurface } from "../domain/models.ts";
 import type { BoothVariant } from "../domain/models.ts";
 import { worldToPlanView } from "../domain/planView.ts";
 import { measuredDistance3DMm, measuredDistanceMm } from "../domain/spatialAnnotations.ts";
+import {
+  applyPrintArtworkOverlays,
+  findPrintArtworkOverlays,
+  type PrintArtworkOverlayMetadata,
+} from "../lib/printArtworkOverlays.ts";
+import {
+  assignArtworkToPrintSurface,
+  removeArtworkFromPrintSurface,
+} from "../domain/technicalServices.ts";
+import type { GraphicFileReference, PrintSurfaceAssignment } from "../domain/project.ts";
 
-async function modelBounds(path: string) {
+async function loadModel(path: string) {
   const file = readFileSync(path);
   const buffer = file.buffer.slice(file.byteOffset, file.byteOffset + file.byteLength);
-  const gltf = await new Promise<{ scene: THREE.Group }>((resolve, reject) =>
+  return new Promise<{ scene: THREE.Group }>((resolve, reject) =>
     new GLTFLoader().parse(buffer, "", resolve, reject),
   );
+}
+
+async function modelBounds(path: string) {
+  const gltf = await loadModel(path);
   const bounds = new THREE.Box3().setFromObject(gltf.scene);
   return { bounds, size: bounds.getSize(new THREE.Vector3()) };
 }
@@ -33,6 +78,44 @@ async function modelBounds(path: string) {
 test("CAD boundary převádí mm centrálně na scene units", () => {
   assert.equal(mmToSceneUnits(1000), 1);
   assert.equal(sceneUnitsToMm(2.5), 2500);
+});
+
+test("3D camera zoom keeps the view ray, clamps distance and reports a stable percentage", () => {
+  const position = { x: 3, y: 4, z: 12 };
+  const target = { x: 0, y: 0, z: 0 };
+  const referenceDistance = distanceBetween3DPoints(position, target);
+  const zoomedIn = cameraPositionAtDistance(
+    position,
+    target,
+    referenceDistance / 1.2,
+    2,
+    20,
+  );
+
+  assert.ok(Math.abs(distanceBetween3DPoints(zoomedIn, target) - referenceDistance / 1.2) < 1e-12);
+  assert.equal(cameraZoomPercent(referenceDistance, distanceBetween3DPoints(zoomedIn, target)), 120);
+  const clamped = cameraPositionAtDistance(position, target, 100, 2, 20);
+  assert.ok(Math.abs(distanceBetween3DPoints(clamped, target) - 20) < 1e-12);
+  assert.ok(Math.abs(clamped.x / clamped.z - position.x / position.z) < 1e-12);
+  assert.ok(Math.abs(clamped.y / clamped.z - position.y / position.z) < 1e-12);
+  assert.equal(cameraZoomPercent(0, 0), 100);
+});
+
+test("3D Fit computes a new framed camera state and Reset/100% restores the declared default state", () => {
+  const fit = fitPerspectiveCameraState({ x: 1, y: 1.25, z: -0.5 }, 2, 38, 16 / 9);
+  assert.deepEqual(fit.target, { x: 1, y: 1.25, z: -0.5 });
+  assert.ok(fit.referenceDistance > 2);
+  assert.equal(cameraZoomPercent(fit.referenceDistance, distanceBetween3DPoints(fit.position, fit.target)), 100);
+
+  const reset = cameraStateFromView({
+    position: [3, 3.1, 5],
+    target: [0, 1.1, 0],
+    fov: 38,
+  }, 50);
+  assert.deepEqual(reset.position, { x: 3, y: 3.1, z: 5 });
+  assert.deepEqual(reset.target, { x: 0, y: 1.1, z: 0 });
+  assert.equal(reset.fov, 38);
+  assert.equal(cameraZoomPercent(reset.referenceDistance, distanceBetween3DPoints(reset.position, reset.target)), 100);
 });
 
 test("CAD Z-up osy se mapují na Three.js Y-up", () => {
@@ -47,40 +130,156 @@ test("Koje 2x2 deklaruje MASTER asset mimo UI komponentu", () => {
   const booth = boothTypes.find((item) => item.id === "koje-2x2");
   const master = getMasterReferenceModel(booth?.assets);
 
-  assert.equal(master?.url, "/models/booths/koje-2x2/master.glb");
+  assert.equal(master?.url, "/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
   assert.equal(master?.role, "master-reference");
-  assert.equal(master?.unit, "mm");
+  assert.equal(master?.unit, "m");
   assert.equal(master?.axisSystem, "x-right-y-depth-z-up");
   assert.equal(
-    existsSync("public/models/booths/koje-2x2/master.glb"),
+    existsSync("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb"),
     true,
   );
 });
 
 test("MASTER GLB zachovává skutečný CAD offset vůči koberci", async () => {
   const { bounds, size } = await modelBounds(
-    "public/models/booths/koje-2x2/master.glb",
+    "public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
   );
-  assert.ok(Math.abs(bounds.min.x - 0) < 0.01);
-  assert.ok(Math.abs(bounds.min.y - 958.4437) < 0.01);
-  assert.ok(Math.abs(bounds.max.y - 2004.4436) < 0.01);
-  assert.ok(Math.abs(size.x - 2020) < 0.01);
-  assert.ok(Math.abs(size.y - 1046) < 0.01);
-  assert.ok(Math.abs(size.z - 2500) < 0.01);
+  assert.ok(Math.abs(bounds.min.x - -1.01) < 0.0001);
+  assert.ok(Math.abs(bounds.min.y - -0.036) < 0.0001);
+  assert.ok(Math.abs(bounds.max.y - 1.01) < 0.0001);
+  assert.ok(Math.abs(size.x - 2.02) < 0.0001);
+  assert.ok(Math.abs(size.y - 1.046) < 0.0001);
+  assert.ok(Math.abs(size.z - 2.5) < 0.0001);
 });
 
 test("židle je reálný katalogový asset s CAD rozměry", async () => {
   const chairModel = getComponentModel(componentCatalog.chair.assets);
-  assert.equal(chairModel?.url, "/models/chairs/zidle.glb");
+  assert.equal(chairModel?.url, "/models/chairs/M57/M57_ZIDLE.glb");
+  assert.equal(chairModel?.unit, "m");
+  assert.equal(
+    componentCatalog.chair.modelAsset?.originalFileName,
+    "M57_ZIDLE.glb",
+  );
   assert.equal(componentCatalog.chair.name, "Židle kovová čalouněná");
   assert.equal(componentCatalog.chair.widthMm, 535);
   assert.equal(componentCatalog.chair.depthMm, 592);
   assert.equal(componentCatalog.chair.heightMm, 795);
 
-  const { size } = await modelBounds("public/models/chairs/zidle.glb");
-  assert.ok(Math.abs(size.x - 535) < 0.1);
-  assert.ok(Math.abs(size.y - 591.902) < 0.1);
-  assert.ok(Math.abs(size.z - 794.797) < 0.1);
+  const { size } = await modelBounds("public/models/chairs/M57/M57_ZIDLE.glb");
+  assert.ok(Math.abs(modelUnitsToMillimeters(size.x, "m") - 530) < 0.1);
+  assert.ok(Math.abs(modelUnitsToMillimeters(size.y, "m") - 600) < 0.1);
+  assert.ok(Math.abs(modelUnitsToMillimeters(size.z, "m") - 821.463) < 0.1);
+});
+
+test("M57 effective resolver preferuje aktivní R2 modelAsset a canonical legacy používá jen bez něj", () => {
+  const placed = placeComponent(componentCatalog.chair, "m57-effective", 0, 0);
+  const active = resolveComponentModelReference(placed);
+  assert.equal(active?.kind, "stored");
+  if (active?.kind === "stored") {
+    assert.equal(active.asset.originalFileName, "M57_ZIDLE.glb");
+    assert.equal(
+      active.asset.storageKey,
+      "catalog/furniture/m57/models/dbd83002-2ac6-4522-b384-02502761cbe6.glb",
+    );
+    assert.equal(active.unit, "m");
+  }
+
+  const fallback = resolveComponentModelReference({
+    ...placed,
+    modelAsset: undefined,
+  });
+  assert.equal(fallback?.kind, "legacy");
+  if (fallback?.kind === "legacy") {
+    assert.equal(fallback.asset.url, "/models/chairs/M57/M57_ZIDLE.glb");
+  }
+});
+
+test("produkční M57 GLB zachovává canonical uzly a PBR materiály; scoped policy mění jen normals/side", async () => {
+  const { scene } = await loadModel("public/models/chairs/M57/M57_ZIDLE.glb");
+  const frame = scene.getObjectByName("M57_FRAME") as THREE.Mesh;
+  const seat = scene.getObjectByName("M57_SEAT") as THREE.Mesh;
+  const backrest = scene.getObjectByName("M57_BACKREST") as THREE.Mesh;
+  assert.ok(frame?.isMesh);
+  assert.ok(seat?.isMesh);
+  assert.ok(backrest?.isMesh);
+
+  const chrome = frame.material as THREE.MeshStandardMaterial;
+  const black = seat.material as THREE.MeshStandardMaterial;
+  assert.equal(chrome.name, "MAT_M57_CHROME");
+  assert.equal((backrest.material as THREE.Material).name, "MAT_M57_BLACK");
+  assert.equal(black.name, "MAT_M57_BLACK");
+  const before = {
+    chrome: {
+      color: chrome.color.getHex(),
+      metalness: chrome.metalness,
+      roughness: chrome.roughness,
+      opacity: chrome.opacity,
+      transparent: chrome.transparent,
+      name: chrome.name,
+    },
+    black: {
+      color: black.color.getHex(),
+      metalness: black.metalness,
+      roughness: black.roughness,
+      opacity: black.opacity,
+      transparent: black.transparent,
+      name: black.name,
+    },
+  };
+  assert.equal(frame.geometry.getAttribute("normal"), undefined);
+
+  const result = applyComponentModelMaterialPolicy(
+    scene,
+    placeComponent(componentCatalog.chair, "m57-material", 0, 0),
+    THREE.DoubleSide,
+  );
+  assert.deepEqual(result, { computedNormals: 3, updatedMaterials: 2 });
+  assert.ok(frame.geometry.getAttribute("normal"));
+  assert.equal(chrome.side, THREE.DoubleSide);
+  assert.equal(black.side, THREE.DoubleSide);
+  assert.deepEqual(
+    {
+      chrome: {
+        color: chrome.color.getHex(),
+        metalness: chrome.metalness,
+        roughness: chrome.roughness,
+        opacity: chrome.opacity,
+        transparent: chrome.transparent,
+        name: chrome.name,
+      },
+      black: {
+        color: black.color.getHex(),
+        metalness: black.metalness,
+        roughness: black.roughness,
+        opacity: black.opacity,
+        transparent: black.transparent,
+        name: black.name,
+      },
+    },
+    before,
+  );
+  assert.notEqual(black.color.getHex(), 0xffffff);
+});
+
+test("M57 material policy nemá globální side ani normals efekt na jiný katalogový model", () => {
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute(
+    "position",
+    new THREE.Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3),
+  );
+  const material = new THREE.MeshStandardMaterial({ side: THREE.FrontSide });
+  material.name = "MAT_M57_BLACK";
+  const root = new THREE.Group();
+  root.add(new THREE.Mesh(geometry, material));
+
+  const result = applyComponentModelMaterialPolicy(
+    root,
+    { definitionId: "some-other-component", internalCode: "OTHER" },
+    THREE.DoubleSide,
+  );
+  assert.deepEqual(result, { computedNormals: 0, updatedMaterials: 0 });
+  assert.equal(geometry.getAttribute("normal"), undefined);
+  assert.equal(material.side, THREE.FrontSide);
 });
 
 test("3D židle používá stejnou instanci pozice a rotace jako 2D", () => {
@@ -164,7 +363,7 @@ test("handedness/cross-product test: cadPointToViewer preserves right-handedness
 test("raycast click handler converts hit points straight through viewerPointToCad — no residual view-rotation undo needed", () => {
   const viewerSource = readFileSync(new URL("../components/configurator/BoothCadViewer.tsx", import.meta.url), "utf8");
   assert.doesNotMatch(viewerSource, /undoViewOnlyYaw180|VIEW_ONLY_YAW_180_RAD/u, "BoothCadViewer.tsx must not reintroduce the reverted content-group view rotation");
-  assert.match(viewerSource, /viewerPointToCad\(hit\.point\)/u, "the click handler should convert hit.point directly, since content/editorOverlays no longer carry any render-time rotation");
+  assert.match(viewerSource, /viewerPointToCad\(\s*hit\.point\.clone\(\)\.sub\(projectFrameOffset\)/u, "the click handler may undo only the explicit centered-origin translation before the canonical conversion");
 });
 
 test("content and editorOverlays groups carry no render-time rotation", () => {
@@ -229,12 +428,8 @@ test("front boundary (Y=0mm) maps to three.z=0; the back boundary (Y=depthMm) ma
 });
 
 test("default 3D camera direction sits on the positive-Z side (outside the canonical front boundary at Y=0), never negative-Z (which would sit outside the back)", () => {
-  const viewerSource = readFileSync(new URL("../components/configurator/BoothCadViewer.tsx", import.meta.url), "utf8");
-  const isometricMatch = viewerSource.match(/isometricDirection\s*=\s*new THREE\.Vector3\(([^)]+)\)/u);
-  assert.ok(isometricMatch, "expected fitCameraToObject to define an isometricDirection Vector3");
-  const components = isometricMatch![1].split(",").map((part) => Number(part.trim()));
-  const [, , zComponent] = components;
-  assert.ok(zComponent > 0, `isometric direction's Z component must stay positive so the default camera sits outside the front (Y=0) boundary — got ${zComponent}`);
+  const fit = fitPerspectiveCameraState({ x: 0, y: 1, z: -1 }, 2, 38, 1.5);
+  assert.ok(fit.position.z > fit.target.z, `fit camera must stay on the positive-Z side of its target — got camera ${fit.position.z}, target ${fit.target.z}`);
 });
 
 // Full 2D plan-view transform coverage (back-at-top, world-left=plan-left, rotation mapping,
@@ -370,4 +565,678 @@ test("resolveBoothModelSource: T04-shaped booth with 3 real variants (roh vlevo/
   assert.equal(isVariantAvailable(t04Variants[0]!, []), true);
   assert.equal(isVariantAvailable(t04Variants[1]!, []), false);
   assert.equal(isVariantAvailable(t04Variants[2]!, []), false);
+});
+
+test("P86 keeps its catalog identity, price and nominal footprint while using the canonical HWS booth asset", () => {
+  const booth = boothTypes.find((item) => item.internalCode === "P86")!;
+  assert.equal(booth.id, "koje-2x2");
+  assert.equal(booth.code, "P86");
+  assert.deepEqual(booth.nominalDimensions, {
+    widthMm: 2000,
+    depthMm: 2000,
+    heightMm: 2500,
+  });
+  assert.equal(booth.widthMm, 2000);
+  assert.equal(booth.depthMm, 2000);
+  assert.deepEqual(booth.cadDimensions, {
+    widthMm: 2020,
+    depthMm: 1046,
+    heightMm: 2500,
+  });
+  assert.equal(booth.pricingEntries?.[0]?.salePrice, 3640);
+  assert.equal(booth.boothAsset?.assetId, "HWS_BOOTH_KOJE_2000x2000");
+});
+
+test("P86 booth definition maps exactly five canonical GLB assemblies to existing Scene keys", () => {
+  const assemblies = boothTypes.find((item) => item.internalCode === "P86")!
+    .boothAsset!.assemblies;
+  assert.deepEqual(
+    assemblies.map((assembly) => [assembly.id, assembly.constructionPartId]),
+    [
+      ["HWS_ASM_BACK_WALL", "back-wall"],
+      ["HWS_ASM_LEFT_WALL", "left-wall"],
+      ["HWS_ASM_RIGHT_WALL", "right-wall"],
+      ["HWS_ASM_TOP_GRID", "upper-grid"],
+      ["HWS_ASM_FASCIA", "collar"],
+    ],
+  );
+});
+
+test("P86 interactive plan selects the GLB top view, while booths without a declared booth GLB keep the canonical fallback", () => {
+  const p86 = boothTypes.find((item) => item.internalCode === "P86")!;
+  const asset = getMasterReferenceModel(p86.assets);
+  assert.equal(resolveBoothPlanVisualMode(p86, asset), "glb-top-view");
+  assert.equal(resolveBoothPlanVisualMode(p86, undefined), "canonical-fallback");
+  assert.equal(
+    resolveBoothPlanVisualMode(
+      {
+        ...p86,
+        id: "booth-without-glb-definition",
+        code: "NO-GLB",
+        internalCode: "NO-GLB",
+        boothAsset: undefined,
+      },
+      asset,
+    ),
+    "canonical-fallback",
+  );
+});
+
+test("P86 top-down GLB frame is governed only by the nominal 2000 x 2000 booth and fixed visual padding", async () => {
+  const booth = boothTypes.find((item) => item.internalCode === "P86")!;
+  const { size } = await modelBounds(
+    "public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+  );
+  assert.ok(Math.abs(size.x * 1000 - 2020) < 0.001, "real GLB remains physically 2020 mm wide");
+
+  const frame = createTopDownBoothPlanFrame(
+    booth.widthMm!,
+    booth.depthMm!,
+    booth.boothAsset?.originConvention,
+  );
+  assert.equal(frame.canonicalWidthMm, 2000);
+  assert.equal(frame.canonicalDepthMm, 2000);
+  assert.equal(frame.visualPaddingMm, BOOTH_PLAN_VISUAL_PADDING_MM);
+  assert.equal(frame.cameraCenterX, 0);
+  assert.equal(frame.cameraCenterZ, 0);
+  assert.deepEqual([frame.left, frame.right, frame.top, frame.bottom], [-1.04, 1.04, 1.04, -1.04]);
+  assert.deepEqual(
+    [frame.layerLeftPercent, frame.layerTopPercent, frame.layerWidthPercent, frame.layerHeightPercent],
+    [-2, -2, 104, 104],
+  );
+});
+
+test("P86 GLB preserves assembly hierarchy, authored origin and exact physical component counts", async () => {
+  const { scene } = await loadModel(
+    "public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+  );
+  const root = scene.getObjectByName("HWS_BOOTH_KOJE_2000x2000")!;
+  assert.ok(root);
+  assert.equal(root.position.length(), 0, "loader must not recenter the authored root");
+  assert.equal(root.userData.origin_rule, "CENTER_OF_COMPLETED_PHYSICAL_BOOTH_ON_FLOOR");
+
+  const countAsset = (assemblyId: string, assetId: string) => {
+    let count = 0;
+    scene.getObjectByName(assemblyId)!.traverse((node) => {
+      if (node.userData.hws_asset_name === assetId) count += 1;
+    });
+    return count;
+  };
+  assert.equal(countAsset("HWS_ASM_BACK_WALL", "HWS_POST_40x40_H2500"), 3);
+  assert.equal(countAsset("HWS_ASM_BACK_WALL", "HWS_PANEL_950_H2500"), 2);
+  assert.equal(countAsset("HWS_ASM_LEFT_WALL", "HWS_POST_40x40_H2500"), 1);
+  assert.equal(countAsset("HWS_ASM_LEFT_WALL", "HWS_PANEL_950_H2500"), 1);
+  assert.equal(countAsset("HWS_ASM_RIGHT_WALL", "HWS_POST_40x40_H2500"), 1);
+  assert.equal(countAsset("HWS_ASM_RIGHT_WALL", "HWS_PANEL_950_H2500"), 1);
+  assert.equal(countAsset("HWS_ASM_TOP_GRID", "HWS_GRID_BEAM_950"), 3);
+  assert.equal(countAsset("HWS_ASM_TOP_GRID", "HWS_GRID_CONNECTOR_150"), 1);
+  assert.equal(countAsset("HWS_ASM_FASCIA", "HWS_FASCIA_2000"), 1);
+});
+
+test("P86 authored 40 mm post bounds occupy exactly 30 mm inside the nominal canonical edges", async () => {
+  const { scene } = await loadModel(
+    "public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+  );
+  const root = scene.getObjectByName("HWS_BOOTH_KOJE_2000x2000")!;
+  assert.deepEqual(root.userData.nominal_footprint_mm, [2000, 2000]);
+  assert.deepEqual(root.userData.physical_completed_footprint_mm, [2020, 2020]);
+
+  const bounds = (nodeName: string) => {
+    const node = scene.getObjectByName(nodeName);
+    assert.ok(node, `${nodeName} must exist in the authored production GLB`);
+    return new THREE.Box3().setFromObject(node);
+  };
+  const left = bounds("HWS_POST_40x40_H2500__LEFT_WALL_01");
+  const right = bounds("HWS_POST_40x40_H2500__RIGHT_WALL_01");
+  const back = bounds("HWS_POST_40x40_H2500__BACK_WALL_02");
+
+  assert.ok(Math.abs(left.getSize(new THREE.Vector3()).x * 1000 - 40) < 0.001);
+  assert.ok(Math.abs(right.getSize(new THREE.Vector3()).x * 1000 - 40) < 0.001);
+  assert.ok(Math.abs(back.getSize(new THREE.Vector3()).y * 1000 - 40) < 0.001);
+  assert.ok(Math.abs((left.max.x + 1) * 1000 - 30) < 0.001);
+  assert.ok(Math.abs((right.min.x + 1) * 1000 - 1970) < 0.001);
+  assert.ok(Math.abs((back.min.y + 1) * 1000 - 1970) < 0.001);
+});
+
+test("assembly visibility is independent and an old project defaults every P86 assembly to visible", async () => {
+  const booth = boothTypes.find((item) => item.internalCode === "P86")!;
+  const assemblies = booth.boothAsset!.assemblies;
+  const legacy = normalizeProjectRecord({
+    id: "legacy-p86-without-assembly-visibility",
+    boothId: booth.id,
+  });
+  const defaults = resolveBoothAssemblyVisibility(
+    assemblies,
+    legacy.constructionVisibility,
+  );
+  assert.equal(Object.values(defaults).every(Boolean), true);
+
+  const { scene } = await loadModel(
+    "public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+  );
+  const missing = applyBoothAssemblyVisibility(scene, assemblies, {
+    "left-wall": false,
+  });
+  assert.deepEqual(missing, []);
+  assert.equal(scene.getObjectByName("HWS_ASM_LEFT_WALL")!.visible, false);
+  assert.equal(scene.getObjectByName("HWS_ASM_BACK_WALL")!.visible, true);
+  assert.equal(scene.getObjectByName("HWS_ASM_RIGHT_WALL")!.visible, true);
+  assert.equal(scene.getObjectByName("HWS_ASM_TOP_GRID")!.visible, true);
+  assert.equal(scene.getObjectByName("HWS_ASM_FASCIA")!.visible, true);
+
+  for (const target of assemblies) {
+    const resolved = resolveBoothAssemblyVisibility(assemblies, {
+      [target.id]: false,
+    });
+    for (const assembly of assemblies) {
+      assert.equal(
+        resolved[assembly.id],
+        assembly.id !== target.id,
+        `${target.id} must be independently switchable by its canonical assembly id`,
+      );
+    }
+  }
+
+  const topGridMissing = applyBoothAssemblyVisibility(scene, assemblies, {
+    HWS_ASM_TOP_GRID: false,
+  });
+  assert.deepEqual(topGridMissing, []);
+  assert.equal(scene.getObjectByName("HWS_ASM_TOP_GRID")!.visible, false);
+  assert.equal(scene.getObjectByName("HWS_ASM_FASCIA")!.visible, true);
+});
+
+test("interactive 2D and standalone Visualization output share one booth GLB top-view render core", () => {
+  const source = readFileSync("components/configurator/BoothCadPlanView.tsx", "utf8");
+  const rendererSource = readFileSync("lib/boothPlanGlbRenderer.ts", "utf8");
+  const exportSource = readFileSync("lib/planExport.ts", "utf8");
+  assert.match(source, /loadBoothPlanModel\(/u);
+  assert.match(rendererSource, /applyBoothModelTransform\(/u);
+  assert.match(rendererSource, /createTopDownBoothPlanFrame\(/u);
+  assert.match(rendererSource, /camera\.up\.set\(0,\s*0,\s*-1\)/u);
+  assert.match(exportSource, /renderBoothPlanGlbToCanvas\(/u);
+  assert.match(source, /data-plan-source="glb-top-view"/u);
+  assert.doesNotMatch(rendererSource, /Box3|setFromObject|getCenter|modelUnitsToMillimeters/u);
+  assert.doesNotMatch(exportSource, /querySelector|cadPlanCanvas|cadSnapshot|onSnapshot/u);
+
+  const constructionSource = readFileSync(
+    "components/configurator/BoothConstructionPlanView.tsx",
+    "utf8",
+  );
+  assert.match(constructionSource, /visualMode === "glb-top-view"/u);
+  assert.match(constructionSource, /<BoothCadPlanView/u);
+  assert.match(constructionSource, /showCanonicalConstruction/u);
+  assert.doesNotMatch(constructionSource, /canonicalBoothCollision|<line/u);
+
+  const generatorSource = readFileSync("components/BoothGenerator.tsx", "utf8");
+  assert.match(generatorSource, /<BoothConstructionPlanView[\s\S]*?asset=\{selectedBoothMasterModel\}/u);
+});
+
+test("GLB construction and the black canonical U are mutually exclusive without a normal-editor collision overlay", () => {
+  assert.equal(shouldRenderCanonicalBoothConstruction("glb-top-view", "loading"), false);
+  assert.equal(shouldRenderCanonicalBoothConstruction("glb-top-view", "ready"), false);
+  assert.equal(shouldRenderCanonicalBoothConstruction("glb-top-view", "failed"), true);
+  assert.equal(shouldRenderCanonicalBoothConstruction("canonical-fallback", "loading"), true);
+
+  const source = readFileSync(
+    "components/configurator/BoothConstructionPlanView.tsx",
+    "utf8",
+  );
+  const conditional = source.indexOf("{showCanonicalConstruction && (");
+  const areas = source.indexOf('className="canonicalBoothConstructionAreas"');
+  const profiles = source.indexOf('className="canonicalBoothConstructionProfiles"');
+  assert.ok(conditional >= 0 && conditional < areas && areas < profiles);
+  assert.doesNotMatch(source, /canonicalBoothCollision|<line/u);
+  assert.match(source, /shouldRenderCanonicalBoothConstruction\(/u);
+});
+
+test("Visualization 2D GLB path obeys booth layer visibility and retains canonical fallback plus independent furniture", () => {
+  const source = readFileSync("lib/planExport.ts", "utf8");
+  assert.match(source, /layers\.includes\("booth"\)[\s\S]*?renderBoothPlanGlbToCanvas\(/u);
+  assert.match(source, /visible:\s*constructionVisibility\.assembly \?\? booth\.visible/u);
+  assert.match(source, /if \(layers\.includes\("booth"\) && !renderedBoothGlb\)/u);
+  assert.match(source, /content\.boothPlan\.constructionAreas/u);
+  assert.match(source, /content\.boothPlan\.constructionProfiles/u);
+  assert.match(source, /for \(const item of content\.sceneObjects\)/u);
+  assert.match(source, /BOOTH_PLAN_VISUAL_PADDING_MM/u);
+});
+
+test("configurator and Visualization preparation preserve identical nested child world transforms", () => {
+  const booth = boothTypes.find((item) => item.internalCode === "P86")!;
+  const asset = getMasterReferenceModel(booth.assets)!;
+  const makeHierarchy = () => {
+    const root = new THREE.Group();
+    const assembly = new THREE.Group();
+    assembly.name = "HWS_ASM_BACK_WALL";
+    assembly.position.set(0.35, -0.2, 0.5);
+    assembly.rotation.z = Math.PI / 7;
+    const nested = new THREE.Group();
+    nested.position.set(-0.1, 0.4, 0.2);
+    const child = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.3, 0.4));
+    child.name = "nested-child";
+    child.position.set(0.25, 0.15, -0.05);
+    nested.add(child);
+    assembly.add(nested);
+    root.add(assembly);
+    return { root, assembly, nested, child };
+  };
+  const configurator = makeHierarchy();
+  const visualization = makeHierarchy();
+  const visibility = { "back-wall": true, "left-wall": false };
+
+  applyBoothModelTransform(configurator.root, asset, booth.boothAsset, visibility);
+  applyBoothModelTransform(visualization.root, asset, booth.boothAsset, visibility);
+
+  assert.equal(configurator.child.parent, configurator.nested, "the authored hierarchy must not be flattened");
+  assert.deepEqual(configurator.child.position.toArray(), [0.25, 0.15, -0.05]);
+  assert.deepEqual(
+    configurator.child.getWorldPosition(new THREE.Vector3()).toArray(),
+    visualization.child.getWorldPosition(new THREE.Vector3()).toArray(),
+  );
+  assert.deepEqual(configurator.child.matrixWorld.toArray(), visualization.child.matrixWorld.toArray());
+  assert.equal(configurator.root.rotation.x, -Math.PI / 2);
+});
+
+test("Visualization step passes the same boothAsset and construction visibility contract as the configurator", () => {
+  const source = readFileSync("components/workflow/WorkflowSteps.tsx", "utf8");
+  assert.match(source, /boothAsset=\{booth\.boothAsset\}/u);
+  assert.match(source, /constructionVisibility=\{project\.constructionVisibility\}/u);
+  assert.match(source, /boothVisible=\{project\.constructionVisibility\.assembly \?\? booth\.visible\}/u);
+});
+
+test("3D toolbar is wired to the viewer camera controller while 2D keeps its viewport controls", () => {
+  const source = readFileSync("components/BoothGenerator.tsx", "utf8");
+  assert.match(source, /editorView === "3d" \? \(\) => booth3DCameraControlsRef\.current\?\.zoomOut\(\)/u);
+  assert.match(source, /editorView === "3d" \? \(\) => booth3DCameraControlsRef\.current\?\.zoomIn\(\)/u);
+  assert.match(source, /editorView === "3d" \? \(\) => booth3DCameraControlsRef\.current\?\.fit\(\)/u);
+  assert.match(source, /editorView === "3d" \? \(\) => booth3DCameraControlsRef\.current\?\.reset\(\)/u);
+  const viewerSource = readFileSync("components/configurator/BoothCadViewer.tsx", "utf8");
+  assert.match(viewerSource, /controls\.enableZoom = true/u, "wheel/OrbitControls zoom stays enabled");
+});
+
+test("GLTFLoader retains printable CORE metadata for future front/back graphics workflows", async () => {
+  const { scene } = await loadModel(
+    "public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+  );
+  const printable = findPrintableModelNodes(scene);
+  const panelCores = printable.filter(
+    (node) => node.metadata.hws_asset_name === "HWS_PANEL_950_CORE",
+  );
+  assert.equal(panelCores.length, 4);
+  assert.equal(panelCores.every((node) => node.metadata.printable_front === true), true);
+  assert.equal(panelCores.every((node) => node.metadata.printable_back === true), true);
+  assert.equal(panelCores.every((node) => node.metadata.surface_role === "PANEL_FACE"), true);
+});
+
+test("P86 printable registry has exactly eight stable panel faces plus the backward-compatible fascia id", () => {
+  const expectedIds = [
+    "back-wall-01-front",
+    "back-wall-01-back",
+    "back-wall-02-front",
+    "back-wall-02-back",
+    "left-wall-01-front",
+    "left-wall-01-back",
+    "right-wall-01-front",
+    "right-wall-01-back",
+    "fascia-print",
+  ];
+  assert.equal(P86_PANEL_PRINT_SURFACES.length, 8);
+  assert.deepEqual(P86_CANONICAL_PRINT_SURFACES.map((surface) => surface.id), expectedIds);
+  assert.equal(new Set(expectedIds).size, 9);
+});
+
+test("all P86 panel ids resolve explicitly to the authored CORE node and local physical face", () => {
+  const expected = new Map([
+    ["back-wall-01", P86_PRINT_SURFACE_NODE_NAMES.backWall01],
+    ["back-wall-02", P86_PRINT_SURFACE_NODE_NAMES.backWall02],
+    ["left-wall-01", P86_PRINT_SURFACE_NODE_NAMES.leftWall01],
+    ["right-wall-01", P86_PRINT_SURFACE_NODE_NAMES.rightWall01],
+  ]);
+  for (const [panelId, nodeName] of expected) {
+    const front = resolvePrintSurfaceBinding(P86_CANONICAL_PRINT_SURFACES, `${panelId}-front`)!;
+    const back = resolvePrintSurfaceBinding(P86_CANONICAL_PRINT_SURFACES, `${panelId}-back`)!;
+    assert.equal(front.nodeName, nodeName);
+    assert.equal(back.nodeName, nodeName);
+    assert.equal(front.face, "front");
+    assert.equal(back.face, "back");
+    assert.equal(front.coordinateSpace, "node-local");
+    assert.equal(back.coordinateSpace, "node-local");
+    assert.equal(front.localNormalAxis, "-y");
+    assert.equal(back.localNormalAxis, "+y");
+  }
+});
+
+test("authored P86 instance rotations carry local -Y FRONT to the correct physical side", async () => {
+  const { scene } = await loadModel(
+    "public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+  );
+  scene.updateWorldMatrix(true, true);
+  const expectedWorldFrontNormals = new Map<string, readonly [number, number, number]>([
+    [P86_PRINT_SURFACE_NODE_NAMES.backWall01, [0, -1, 0]],
+    [P86_PRINT_SURFACE_NODE_NAMES.backWall02, [0, -1, 0]],
+    [P86_PRINT_SURFACE_NODE_NAMES.leftWall01, [1, 0, 0]],
+    [P86_PRINT_SURFACE_NODE_NAMES.rightWall01, [-1, 0, 0]],
+    [P86_PRINT_SURFACE_NODE_NAMES.fascia, [0, -1, 0]],
+  ]);
+  for (const [nodeName, expected] of expectedWorldFrontNormals) {
+    const node = scene.getObjectByName(nodeName)!;
+    const worldFront = new THREE.Vector3(0, -1, 0)
+      .applyQuaternion(node.getWorldQuaternion(new THREE.Quaternion()))
+      .toArray()
+      .map((coordinate) => {
+        const rounded = Math.round(coordinate);
+        return Object.is(rounded, -0) ? 0 : rounded;
+      });
+    assert.deepEqual(worldFront, expected, `${nodeName} local FRONT must follow its authored rotation`);
+  }
+});
+
+test("P86 canonical print dimensions are 950x2340 per panel face and 2000x300 for fascia", () => {
+  assert.equal(P86_PANEL_PRINT_WIDTH_MM, 950);
+  assert.equal(P86_PANEL_PRINT_HEIGHT_MM, 2340);
+  assert.equal(P86_PANEL_PRINT_SURFACES.every((surface) => surface.widthMm === 950 && surface.heightMm === 2340), true);
+  const fascia = P86_CANONICAL_PRINT_SURFACES.find((surface) => surface.id === "fascia-print")!;
+  assert.equal(P86_FASCIA_PRINT_WIDTH_MM, 2000);
+  assert.equal(P86_FASCIA_PRINT_HEIGHT_MM, 300);
+  assert.deepEqual([fascia.widthMm, fascia.heightMm], [2000, 300]);
+});
+
+test("fascia-print keeps its business id and resolves to the authored fascia FRONT", () => {
+  const fascia = resolvePrintSurfaceBinding(P86_CANONICAL_PRINT_SURFACES, "fascia-print")!;
+  assert.equal(fascia.nodeName, P86_PRINT_SURFACE_NODE_NAMES.fascia);
+  assert.equal(fascia.face, "front");
+  assert.equal(fascia.localNormalAxis, "-y");
+});
+
+test("print-surface resolver requires explicit binding and never guesses from id, name or legacy nodeName", () => {
+  const traps: readonly PrintSurface[] = [{
+    id: "HWS_PANEL_950_H2500__BACK_WALL_01__CORE-front",
+    name: "back-wall-01-front HWS_PANEL_950_CORE",
+    nodeName: "legacy-whole-node-name",
+    widthMm: 950,
+    heightMm: 2340,
+    active: true,
+  }];
+  assert.equal(resolvePrintSurfaceBinding(traps, traps[0]!.id), undefined);
+
+  const explicit: readonly PrintSurface[] = [{
+    ...traps[0]!,
+    sceneBinding: {
+      nodeName: "EXPLICIT_AUTHORED_NODE",
+      face: "back",
+      coordinateSpace: "node-local",
+      localNormalAxis: "+y",
+    },
+  }];
+  assert.equal(resolvePrintSurfaceBinding(explicit, explicit[0]!.id)?.nodeName, "EXPLICIT_AUTHORED_NODE");
+});
+
+test("all nine P86 bindings point at real authored printable GLB nodes", async () => {
+  const { scene } = await loadModel(
+    "public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb",
+  );
+  for (const surface of P86_CANONICAL_PRINT_SURFACES) {
+    const binding = resolvePrintSurfaceBinding(P86_CANONICAL_PRINT_SURFACES, surface.id)!;
+    const node = scene.getObjectByName(binding.nodeName);
+    assert.ok(node, `${surface.id} must resolve to an authored node`);
+    assert.equal(node.userData.printable, true);
+    if (binding.face === "front") assert.notEqual(node.userData.printable_front, false);
+    if (binding.face === "back") assert.equal(node.userData.printable_back, true);
+  }
+});
+
+test("legacy fascia-only project remains valid and graphicsFiles already carry artwork asset + surface linkage", () => {
+  const fasciaAssignment = {
+    printSurfaceId: "fascia-print",
+    sceneReference: "koje-2x2",
+    graphicsKind: "fascia" as const,
+    artworkStatus: "received" as const,
+    artworkFileId: "artwork-fascia-1",
+    selectedForPrint: true,
+    canonicalWidthMm: 2000,
+    canonicalHeightMm: 300,
+    productionWidthMm: 2000,
+    productionHeightMm: 300,
+    includedInPackage: true,
+    pricedSeparately: false,
+  };
+  const project = createProjectRecord({
+    id: "legacy-p86-fascia-only",
+    boothId: "koje-2x2",
+    printSurfaceAssignments: [fasciaAssignment],
+    graphicsFiles: [{
+      id: "artwork-fascia-1",
+      name: "fascia.pdf",
+      size: 1234,
+      mimeType: "application/pdf",
+      availability: "persistent",
+      storageKey: "projects/legacy-p86-fascia-only/graphics/fascia.pdf",
+      status: "uploaded",
+      printSurfaceId: "fascia-print",
+    }],
+  });
+  const reloaded = normalizeProjectRecord(JSON.parse(JSON.stringify(project)));
+  assert.deepEqual(reloaded.printSurfaceAssignments, [fasciaAssignment]);
+  assert.equal(reloaded.graphicsFiles[0]?.printSurfaceId, "fascia-print");
+  assert.equal(reloaded.graphicsFiles[0]?.storageKey, "projects/legacy-p86-fascia-only/graphics/fascia.pdf");
+});
+
+test("declared model units scale the meter-authored P86 GLB exactly once", () => {
+  assert.equal(modelUnitScaleToScene("m"), 1);
+  assert.equal(modelUnitScaleToScene("mm"), 0.001);
+  assert.equal(modelUnitsToMillimeters(2.02, "m"), 2020);
+  assert.equal(modelUnitsToMillimeters(2020, "mm"), 2020);
+});
+
+const p86ForArtwork = boothTypes.find((item) => item.internalCode === "P86")!;
+
+function artworkFile(id: string, name = `${id}.png`): GraphicFileReference {
+  return {
+    id,
+    name,
+    size: 1234,
+    mimeType: name.endsWith(".pdf") ? "application/pdf" : "image/png",
+    availability: "persistent",
+    storageKey: `projects/artwork/${name}`,
+    status: "uploaded",
+  };
+}
+
+function artworkAssignments(
+  entries: readonly (readonly [surfaceId: string, artworkFileId: string])[],
+): readonly PrintSurfaceAssignment[] {
+  return entries.reduce<readonly PrintSurfaceAssignment[]>(
+    (current, [surfaceId, fileId]) => assignArtworkToPrintSurface(
+      p86ForArtwork,
+      "default",
+      current,
+      surfaceId,
+      fileId,
+    ),
+    [],
+  );
+}
+
+async function decorateArtworkScene(
+  scene: THREE.Object3D,
+  assignments: readonly PrintSurfaceAssignment[],
+  files: readonly GraphicFileReference[],
+) {
+  return applyPrintArtworkOverlays({
+    scene,
+    printSurfaces: p86ForArtwork.printSurfaces ?? [],
+    printSurfaceAssignments: assignments,
+    graphicsFiles: files,
+    modelUnit: "m",
+    resolveArtworkUrl: async (file) => `memory://${file.id}`,
+    loadTexture: async () => new THREE.Texture(),
+  });
+}
+
+function overlayMetadata(mesh: THREE.Mesh): PrintArtworkOverlayMetadata {
+  return mesh.userData.hwsPrintArtworkOverlay as PrintArtworkOverlayMetadata;
+}
+
+test("artwork FRONT overlay binds only to the explicit back-wall-01 CORE node", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  await decorateArtworkScene(scene, artworkAssignments([["back-wall-01-front", "front-a"]]), [artworkFile("front-a")]);
+  const [overlay] = findPrintArtworkOverlays(scene);
+  assert.ok(overlay);
+  assert.equal(overlay.parent?.name, P86_PRINT_SURFACE_NODE_NAMES.backWall01);
+  assert.deepEqual(overlayMetadata(overlay), {
+    printSurfaceId: "back-wall-01-front",
+    artworkFileId: "front-a",
+    nodeName: P86_PRINT_SURFACE_NODE_NAMES.backWall01,
+    face: "front",
+    localNormalAxis: "-y",
+    artworkRightAxis: "+x",
+    artworkUpAxis: "+z",
+    canonicalWidthMm: 950,
+    canonicalHeightMm: 2340,
+  });
+});
+
+test("FRONT and BACK create independent overlays on the same CORE and opposite local faces", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  await decorateArtworkScene(scene, artworkAssignments([
+    ["back-wall-01-front", "front-a"],
+    ["back-wall-01-back", "back-b"],
+  ]), [artworkFile("front-a"), artworkFile("back-b")]);
+  const overlays = findPrintArtworkOverlays(scene);
+  assert.equal(overlays.length, 2);
+  assert.equal(new Set(overlays.map((overlay) => overlay.parent?.name)).size, 1);
+  assert.deepEqual(new Set(overlays.map((overlay) => overlayMetadata(overlay).artworkFileId)), new Set(["front-a", "back-b"]));
+  const front = overlays.find((overlay) => overlayMetadata(overlay).face === "front")!;
+  const back = overlays.find((overlay) => overlayMetadata(overlay).face === "back")!;
+  assert.ok(front.geometry.getAttribute("position").getY(0) < 0);
+  assert.ok(back.geometry.getAttribute("position").getY(0) > 0);
+  assert.ok(front.geometry.getAttribute("normal").getY(0) < -0.999);
+  assert.ok(back.geometry.getAttribute("normal").getY(0) > 0.999);
+});
+
+test("BACK UV contract reverses local X so artwork is not mirrored from its physical side", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  await decorateArtworkScene(scene, artworkAssignments([
+    ["back-wall-01-front", "front-a"],
+    ["back-wall-01-back", "back-b"],
+  ]), [artworkFile("front-a"), artworkFile("back-b")]);
+  const overlays = findPrintArtworkOverlays(scene);
+  const front = overlays.find((overlay) => overlayMetadata(overlay).face === "front")!;
+  const back = overlays.find((overlay) => overlayMetadata(overlay).face === "back")!;
+  const frontPosition = front.geometry.getAttribute("position");
+  const backPosition = back.geometry.getAttribute("position");
+  assert.ok(frontPosition.getX(1) > frontPosition.getX(0), "FRONT artwork right is local +X");
+  assert.ok(backPosition.getX(1) < backPosition.getX(0), "BACK artwork right is local -X");
+  assert.deepEqual(Array.from(front.geometry.getAttribute("uv").array), [0, 0, 1, 0, 1, 1, 0, 1]);
+  assert.deepEqual(Array.from(back.geometry.getAttribute("uv").array), [0, 0, 1, 0, 1, 1, 0, 1]);
+  assert.equal((front.material as THREE.MeshBasicMaterial).map?.flipY, true);
+  assert.equal((back.material as THREE.MeshBasicMaterial).map?.flipY, true);
+});
+
+test("fascia-print uses the authored fascia FRONT and all overlay dimensions are canonical", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  await decorateArtworkScene(scene, artworkAssignments([
+    ["back-wall-01-front", "panel"],
+    ["fascia-print", "fascia"],
+  ]), [artworkFile("panel"), artworkFile("fascia")]);
+  const overlays = findPrintArtworkOverlays(scene);
+  const panel = overlays.find((overlay) => overlayMetadata(overlay).printSurfaceId === "back-wall-01-front")!;
+  const fascia = overlays.find((overlay) => overlayMetadata(overlay).printSurfaceId === "fascia-print")!;
+  assert.equal(fascia.parent?.name, P86_PRINT_SURFACE_NODE_NAMES.fascia);
+  assert.equal(overlayMetadata(fascia).face, "front");
+  const size = (mesh: THREE.Mesh) => mesh.geometry.boundingBox!.getSize(new THREE.Vector3());
+  assert.deepEqual(size(panel).toArray().map((value) => Math.round(value * 1000)), [950, 0, 2340]);
+  assert.deepEqual(size(fascia).toArray().map((value) => Math.round(value * 1000)), [2000, 0, 300]);
+});
+
+test("re-applying changed artwork disposes the old overlay and never duplicates it", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  await decorateArtworkScene(scene, artworkAssignments([["back-wall-01-front", "old"]]), [artworkFile("old")]);
+  const old = findPrintArtworkOverlays(scene)[0]!;
+  let geometryDisposed = false;
+  let materialDisposed = false;
+  let textureDisposed = false;
+  old.geometry.addEventListener("dispose", () => { geometryDisposed = true; });
+  (old.material as THREE.Material).addEventListener("dispose", () => { materialDisposed = true; });
+  (old.material as THREE.MeshBasicMaterial).map!.addEventListener("dispose", () => { textureDisposed = true; });
+  await decorateArtworkScene(scene, artworkAssignments([["back-wall-01-front", "new"]]), [artworkFile("new")]);
+  const overlays = findPrintArtworkOverlays(scene);
+  assert.equal(overlays.length, 1);
+  assert.equal(overlayMetadata(overlays[0]!).artworkFileId, "new");
+  assert.equal(geometryDisposed, true);
+  assert.equal(materialDisposed, true);
+  assert.equal(textureDisposed, true);
+});
+
+test("removing artwork clears only the overlay and keeps the authored base CORE", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  const assigned = artworkAssignments([["back-wall-01-front", "front-a"]]);
+  await decorateArtworkScene(scene, assigned, [artworkFile("front-a")]);
+  const base = scene.getObjectByName(P86_PRINT_SURFACE_NODE_NAMES.backWall01)!;
+  const withoutArtwork = removeArtworkFromPrintSurface(assigned, "back-wall-01-front");
+  await decorateArtworkScene(scene, withoutArtwork, [artworkFile("front-a")]);
+  assert.equal(findPrintArtworkOverlays(scene).length, 0);
+  assert.equal(scene.getObjectByName(P86_PRINT_SURFACE_NODE_NAMES.backWall01), base);
+  assert.equal(withoutArtwork[0]?.artworkFileId, undefined);
+  assert.equal(withoutArtwork[0]?.artworkStatus, "missing");
+});
+
+test("one graphicsFiles id can decorate multiple explicitly bound surfaces without asset copies", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  const shared = artworkFile("shared");
+  await decorateArtworkScene(scene, artworkAssignments([
+    ["back-wall-01-front", shared.id],
+    ["left-wall-01-front", shared.id],
+    ["right-wall-01-back", shared.id],
+  ]), [shared]);
+  const overlays = findPrintArtworkOverlays(scene);
+  assert.equal(overlays.length, 3);
+  assert.equal(overlays.every((overlay) => overlayMetadata(overlay).artworkFileId === shared.id), true);
+});
+
+test("PDF remains a persisted production source but intentionally creates no 3D overlay", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  const pdf = artworkFile("source-pdf", "panel.pdf");
+  const result = await decorateArtworkScene(scene, artworkAssignments([["back-wall-01-front", pdf.id]]), [pdf]);
+  assert.deepEqual(result.sourceOnlySurfaceIds, ["back-wall-01-front"]);
+  assert.equal(findPrintArtworkOverlays(scene).length, 0);
+});
+
+test("artwork project save/load keeps stable file id and FRONT/BACK assignment links", () => {
+  const assignments = artworkAssignments([
+    ["back-wall-01-front", "front-a"],
+    ["back-wall-01-back", "back-b"],
+  ]);
+  const project = createProjectRecord({
+    id: "p86-artwork-roundtrip",
+    boothId: p86ForArtwork.id,
+    graphicsFiles: [artworkFile("front-a"), artworkFile("back-b")],
+    printSurfaceAssignments: assignments,
+  });
+  const reloaded = normalizeProjectRecord(JSON.parse(JSON.stringify(project)));
+  assert.deepEqual(reloaded.graphicsFiles.map((file) => file.id), ["front-a", "back-b"]);
+  assert.deepEqual(reloaded.printSurfaceAssignments.map((assignment) => [assignment.printSurfaceId, assignment.artworkFileId]), [
+    ["back-wall-01-front", "front-a"],
+    ["back-wall-01-back", "back-b"],
+  ]);
+});
+
+test("legacy project with no graphicsFiles or panel assignments remains empty and valid", () => {
+  const legacy = normalizeProjectRecord({ id: "legacy-without-artwork", boothId: p86ForArtwork.id });
+  assert.deepEqual(legacy.graphicsFiles, []);
+  assert.deepEqual(legacy.printSurfaceAssignments, []);
+});
+
+test("Graphics UI groups canonical surfaces and reuses graphicsFiles/artworkFileId upload flow", () => {
+  const panelSource = readFileSync("components/configurator/GraphicsSurfacePanel.tsx", "utf8");
+  const generatorSource = readFileSync("components/BoothGenerator.tsx", "utf8");
+  for (const label of ["Zadní stěna", "Levá stěna", "Pravá stěna", "Límec"]) {
+    assert.ok(P86_CANONICAL_PRINT_SURFACES.some((surface) => surface.group?.name === label));
+  }
+  assert.match(panelSource, /surface\.group\?\.name/u);
+  assert.match(panelSource, /surface\.sceneBinding\?\.face === "back"/u);
+  assert.match(panelSource, /950|surface\.widthMm/u);
+  assert.match(panelSource, /onAssignExisting\(surface\.id, event\.target\.value\)/u);
+  assert.match(generatorSource, /uploadAsset\(file, \{ category: "project-graphics", ownerId \}/u);
+  assert.match(generatorSource, /assignArtworkToPrintSurface\([\s\S]*?additions\[0\]!\.id/u);
+  assert.doesNotMatch(generatorSource, /graphicAssets|artworkAssets|graphicUploads/u);
 });

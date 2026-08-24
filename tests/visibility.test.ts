@@ -27,7 +27,7 @@ test("toggle visibility nemění world position objektu", () => {
   assert.equal(hiddenComponent.rotationDeg, component.rotationDeg);
 });
 
-test("skrytá konstrukce stále způsobuje hard collision", () => {
+test("skrytá konstrukce odstraní také hard collision", () => {
   const visuallyHiddenBooth = {
     ...booth,
     visible: false,
@@ -37,8 +37,27 @@ test("skrytá konstrukce stále způsobuje hard collision", () => {
     isPlacementValid(
       visuallyHiddenBooth,
       { widthMm: 200, depthMm: 200 },
-      { x: 100, y: 500, rotationDeg: 0 },
+      { x: 100, y: 1500, rotationDeg: 0 },
     ),
+    true,
+  );
+});
+
+test("hidden HWS side assembly removes only its hard obstacle", () => {
+  const furniture = { widthMm: 200, depthMm: 200 };
+  const rearLeft = { x: 100, y: 1500, rotationDeg: 0 };
+
+  assert.equal(isPlacementValid(booth, furniture, rearLeft), false);
+  assert.equal(
+    isPlacementValid(booth, furniture, rearLeft, {
+      HWS_ASM_LEFT_WALL: false,
+    }),
+    true,
+  );
+  assert.equal(
+    isPlacementValid(booth, furniture, rearLeft, {
+      HWS_ASM_RIGHT_WALL: false,
+    }),
     false,
   );
 });

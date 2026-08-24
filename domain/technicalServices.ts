@@ -266,6 +266,132 @@ export function priceGraphics(
   return results;
 }
 
+/**
+ * Structural equality for a derived printSurfaceAssignments array — used to make the
+ * BoothGenerator.tsx effect that recomputes assignments from selectedBooth/realizationProfileId
+ * a genuine no-op (returns the SAME array reference) when nothing actually changed, instead of
+ * always returning a freshly-mapped array. React's setState bails out on a referentially
+ * unchanged value but never deep-compares a new array/object literal — an effect that always
+ * hands back a new (even if content-identical) array defeats that bail-out and, if anything else
+ * makes the effect's own dependencies unstable, can drive a render→effect→setState→render loop.
+ */
+export function printSurfaceAssignmentsEqual(
+  a: readonly PrintSurfaceAssignment[],
+  b: readonly PrintSurfaceAssignment[],
+): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((item, index) => {
+    const other = b[index];
+    return (
+      other !== undefined &&
+      item.printSurfaceId === other.printSurfaceId &&
+      item.sceneReference === other.sceneReference &&
+      item.graphicsKind === other.graphicsKind &&
+      item.artworkStatus === other.artworkStatus &&
+      item.artworkFileId === other.artworkFileId &&
+      item.selectedForPrint === other.selectedForPrint &&
+      item.canonicalWidthMm === other.canonicalWidthMm &&
+      item.canonicalHeightMm === other.canonicalHeightMm &&
+      item.productionWidthMm === other.productionWidthMm &&
+      item.productionHeightMm === other.productionHeightMm &&
+      item.includedInPackage === other.includedInPackage &&
+      item.pricedSeparately === other.pricedSeparately
+    );
+  });
+}
+
+/**
+ * Derives the next printSurfaceAssignments array for a (newly selected, or realization-profile-
+ * changed) booth, preserving any per-assignment user choices (graphicsKind/artworkStatus/
+ * selectedForPrint/artworkFileId) already present in `current`. Returns `current` BY REFERENCE,
+ * completely unchanged, when the result is structurally identical — this is what lets
+ * components/BoothGenerator.tsx's effect safely depend on `selectedBooth`/`realizationProfileId`
+ * without looping: a booth with no printSurfaces (e.g. Individual mode's synthetic booth) maps to
+ * `[]` every time, and handing back the SAME `current` (never a fresh `[]`) lets React's setState
+ * bail out instead of re-rendering forever. See printSurfaceAssignmentsEqual above.
+ */
+export function computePrintSurfaceAssignments(
+  booth: Pick<BoothType, "id" | "printSurfaces" | "packageContents">,
+  realizationProfileId: string,
+  current: PrintSurfaceAssignment[],
+): PrintSurfaceAssignment[] {
+  const next = (booth.printSurfaces ?? []).flatMap((surface) => {
+    const existing = current.find((item) => item.printSurfaceId === surface.id);
+    const included = Boolean(
+      booth.packageContents?.some(
+        (item) => item.printSurfaceId === surface.id && item.includedInBasePrice,
+      ),
+    );
+    // Available booth surfaces are catalog data, not project state. Only an already-created
+    // project assignment or an included package surface (P86's legacy fascia-print) belongs in
+    // the project automatically. The graphics editor can create panel assignments explicitly in
+    // a later batch without backfilling eight empty assignments into every existing P86 project.
+    if (!existing && !included && surface.assignmentMode === "on-demand") return [];
+    const production = productionPrintSurfaceDimensions(surface, realizationProfileId);
+    return [{
+      printSurfaceId: surface.id,
+      sceneReference: booth.id,
+      graphicsKind: existing?.graphicsKind ?? (included ? "fascia" as const : "fullWrap" as const),
+      artworkStatus: existing?.artworkStatus ?? "missing" as const,
+      artworkFileId: existing?.artworkFileId,
+      selectedForPrint: existing?.selectedForPrint ?? included,
+      canonicalWidthMm: surface.widthMm,
+      canonicalHeightMm: surface.heightMm,
+      productionWidthMm: production.widthMm,
+      productionHeightMm: production.heightMm,
+      includedInPackage: included,
+      pricedSeparately: !included,
+    }];
+  });
+  return printSurfaceAssignmentsEqual(current, next) ? current : next;
+}
+
+/** Creates an on-demand assignment, or changes only the artwork link on an existing one. */
+export function assignArtworkToPrintSurface(
+  booth: Pick<BoothType, "id" | "printSurfaces" | "packageContents">,
+  realizationProfileId: string,
+  current: readonly PrintSurfaceAssignment[],
+  printSurfaceId: string,
+  artworkFileId: string,
+): readonly PrintSurfaceAssignment[] {
+  const surface = booth.printSurfaces?.find((item) => item.id === printSurfaceId);
+  if (!surface) return current;
+  const included = Boolean(booth.packageContents?.some(
+    (item) => item.printSurfaceId === surface.id && item.includedInBasePrice,
+  ));
+  const production = productionPrintSurfaceDimensions(surface, realizationProfileId);
+  const existing = current.find((item) => item.printSurfaceId === surface.id);
+  const assigned: PrintSurfaceAssignment = {
+    printSurfaceId: surface.id,
+    sceneReference: booth.id,
+    graphicsKind: existing?.graphicsKind ?? (included ? "fascia" : "fullWrap"),
+    artworkStatus: "received",
+    artworkFileId,
+    selectedForPrint: true,
+    canonicalWidthMm: surface.widthMm,
+    canonicalHeightMm: surface.heightMm,
+    productionWidthMm: production.widthMm,
+    productionHeightMm: production.heightMm,
+    includedInPackage: included,
+    pricedSeparately: !included,
+  };
+  const next = existing
+    ? current.map((item) => item.printSurfaceId === surface.id ? assigned : item)
+    : [...current, assigned];
+  return printSurfaceAssignmentsEqual(current, next) ? current : next;
+}
+
+/** Removes only the project artwork link; the uploaded file may still serve another surface. */
+export function removeArtworkFromPrintSurface(
+  current: readonly PrintSurfaceAssignment[],
+  printSurfaceId: string,
+): readonly PrintSurfaceAssignment[] {
+  const next = current.map((item) => item.printSurfaceId === printSurfaceId
+    ? { ...item, artworkFileId: undefined, artworkStatus: "missing" as const }
+    : item);
+  return printSurfaceAssignmentsEqual(current, next) ? current : next;
+}
+
 export function productionPrintSurfaceDimensions(
   surface: PrintSurface,
   realizationProfileId: string,

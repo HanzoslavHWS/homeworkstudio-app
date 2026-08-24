@@ -36,7 +36,7 @@ test("objekt neprojde skrz konstrukční stěnu", () => {
   assert.equal(
     isPlacementValid(booth, furniture, {
       x: 1000,
-      y: 200,
+      y: 1800,
       rotationDeg: 0,
     }),
     false,
@@ -47,7 +47,7 @@ test("objekt se může konstrukční stěny přesně dotknout", () => {
   assert.equal(
     isPlacementValid(booth, furniture, {
       x: 1000,
-      y: 280,
+      y: 1770,
       rotationDeg: 0,
     }),
     true,
@@ -58,21 +58,21 @@ test("objekt nesmí opustit plochu stánku", () => {
   assert.equal(
     isPlacementValid(booth, furniture, {
       x: 1000,
-      y: 1900,
+      y: 100,
       rotationDeg: 0,
     }),
     false,
   );
 });
 
-test("objekt koliduje s levým bokem pouze v oblasti Y < 1000", () => {
+test("levý bok blokuje pouze zadní polovinu", () => {
   assert.equal(
     isPlacementValid(booth, compactFurniture, {
       x: 100,
       y: 500,
       rotationDeg: 0,
     }),
-    false,
+    true,
   );
   assert.equal(
     isPlacementValid(booth, compactFurniture, {
@@ -80,22 +80,26 @@ test("objekt koliduje s levým bokem pouze v oblasti Y < 1000", () => {
       y: 1500,
       rotationDeg: 0,
     }),
-    true,
+    false,
+  );
+  assert.equal(
+    applySnap(booth, compactFurniture, 120, 500, 0).x,
+    100,
   );
   assert.equal(
     applySnap(booth, compactFurniture, 120, 1500, 0).x,
-    100,
+    130,
   );
 });
 
-test("objekt koliduje s pravým bokem pouze v oblasti Y < 1000", () => {
+test("pravý bok blokuje pouze zadní polovinu", () => {
   assert.equal(
     isPlacementValid(booth, compactFurniture, {
       x: 1900,
       y: 500,
       rotationDeg: 0,
     }),
-    false,
+    true,
   );
   assert.equal(
     isPlacementValid(booth, compactFurniture, {
@@ -103,11 +107,26 @@ test("objekt koliduje s pravým bokem pouze v oblasti Y < 1000", () => {
       y: 1500,
       rotationDeg: 0,
     }),
-    true,
+    false,
+  );
+  assert.equal(
+    applySnap(booth, compactFurniture, 1880, 500, 0).x,
+    1900,
   );
   assert.equal(
     applySnap(booth, compactFurniture, 1880, 1500, 0).x,
-    1900,
+    1870,
+  );
+});
+
+test("open-front containment remains 2000 x 2000", () => {
+  assert.equal(
+    isPlacementValid(booth, compactFurniture, {
+      x: 99,
+      y: 500,
+      rotationDeg: 0,
+    }),
+    false,
   );
 });
 

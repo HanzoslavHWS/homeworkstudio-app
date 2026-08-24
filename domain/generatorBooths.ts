@@ -15,6 +15,7 @@ import {
 } from "./catalogItemsAdmin.ts";
 import { pricingPolicyFor } from "./pricing.ts";
 import type { BoothType, PricingEntry } from "./models.ts";
+import { withP86BoothAsset } from "./boothAssets.ts";
 
 const NATURAL_CODE_COLLATOR = new Intl.Collator("cs", { sensitivity: "base", numeric: true });
 
@@ -73,10 +74,11 @@ export function adaptCatalogItemToBoothType(item: CatalogItemAdmin): BoothType {
   const pricingEntries = Array.isArray(document.pricingEntries) ? (document.pricingEntries as readonly PricingEntry[]) : undefined;
 
   if (isFullBoothTypeShape(document)) {
-    // Already a complete BoothType document (P86-style canonical seed) — trust it directly, but
-    // the DB's own id/internalCode/lifecycleStatus/photoAsset/variants columns are the source of
-    // truth, never a possibly-stale copy the document itself might carry.
-    return {
+    // Already a complete BoothType document (P86-style canonical seed) — trust its business data
+    // directly, but the DB's own id/internalCode/lifecycleStatus/photoAsset/variants columns are
+    // the source of truth. P86 then passes through its narrow compatibility normalizer for the
+    // canonical GLB and collision rectangles persisted by older catalog snapshots.
+    const booth = {
       ...(document as unknown as BoothType),
       id,
       internalCode: item.internalCode ?? undefined,
@@ -84,6 +86,9 @@ export function adaptCatalogItemToBoothType(item: CatalogItemAdmin): BoothType {
       photoAsset,
       variants,
     };
+    return booth.internalCode === "P86"
+      ? withP86BoothAsset(booth)
+      : booth;
   }
 
   // Minimal type-booth line (T04..T25) — synthesize the required BoothType scaffold around the

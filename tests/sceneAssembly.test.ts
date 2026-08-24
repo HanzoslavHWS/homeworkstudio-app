@@ -20,7 +20,7 @@ import type { ComponentDefinition } from "../domain/models.ts";
 test("typová booth (P86) resolves to exactly one master-reference 3D model — the runtime never composes it from separate wall/column components", () => {
   const p86 = boothTypes.find((booth) => booth.internalCode === "P86")!;
   const master = getMasterReferenceModel(p86.assets);
-  assert.equal(p86.modelUrl, "/models/booths/koje-2x2/master.glb");
+  assert.equal(p86.modelUrl, "/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
   // P86 carries the SAME single GLB both as the legacy modelUrl string AND as one
   // assets.models3d "master-reference" entry — both point at one master.glb, never a set of
   // separate wall/column part models composed at runtime.

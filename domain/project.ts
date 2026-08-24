@@ -8,6 +8,9 @@ import { createEmptyNotes } from "./notes.ts";
 import type { CustomDimension, ProjectAnnotation } from "./spatialAnnotations.ts";
 import type { ExportLayer } from "./workflow.ts";
 import type { StoredAsset } from "./assets.ts";
+import type { PlotPolygon, PlotStatus } from "./plot.ts";
+import type { FloorZone } from "./floorZones.ts";
+import type { RectanglePrimitive } from "./rectanglePrimitives.ts";
 
 export type ProjectMode = "proposal" | "order" | "production";
 export type ProjectStatus = "draft" | "inProgress" | "ready" | "archived";
@@ -139,14 +142,20 @@ export type ImportedOrder = Readonly<{
   lines: readonly ImportedOrderLine[];
 }>;
 
-export type SavedCameraView = Readonly<{
+export type VisualizationView = Readonly<{
   id: string;
   name: string;
   position: readonly [number, number, number];
   target: readonly [number, number, number];
   fov?: number;
+  projectionMode: "perspective";
+  type: "3d";
+  order: number;
   createdAt: string;
 }>;
+
+/** Compatibility name for pre-Visualization-v1 callers and persisted project documents. */
+export type SavedCameraView = VisualizationView;
 
 export type VisualizationItem = Readonly<{
   id: string;
@@ -207,6 +216,26 @@ export type ProjectRecord = Readonly<{
   requiresAction: boolean;
   mode: ProjectMode;
   projectType: ProjectType;
+  /**
+   * Individual-booth plot size (mode=individualni only) — LEGACY foundation fields, the 250 mm
+   * layout grid rectangle a project saved before the polygon foundation used as its only plot
+   * shape. Kept for backward compatibility (see domain/plot.ts's resolveIndividualPlotPolygon) —
+   * never written by a project saved after the polygon foundation; individualPlotPolygon is the
+   * real source of truth going forward. Never the manufactured part dimensions either way.
+   */
+  individualWidthMm?: number;
+  individualDepthMm?: number;
+  /** The drawing canvas the Individual-mode plot/floor/construction editors work in — NEVER the booth footprint itself (see domain/plot.ts's IndividualWorkspace). Undefined = domain/plot.ts's DEFAULT_INDIVIDUAL_WORKSPACE. */
+  individualWorkspaceWidthMm?: number;
+  individualWorkspaceDepthMm?: number;
+  /** The real, possibly non-rectangular plot boundary (domain/plot.ts's PlotPolygon) — source of truth for every project saved after the polygon foundation. Undefined means "not drawn yet" (or a legacy project — see individualWidthMm/individualDepthMm above and resolveIndividualPlotPolygon). */
+  individualPlotPolygon?: PlotPolygon;
+  /** EDIT vs CONFIRMED/LOCKED for the plot polygon above (domain/plot.ts's PlotStatus/resolvePlotStatus) — undefined resolves to "draft", never silently "confirmed". */
+  individualPlotStatus?: PlotStatus;
+  /** Floor zones inside the plot (domain/floorZones.ts) — the rented plot polygon is not necessarily fully covered by one uniform floor finish. Each zone carries its own lock status (FloorZone.status). */
+  individualFloorZones?: readonly FloorZone[];
+  /** Report section 5-11: the rectangle-primitive authoring helper's CURRENT working set (domain/rectanglePrimitives.ts) — persisted so in-progress authoring survives a reload, but NEVER read as booth geometry by floor/construction/furniture logic; only individualPlotPolygon (produced by "Sloučit do plochy stánku") is the real source of truth. */
+  individualPlotPrimitives?: readonly RectanglePrimitive[];
   notes: Notes;
   assemblyNotes: Notes;
   constructionNotes: Readonly<Record<string, Notes>>;
@@ -215,7 +244,9 @@ export type ProjectRecord = Readonly<{
   technicalRequirements: TechnicalRequirements;
   importedOrder?: ImportedOrder;
   sceneObjects: readonly PlacedComponent[];
-  savedViews: readonly SavedCameraView[];
+  visualizationViews: readonly VisualizationView[];
+  /** Legacy read-only project field; normalized records write only visualizationViews. */
+  savedViews?: readonly Partial<VisualizationView>[];
   visualizations: readonly VisualizationItem[];
   generatedPlanOutputs: readonly GeneratedPlanOutput[];
   selectedOutputIds: readonly string[];
@@ -235,7 +266,7 @@ export type ProjectRecord = Readonly<{
   access: readonly ProjectAccess[];
 }>;
 
-export const CURRENT_PROJECT_SCHEMA_VERSION = 4;
+export const CURRENT_PROJECT_SCHEMA_VERSION = 5;
 
 export const DEFAULT_REALIZATION_COMPANY_ID = "default";
 
@@ -266,6 +297,46 @@ export function createDefaultExportCalculationOptions(): ExportCalculationOption
   };
 }
 
+function isCameraTuple(value: unknown): value is readonly [number, number, number] {
+  return (
+    Array.isArray(value) &&
+    value.length === 3 &&
+    value.every((coordinate) => typeof coordinate === "number" && Number.isFinite(coordinate))
+  );
+}
+
+/** Upgrades legacy savedViews entries without ever attaching a frozen project scene. */
+export function normalizeVisualizationViews(
+  views: readonly Partial<VisualizationView>[],
+): readonly VisualizationView[] {
+  return views
+    .flatMap((view, index) => {
+      if (
+        typeof view.id !== "string" ||
+        typeof view.name !== "string" ||
+        !isCameraTuple(view.position) ||
+        !isCameraTuple(view.target)
+      ) {
+        return [];
+      }
+      return [{
+        id: view.id,
+        name: view.name,
+        position: [...view.position] as [number, number, number],
+        target: [...view.target] as [number, number, number],
+        ...(typeof view.fov === "number" && Number.isFinite(view.fov)
+          ? { fov: view.fov }
+          : {}),
+        projectionMode: "perspective" as const,
+        type: "3d" as const,
+        order: typeof view.order === "number" && Number.isFinite(view.order) ? view.order : index,
+        createdAt: typeof view.createdAt === "string" ? view.createdAt : "",
+      }];
+    })
+    .sort((left, right) => left.order - right.order)
+    .map((view, order) => ({ ...view, order }));
+}
+
 export function createProjectRecord(
   overrides: Partial<ProjectRecord> = {},
   now = new Date().toISOString(),
@@ -292,6 +363,14 @@ export function createProjectRecord(
     requiresAction: overrides.requiresAction ?? false,
     mode: overrides.mode ?? "proposal",
     projectType: overrides.projectType ?? "typovy",
+    individualWidthMm: overrides.individualWidthMm,
+    individualDepthMm: overrides.individualDepthMm,
+    individualWorkspaceWidthMm: overrides.individualWorkspaceWidthMm,
+    individualWorkspaceDepthMm: overrides.individualWorkspaceDepthMm,
+    individualPlotPolygon: overrides.individualPlotPolygon,
+    individualPlotStatus: overrides.individualPlotStatus,
+    individualFloorZones: overrides.individualFloorZones,
+    individualPlotPrimitives: overrides.individualPlotPrimitives,
     notes: overrides.notes ?? createEmptyNotes(),
     assemblyNotes: overrides.assemblyNotes ?? createEmptyNotes(),
     constructionNotes: overrides.constructionNotes ?? {},
@@ -309,7 +388,9 @@ export function createProjectRecord(
       userLocked: item.userLocked ?? false,
       displayOrder2D: item.displayOrder2D ?? 0,
     })),
-    savedViews: overrides.savedViews ?? [],
+    visualizationViews: normalizeVisualizationViews(
+      overrides.visualizationViews ?? overrides.savedViews ?? [],
+    ),
     visualizations: (overrides.visualizations ?? []).map((item) => ({
       ...item,
       reviewStatus: item.reviewStatus ?? "unreviewed",

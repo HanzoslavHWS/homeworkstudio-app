@@ -8,7 +8,11 @@ import {
   worldRotationToPlanView,
   worldToPlanView,
 } from "../domain/planView.ts";
-import { cadPointToViewer } from "../domain/cad3d.ts";
+import {
+  BOOTH_PLAN_VISUAL_PADDING_MM,
+  cadPointToViewer,
+  createTopDownBoothPlanFrame,
+} from "../domain/cad3d.ts";
 
 const W = 2000;
 const D = 2000;
@@ -106,7 +110,7 @@ test("BoothGenerator.tsx's pointer/drag paths use the renamed planViewToWorld/wo
   assert.ok(pointerFn, "expected to find pointFromPlanPointer");
   assert.match(pointerFn![0], /planViewToWorld\(/u);
   // handleComponentPointerMove (component drag) must also go through the same inverse.
-  const dragFn = source.match(/function handleComponentPointerMove\([\s\S]{0,700}?planViewToWorld\(/u);
+  const dragFn = source.match(/function handleComponentPointerMove\([\s\S]{0,1400}?planViewToWorld\(/u);
   assert.ok(dragFn, "expected handleComponentPointerMove to convert its display pointer via planViewToWorld");
 });
 
@@ -308,40 +312,29 @@ test("BoothCadPlanView's OLD up=(0,0,1) camera (pre-fix, reconstructed here only
   assert.ok(cameraRight.x < -0.99, `sanity check: the OLD up vector really did point camera-right toward -X — got ${cameraRight.x}`);
 });
 
-/** The exact placement formula BoothCadPlanView.tsx's DOM style and lib/planExport.ts's drawImage now both use — X-preserving, Y-flip-only, same convention as worldToPlanView. */
-function cadOutlinePlacement(bounds: { minX: number; minY: number; width: number; depth: number }, footprintWidthMm: number, footprintDepthMm: number) {
-  return {
-    left: bounds.minX,
-    top: footprintDepthMm - bounds.minY - bounds.depth,
-    width: bounds.width,
-    height: bounds.depth,
-  };
-}
-
-test("CAD-outline placement formula is exact for an ASYMMETRIC bounding box (model not centered on the footprint) — the old rotateView180 X-compensation was only exact when centered; this formula has no such dependency", () => {
-  const footprintWidthMm = 2000;
-  const footprintDepthMm = 2000;
-  // Model's bounds are NOT centered: minX=340 (not 0), width=1500 (center at 1090, not 1000).
-  const bounds = { minX: 340, minY: 100, width: 1500, depth: 1800 };
-  const placed = cadOutlinePlacement(bounds, footprintWidthMm, footprintDepthMm);
-
-  // Left edge stays exactly at the model's own minX — X is never touched, matching worldToPlanView.
-  assert.equal(placed.left, 340);
-  // Top edge: the model's back edge (minY+depth, closest to depthMm) maps to the SMALLEST
-  // top value (closest to the plan's top/back) — same worldToPlanView(depthMm - y) formula.
-  assert.equal(placed.top, footprintDepthMm - bounds.minY - bounds.depth);
-  assert.equal(placed.top, 100);
+test("top-down GLB frame keeps the P86 nominal 2000 x 2000 coordinate space and adds only fixed visual overflow", () => {
+  const frame = createTopDownBoothPlanFrame(
+    2000,
+    2000,
+    "completed-physical-footprint-center-floor",
+  );
+  assert.equal(frame.visualPaddingMm, BOOTH_PLAN_VISUAL_PADDING_MM);
+  assert.deepEqual(
+    [frame.canonicalWidthMm, frame.canonicalDepthMm, frame.cameraCenterX, frame.cameraCenterZ],
+    [2000, 2000, 0, 0],
+  );
+  assert.deepEqual([frame.left, frame.right, frame.top, frame.bottom], [-1.04, 1.04, 1.04, -1.04]);
+  assert.deepEqual(
+    [frame.layerLeftPercent, frame.layerTopPercent, frame.layerWidthPercent, frame.layerHeightPercent],
+    [-2, -2, 104, 104],
+  );
 });
 
-test("CAD-outline placement's Y-flip is self-consistent with worldToPlanView: the top-left corner of the model's raw bounding box maps to the SAME plan point worldToPlanView would give its back-left corner", () => {
-  const footprintWidthMm = 2000;
-  const footprintDepthMm = 2000;
-  const bounds = { minX: 340, minY: 100, width: 1500, depth: 1800 };
-  const placed = cadOutlinePlacement(bounds, footprintWidthMm, footprintDepthMm);
-  // The model rectangle's back-left corner in world/CAD terms is (minX, minY+depth).
-  const backLeftPlan = worldToPlanView({ x: bounds.minX, y: bounds.minY + bounds.depth }, footprintWidthMm, footprintDepthMm);
-  assert.equal(placed.left, backLeftPlan.x);
-  assert.equal(placed.top, backLeftPlan.y);
+test("legacy CAD-origin top-down frame uses the nominal booth center without recentering from geometry", () => {
+  const frame = createTopDownBoothPlanFrame(2000, 2000, undefined);
+  assert.deepEqual([frame.cameraCenterX, frame.cameraCenterZ], [1, -1]);
+  assert.ok(Math.abs(frame.left - -0.04) < 1e-12);
+  assert.equal(frame.right, 2.04);
 });
 
 test("rotateView180 (the retired CSS-rotate/mirror-position compensation) no longer exists anywhere in the codebase", () => {
@@ -351,13 +344,17 @@ test("rotateView180 (the retired CSS-rotate/mirror-position compensation) no lon
   }
 });
 
-test("lib/planExport.ts no longer applies a rotate(Math.PI) compensation when drawing the CAD outline snapshot — the snapshot is correctly oriented at the source", () => {
+test("lib/planExport.ts uses a dedicated GLB render first and deterministic canonical vectors as failure fallback", () => {
   const source = readFileSync(new URL("../lib/planExport.ts", import.meta.url), "utf8");
   assert.doesNotMatch(source, /rotate\(Math\.PI\)/u);
+  assert.doesNotMatch(source, /cadSnapshot|querySelector|cadPlanCanvas|onSnapshot/u);
+  assert.match(source, /renderBoothPlanGlbToCanvas/u);
+  assert.match(source, /!renderedBoothGlb/u);
+  assert.match(source, /resolveBoothPlanPresentation/u);
 });
 
-test("BoothCadPlanView.tsx's camera up vector is (0,0,-1), not the old mirroring (0,0,1)", () => {
-  const source = readFileSync(new URL("../components/configurator/BoothCadPlanView.tsx", import.meta.url), "utf8");
+test("shared top-view camera up vector is (0,0,-1), not the old mirroring (0,0,1)", () => {
+  const source = readFileSync(new URL("../lib/boothPlanGlbRenderer.ts", import.meta.url), "utf8");
   assert.match(source, /camera\.up\.set\(0,\s*0,\s*-1\)/u);
   assert.doesNotMatch(source, /camera\.up\.set\(0,\s*0,\s*1\)/u);
 });

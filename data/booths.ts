@@ -1,9 +1,16 @@
-import type { BoothType, CollisionRect } from "../domain/models.ts";
+import type { BoothType } from "../domain/models.ts";
 import { pricingPolicyFor } from "../domain/pricing.ts";
 import {
   carpetFinishVariants,
   constructionFinishVariants,
 } from "../domain/finishes.ts";
+import {
+  P86_BOOTH_ASSET_DEFINITION,
+  P86_CANONICAL_COLLISION_OBSTACLES,
+  P86_BOOTH_GLB_PATH,
+  P86_MASTER_MODEL_ASSET,
+} from "../domain/boothAssets.ts";
+import { P86_CANONICAL_PRINT_SURFACES } from "../domain/printSurfaces.ts";
 
 const lockedConstructionRotation = {
   defaultMode: "snap",
@@ -13,11 +20,7 @@ const lockedConstructionRotation = {
   locked: true,
 } as const;
 
-export const koje2x2CollisionWalls: readonly CollisionRect[] = [
-  { id: "back-wall", x: 0, y: 0, width: 2000, height: 80 },
-  { id: "left-wall", x: 0, y: 0, width: 80, height: 1000 },
-  { id: "right-wall", x: 1920, y: 0, width: 80, height: 1000 },
-];
+export const koje2x2CollisionWalls = P86_CANONICAL_COLLISION_OBSTACLES;
 
 const baseBoothTypes: readonly BoothType[] = [
   {
@@ -42,22 +45,10 @@ const baseBoothTypes: readonly BoothType[] = [
     visible: true,
     active: true,
     category: "typova-koje",
-    modelUrl: "/models/booths/koje-2x2/master.glb",
+    modelUrl: P86_BOOTH_GLB_PATH,
+    boothAsset: P86_BOOTH_ASSET_DEFINITION,
     printable: true,
-    printSurfaces: [
-      {
-        id: "fascia-print",
-        name: "Límec",
-        widthMm: 2000,
-        heightMm: 300,
-        orientation: "landscape",
-        materialRole: "PRINT_SURFACE",
-        allowanceLinearMeters: 2,
-        pricingUnit: "bm",
-        productionProfiles: {},
-        active: true,
-      },
-    ],
+    printSurfaces: P86_CANONICAL_PRINT_SURFACES,
     partDefinitions: [],
     finishVariants: constructionFinishVariants,
     carpetVariants: carpetFinishVariants,
@@ -174,29 +165,29 @@ const baseBoothTypes: readonly BoothType[] = [
       {
         id: "koje-2x2-main",
         name: "Hlavní",
-        position: [4, 3.1, 4],
-        target: [1, 1.1, -1],
+        position: [3, 3.1, 5],
+        target: [0, 1.1, 0],
         fov: 38,
       },
       {
         id: "koje-2x2-left",
         name: "Levý",
-        position: [-3.5, 2.5, 3.5],
-        target: [1, 1, -1],
+        position: [-4.5, 2.5, 4.5],
+        target: [0, 1, 0],
         fov: 38,
       },
       {
         id: "koje-2x2-right",
         name: "Pravý",
-        position: [5.5, 2.5, 2.5],
-        target: [1, 1, -1],
+        position: [4.5, 2.5, 3.5],
+        target: [0, 1, 0],
         fov: 38,
       },
       {
         id: "koje-2x2-top",
         name: "Nadhled",
-        position: [1, 6, -1],
-        target: [1, 0, -1],
+        position: [0, 6, 0],
+        target: [0, 0, 0],
         fov: 38,
       },
     ],
@@ -205,13 +196,7 @@ const baseBoothTypes: readonly BoothType[] = [
       scale: 1,
       unit: "mm",
       models3d: [
-        {
-          id: "koje-2x2-master",
-          url: "/models/booths/koje-2x2/master.glb",
-          role: "master-reference",
-          unit: "mm",
-          axisSystem: "x-right-y-depth-z-up",
-        },
+        P86_MASTER_MODEL_ASSET,
       ],
     },
   },
@@ -314,6 +299,7 @@ export const boothTypes: readonly BoothType[] = baseBoothTypes.map((booth) =>
         constructionParts: koje2x2.constructionParts,
         collisionObstacles: koje2x2.collisionObstacles,
         assets: koje2x2.assets,
+        boothAsset: koje2x2.boothAsset,
         modelUrl: koje2x2.modelUrl,
         defaultViews: koje2x2.defaultViews,
         printable: false,

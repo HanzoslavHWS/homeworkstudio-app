@@ -5,15 +5,29 @@ import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import {
+  applyBoothModelTransform,
+  applyComponentModelMaterialPolicy,
+  cameraPositionAtDistance,
+  cameraStateFromView,
+  cameraZoomPercent,
   CAD_TO_VIEWER_ROTATION_X_RAD,
-  SCENE_UNITS_PER_MILLIMETER,
-  getComponentModel,
+  distanceBetween3DPoints,
+  fitPerspectiveCameraState,
   mmToSceneUnits,
+  modelUnitScaleToScene,
+  modelUnitsToMillimeters,
   placedComponentToViewerTransform,
+  resolveComponentModelReference,
   viewerPointToCad,
 } from "../../domain/cad3d";
+import { getAssetDownloadUrl } from "../../lib/storage/assetClient";
+import {
+  applyPrintArtworkOverlays,
+  clearPrintArtworkOverlays,
+} from "../../lib/printArtworkOverlays";
 import type {
   CadModelAsset,
+  BoothAssetDefinition,
   FinishVariant,
   NominalDimensions,
   PrintSurface,
@@ -22,22 +36,27 @@ import type {
 } from "../../domain/models";
 import { constructionMaterialOverrides } from "../../domain/materialOverrides";
 import type { CameraViewDefinition } from "../../domain/models";
-import type { SavedCameraView } from "../../domain/project";
-import type { Measurement3D, PrintSurfaceAssignment } from "../../domain/project";
+import type {
+  GraphicFileReference,
+  Measurement3D,
+  PrintSurfaceAssignment,
+  VisualizationView,
+} from "../../domain/project";
 import { createMeasurement3D, nominalDimensionAnchors } from "../../domain/spatialAnnotations";
 
 type BoothCadViewerProps = {
   asset?: CadModelAsset;
+  boothAsset?: BoothAssetDefinition;
+  constructionVisibility?: Readonly<Record<string, boolean>>;
+  boothVisible?: boolean;
   footprintWidthMm: number;
   footprintDepthMm: number;
   components: readonly PlacedComponent[];
   defaultViews?: readonly CameraViewDefinition[];
-  savedViews?: readonly SavedCameraView[];
-  onSaveView?: (view: Omit<SavedCameraView, "id" | "createdAt">) => void;
-  onDeleteView?: (viewId: string) => void;
+  onSaveView?: (view: BoothCadCameraSnapshot) => void;
   onCapture?: (capture: {
     imageDataUrl: string;
-    view: Omit<SavedCameraView, "id" | "createdAt">;
+    view: BoothCadCameraSnapshot;
   }) => void;
   carpetFinish?: FinishVariant;
   constructionFinish?: FinishVariant;
@@ -50,9 +69,34 @@ type BoothCadViewerProps = {
   dimensionOffsets?: Readonly<Record<"width" | "depth" | "height", number>>;
   onDimensionOffsetsChange?: (offsets: Readonly<Record<"width" | "depth" | "height", number>>) => void;
   printSurfaceAssignments?: readonly PrintSurfaceAssignment[];
+  graphicsFiles?: readonly GraphicFileReference[];
   selectedPrintSurfaceId?: string | null;
   onSelectPrintSurface?: (surfaceId: string | null) => void;
+  /**
+   * Individual mode's real (possibly non-rectangular) plot polygon in world mm — when present,
+   * the floor/carpet mesh is built from THIS shape (via THREE.Shape/ShapeGeometry) instead of a
+   * footprintWidthMm×footprintDepthMm rectangle. Undefined for typovka — completely unchanged
+   * rectangle behavior. Never affects component placement/collision (that stays 2D, domain/
+   * plot.ts) — this only changes what the floor MESH looks like.
+   */
+  floorPolygon?: readonly { x: number; y: number }[];
+  cameraControlsRef?: { current: BoothCadCameraControls | null };
+  onCameraZoomPercentChange?: (percent: number) => void;
 };
+
+export type BoothCadCameraControls = Readonly<{
+  zoomOut: () => void;
+  zoomIn: () => void;
+  fit: () => void;
+  reset: () => void;
+  applyView: (view: Pick<VisualizationView, "position" | "target" | "fov">) => void;
+  currentView: () => BoothCadCameraSnapshot;
+}>;
+
+export type BoothCadCameraSnapshot = Pick<
+  VisualizationView,
+  "name" | "position" | "target" | "fov" | "projectionMode"
+>;
 
 type ModelDimensionsMm = {
   width: number;
@@ -61,10 +105,11 @@ type ModelDimensionsMm = {
 };
 
 const EMPTY_CAMERA_VIEWS: readonly CameraViewDefinition[] = [];
-const EMPTY_SAVED_VIEWS: readonly SavedCameraView[] = [];
 const EMPTY_PRINT_SURFACES: readonly PrintSurface[] = [];
 const EMPTY_MEASUREMENTS: readonly Measurement3D[] = [];
 const EMPTY_PRINT_SURFACE_ASSIGNMENTS: readonly PrintSurfaceAssignment[] = [];
+const EMPTY_GRAPHICS_FILES: readonly GraphicFileReference[] = [];
+const EMPTY_CONSTRUCTION_VISIBILITY: Readonly<Record<string, boolean>> = {};
 const DEFAULT_DIMENSION_OFFSETS = { width: 0, depth: 0, height: 0 } as const;
 
 function disposeObject(root: THREE.Object3D) {
@@ -89,36 +134,53 @@ function disposeObject(root: THREE.Object3D) {
   });
 }
 
+function visibleObjectBounds(root: THREE.Object3D): THREE.Box3 {
+  const bounds = new THREE.Box3();
+  root.updateWorldMatrix(true, true);
+
+  const visit = (object: THREE.Object3D, ancestorsVisible: boolean) => {
+    const visible = ancestorsVisible && object.visible;
+    if (!visible) return;
+    const geometry = (object as THREE.Mesh).geometry;
+    if (geometry) {
+      if (!geometry.boundingBox) geometry.computeBoundingBox();
+      if (geometry.boundingBox) {
+        bounds.union(geometry.boundingBox.clone().applyMatrix4(object.matrixWorld));
+      }
+    }
+    object.children.forEach((child) => visit(child, visible));
+  };
+  visit(root, true);
+  return bounds;
+}
+
 function fitCameraToObject(
   camera: THREE.PerspectiveCamera,
   controls: OrbitControls,
   object: THREE.Object3D,
 ) {
-  const box = new THREE.Box3().setFromObject(object);
+  const box = visibleObjectBounds(object);
   if (box.isEmpty()) {
     return;
   }
 
   const sphere = box.getBoundingSphere(new THREE.Sphere());
-  const verticalFov = THREE.MathUtils.degToRad(camera.fov);
-  const horizontalFov = 2 * Math.atan(Math.tan(verticalFov / 2) * camera.aspect);
-  const limitingFov = Math.min(verticalFov, horizontalFov);
-  const distance = Math.max(
-    0.5,
-    (sphere.radius / Math.sin(limitingFov / 2)) * 1.15,
+  const fit = fitPerspectiveCameraState(
+    sphere.center,
+    sphere.radius,
+    camera.fov,
+    camera.aspect,
   );
   // Z stays positive so the default camera sits outside the booth's canonical FRONT boundary
   // (Y=0mm → cadPointToViewer's three.z=0; the booth interior/back extend toward negative Z)
   // rather than outside the back. Do not flip this sign without also re-checking
   // tests/cad3d.test.ts's front/back boundary assertions.
-  const isometricDirection = new THREE.Vector3(1, 0.78, 1).normalize();
-
-  camera.position.copy(sphere.center).addScaledVector(isometricDirection, distance);
-  camera.near = Math.max(0.001, distance / 100);
-  camera.far = Math.max(100, distance * 100);
+  camera.position.set(fit.position.x, fit.position.y, fit.position.z);
+  camera.near = fit.near;
+  camera.far = fit.far;
   camera.updateProjectionMatrix();
 
-  controls.target.copy(sphere.center);
+  controls.target.set(fit.target.x, fit.target.y, fit.target.z);
   controls.minDistance = Math.max(0.05, sphere.radius * 0.12);
   controls.maxDistance = Math.max(20, sphere.radius * 20);
   controls.update();
@@ -148,13 +210,14 @@ function cadTupleToViewer(point: readonly [number, number, number]) {
 
 export function BoothCadViewer({
   asset,
+  boothAsset,
+  constructionVisibility = EMPTY_CONSTRUCTION_VISIBILITY,
+  boothVisible = true,
   footprintWidthMm,
   footprintDepthMm,
   components,
   defaultViews = EMPTY_CAMERA_VIEWS,
-  savedViews = EMPTY_SAVED_VIEWS,
   onSaveView,
-  onDeleteView,
   onCapture,
   carpetFinish,
   constructionFinish,
@@ -167,18 +230,30 @@ export function BoothCadViewer({
   dimensionOffsets = DEFAULT_DIMENSION_OFFSETS,
   onDimensionOffsetsChange,
   printSurfaceAssignments = EMPTY_PRINT_SURFACE_ASSIGNMENTS,
+  graphicsFiles = EMPTY_GRAPHICS_FILES,
   selectedPrintSurfaceId,
   onSelectPrintSurface,
+  floorPolygon,
+  cameraControlsRef,
+  onCameraZoomPercentChange,
 }: BoothCadViewerProps) {
   const mountRef = useRef<HTMLDivElement | null>(null);
   const fitViewRef = useRef<() => void>(() => undefined);
+  const resetViewRef = useRef<() => void>(() => undefined);
   const applyViewRef = useRef<(view: CameraViewDefinition) => void>(
     () => undefined,
   );
   const currentViewRef = useRef<
-    () => Omit<SavedCameraView, "id" | "createdAt">
-  >(() => ({ name: "Pohled", position: [0, 0, 0], target: [0, 0, 0] }));
+    () => BoothCadCameraSnapshot
+  >(() => ({
+    name: "Pohled",
+    position: [0, 0, 0],
+    target: [0, 0, 0],
+    projectionMode: "perspective",
+  }));
   const captureRef = useRef<() => string | null>(() => null);
+  const boothSceneRef = useRef<{ scene: THREE.Object3D; modelUnit: "mm" | "m" } | null>(null);
+  const [boothSceneRevision, setBoothSceneRevision] = useState(0);
   const [loadingProgress, setLoadingProgress] = useState<number | null>(0);
   const [error, setError] = useState("");
   const [componentLoadError, setComponentLoadError] = useState(false);
@@ -190,6 +265,7 @@ export function BoothCadViewer({
   const [measurementStart, setMeasurementStart] = useState<readonly [number, number, number] | null>(null);
   const onMeasurementsChangeRef = useRef(onMeasurementsChange);
   const onSelectPrintSurfaceRef = useRef(onSelectPrintSurface);
+  const onCameraZoomPercentChangeRef = useRef(onCameraZoomPercentChange);
 
   useEffect(() => {
     onMeasurementsChangeRef.current = onMeasurementsChange;
@@ -200,6 +276,29 @@ export function BoothCadViewer({
   }, [onSelectPrintSurface]);
 
   useEffect(() => {
+    onCameraZoomPercentChangeRef.current = onCameraZoomPercentChange;
+  }, [onCameraZoomPercentChange]);
+
+  useEffect(() => {
+    const loaded = boothSceneRef.current;
+    if (!loaded) return;
+    void applyPrintArtworkOverlays({
+      scene: loaded.scene,
+      printSurfaces,
+      printSurfaceAssignments,
+      graphicsFiles,
+      modelUnit: loaded.modelUnit,
+      resolveArtworkUrl: async (file) => {
+        const storageKey = file.storageKey ?? file.asset?.storageKey;
+        if (storageKey) return getAssetDownloadUrl(storageKey);
+        return file.storageUrl;
+      },
+    }).catch((reason) => {
+      console.error("Artwork overlay loading failed", reason);
+    });
+  }, [boothSceneRevision, graphicsFiles, printSurfaceAssignments, printSurfaces]);
+
+  useEffect(() => {
     const mount = mountRef.current;
     if (!mount) {
       return;
@@ -207,7 +306,8 @@ export function BoothCadViewer({
 
     if (
       asset &&
-      (asset.axisSystem !== "x-right-y-depth-z-up" || asset.unit !== "mm")
+      (asset.axisSystem !== "x-right-y-depth-z-up" ||
+        !["mm", "m"].includes(asset.unit))
     ) {
       setLoadingProgress(null);
       setError("3D model používá nepodporovaný souřadný systém nebo jednotky.");
@@ -248,6 +348,7 @@ export function BoothCadViewer({
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
+    controls.enableZoom = true;
     controls.dampingFactor = 0.07;
     controls.screenSpacePanning = true;
     controls.zoomToCursor = true;
@@ -260,6 +361,22 @@ export function BoothCadViewer({
     const editorOverlays = new THREE.Group();
     editorOverlays.name = "Editor overlays";
     scene.add(editorOverlays);
+
+    // The P86 GLB origin is deliberately the completed physical booth center on the floor.
+    // Keep the asset untouched and express legacy project coordinates (0..nominal width/depth)
+    // in that centered frame by moving only project-owned furniture/floor/overlays.
+    const usesCenteredBoothOrigin =
+      boothAsset?.originConvention ===
+      "completed-physical-footprint-center-floor";
+    const projectFrameOffset = usesCenteredBoothOrigin
+      ? new THREE.Vector3(
+          -mmToSceneUnits(footprintWidthMm) / 2,
+          0,
+          mmToSceneUnits(footprintDepthMm) / 2,
+        )
+      : new THREE.Vector3();
+    furniture.position.copy(projectFrameOffset);
+    editorOverlays.position.copy(projectFrameOffset);
 
     if (showDimensions && nominalDimensions) {
       (["width", "depth", "height"] as const).forEach((axis) => {
@@ -285,26 +402,46 @@ export function BoothCadViewer({
     });
 
     let carpet: THREE.Mesh | undefined;
-    if (carpetFinish && carpetFinish.id !== "none") {
+    const hasRealPlotPolygon = Boolean(floorPolygon && floorPolygon.length >= 3);
+    // Individual mode has no master booth GLB (asset is undefined — there is no typovka-style
+    // pre-built shell), so without SOME floor mesh the plot would be entirely invisible in 3D by
+    // default (report section 34). Typovka is completely unaffected: hasRealPlotPolygon is only
+    // ever true when floorPolygon was actually passed (Individual mode only), so this reduces to
+    // the exact original `carpetFinish && carpetFinish.id !== "none"` condition for typovka.
+    const shouldRenderFloor = hasRealPlotPolygon || Boolean(carpetFinish && carpetFinish.id !== "none");
+    if (shouldRenderFloor) {
+      // floorPolygon builds the mesh from THREE.Shape/ShapeGeometry instead of a rectangle —
+      // reusing Three.js's own triangulation rather than a hand-rolled one. Shape points are
+      // built directly in ABSOLUTE (0-based) scene units, matching domain/cad3d.ts's
+      // cadPointToViewer convention exactly once rotated (local Y → viewer Z = -Y, local X →
+      // viewer X) — verified against the pre-existing centered-PlaneGeometry-plus-offset math
+      // below, which produces the identical final [0,width]×[-depth,0] viewer range for the
+      // rectangle case.
+      const geometry = hasRealPlotPolygon
+        ? new THREE.ShapeGeometry(new THREE.Shape(floorPolygon!.map((point) => new THREE.Vector2(mmToSceneUnits(point.x), mmToSceneUnits(point.y)))))
+        : new THREE.PlaneGeometry(mmToSceneUnits(footprintWidthMm), mmToSceneUnits(footprintDepthMm));
+      const hasRealFinish = Boolean(carpetFinish && carpetFinish.id !== "none");
       carpet = new THREE.Mesh(
-        new THREE.PlaneGeometry(
-          mmToSceneUnits(footprintWidthMm),
-          mmToSceneUnits(footprintDepthMm),
-        ),
+        geometry,
         new THREE.MeshStandardMaterial({
-          color: carpetFinish.swatchColor ?? "#c9c6bf",
+          // Neutral grey "no finish chosen yet" default — never fabricates a finish color.
+          color: hasRealFinish ? carpetFinish!.swatchColor ?? "#c9c6bf" : "#e4e5e6",
           roughness: 0.92,
           metalness: 0,
           side: THREE.DoubleSide,
         }),
       );
-      carpet.name = `Carpet ${carpetFinish.name}`;
+      carpet.name = hasRealFinish ? `Carpet ${carpetFinish!.name}` : "Floor (no finish)";
       carpet.rotation.x = -Math.PI / 2;
-      carpet.position.set(
-        mmToSceneUnits(footprintWidthMm) / 2,
-        -0.002,
-        -mmToSceneUnits(footprintDepthMm) / 2,
-      );
+      if (hasRealPlotPolygon || usesCenteredBoothOrigin) {
+        carpet.position.set(0, -0.002, 0);
+      } else {
+        carpet.position.set(
+          mmToSceneUnits(footprintWidthMm) / 2,
+          -0.002,
+          -mmToSceneUnits(footprintDepthMm) / 2,
+        );
+      }
       content.add(carpet);
     }
 
@@ -327,20 +464,74 @@ export function BoothCadViewer({
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(mount);
 
-    const fitView = () => fitCameraToObject(camera, controls, content);
+    let referenceCameraDistance = 0;
+    const currentCameraDistance = () =>
+      distanceBetween3DPoints(camera.position, controls.target);
+    const reportCameraZoom = () => {
+      onCameraZoomPercentChangeRef.current?.(
+        cameraZoomPercent(referenceCameraDistance, currentCameraDistance()),
+      );
+    };
+    const establishReferenceDistance = () => {
+      referenceCameraDistance = currentCameraDistance();
+      reportCameraZoom();
+    };
+    const fitView = () => {
+      fitCameraToObject(camera, controls, content);
+      establishReferenceDistance();
+    };
     fitViewRef.current = fitView;
-    applyViewRef.current = (view) => {
-      camera.position.fromArray(view.position);
-      controls.target.fromArray(view.target);
-      if (view.fov !== undefined) camera.fov = view.fov;
+    const applyCameraView = (
+      view: Pick<CameraViewDefinition, "position" | "target" | "fov">,
+    ) => {
+      const state = cameraStateFromView(view, camera.fov);
+      camera.position.set(state.position.x, state.position.y, state.position.z);
+      controls.target.set(state.target.x, state.target.y, state.target.z);
+      camera.fov = state.fov;
       camera.updateProjectionMatrix();
       controls.update();
+      return state;
     };
+    applyViewRef.current = (view) => { applyCameraView(view); };
+    resetViewRef.current = () => {
+      const defaultView = defaultViews[0];
+      if (defaultView) {
+        referenceCameraDistance = applyCameraView(defaultView).referenceDistance;
+        reportCameraZoom();
+      }
+      else fitView();
+    };
+    const zoomBy = (factor: number) => {
+      const next = cameraPositionAtDistance(
+        camera.position,
+        controls.target,
+        currentCameraDistance() * factor,
+        controls.minDistance,
+        controls.maxDistance,
+      );
+      camera.position.set(next.x, next.y, next.z);
+      controls.update();
+      reportCameraZoom();
+    };
+    const cameraController: BoothCadCameraControls = {
+      zoomOut: () => zoomBy(1.2),
+      zoomIn: () => zoomBy(1 / 1.2),
+      fit: fitView,
+      reset: () => resetViewRef.current(),
+      applyView: (view) => {
+        applyCameraView(view);
+        establishReferenceDistance();
+      },
+      currentView: () => currentViewRef.current(),
+    };
+    if (cameraControlsRef) cameraControlsRef.current = cameraController;
+    controls.addEventListener("change", reportCameraZoom);
     currentViewRef.current = () => ({
       name: "Vlastní pohled",
       position: camera.position.toArray() as [number, number, number],
       target: controls.target.toArray() as [number, number, number],
       fov: camera.fov,
+      projectionMode: "perspective",
     });
     captureRef.current = () => {
       renderer.render(scene, camera);
@@ -363,15 +554,20 @@ export function BoothCadViewer({
         const cadBounds = new THREE.Box3().setFromObject(gltf.scene);
         const cadSize = cadBounds.getSize(new THREE.Vector3());
         setModelDimensions({
-          width: cadSize.x,
-          depth: cadSize.y,
-          height: cadSize.z,
+          width: modelUnitsToMillimeters(cadSize.x, asset.unit),
+          depth: modelUnitsToMillimeters(cadSize.y, asset.unit),
+          height: modelUnitsToMillimeters(cadSize.z, asset.unit),
         });
 
-        // Central CAD boundary: mm -> meters and Z-up -> Three.js Y-up.
-        gltf.scene.scale.setScalar(SCENE_UNITS_PER_MILLIMETER);
-        gltf.scene.rotation.x = CAD_TO_VIEWER_ROTATION_X_RAD;
-        gltf.scene.updateMatrixWorld(true);
+        // Central CAD boundary: declared model units -> scene meters and Z-up -> Three.js Y-up.
+        // Never recenter the master GLB; its authored origin is part of the booth definition.
+        applyBoothModelTransform(
+          gltf.scene,
+          asset,
+          boothAsset,
+          constructionVisibility,
+          boothVisible,
+        );
         const materialOverrides = constructionMaterialOverrides(
           partDefinitions ?? [],
           constructionFinish,
@@ -417,6 +613,8 @@ export function BoothCadViewer({
             }
           }
         }
+        boothSceneRef.current = { scene: gltf.scene, modelUnit: asset.unit };
+        setBoothSceneRevision((revision) => revision + 1);
         loadedModels.push(gltf.scene);
         content.add(gltf.scene);
 
@@ -442,28 +640,43 @@ export function BoothCadViewer({
       },
     );
 
+    // Report section 28/36: resolveComponentModelReference prefers a real R2 modelAsset, then a
+    // bare modelUrl, and keeps legacy assets.models3d[] as the final fallback — the two active
+    // fields are the sources a DB-catalog-sourced component (e.g. an
+    // Admin-uploaded booth_component) actually carries. Only the "stored" case needs an async
+    // signed-URL resolution before it has a loadable url at all.
     const componentModels = components.flatMap((component) => {
-      const model = getComponentModel(component.assets);
-      return component.visible && component.showIn3D && model
-        ? [{ component, model }]
+      const source = resolveComponentModelReference(component);
+      return component.visible && component.showIn3D && source
+        ? [{ component, source }]
         : [];
     });
     setPendingComponents(componentModels.length);
 
-    componentModels.forEach(({ component, model }) => {
+    function loadComponentModel(
+      component: PlacedComponent,
+      url: string,
+      anchor: CadModelAsset["anchor"],
+      unit: CadModelAsset["unit"] = "mm",
+    ) {
       new GLTFLoader().load(
-        model.url,
+        url,
         (gltf) => {
           if (!active) {
             disposeObject(gltf.scene);
             return;
           }
 
-          gltf.scene.scale.setScalar(SCENE_UNITS_PER_MILLIMETER);
+          applyComponentModelMaterialPolicy(
+            gltf.scene,
+            component,
+            THREE.DoubleSide,
+          );
+          gltf.scene.scale.setScalar(modelUnitScaleToScene(unit));
           gltf.scene.rotation.x = CAD_TO_VIEWER_ROTATION_X_RAD;
           gltf.scene.updateMatrixWorld(true);
 
-          if (model.anchor === "footprint-center-floor") {
+          if (anchor === "footprint-center-floor") {
             const bounds = new THREE.Box3().setFromObject(gltf.scene);
             const center = bounds.getCenter(new THREE.Vector3());
             gltf.scene.position.x -= center.x;
@@ -497,6 +710,38 @@ export function BoothCadViewer({
           setPendingComponents((count) => Math.max(0, count - 1));
         },
       );
+    }
+
+    componentModels.forEach(({ component, source }) => {
+      if (source.kind === "legacy") {
+        loadComponentModel(
+          component,
+          source.asset.url,
+          source.asset.anchor,
+          source.asset.unit,
+        );
+        return;
+      }
+      if (source.kind === "url") {
+        loadComponentModel(component, source.url, source.anchor, source.unit);
+        return;
+      }
+      // "stored": a real R2 modelAsset — source of truth is storageKey, resolved to a signed
+      // download URL the same way the master booth model already is (BoothGenerator.tsx's
+      // useAssetUrl/resolvedStoredModelUrl). No hook available inside an imperative effect, so
+      // this calls the same underlying plain function directly (never a public-URL workaround, no
+      // new upload/duplicate asset — report section 36).
+      getAssetDownloadUrl(source.asset.storageKey)
+        .then((url) => {
+          if (!active) return;
+          loadComponentModel(component, url, source.anchor, source.unit);
+        })
+        .catch((reason) => {
+          if (!active) return;
+          console.error(`Component asset URL resolution failed: ${component.id}`, reason);
+          setComponentLoadError(true);
+          setPendingComponents((count) => Math.max(0, count - 1));
+        });
     });
 
     fitView();
@@ -514,7 +759,9 @@ export function BoothCadViewer({
         onSelectPrintSurfaceRef.current?.(object?.userData.printSurfaceId ?? null);
         return;
       }
-      const cadPoint = viewerPointToCad(hit.point);
+      const cadPoint = viewerPointToCad(
+        hit.point.clone().sub(projectFrameOffset),
+      );
       const point: readonly [number, number, number] = [cadPoint.x, cadPoint.y, cadPoint.z];
       if (!measurementStart) setMeasurementStart(point);
       else {
@@ -535,17 +782,26 @@ export function BoothCadViewer({
       active = false;
       window.cancelAnimationFrame(animationFrame);
       resizeObserver.disconnect();
+      controls.removeEventListener("change", reportCameraZoom);
       controls.dispose();
       renderer.domElement.removeEventListener("click", handleCanvasClick);
       fitViewRef.current = () => undefined;
+      resetViewRef.current = () => undefined;
       applyViewRef.current = () => undefined;
       captureRef.current = () => null;
+      if (cameraControlsRef?.current === cameraController) {
+        cameraControlsRef.current = null;
+      }
+      if (boothSceneRef.current && loadedModels.includes(boothSceneRef.current.scene)) {
+        clearPrintArtworkOverlays(boothSceneRef.current.scene);
+        boothSceneRef.current = null;
+      }
       if (carpet) disposeObject(carpet);
       loadedModels.forEach(disposeObject);
       renderer.dispose();
       renderer.domElement.remove();
     };
-  }, [asset, carpetFinish, components, constructionFinish, dimensionOffsets, footprintDepthMm, footprintWidthMm, measurementStart, measurements, nominalDimensions, partDefinitions, printSurfaces, selectedPrintSurfaceId, showDimensions, showPrintPlaceholder, viewerTool]);
+  }, [asset, boothAsset, boothVisible, cameraControlsRef, carpetFinish, components, constructionFinish, constructionVisibility, defaultViews, dimensionOffsets, footprintDepthMm, footprintWidthMm, measurementStart, measurements, nominalDimensions, partDefinitions, printSurfaces, selectedPrintSurfaceId, showDimensions, showPrintPlaceholder, viewerTool]);
 
   return (
     <div className="cadViewer">
@@ -554,7 +810,10 @@ export function BoothCadViewer({
       <div className="cadViewerToolbars">
         <div className="cadViewerToolbar cadViewToolbar"><strong>POHLED</strong><div className="cadViewButtons">
           <button type="button" onClick={() => fitViewRef.current()}>
-            Fit model
+            Fit
+          </button>
+          <button type="button" onClick={() => resetViewRef.current()}>
+            Reset kamery
           </button>
           {defaultViews.map((view) => (
             <button
@@ -564,22 +823,6 @@ export function BoothCadViewer({
             >
               {view.name}
             </button>
-          ))}
-          {savedViews.map((view) => (
-            <span className="savedViewAction" key={view.id}>
-              <button type="button" onClick={() => applyViewRef.current(view)}>
-                {view.name}
-              </button>
-              {onDeleteView && (
-                <button
-                  type="button"
-                  aria-label={`Odstranit pohled ${view.name}`}
-                  onClick={() => onDeleteView(view.id)}
-                >
-                  ×
-                </button>
-              )}
-            </span>
           ))}
           {onSaveView && (
             <button

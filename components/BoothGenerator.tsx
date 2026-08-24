@@ -1,7 +1,9 @@
 "use client";
 
 import {
+  useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type PointerEvent as ReactPointerEvent,
@@ -35,7 +37,7 @@ import type {
   ExportCalculationOptions,
   Measurement3D,
   PrintSurfaceAssignment,
-  SavedCameraView,
+  VisualizationView,
   TechnicalRequirements,
   VisualizationItem,
 } from "../domain/project";
@@ -55,6 +57,10 @@ import { RemoteApiCatalogPricingRepository } from "../lib/db/catalogPricing.remo
 import { resolvePersistenceProbe } from "../lib/db/persistenceMode.client";
 import { ConcurrencyConflictError } from "../lib/db/concurrency";
 import { saveCameraView } from "../domain/workflow";
+import {
+  moveVisualizationView,
+  renameVisualizationView,
+} from "../domain/visualization";
 import type { Exhibition, PriceList } from "../domain/organizations";
 import { resolveEventPriceListForCurrency } from "../domain/organizations";
 import type { CatalogItemSummary, PricingEntrySummary } from "../domain/catalogPricing";
@@ -75,18 +81,68 @@ import {
   worldRotationToPlanView,
   worldToPlanView,
 } from "../domain/planView";
+import { getBounds } from "../geometry/polygons";
 import { getMasterReferenceModel, isVariantAvailable, resolveBoothModelSource } from "../domain/cad3d";
 import { resolveGeneratorBooth, resolveGeneratorVariant, selectGeneratorBooths } from "../domain/generatorBooths";
+import { selectGeneratorBoothComponents } from "../domain/generatorBoothComponents";
+import { createIndividualBooth } from "../domain/individualBooth";
+import {
+  canConfirmPlot,
+  createCenteredRectanglePlotPolygon,
+  createRectanglePlotPolygon,
+  DEFAULT_INDIVIDUAL_WORKSPACE,
+  findComponentAnchorsOutsidePlot,
+  isPlacementValidOnPlot,
+  isPlotConfirmed,
+  isPolygonWithinWorkspace,
+  plotAreaSquareMeters,
+  resolveDefaultAnchorOnPlot,
+  resolveIndividualPlotPolygon,
+  resolvePlotStatus,
+  tryMoveComponentOnPlot,
+  type IndividualWorkspace,
+  type PlotPolygon,
+  type PlotStatus,
+} from "../domain/plot";
+import {
+  createRectanglePrimitive,
+  duplicatePrimitive,
+  mergePrimitivesToPolygon,
+  rectanglePrimitivePolygon,
+  rotatePrimitive90,
+  type RectanglePrimitive,
+} from "../domain/rectanglePrimitives";
+import {
+  confirmFloorZone,
+  createFloorZone,
+  findFloorZonesOutsidePlot,
+  findOverlappingFloorZonePairs,
+  FLOOR_ZONE_BASES,
+  FLOOR_ZONE_BASE_LABELS_CS,
+  FLOOR_ZONE_CONFIRM_ISSUE_LABELS_CS,
+  FLOOR_ZONE_FINISHES,
+  FLOOR_ZONE_FINISH_LABELS_CS,
+  freeFloorAreaRegions,
+  isFloorZoneConfirmed,
+  totalFloorAreaByFinish,
+  uncoveredFloorAreaSquareMeters,
+  unlockFloorZone,
+  validateFloorZoneForConfirm,
+  type FloorZone,
+} from "../domain/floorZones";
 import { useAssetUrl } from "../hooks/useAssetUrl";
 import {
   componentZIndex,
+  isTechnicalPointLayer,
   moveComponentDisplayOrder,
   scenePlanBounds,
   sortComponentsFor2D,
 } from "../domain/displayOrder";
 import {
+  assignArtworkToPrintSurface,
+  computePrintSurfaceAssignments,
   effectiveFasciaRequirement,
-  productionPrintSurfaceDimensions,
+  removeArtworkFromPrintSurface,
 } from "../domain/technicalServices";
 import { isObjectLocked, toggleUserLock } from "../domain/locking";
 import {
@@ -100,7 +156,11 @@ import {
 import { toggleVisibility } from "../domain/visibility";
 import {
   applySnap as snapPlacement,
+  createComponentDragOffset,
+  INDIVIDUAL_GRID_MM,
   isPlacementValid,
+  resolveDraggedComponentCenter,
+  roundToGridMm,
   tryMoveComponent,
 } from "../geometry/placement";
 import { quickRotation, rotationForMode } from "../geometry/rotation";
@@ -108,8 +168,12 @@ import { useBoothViewport } from "../hooks/useBoothViewport";
 import { AppSidebar } from "./AppSidebar";
 import { StepHeader } from "./StepHeader";
 import { ComponentLibrary } from "./configurator/ComponentLibrary";
-import { BoothCadViewer } from "./configurator/BoothCadViewer";
-import { BoothCadPlanView } from "./configurator/BoothCadPlanView";
+import { BoothComponentLibrary } from "./configurator/BoothComponentLibrary";
+import { PlotSizeInput } from "./configurator/PlotSizeInput";
+import { PlotPolygonEditor } from "./configurator/PlotPolygonEditor";
+import { BoothCadViewer, type BoothCadCameraControls } from "./configurator/BoothCadViewer";
+import { GraphicsSurfacePanel } from "./configurator/GraphicsSurfacePanel";
+import { BoothConstructionPlanView } from "./configurator/BoothConstructionPlanView";
 import { ConfiguratorHelp } from "./configurator/ConfiguratorHelp";
 import { NotesEditor } from "./configurator/NotesEditor";
 import { CoordinateInput } from "./configurator/CoordinateInput";
@@ -129,6 +193,7 @@ import {
   SummaryStep,
   VisualizationStep,
 } from "./workflow/WorkflowSteps";
+
 import {
   EventLogo,
   EventsPage,
@@ -138,6 +203,26 @@ import { dataUrlToFile, uploadAsset, type UploadProgress } from "../lib/storage/
 import { PricingAdminPage } from "./workflow/PricingAdminPages";
 import { RemoteApiPricingAdminRepository } from "../lib/db/pricingAdmin.remoteApi.client";
 import { RemoteApiCatalogItemsAdminRepository } from "../lib/db/catalogItemsAdmin.remoteApi.client";
+
+/** Individual-booth plot size defaults (mode=individualni, before the user has entered anything) — a neutral starting point on the 250 mm layout grid, never a fabricated real-world footprint. */
+const INDIVIDUAL_DEFAULT_WIDTH_MM = 3000;
+const INDIVIDUAL_DEFAULT_DEPTH_MM = 2000;
+
+/**
+ * Individual mode's 4 persistent work steps (report section 3) — Plocha/Podlaha/Konstrukce/
+ * Mobiliář are tabs over ONE shared ProjectRecord, never a destructive wizard: switching tabs
+ * never clears sceneObjects/polygon/floor zones. "mobiliar" reuses the exact SAME
+ * ComponentLibrary/configurator experience typovka already uses (report section 28) — no second
+ * furniture editor.
+ */
+const INDIVIDUAL_SUB_STEPS = ["plocha", "podlaha", "konstrukce", "mobiliar"] as const;
+type IndividualSubStep = (typeof INDIVIDUAL_SUB_STEPS)[number];
+const INDIVIDUAL_SUB_STEP_LABELS_CS: Readonly<Record<IndividualSubStep, string>> = {
+  plocha: "Plocha",
+  podlaha: "Podlaha",
+  konstrukce: "Konstrukce",
+  mobiliar: "Mobiliář",
+};
 
 /**
  * Booth-selection card thumbnail — a real uploaded photoAsset (R2, resolved to a signed URL)
@@ -204,6 +289,12 @@ export default function BoothGenerator() {
   const [dbBoothTypes, setDbBoothTypes] = useState<readonly BoothType[] | null>(null);
   const [boothsError, setBoothsError] = useState("");
   const boothTypes = dbBoothTypes ?? [];
+  // Individual-mode Phase 1 picker (kind=booth_component only) — same DB catalog_items list as
+  // dbBoothTypes above (one fetch, two filters), never a second/parallel catalog. null = still
+  // loading; [] + boothComponentsError = a real fetch failure; [] + no error = genuinely zero
+  // active+ready+generatorEligible+placeable booth components right now.
+  const [dbBoothComponents, setDbBoothComponents] = useState<readonly ComponentDefinition[] | null>(null);
+  const [boothComponentsError, setBoothComponentsError] = useState("");
   const [step, setStep] =
     useState(1);
 
@@ -221,7 +312,7 @@ export default function BoothGenerator() {
   const [technicalRequirements, setTechnicalRequirements] =
     useState<TechnicalRequirements>(() => createDefaultTechnicalRequirements());
   const [importedOrder, setImportedOrder] = useState<ImportedOrder | undefined>();
-  const [savedViews, setSavedViews] = useState<SavedCameraView[]>([]);
+  const [visualizationViews, setVisualizationViews] = useState<VisualizationView[]>([]);
   const [visualizations, setVisualizations] = useState<VisualizationItem[]>([]);
   const [generatedPlanOutputs, setGeneratedPlanOutputs] =
     useState<GeneratedPlanOutput[]>([]);
@@ -268,6 +359,10 @@ export default function BoothGenerator() {
 
   const [editorView, setEditorView] =
     useState<"2d" | "3d">("2d");
+  const booth3DCameraControlsRef = useRef<BoothCadCameraControls | null>(null);
+  const [booth3DZoomPercent, setBooth3DZoomPercent] = useState(100);
+  const [readyBoothPlanVisualKey, setReadyBoothPlanVisualKey] =
+    useState<string | null>(null);
 
   const [type, setType] =
     useState<ProjectType>("typovy");
@@ -311,6 +406,33 @@ export default function BoothGenerator() {
     setSelectedVariantId,
   ] = useState("");
 
+  // Step 2's quick-rectangle draft inputs — a convenience starting point only (report section
+  // 10); the real, possibly non-rectangular plot lives in individualPlotPolygon below and is
+  // drawn/edited in the "Plocha" tab inside the configurator (step 3).
+  const [individualWidthMm, setIndividualWidthMm] = useState(INDIVIDUAL_DEFAULT_WIDTH_MM);
+  const [individualDepthMm, setIndividualDepthMm] = useState(INDIVIDUAL_DEFAULT_DEPTH_MM);
+
+  const [individualSubStep, setIndividualSubStep] = useState<IndividualSubStep>("plocha");
+  const [individualWorkspaceWidthMm, setIndividualWorkspaceWidthMm] = useState(DEFAULT_INDIVIDUAL_WORKSPACE.widthMm);
+  const [individualWorkspaceDepthMm, setIndividualWorkspaceDepthMm] = useState(DEFAULT_INDIVIDUAL_WORKSPACE.depthMm);
+  // Report section 4: set only when a requested workspace resize was REJECTED (would have left
+  // part of the drawn plot outside the new canvas) — the resize itself never silently clips the
+  // polygon, it just doesn't happen.
+  const [individualWorkspaceSizeError, setIndividualWorkspaceSizeError] = useState<string | null>(null);
+  const [individualPlotPolygon, setIndividualPlotPolygon] = useState<PlotPolygon | undefined>(undefined);
+  // Report sections 1/2: draft vs confirmed/locked for the plot polygon itself — mirrors each
+  // FloorZone's own `status` field (domain/floorZones.ts). Absent/"draft" means the "Plocha"
+  // editor stays fully editable; "confirmed" locks it read-only until "Upravit plochu".
+  const [individualPlotStatus, setIndividualPlotStatus] = useState<PlotStatus>("draft");
+  const [individualFloorZones, setIndividualFloorZones] = useState<FloorZone[]>([]);
+  const [editingFloorZoneId, setEditingFloorZoneId] = useState<string | null>(null);
+  // Report sections 5-11: rectangle-primitive authoring helper — an alternative, purely-rectangular
+  // way to build up the plot polygon (e.g. 5x5 + 2x3 -> L) next to point-by-point drawing, which
+  // stays fully available and unchanged. Never the booth's own source of truth (see the type's own
+  // doc comment) — "Sloučit do plochy stánku" is what actually sets individualPlotPolygon.
+  const [individualPlotPrimitives, setIndividualPlotPrimitives] = useState<RectanglePrimitive[]>([]);
+  const [primitiveMergeError, setPrimitiveMergeError] = useState<string | null>(null);
+
   const [
     placedComponents,
     setPlacedComponents,
@@ -337,14 +459,14 @@ export default function BoothGenerator() {
   ] = useState<Record<string, boolean>>({});
 
   const [
-    draggingComponentId,
-    setDraggingComponentId,
-  ] = useState<string | null>(null);
-
-  const [
     editorMessage,
     setEditorMessage,
   ] = useState("");
+  const componentDragSessionRef = useRef<{
+    componentId: string;
+    pointerId: number;
+    offset: ReturnType<typeof createComponentDragOffset>;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -416,10 +538,17 @@ export default function BoothGenerator() {
           if (cancelled) return;
           setDbBoothTypes(selectGeneratorBooths(catalogItems));
           setBoothsError("");
+          // Same fetched list, same failure-visibility rule as the booth picker above — a
+          // dedicated try/catch so a booth-component adapt error can never silently blank the
+          // (already-succeeded) booth picker or vice versa.
+          setDbBoothComponents(selectGeneratorBoothComponents(catalogItems));
+          setBoothComponentsError("");
         } catch (error) {
           if (cancelled) return;
           setBoothsError(error instanceof Error ? error.message : "Typové stánky se nepodařilo načíst.");
           setDbBoothTypes([]);
+          setBoothComponentsError(error instanceof Error ? error.message : "Komponenty stánku se nepodařilo načíst.");
+          setDbBoothComponents([]);
         }
         return;
       }
@@ -431,6 +560,8 @@ export default function BoothGenerator() {
         // static demo data as if it were production truth.
         setBoothsError("Typové stánky vyžadují databázové připojení.");
         setDbBoothTypes([]);
+        setBoothComponentsError("Komponenty stánku vyžadují databázové připojení.");
+        setDbBoothComponents([]);
         return;
       }
 
@@ -440,6 +571,8 @@ export default function BoothGenerator() {
       setPersistenceMode("unavailable");
       setBoothsError("Typové stánky vyžadují databázové připojení.");
       setDbBoothTypes([]);
+      setBoothComponentsError("Komponenty stánku vyžadují databázové připojení.");
+      setDbBoothComponents([]);
     }
 
     init();
@@ -540,10 +673,34 @@ export default function BoothGenerator() {
     projectNotes.internalNote.trim() || projectNotes.customerNote.trim(),
   );
 
+  // See domain/individualBooth.ts for why this scaffold is enough for every existing
+  // selectedBooth-driven read below to work for Individual mode with no separate code path.
+  //
+  // MUST be referentially stable across renders that don't actually change the plot size —
+  // an inline `createIndividualBooth(...)` object literal here is a NEW object identity on
+  // EVERY render, and selectedBooth below is a dependency of the printSurfaceAssignments
+  // useEffect further down. A fresh identity each render makes that effect fire every render;
+  // its setState always produces a new (even if empty) array, which React never bails out of
+  // (a new [] is never Object.is-equal to the previous one) — render → effect → setState →
+  // render, forever ("Maximum update depth exceeded"). useMemo keyed on the actual plot inputs
+  // is the real fix; see that effect for the second, independent no-op guard.
+  // widthMm/depthMm on this scaffold are the WORKSPACE canvas (report section 4) — never the
+  // real plot; the real, possibly non-rectangular plot is individualPlotPolygon, carried
+  // separately and validated/rendered with dedicated polygon-aware logic (domain/plot.ts).
+  const individualWorkspace: IndividualWorkspace = useMemo(
+    () => ({ widthMm: individualWorkspaceWidthMm, depthMm: individualWorkspaceDepthMm }),
+    [individualWorkspaceWidthMm, individualWorkspaceDepthMm],
+  );
+  const individualBooth: BoothType | undefined = useMemo(
+    () => (type === "individualni" ? createIndividualBooth(individualWorkspace, individualPlotPolygon) : undefined),
+    [type, individualWorkspace, individualPlotPolygon],
+  );
+
   // resolveGeneratorBooth (not a plain .find) so an OLDER saved project resolves correctly even
   // if it stored an internalCode instead of the booth's own id — never a guess, undefined when
   // truly nothing matches (e.g. the booth was archived since the project was saved).
-  const selectedBooth = resolveGeneratorBooth(boothTypes, selectedBoothId);
+  const selectedBooth =
+    type === "individualni" ? individualBooth : resolveGeneratorBooth(boothTypes, selectedBoothId);
 
   // Section "GENERÁTOR TYPOVEK" (2026-08-19): a booth with declared variants (T04..T25) NEVER
   // falls back to its own parent GLB — resolveBoothModelSource requires the SELECTED variant's
@@ -567,6 +724,17 @@ export default function BoothGenerator() {
             axisSystem: "x-right-y-depth-z-up",
           } as const)
         : undefined;
+  const selectedBoothPlanVisualKey = selectedBooth
+    ? `${selectedBooth.id}:${selectedBoothMasterModel?.id ?? "fallback"}:${selectedBoothMasterModel?.url ?? "canonical"}`
+    : null;
+  const handleBoothPlanVisualReadyChange = useCallback(
+    (ready: boolean) => {
+      setReadyBoothPlanVisualKey(
+        ready ? selectedBoothPlanVisualKey : null,
+      );
+    },
+    [selectedBoothPlanVisualKey],
+  );
 
   const selectedVariant =
     selectedBooth?.variants.find(
@@ -594,29 +762,7 @@ export default function BoothGenerator() {
       return;
     }
     setPrintSurfaceAssignments((current) =>
-      (selectedBooth.printSurfaces ?? []).map((surface) => {
-        const existing = current.find((item) => item.printSurfaceId === surface.id);
-        const production = productionPrintSurfaceDimensions(surface, realizationProfileId);
-        const included = Boolean(
-          selectedBooth.packageContents?.some(
-            (item) => item.printSurfaceId === surface.id && item.includedInBasePrice,
-          ),
-        );
-        return {
-          printSurfaceId: surface.id,
-          sceneReference: selectedBooth.id,
-          graphicsKind: existing?.graphicsKind ?? (included ? "fascia" : "fullWrap"),
-          artworkStatus: existing?.artworkStatus ?? "missing",
-          artworkFileId: existing?.artworkFileId,
-          selectedForPrint: existing?.selectedForPrint ?? included,
-          canonicalWidthMm: surface.widthMm,
-          canonicalHeightMm: surface.heightMm,
-          productionWidthMm: production.widthMm,
-          productionHeightMm: production.heightMm,
-          includedInPackage: included,
-          pricedSeparately: !included,
-        };
-      }),
+      computePrintSurfaceAssignments(selectedBooth, realizationProfileId, current),
     );
   }, [realizationProfileId, selectedBooth]);
 
@@ -664,10 +810,39 @@ export default function BoothGenerator() {
     ? (constructionVisibility.assembly ?? selectedBooth.visible)
     : true;
 
+  // Section 5/22: for Individual mode, the relevant thing to auto-fit/Fit-button to is the REAL
+  // plot polygon — never the full 10×10 m workspace canvas selectedBooth.widthMm/depthMm
+  // represents here. Bounds MUST go through worldToPlanView first (matching every other
+  // consumer of these mm coordinates on this canvas, e.g. the placed-component position style
+  // below) — fitBoundsToViewport has no idea about the plan's own Y-flip, so feeding it raw
+  // world coordinates for anything less than the FULL workspace would frame the wrong region
+  // (this was the exact bug in components/configurator/PlotPolygonEditor.tsx before the fix —
+  // see the foundation report). Typovka is untouched: individualPlotFitBounds is always
+  // undefined for it, so useBoothViewport falls back to its original worldWidthMm/worldHeightMm
+  // behavior exactly as before.
+  const individualPlotFitBounds =
+    type === "individualni" && individualPlotPolygon && selectedBooth?.widthMm && selectedBooth?.depthMm
+      ? getBounds(individualPlotPolygon.map((point) => worldToPlanView(point, selectedBooth.widthMm!, selectedBooth.depthMm!)))
+      : undefined;
+
   const boothViewport = useBoothViewport({
     worldWidthMm: selectedBooth?.widthMm ?? 2000,
     worldHeightMm: selectedBooth?.depthMm ?? 2000,
     enabled: step === 3 && Boolean(selectedBooth),
+    fitBounds: individualPlotFitBounds,
+    // Forces a fresh auto-fit whenever Individual mode switches INTO Konstrukce/Mobiliář (report
+    // section 4 — "when I open 2D Konstrukce/Mobiliář, auto-fit") — this shared hook instance
+    // never unmounts between substep switches, so without this the transform would otherwise
+    // silently stay stuck at whatever it was (or its un-fit default) from before. Typovka keys
+    // the one-shot fit by the selected booth visual: booth/asset changes get one fresh fit,
+    // ordinary rerenders and later manual zoom do not.
+    fitKey:
+      type === "individualni"
+        ? individualSubStep
+        : (selectedBoothPlanVisualKey ?? "typovka"),
+    initialFitReady:
+      selectedBoothPlanVisualKey !== null &&
+      readyBoothPlanVisualKey === selectedBoothPlanVisualKey,
   });
 
   const canOpenConfigurator =
@@ -685,6 +860,33 @@ export default function BoothGenerator() {
     importedOrder,
     placedComponents,
   );
+
+  // Section 30/32: components/zones that fell outside the CURRENT plot polygon (e.g. after the
+  // user edited it smaller) — surfaced as a conflict, NEVER auto-deleted/auto-clipped.
+  const constructionOutsidePlotIds = individualPlotPolygon
+    ? findComponentAnchorsOutsidePlot(
+        placedComponents
+          .filter((component) => component.sceneLayer === "booth")
+          .map((component) => ({ id: component.id, x: component.xMm, y: component.yMm })),
+        individualPlotPolygon,
+      )
+    : [];
+  const floorZonesOutsidePlot = individualPlotPolygon
+    ? findFloorZonesOutsidePlot(individualFloorZones, individualPlotPolygon)
+    : [];
+  const overlappingFloorZonePairs = findOverlappingFloorZonePairs(individualFloorZones);
+  const floorZoneConflicts = Array.from(
+    new Set([...floorZonesOutsidePlot, ...overlappingFloorZonePairs.flat()]),
+  );
+  // Report sections 3/17/24: "Plocha" is done only once the plot is BOTH confirmed/locked and
+  // still geometrically valid (confirming already required validity, but this stays defensive —
+  // e.g. against future code paths that might set the status without re-validating). "Podlaha" is
+  // done once every zone is individually confirmed — zero zones is itself a valid, complete state
+  // (section 16/17), a lone unconfirmed draft zone is not.
+  const isIndividualPlotConfirmed = isPlotConfirmed(individualPlotStatus);
+  const isIndividualPlotStepComplete = isIndividualPlotConfirmed && canConfirmPlot(individualPlotPolygon);
+  const hasUnconfirmedFloorZone = individualFloorZones.some((zone) => !isFloorZoneConfirmed(zone));
+  const isIndividualFloorStepComplete = isIndividualPlotStepComplete && !hasUnconfirmedFloorZone;
   const selectedCarpetFinish = selectedFinish(
     selectedBooth?.carpetVariants ?? carpetFinishVariants,
     carpetFinishId,
@@ -716,7 +918,7 @@ export default function BoothGenerator() {
     requirements: technicalRequirements,
     order: importedOrder,
     inventory: orderInventory,
-    savedViews,
+    visualizationViews,
     visualizations,
     generatedPlanOutputs,
     selectedOutputIds,
@@ -729,6 +931,7 @@ export default function BoothGenerator() {
     customDimensions,
     carpetFinishId,
     constructionFinishId,
+    constructionVisibility,
     internalNote: projectNotes.internalNote,
     customerNote: projectNotes.customerNote,
     printSurfaceAssignments,
@@ -745,7 +948,10 @@ export default function BoothGenerator() {
     return id;
   }
 
-  async function addPersistentGraphics(files: FileList | readonly File[]) {
+  async function addPersistentGraphics(
+    files: FileList | readonly File[],
+    printSurfaceId?: string,
+  ): Promise<void> {
     const ownerId = ensureProjectStorageId();
     const batch = Array.from(files);
     const results = await Promise.allSettled(batch.map(async (file) => {
@@ -760,15 +966,39 @@ export default function BoothGenerator() {
         asset,
         status: "uploaded" as const,
         associatedRequirement: !["unspecified", "notWanted"].includes(technicalRequirements.fullWrapGraphics.status) ? "fullWrap" as const : "fascia" as const,
-        printSurfaceId: selectedPrintSurfaceId ?? undefined,
+        printSurfaceId: printSurfaceId ?? selectedPrintSurfaceId ?? undefined,
         createdAt: asset.createdAt,
       };
     }));
     const additions = results.flatMap((result) => result.status === "fulfilled" ? [result.value] : []);
     if (additions.length) setGraphicsFiles((current) => [...current, ...additions]);
+    if (printSurfaceId && additions[0] && selectedBooth) {
+      setPrintSurfaceAssignments((current) => [...assignArtworkToPrintSurface(
+        selectedBooth,
+        realizationProfileId,
+        current,
+        printSurfaceId,
+        additions[0]!.id,
+      )]);
+    }
     batch.forEach((file, index) => {
       if (results[index]?.status === "rejected") temporaryGraphicFilesRef.current.set(`retry-${Date.now()}-${index}`, file);
     });
+  }
+
+  function assignExistingArtwork(printSurfaceId: string, artworkFileId: string) {
+    if (!selectedBooth) return;
+    setPrintSurfaceAssignments((current) => [...assignArtworkToPrintSurface(
+      selectedBooth,
+      realizationProfileId,
+      current,
+      printSurfaceId,
+      artworkFileId,
+    )]);
+  }
+
+  function removeSurfaceArtwork(printSurfaceId: string) {
+    setPrintSurfaceAssignments((current) => [...removeArtworkFromPrintSurface(current, printSurfaceId)]);
   }
 
   async function retryPersistentGraphics() {
@@ -909,23 +1139,11 @@ export default function BoothGenerator() {
     setConstructionNotes({});
     setMeasurements3D([]);
     setSelectedPrintSurfaceId(null);
-    setPrintSurfaceAssignments((booth?.printSurfaces ?? []).map((surface) => {
-      const production = productionPrintSurfaceDimensions(surface, realizationProfileId);
-      const included = Boolean(booth?.packageContents?.some((item) => item.printSurfaceId === surface.id && item.includedInBasePrice));
-      return {
-        printSurfaceId: surface.id,
-        sceneReference: booth?.id ?? "booth",
-        graphicsKind: included ? "fascia" as const : "fullWrap" as const,
-        artworkStatus: "missing" as const,
-        selectedForPrint: included,
-        canonicalWidthMm: surface.widthMm,
-        canonicalHeightMm: surface.heightMm,
-        productionWidthMm: production.widthMm,
-        productionHeightMm: production.heightMm,
-        includedInPackage: included,
-        pricedSeparately: !included,
-      };
-    }));
+    setPrintSurfaceAssignments(
+      booth
+        ? computePrintSurfaceAssignments(booth, realizationProfileId, [])
+        : [],
+    );
 
     setEditorMessage("");
   }
@@ -961,7 +1179,7 @@ export default function BoothGenerator() {
     setProjectCreatedAt("");
     setTechnicalRequirements(createDefaultTechnicalRequirements());
     setImportedOrder(undefined);
-    setSavedViews([]);
+    setVisualizationViews([]);
     setVisualizations([]);
     setGeneratedPlanOutputs([]);
     setSelectedOutputIds([]);
@@ -1002,6 +1220,17 @@ export default function BoothGenerator() {
 
     setSelectedBoothId("");
     setSelectedVariantId("");
+    setIndividualWidthMm(INDIVIDUAL_DEFAULT_WIDTH_MM);
+    setIndividualDepthMm(INDIVIDUAL_DEFAULT_DEPTH_MM);
+    setIndividualWorkspaceWidthMm(DEFAULT_INDIVIDUAL_WORKSPACE.widthMm);
+    setIndividualWorkspaceDepthMm(DEFAULT_INDIVIDUAL_WORKSPACE.depthMm);
+    setIndividualPlotPolygon(undefined);
+    setIndividualPlotStatus("draft");
+    setIndividualFloorZones([]);
+    setIndividualPlotPrimitives([]);
+    setPrimitiveMergeError(null);
+    setIndividualSubStep("plocha");
+    setEditingFloorZoneId(null);
 
     setPlacedComponents([]);
     setSelectedComponentId(null);
@@ -1009,7 +1238,7 @@ export default function BoothGenerator() {
     setConstructionUserLocks({});
     setConstructionVisibility({});
 
-    setDraggingComponentId(null);
+    componentDragSessionRef.current = null;
 
     setEditorMessage("");
   }
@@ -1040,6 +1269,17 @@ export default function BoothGenerator() {
       requiresAction,
       mode: projectMode,
       projectType: type,
+      // individualWidthMm/individualDepthMm are the LEGACY foundation fields (domain/plot.ts's
+      // resolveIndividualPlotPolygon) — a project saved after the polygon foundation writes
+      // ONLY individualPlotPolygon/workspace below, never these, so the polygon is unambiguously
+      // the source of truth going forward. Not destructive: the rectangle they described is
+      // already fully represented as individualPlotPolygon once one exists.
+      individualWorkspaceWidthMm: type === "individualni" ? individualWorkspaceWidthMm : undefined,
+      individualWorkspaceDepthMm: type === "individualni" ? individualWorkspaceDepthMm : undefined,
+      individualPlotPolygon: type === "individualni" ? individualPlotPolygon : undefined,
+      individualPlotStatus: type === "individualni" ? individualPlotStatus : undefined,
+      individualFloorZones: type === "individualni" ? individualFloorZones : undefined,
+      individualPlotPrimitives: type === "individualni" ? individualPlotPrimitives : undefined,
       notes: projectNotes,
       assemblyNotes,
       constructionNotes,
@@ -1048,7 +1288,7 @@ export default function BoothGenerator() {
       technicalRequirements,
       importedOrder,
       sceneObjects: placedComponents,
-      savedViews,
+      visualizationViews,
       visualizations,
       generatedPlanOutputs,
       selectedOutputIds,
@@ -1101,6 +1341,26 @@ export default function BoothGenerator() {
     setBoothNumber(project.boothNumber);
     setSelectedBoothId(project.boothId);
     setSelectedVariantId(project.variantId);
+    // Legacy quick-rectangle draft inputs (step 2's convenience form) — not authoritative once a
+    // real polygon exists; still seeded from the legacy fields when present so an OLD project's
+    // "size" keeps showing sensibly if the user revisits step 2.
+    setIndividualWidthMm(project.individualWidthMm ?? INDIVIDUAL_DEFAULT_WIDTH_MM);
+    setIndividualDepthMm(project.individualDepthMm ?? INDIVIDUAL_DEFAULT_DEPTH_MM);
+    setIndividualWorkspaceWidthMm(project.individualWorkspaceWidthMm ?? DEFAULT_INDIVIDUAL_WORKSPACE.widthMm);
+    setIndividualWorkspaceDepthMm(project.individualWorkspaceDepthMm ?? DEFAULT_INDIVIDUAL_WORKSPACE.depthMm);
+    // resolveIndividualPlotPolygon prefers the real polygon and only derives a rectangle from
+    // legacy individualWidthMm/individualDepthMm when no polygon was ever saved — see domain/
+    // plot.ts. Never rewritten back into the project document by this read; only an actual save
+    // persists the derived polygon as the new source of truth.
+    setIndividualPlotPolygon(resolveIndividualPlotPolygon(project));
+    // resolvePlotStatus defaults a project saved before locking existed to "draft" — never
+    // silently treated as already-confirmed (domain/plot.ts).
+    setIndividualPlotStatus(resolvePlotStatus(project.individualPlotStatus));
+    setIndividualFloorZones([...(project.individualFloorZones ?? [])]);
+    setIndividualPlotPrimitives([...(project.individualPlotPrimitives ?? [])]);
+    setPrimitiveMergeError(null);
+    setIndividualSubStep("plocha");
+    setEditingFloorZoneId(null);
     setRealizationProfileId(project.realizationProfileId);
     setCommunicationLanguage(project.communicationLanguage);
     setCurrency(project.currency);
@@ -1119,7 +1379,7 @@ export default function BoothGenerator() {
     setTechnicalRequirements(project.technicalRequirements);
     setImportedOrder(project.importedOrder);
     setPlacedComponents([...project.sceneObjects]);
-    setSavedViews([...project.savedViews]);
+    setVisualizationViews([...project.visualizationViews]);
     setVisualizations([...project.visualizations]);
     setGeneratedPlanOutputs([...project.generatedPlanOutputs]);
     setSelectedOutputIds([...project.selectedOutputIds]);
@@ -1141,7 +1401,15 @@ export default function BoothGenerator() {
     setSelectedComponentId(null);
     setSelectedConstructionPartId(null);
     setWorkspaceSection("project");
-    setStep(project.boothId ? 3 : 1);
+    setStep(
+      project.projectType === "individualni"
+        ? resolveIndividualPlotPolygon(project)
+          ? 3
+          : 1
+        : project.boothId
+          ? 3
+          : 1,
+    );
   }
 
   async function deleteProject(projectToDeleteId: string) {
@@ -1179,12 +1447,23 @@ export default function BoothGenerator() {
     centerY: number,
     rotationDeg: number
   ) {
+    if (type === "individualni") {
+      // Section 19: the ANCHOR (center) must be inside/on the plot polygon — never a
+      // full-footprint-bounding-box-inside-polygon rule (see domain/plot.ts's
+      // isAnchorInsidePlot doc comment for why).
+      return individualPlotPolygon ? isPlacementValidOnPlot(individualPlotPolygon, centerX, centerY) : false;
+    }
     return selectedBooth
-      ? isPlacementValid(selectedBooth, component, {
-          x: centerX,
-          y: centerY,
-          rotationDeg,
-        })
+      ? isPlacementValid(
+          selectedBooth,
+          component,
+          {
+            x: centerX,
+            y: centerY,
+            rotationDeg,
+          },
+          constructionVisibility,
+        )
       : false;
   }
 
@@ -1198,15 +1477,24 @@ export default function BoothGenerator() {
     centerY: number,
     rotationDeg: number
   ) {
-    return selectedBooth
-      ? snapPlacement(
+    if (!selectedBooth) {
+      return { x: centerX, y: centerY };
+    }
+
+    // Individual mode snaps to the 250 mm nominal layout grid only — validity (whether the
+    // snapped anchor is actually inside the plot) is a SEPARATE check (isPositionValid/
+    // tryMoveComponentOnPlot above), never a rectangular clamp against the workspace canvas.
+    // Typovka keeps its existing construction-edge snap completely untouched.
+    return type === "individualni"
+      ? { x: roundToGridMm(centerX), y: roundToGridMm(centerY) }
+      : snapPlacement(
           selectedBooth,
           component,
           centerX,
           centerY,
-          rotationDeg
-        )
-      : { x: centerX, y: centerY };
+          rotationDeg,
+          constructionVisibility,
+        );
   }
 
   /* ================================================= */
@@ -1214,11 +1502,24 @@ export default function BoothGenerator() {
   /* ================================================= */
 
   function addComponent(definition: ComponentDefinition) {
+    // Report section 28/31: for Individual mode, the default insert point must be a position
+    // that's ALWAYS valid on the real (possibly relocated/non-rectangular) plot polygon — a fixed
+    // world point could land far outside the plot (and outside whatever the Fit-scoped viewport
+    // is currently showing), which read as "the component vanished after insert" even though it
+    // was really just off-screen. Typovka is completely unaffected (no plot polygon exists there,
+    // so it always takes the original (1000, 1500) default it always used).
+    const insertPoint =
+      type === "individualni" && individualPlotPolygon
+        ? resolveDefaultAnchorOnPlot(individualPlotPolygon)
+        : { x: 1000, y: 1500 };
     const component = placeComponent(
       definition,
-      `${definition.type}-${Date.now()}`,
-      1000,
-      1500
+      // crypto.randomUUID() (same convention as projectSnapshot's own id generation below) —
+      // never Date.now()-only, which can collide across two rapid inserts of the same definition
+      // type (report section 12/30's id-uniqueness audit).
+      `${definition.type}-${crypto.randomUUID()}`,
+      insertPoint.x,
+      insertPoint.y
     );
 
     setPlacedComponents((items) => [...items, component]);
@@ -1255,14 +1556,29 @@ export default function BoothGenerator() {
     setSelectedConstructionPartId(null);
 
     if (!component || isObjectLocked(component)) {
-      setDraggingComponentId(null);
+      componentDragSessionRef.current = null;
       setEditorMessage("");
       return;
     }
 
-    setDraggingComponentId(
-      componentId
+    const displayPointer = boothViewport.clientToWorld(
+      event.clientX,
+      event.clientY,
     );
+    if (!displayPointer || !selectedBooth?.widthMm || !selectedBooth.depthMm) {
+      componentDragSessionRef.current = null;
+      return;
+    }
+    const pointerWorld = planViewToWorld(
+      displayPointer,
+      selectedBooth.widthMm,
+      selectedBooth.depthMm,
+    );
+    componentDragSessionRef.current = {
+      componentId,
+      pointerId: event.pointerId,
+      offset: createComponentDragOffset(component, pointerWorld),
+    };
 
     setEditorMessage("");
 
@@ -1276,8 +1592,8 @@ export default function BoothGenerator() {
     componentId: string
   ) {
     if (
-      draggingComponentId !==
-        componentId ||
+      componentDragSessionRef.current?.componentId !== componentId ||
+      componentDragSessionRef.current.pointerId !== event.pointerId ||
       !selectedBooth?.widthMm ||
       !selectedBooth.depthMm
     ) {
@@ -1296,7 +1612,7 @@ export default function BoothGenerator() {
     }
 
     if (isObjectLocked(component)) {
-      setDraggingComponentId(null);
+      componentDragSessionRef.current = null;
       return;
     }
 
@@ -1314,13 +1630,17 @@ export default function BoothGenerator() {
       selectedBooth.widthMm,
       selectedBooth.depthMm,
     );
+    const requestedCenter = resolveDraggedComponentCenter(
+      pointer,
+      componentDragSessionRef.current.offset,
+    );
 
     const snapped =
       applySnap(
         component,
 
-        pointer.x,
-        pointer.y,
+        requestedCenter.x,
+        requestedCenter.y,
 
         component.rotationDeg
       );
@@ -1333,11 +1653,34 @@ export default function BoothGenerator() {
       );
     };
 
+    if (type === "individualni") {
+      // Polygon-aware move — no X-only/Y-only slide fallback (report section 26: a plot
+      // boundary is a soft layout boundary, not a rigid wall obstacle to slide along).
+      if (!individualPlotPolygon) {
+        setEditorMessage("Nejdřív nakresli plochu stánku v kroku Plocha.");
+        return;
+      }
+      const moveResult = tryMoveComponentOnPlot(
+        individualPlotPolygon,
+        component,
+        Math.round(snapped.x),
+        Math.round(snapped.y),
+      );
+      if (moveResult.accepted) {
+        moveComponent(moveResult.component);
+        setEditorMessage("");
+      } else if (moveResult.reason !== "locked") {
+        setEditorMessage("Mimo plochu stánku.");
+      }
+      return;
+    }
+
     const directMove = tryMoveComponent(
       selectedBooth,
       component,
-      Math.round(snapped.x),
-      Math.round(snapped.y),
+      snapped.x,
+      snapped.y,
+      constructionVisibility,
     );
 
     if (directMove.accepted) {
@@ -1356,8 +1699,9 @@ export default function BoothGenerator() {
     const xOnlyMove = tryMoveComponent(
       selectedBooth,
       component,
-      Math.round(snapped.x),
+      snapped.x,
       component.yMm,
+      constructionVisibility,
     );
 
     if (xOnlyMove.accepted) {
@@ -1378,7 +1722,8 @@ export default function BoothGenerator() {
       selectedBooth,
       component,
       component.xMm,
-      Math.round(snapped.y),
+      snapped.y,
+      constructionVisibility,
     );
 
     if (yOnlyMove.accepted) {
@@ -1403,10 +1748,9 @@ export default function BoothGenerator() {
   function handleComponentPointerUp(
     event: ReactPointerEvent<HTMLButtonElement>
   ) {
-    setDraggingComponentId(
-      null
-    );
-
+    if (componentDragSessionRef.current?.pointerId === event.pointerId) {
+      componentDragSessionRef.current = null;
+    }
     if (
       event.currentTarget.hasPointerCapture(
         event.pointerId
@@ -1679,6 +2023,7 @@ export default function BoothGenerator() {
       selectedPlacedComponent,
       axis === "x" ? valueMm : selectedPlacedComponent.xMm,
       axis === "y" ? valueMm : selectedPlacedComponent.yMm,
+      constructionVisibility,
     );
 
     if (!move.accepted) {
@@ -1829,6 +2174,352 @@ export default function BoothGenerator() {
 
     setEditorMessage("");
   }
+
+  /* ================================================= */
+  /* INDIVIDUAL: PLOCHA / PODLAHA PANELS              */
+  /* ================================================= */
+
+  // Report sections 2-4: the workspace is a user-resizable DRAWING CANVAS, never the booth area
+  // itself (individualWorkspace stays a completely separate concept from individualPlotPolygon —
+  // see domain/plot.ts). A shrink that would leave part of the ALREADY-DRAWN plot outside the new
+  // canvas is rejected outright (never a silent clip/delete of the polygon) — the user must either
+  // pick a larger workspace or edit/shrink the plot itself first.
+  function resizeIndividualWorkspace(widthMm: number, depthMm: number) {
+    const nextWorkspace: IndividualWorkspace = { widthMm, depthMm };
+    if (individualPlotPolygon && !isPolygonWithinWorkspace(individualPlotPolygon, nextWorkspace)) {
+      setIndividualWorkspaceSizeError("Nová pracovní plocha je menší, než nakreslená plocha stánku — zvětši ji, nebo nejdřív uprav (zmenši) plochu stánku.");
+      return;
+    }
+    setIndividualWorkspaceSizeError(null);
+    setIndividualWorkspaceWidthMm(widthMm);
+    setIndividualWorkspaceDepthMm(depthMm);
+  }
+
+  // Report sections 5-11: rectangle-primitive authoring — insert/select(via row)/move-by-250mm/
+  // rotate-90/delete/duplicate, plus the union action that actually produces a real PlotPolygon.
+  function addPrimitive() {
+    const anchor = individualPlotPolygon
+      ? resolveDefaultAnchorOnPlot(individualPlotPolygon)
+      : { x: individualWorkspace.widthMm / 2, y: individualWorkspace.depthMm / 2 };
+    const primitive = createRectanglePrimitive({ id: crypto.randomUUID(), xMm: anchor.x, yMm: anchor.y });
+    setIndividualPlotPrimitives((items) => [...items, primitive]);
+    setPrimitiveMergeError(null);
+  }
+
+  function updatePrimitive(id: string, patch: Partial<Pick<RectanglePrimitive, "xMm" | "yMm" | "widthMm" | "depthMm">>) {
+    setIndividualPlotPrimitives((items) => items.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  }
+
+  function movePrimitiveByGrid(id: string, dxMm: number, dyMm: number) {
+    setIndividualPlotPrimitives((items) => items.map((item) => (item.id === id ? { ...item, xMm: item.xMm + dxMm, yMm: item.yMm + dyMm } : item)));
+  }
+
+  function rotatePrimitiveById(id: string) {
+    setIndividualPlotPrimitives((items) => items.map((item) => (item.id === id ? rotatePrimitive90(item) : item)));
+  }
+
+  function duplicatePrimitiveById(id: string) {
+    setIndividualPlotPrimitives((items) => {
+      const source = items.find((item) => item.id === id);
+      return source ? [...items, duplicatePrimitive(source, crypto.randomUUID())] : items;
+    });
+  }
+
+  function deletePrimitive(id: string) {
+    setIndividualPlotPrimitives((items) => items.filter((item) => item.id !== id));
+  }
+
+  function mergePrimitivesIntoPlot() {
+    const result = mergePrimitivesToPolygon(individualPlotPrimitives);
+    if (result.status === "merged") {
+      setPrimitiveMergeError(null);
+      setIndividualPlotPolygon(result.polygon);
+      return;
+    }
+    setPrimitiveMergeError(
+      result.status === "no-primitives"
+        ? "Nejdřív vlož alespoň jeden obdélník."
+        : `Obdélníky netvoří jednu souvislou plochu (${result.regionCount} oddělené části) — posuň je tak, aby se dotýkaly nebo překrývaly.`,
+    );
+  }
+
+  function addFloorZone() {
+    // Report section 12 root cause (1/2): `Date.now()`-based ids can collide on two rapid
+    // consecutive adds — crypto.randomUUID() (same convention as addComponent/projectSnapshot)
+    // is collision-safe.
+    const id = crypto.randomUUID();
+    // Report section 12 root cause (2/2): a default rectangle ALWAYS anchored at world (0,0) meant
+    // two freshly-added zones (before either was moved) were geometrically IDENTICAL — indistinguishable
+    // on screen, which is exactly what read as "duplicate zones". Centering the default on the plot's
+    // own safe interior anchor fixes the common case; "Vyplnit volnou plochu" (below) is the real
+    // production answer for adding a second/third zone without manual repositioning.
+    const anchor = individualPlotPolygon ? resolveDefaultAnchorOnPlot(individualPlotPolygon) : { x: 500, y: 500 };
+    const polygon = createRectanglePlotPolygon(1000, 1000).map((vertex) => ({ x: vertex.x + anchor.x - 500, y: vertex.y + anchor.y - 500 }));
+    const zone = createFloorZone({ id, polygon });
+    setIndividualFloorZones((zones) => [...zones, zone]);
+    setEditingFloorZoneId(id);
+  }
+
+  // Report sections 16-18: fills the currently-edited zone's polygon with the real remaining free
+  // area (plot minus other CONFIRMED zones). When the free area is split into more than one
+  // disconnected region (see domain/floorZones.ts's freeFloorAreaRegions doc comment for why),
+  // the LARGEST region is used and the caller is told the fill was partial — never a fake
+  // connecting edge between the pieces, never silently dropping the rest.
+  function fillFreeFloorArea(zoneId: string) {
+    if (!individualPlotPolygon) return;
+    const regions = freeFloorAreaRegions(individualPlotPolygon, individualFloorZones);
+    if (regions.length === 0) {
+      setEditorMessage("Volná plocha už je 0 m² — celý booth je pokrytý potvrzenými zónami.");
+      return;
+    }
+    const largest = regions.reduce((best, region) => (plotAreaSquareMeters(region) > plotAreaSquareMeters(best) ? region : best));
+    updateFloorZone(zoneId, { polygon: largest });
+    setEditorMessage(
+      regions.length > 1
+        ? `Vyplněna pouze největší volná oblast (${plotAreaSquareMeters(largest).toFixed(2)} m²) — volná plocha je rozdělená na ${regions.length} samostatné části.`
+        : "",
+    );
+  }
+
+  function updateFloorZone(id: string, patch: Partial<Pick<FloorZone, "base" | "finish" | "label" | "colorLabel" | "polygon">>) {
+    setIndividualFloorZones((zones) => zones.map((zone) => (zone.id === id ? { ...zone, ...patch } : zone)));
+  }
+
+  function deleteFloorZone(id: string) {
+    setIndividualFloorZones((zones) => zones.filter((zone) => zone.id !== id));
+    if (editingFloorZoneId === id) setEditingFloorZoneId(null);
+  }
+
+  // Report sections 1/8: confirm/unlock — the same draft<->confirmed pattern applied to both the
+  // plot itself and each floor zone. Confirming is HARD-gated on validity (never "save now, warn
+  // later"); unlocking is always allowed (it only ever loosens a constraint).
+  function confirmIndividualPlot() {
+    if (canConfirmPlot(individualPlotPolygon)) setIndividualPlotStatus("confirmed");
+  }
+
+  function unlockIndividualPlot() {
+    setIndividualPlotStatus("draft");
+  }
+
+  function confirmFloorZoneById(id: string) {
+    if (!individualPlotPolygon) return;
+    const zone = individualFloorZones.find((candidate) => candidate.id === id);
+    if (!zone) return;
+    const result = validateFloorZoneForConfirm(zone, individualPlotPolygon, individualFloorZones);
+    if (!result.valid) return;
+    setIndividualFloorZones((zones) => zones.map((candidate) => (candidate.id === id ? confirmFloorZone(candidate) : candidate)));
+  }
+
+  function unlockFloorZoneById(id: string) {
+    setIndividualFloorZones((zones) => zones.map((candidate) => (candidate.id === id ? unlockFloorZone(candidate) : candidate)));
+  }
+
+  // Report section 14: the summary — like uncoveredFloorAreaSquareMeters, only CONFIRMED zones
+  // count toward "explicit zones" / "bez krytiny" so the two numbers stay mutually consistent; a
+  // zone still being drawn/edited isn't reserved yet.
+  const confirmedFloorZones = individualFloorZones.filter(isFloorZoneConfirmed);
+  const floorAreaTotals = totalFloorAreaByFinish(confirmedFloorZones);
+  const confirmedFloorZonesAreaM2 = confirmedFloorZones.reduce((sum, zone) => sum + plotAreaSquareMeters(zone.polygon), 0);
+  const uncoveredFloorAreaM2 = individualPlotPolygon ? uncoveredFloorAreaSquareMeters(individualPlotPolygon, individualFloorZones) : 0;
+  const editingFloorZone = individualFloorZones.find((zone) => zone.id === editingFloorZoneId);
+  const editingFloorZoneConfirmed = editingFloorZone ? isFloorZoneConfirmed(editingFloorZone) : false;
+  const editingFloorZoneConfirmResult =
+    editingFloorZone && individualPlotPolygon
+      ? validateFloorZoneForConfirm(editingFloorZone, individualPlotPolygon, individualFloorZones)
+      : null;
+
+  const individualPlotSubStepPanel =
+    type !== "individualni" ? null : individualSubStep === "plocha" ? (
+      <section className="individualSubStepPanel">
+        {constructionOutsidePlotIds.length > 0 && (
+          <p className="uploadError persistenceBanner">
+            {constructionOutsidePlotIds.length} {constructionOutsidePlotIds.length === 1 ? "prvek konstrukce je" : "prvky/prvků konstrukce jsou"} mimo aktuální plochu stánku — přesuň je, smaž je, nebo uprav plochu zpět.
+          </p>
+        )}
+        {/* Report section 2-4: workspace = drawing canvas only, NEVER the booth area (that's
+            individualPlotPolygon, drawn below) — user-resizable, shrink is rejected (not
+            silently clipped) if it would leave the already-drawn plot outside the new canvas. */}
+        <div className="individualWorkspaceSizeBar">
+          <span className="individualWorkspaceSizeLabel">PRACOVNÍ PLOCHA (jen canvas, ne plocha stánku)</span>
+          <PlotSizeInput label="ŠÍŘKA" value={individualWorkspaceWidthMm} onCommit={(width) => resizeIndividualWorkspace(width, individualWorkspaceDepthMm)} />
+          <PlotSizeInput label="HLOUBKA" value={individualWorkspaceDepthMm} onCommit={(depth) => resizeIndividualWorkspace(individualWorkspaceWidthMm, depth)} />
+        </div>
+        {individualWorkspaceSizeError && <p className="uploadError persistenceBanner">{individualWorkspaceSizeError}</p>}
+
+        {/* Report sections 5-11: rectangle-primitive authoring — an ALTERNATIVE to point-by-point
+            polygon drawing (below), never a replacement for it. "Sloučit do plochy stánku" is the
+            only action that actually writes individualPlotPolygon; the primitive list itself is
+            just an authoring helper. */}
+        {!isIndividualPlotConfirmed && (
+          <div className="primitiveBuilder">
+            <span className="individualWorkspaceSizeLabel">OBDÉLNÍKOVÉ PRIMITIVY (rychlé skládání plochy)</span>
+            {individualPlotPrimitives.length === 0 && <p className="libraryHint">Zatím žádné primitivy — buď kresli plochu ručně výše, nebo vlož obdélníky a slouč je do plochy.</p>}
+            <div className="primitiveList">
+              {individualPlotPrimitives.map((primitive, index) => (
+                <div key={primitive.id} className="primitiveRow">
+                  <span className="primitiveRowLabel">#{index + 1}</span>
+                  <PlotSizeInput label="Š" value={primitive.widthMm} onCommit={(width) => updatePrimitive(primitive.id, { widthMm: width })} />
+                  <PlotSizeInput label="H" value={primitive.depthMm} onCommit={(depth) => updatePrimitive(primitive.id, { depthMm: depth })} />
+                  <span className="primitiveMoveGroup">
+                    <button type="button" className="lightButton" title="Posunout doleva o 250mm" onClick={() => movePrimitiveByGrid(primitive.id, -INDIVIDUAL_GRID_MM, 0)}>←</button>
+                    <button type="button" className="lightButton" title="Posunout doprava o 250mm" onClick={() => movePrimitiveByGrid(primitive.id, INDIVIDUAL_GRID_MM, 0)}>→</button>
+                    <button type="button" className="lightButton" title="Posunout nahoru o 250mm" onClick={() => movePrimitiveByGrid(primitive.id, 0, -INDIVIDUAL_GRID_MM)}>↑</button>
+                    <button type="button" className="lightButton" title="Posunout dolů o 250mm" onClick={() => movePrimitiveByGrid(primitive.id, 0, INDIVIDUAL_GRID_MM)}>↓</button>
+                  </span>
+                  <button type="button" className="lightButton" title="Otočit o 90°" onClick={() => rotatePrimitiveById(primitive.id)}>⟳ {primitive.rotationDeg}°</button>
+                  <button type="button" className="lightButton" onClick={() => duplicatePrimitiveById(primitive.id)}>Duplikovat</button>
+                  <button type="button" className="lightButton" onClick={() => deletePrimitive(primitive.id)}>Smazat</button>
+                </div>
+              ))}
+            </div>
+            <div className="primitiveActionsBar">
+              <button type="button" className="lightButton" onClick={addPrimitive}>+ Přidat obdélník</button>
+              <button type="button" className="primaryButton" disabled={individualPlotPrimitives.length === 0} onClick={mergePrimitivesIntoPlot}>
+                Sloučit do plochy stánku
+              </button>
+            </div>
+            {primitiveMergeError && <p className="uploadError persistenceBanner">{primitiveMergeError}</p>}
+          </div>
+        )}
+
+        <PlotPolygonEditor
+          workspace={individualWorkspace}
+          polygon={individualPlotPolygon}
+          onPolygonChange={setIndividualPlotPolygon}
+          quickRectangleDefaultWidthMm={individualWidthMm}
+          quickRectangleDefaultDepthMm={individualDepthMm}
+          readOnly={isIndividualPlotConfirmed}
+          referenceShapes={individualPlotPrimitives.map((primitive) => ({ id: primitive.id, polygon: rectanglePrimitivePolygon(primitive), className: "plotPrimitiveShape" }))}
+        />
+        <div className="individualPlotLockBar">
+          {isIndividualPlotConfirmed ? (
+            <>
+              <span className="individualStepStatusConfirmed">✓ Plocha potvrzena a zamčena.</span>
+              <button type="button" className="lightButton" onClick={unlockIndividualPlot}>Upravit plochu</button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="primaryButton"
+              disabled={!canConfirmPlot(individualPlotPolygon)}
+              onClick={confirmIndividualPlot}
+            >
+              Potvrdit plochu / Zamknout plochu stánku
+            </button>
+          )}
+          <button
+            type="button"
+            className="primaryButton"
+            disabled={!isIndividualPlotStepComplete}
+            onClick={() => setIndividualSubStep("podlaha")}
+          >
+            Další – Podlaha
+          </button>
+        </div>
+      </section>
+    ) : individualSubStep === "podlaha" ? (
+      <section className="individualSubStepPanel">
+        {!isIndividualPlotConfirmed && (
+          <p className="temporaryNotice persistenceBanner">Plocha stánku ještě není potvrzená — nejdřív ji potvrď v kroku "Plocha".</p>
+        )}
+        {floorZoneConflicts.length > 0 && (
+          <p className="uploadError persistenceBanner">
+            {floorZonesOutsidePlot.length > 0 && `${floorZonesOutsidePlot.length} podlahová zóna mimo plochu. `}
+            {overlappingFloorZonePairs.length > 0 && `${overlappingFloorZonePairs.length} překryv zón.`}
+          </p>
+        )}
+        <div className="floorZoneSummary">
+          <span>Celková plocha stánku: <strong>{individualPlotPolygon ? plotAreaSquareMeters(individualPlotPolygon).toFixed(2) : "0.00"} m²</strong></span>
+          <span>Explicitní zóny: <strong>{confirmedFloorZonesAreaM2.toFixed(2)} m²</strong></span>
+          <span>Bez krytiny: <strong>{uncoveredFloorAreaM2.toFixed(2)} m²</strong></span>
+          {FLOOR_ZONE_FINISHES.filter((finish) => finish !== "none").map((finish) => floorAreaTotals[finish] > 0 && (
+            <span key={finish}>{FLOOR_ZONE_FINISH_LABELS_CS[finish]}: <strong>{floorAreaTotals[finish].toFixed(2)} m²</strong></span>
+          ))}
+        </div>
+        <div className="floorZoneList">
+          {individualFloorZones.length === 0 && <p className="libraryHint">Zatím žádné zóny — celá plocha je "Bez krytiny".</p>}
+          {individualFloorZones.map((zone) => {
+            const zoneConfirmed = isFloorZoneConfirmed(zone);
+            return (
+              <div key={zone.id} className={editingFloorZoneId === zone.id ? "floorZoneRow active" : "floorZoneRow"}>
+                <button type="button" className="lightButton" onClick={() => setEditingFloorZoneId(zone.id)}>
+                  {zoneConfirmed ? "✓ " : ""}{zone.label || "Zóna"} · {plotAreaSquareMeters(zone.polygon).toFixed(2)} m²
+                </button>
+                <select disabled={zoneConfirmed} value={zone.base} onChange={(event) => updateFloorZone(zone.id, { base: event.target.value as FloorZone["base"] })}>
+                  {FLOOR_ZONE_BASES.map((base) => <option key={base} value={base}>{FLOOR_ZONE_BASE_LABELS_CS[base]}</option>)}
+                </select>
+                <select disabled={zoneConfirmed} value={zone.finish} onChange={(event) => updateFloorZone(zone.id, { finish: event.target.value as FloorZone["finish"] })}>
+                  {FLOOR_ZONE_FINISHES.map((finish) => <option key={finish} value={finish}>{FLOOR_ZONE_FINISH_LABELS_CS[finish]}</option>)}
+                </select>
+                <input
+                  type="text"
+                  className="floorZoneColorInput"
+                  placeholder="Barva / dekor (např. Černý)"
+                  disabled={zoneConfirmed}
+                  value={zone.colorLabel ?? ""}
+                  onChange={(event) => updateFloorZone(zone.id, { colorLabel: event.target.value || undefined })}
+                />
+                {zoneConfirmed ? (
+                  <button type="button" className="lightButton" onClick={() => unlockFloorZoneById(zone.id)}>Upravit zónu</button>
+                ) : (
+                  <button
+                    type="button"
+                    className="lightButton"
+                    disabled={!individualPlotPolygon || !validateFloorZoneForConfirm(zone, individualPlotPolygon, individualFloorZones).valid}
+                    onClick={() => confirmFloorZoneById(zone.id)}
+                  >
+                    Potvrdit zónu
+                  </button>
+                )}
+                <button type="button" className="lightButton" onClick={() => deleteFloorZone(zone.id)}>Smazat</button>
+              </div>
+            );
+          })}
+          <button type="button" className="lightButton" onClick={addFloorZone}>+ Přidat zónu</button>
+        </div>
+        {editingFloorZoneConfirmResult && !editingFloorZoneConfirmResult.valid && (
+          <p className="uploadError persistenceBanner">
+            {editingFloorZoneConfirmResult.issues.map((issue) => FLOOR_ZONE_CONFIRM_ISSUE_LABELS_CS[issue] ?? issue).join(" ")}
+          </p>
+        )}
+        {editingFloorZone && !editingFloorZoneConfirmed && (
+          <div className="individualPlotLockBar">
+            <button type="button" className="lightButton" onClick={() => fillFreeFloorArea(editingFloorZone.id)}>
+              Vyplnit volnou plochu
+            </button>
+          </div>
+        )}
+        {individualPlotPolygon && (
+          <PlotPolygonEditor
+            // Remounts (fresh viewport fit + fresh draw state) whenever the user switches which
+            // zone they're editing — a shared instance would otherwise carry over stale
+            // draft/isDrawing state and viewport transform from whatever zone was open before.
+            // "no-zone-selected" is its own remount identity too, so the plot-boundary preview
+            // (report section 2) always starts from a clean, freshly-fit state.
+            key={editingFloorZone?.id ?? "no-zone-selected"}
+            workspace={individualWorkspace}
+            polygon={editingFloorZone?.polygon}
+            onPolygonChange={(polygon) => editingFloorZone && updateFloorZone(editingFloorZone.id, { polygon })}
+            readOnly={!editingFloorZone || editingFloorZoneConfirmed}
+            boundaryPolygon={individualPlotPolygon}
+            referenceShapes={[
+              { id: "plot", polygon: individualPlotPolygon, className: "plotReferenceShape" },
+              ...individualFloorZones.filter((zone) => zone.id !== editingFloorZone?.id).map((zone) => ({ id: zone.id, polygon: zone.polygon })),
+            ]}
+          />
+        )}
+        <div className="individualPlotLockBar">
+          <button
+            type="button"
+            className="primaryButton"
+            disabled={!isIndividualFloorStepComplete}
+            onClick={() => setIndividualSubStep("konstrukce")}
+          >
+            Další – Konstrukce
+          </button>
+        </div>
+      </section>
+    ) : null;
 
   /* ================================================= */
   /* RENDER                                           */
@@ -2542,14 +3233,20 @@ export default function BoothGenerator() {
                 </span>
 
                 <h1>
-                  Vyber základ konstrukce
+                  {type === "individualni" ? "Zadej velikost plochy" : "Vyber základ konstrukce"}
                 </h1>
 
                 <p>
-                  Nejprve vyber typ stánku.
-                  Pokud konstrukce obsahuje více
-                  variant, zobrazí se jejich
-                  výběr automaticky.
+                  {type === "individualni" ? (
+                    "Zadej šířku a hloubku plochy stánku. Konstrukci pak poskládáš z komponent v konfigurátoru."
+                  ) : (
+                    <>
+                      Nejprve vyber typ stánku.
+                      Pokud konstrukce obsahuje více
+                      variant, zobrazí se jejich
+                      výběr automaticky.
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -2865,21 +3562,60 @@ export default function BoothGenerator() {
                   )}
               </>
             ) : (
-              <div className="individualPlaceholder">
-                <span>
-                  INDIVIDUÁLNÍ PROJEKT
-                </span>
+              <section className="boothSelectionSection individualPlotSection">
+                <div className="selectionTitle">
+                  <div>
+                    <span>01</span>
 
-                <h2>
-                  Editor vlastního půdorysu
-                </h2>
+                    <div>
+                      <small>PLOCHA</small>
 
-                <p>
-                  Individuální konstrukce
-                  připravíme jako samostatnou
-                  část generátoru.
-                </p>
-              </div>
+                      <h2>{individualPlotPolygon ? "Plocha stánku" : "Rychlý start"}</h2>
+                    </div>
+                  </div>
+
+                  <p>
+                    {individualPlotPolygon
+                      ? "Reálný tvar plochy nakreslíš nebo upravíš v konfigurátoru, v kroku Plocha."
+                      : "Zadej rychlý obdélníkový základ. Skutečný (i nepravoúhlý) tvar plochy nakreslíš v konfigurátoru, v kroku Plocha — 45° hrany a L/U tvary jsou podporované."}
+                  </p>
+                </div>
+
+                {!individualPlotPolygon && (
+                  <div className="individualPlotForm">
+                    <PlotSizeInput
+                      label="ŠÍŘKA"
+                      value={individualWidthMm}
+                      onCommit={setIndividualWidthMm}
+                    />
+                    <PlotSizeInput
+                      label="HLOUBKA"
+                      value={individualDepthMm}
+                      onCommit={setIndividualDepthMm}
+                    />
+                  </div>
+                )}
+
+                <div className="noVariantInfo">
+                  <div className="noVariantIcon">✓</div>
+
+                  <div>
+                    <strong>
+                      {individualPlotPolygon
+                        ? individualBooth?.size
+                        : `${individualWidthMm / 1000} × ${individualDepthMm / 1000} m`}
+                      {" "}
+                      ({individualPlotPolygon ? individualBooth?.area : `${Math.round((individualWidthMm * individualDepthMm) / 1_000_000)} m²`})
+                    </strong>
+
+                    <p>
+                      Vytvoří se prázdná plocha stánku bez konstrukce.
+                      Komponenty stánku (sloupky, panely, dveře, …) vložíš
+                      v kroku Konstrukce, mobiliář až v kroku Mobiliář.
+                    </p>
+                  </div>
+                </div>
+              </section>
             )}
 
             <footer className="pageFooter">
@@ -2901,6 +3637,12 @@ export default function BoothGenerator() {
                   if (
                     canOpenConfigurator
                   ) {
+                    if (type === "individualni" && !individualPlotPolygon) {
+                      setIndividualPlotPolygon(createCenteredRectanglePlotPolygon(individualWorkspace, individualWidthMm, individualDepthMm));
+                    }
+                    if (type === "individualni") {
+                      setIndividualSubStep("plocha");
+                    }
                     setStep(
                       3
                     );
@@ -2936,7 +3678,7 @@ export default function BoothGenerator() {
                       setStep(2)
                     }
                   >
-                    ← Zpět na výběr stánku
+                    {type === "individualni" ? "← Zpět na velikost plochy" : "← Zpět na výběr stánku"}
                   </button>
 
                   <span className="eyebrow">
@@ -2962,15 +3704,63 @@ export default function BoothGenerator() {
                 </div>
               </div>
 
+              {/* INDIVIDUAL SUB-STEP NAVIGATION — persistent tabs over ONE ProjectRecord
+                  (report section 2): switching tabs never clears sceneObjects/polygon/floor
+                  zones, unlike the old destructive-wizard step model. */}
+              {type === "individualni" && (
+                <nav className="individualSubStepNav" aria-label="Kroky individuálního stánku">
+                  {INDIVIDUAL_SUB_STEPS.map((subStep, index) => (
+                    <button
+                      key={subStep}
+                      type="button"
+                      className={individualSubStep === subStep ? "individualSubStepTab active" : "individualSubStepTab"}
+                      onClick={() => setIndividualSubStep(subStep)}
+                    >
+                      <span>{index + 1}</span>
+                      {INDIVIDUAL_SUB_STEP_LABELS_CS[subStep]}
+                      {subStep === "plocha" && isIndividualPlotStepComplete && <em className="subStepDone">✓</em>}
+                      {subStep === "podlaha" && isIndividualFloorStepComplete && <em className="subStepDone">✓</em>}
+                      {subStep === "konstrukce" && constructionOutsidePlotIds.length > 0 && <em className="subStepWarning">⚠</em>}
+                      {subStep === "podlaha" && floorZoneConflicts.length > 0 && <em className="subStepWarning">⚠</em>}
+                    </button>
+                  ))}
+                </nav>
+              )}
+
+              {individualPlotSubStepPanel}
+
+              {type === "individualni" && individualSubStep === "konstrukce" && (
+                <div className="individualPlotLockBar">
+                  <button type="button" className="primaryButton" onClick={() => setIndividualSubStep("mobiliar")}>
+                    Další – Mobiliář
+                  </button>
+                </div>
+              )}
+
               {/* WORKSPACE */}
 
+              {(type !== "individualni" || individualSubStep === "konstrukce" || individualSubStep === "mobiliar") && (
               <div className="configuratorWorkspace">
                 {/* COMPONENT LIBRARY */}
 
-                <ComponentLibrary
-                  onAddComponent={addComponent}
-                  inventory={orderInventory}
-                />
+                {/* Report section 39-41: Konstrukce and Mobiliář are two DIFFERENT catalog
+                    sources sharing one scene — booth_component (DB-backed) for Konstrukce, the
+                    SAME production furniture/service catalog typovka already uses for Mobiliář.
+                    type === "individualni" alone used to always render BoothComponentLibrary,
+                    even on the "mobiliar" sub-step — a real switch on individualSubStep, not just
+                    a renamed tab, and never a second ComponentLibrary/furniture catalog. */}
+                {type === "individualni" && individualSubStep === "konstrukce" ? (
+                  <BoothComponentLibrary
+                    items={dbBoothComponents}
+                    error={boothComponentsError}
+                    onAddComponent={addComponent}
+                  />
+                ) : (
+                  <ComponentLibrary
+                    onAddComponent={addComponent}
+                    inventory={orderInventory}
+                  />
+                )}
 
                 {/* PLAN */}
 
@@ -3015,11 +3805,7 @@ export default function BoothGenerator() {
                       </span>
 
                       <span>
-                        SNAP 40 mm
-                      </span>
-
-                      <span className="collisionOn">
-                        KOLIZE ON
+                        {type === "individualni" ? "SNAP 250 mm" : "SNAP 40 mm"}
                       </span>
 
                       {editorView === "2d" && <div className="planToolButtons">
@@ -3052,11 +3838,11 @@ export default function BoothGenerator() {
                       </button>
 
                       <ViewportToolbar
-                        zoomPercent={boothViewport.zoomPercent}
-                        onZoomOut={boothViewport.zoomOut}
-                        onZoomIn={boothViewport.zoomIn}
-                        onFit={() => boothViewport.fitToContent(scenePlanBounds(selectedBooth.widthMm!, selectedBooth.depthMm!, placedComponents))}
-                        onReset={boothViewport.resetZoom}
+                        zoomPercent={editorView === "3d" ? booth3DZoomPercent : boothViewport.zoomPercent}
+                        onZoomOut={editorView === "3d" ? () => booth3DCameraControlsRef.current?.zoomOut() : boothViewport.zoomOut}
+                        onZoomIn={editorView === "3d" ? () => booth3DCameraControlsRef.current?.zoomIn() : boothViewport.zoomIn}
+                        onFit={editorView === "3d" ? () => booth3DCameraControlsRef.current?.fit() : () => boothViewport.fitToContent(individualPlotFitBounds ?? scenePlanBounds(selectedBooth.widthMm!, selectedBooth.depthMm!, placedComponents))}
+                        onReset={editorView === "3d" ? () => booth3DCameraControlsRef.current?.reset() : boothViewport.resetZoom}
                       />
                     </div>
                   </div>
@@ -3228,26 +4014,73 @@ export default function BoothGenerator() {
                       onPointerDown={handlePlanToolPointerDown}
                       onPointerMove={handlePlanToolPointerMove}
                     >
-                      {/* CARPET */}
+                      {/* CARPET — typovka only. Report section 22/24: for Individual this whole-
+                          canvas rect used to fill the ENTIRE boothCanvas (workspace size, not the
+                          real plot) with a solid grey/colored block regardless of the booth's real
+                          shape — the "grey workspace" bug. Individual flooring is exclusively the
+                          Podlaha step's floorZones (see the plotOutlineOverlay block below, and
+                          ScenePanel's own showFloorControl gate for the legacy carpet CONTROL). */}
 
-                      <div
-                        className={`carpetLayer ${carpetFinishId === "none" ? "noCarpet" : ""}`}
-                        style={carpetFinishId === "none" ? undefined : { backgroundColor: selectedCarpetFinish?.swatchColor }}
-                      >
-                        <span className="carpetLabel">
-                          {carpetFinishId === "none" ? "BEZ KOBERCE" : `KOBEREC · ${selectedCarpetFinish?.name ?? "—"}`}
-                        </span>
-                      </div>
+                      {type !== "individualni" && (
+                        <div
+                          className={`carpetLayer ${carpetFinishId === "none" ? "noCarpet" : ""}`}
+                          style={carpetFinishId === "none" ? undefined : { backgroundColor: selectedCarpetFinish?.swatchColor }}
+                        >
+                          <span className="carpetLabel">
+                            {carpetFinishId === "none" ? "BEZ KOBERCE" : `KOBEREC · ${selectedCarpetFinish?.name ?? "—"}`}
+                          </span>
+                        </div>
+                      )}
 
-                      {/* CAD-DERIVED CONSTRUCTION PLAN */}
+                      {/* CANONICAL NOMINAL-MM CONSTRUCTION PLAN */}
 
-                      <BoothCadPlanView
+                      <BoothConstructionPlanView
+                        key={selectedBoothPlanVisualKey}
+                        booth={selectedBooth}
                         asset={selectedBoothMasterModel}
-                        footprintWidthMm={selectedBooth.widthMm}
-                        footprintDepthMm={selectedBooth.depthMm}
+                        constructionVisibility={constructionVisibility}
                         visible={constructionAssemblyVisible}
                         selected={selectedConstructionPartId !== null}
+                        onVisualReadyChange={handleBoothPlanVisualReadyChange}
                       />
+
+                      {/* INDIVIDUAL PLOT + FLOOR ZONES — same worldToPlanView convention as
+                          everything else on this canvas (report section 22-25). Outside the real
+                          (possibly L/U/triangle) plot boundary is dimmed (same evenodd-mask
+                          technique as PlotPolygonEditor's boundaryPolygon — reused polygon
+                          geometry, never a second coordinate system); the plot itself gets a
+                          neutral "uncovered" technical fill (never material-styled — that's
+                          reserved for confirmed zones); each CONFIRMED zone is its own separately
+                          filled region drawn on top (never "whole workspace grey + one zone") —
+                          the layering alone makes the visible remainder correct with no polygon
+                          difference needed for rendering. Draft/unconfirmed zones stay outline-
+                          only, matching the existing (unchanged) pre-lock visual. */}
+                      {type === "individualni" && individualPlotPolygon && (
+                        <div className="plotOutlineOverlay" aria-hidden="true">
+                          <svg viewBox={`0 0 ${selectedBooth.widthMm} ${selectedBooth.depthMm}`} preserveAspectRatio="none">
+                            <path
+                              className="plotOutsideMask"
+                              fillRule="evenodd"
+                              d={`M0,0 L${selectedBooth.widthMm},0 L${selectedBooth.widthMm},${selectedBooth.depthMm} L0,${selectedBooth.depthMm} Z ${individualPlotPolygon.map((point, index) => { const p = worldToPlanView(point, selectedBooth.widthMm!, selectedBooth.depthMm!); return `${index === 0 ? "M" : "L"}${p.x},${p.y}`; }).join(" ")} Z`}
+                            />
+                            <polygon
+                              className="plotUncoveredFill"
+                              points={individualPlotPolygon.map((point) => { const p = worldToPlanView(point, selectedBooth.widthMm!, selectedBooth.depthMm!); return `${p.x},${p.y}`; }).join(" ")}
+                            />
+                            <polygon
+                              className="plotOutlineShape"
+                              points={individualPlotPolygon.map((point) => { const p = worldToPlanView(point, selectedBooth.widthMm!, selectedBooth.depthMm!); return `${p.x},${p.y}`; }).join(" ")}
+                            />
+                            {individualFloorZones.map((zone) => (
+                              <polygon
+                                key={zone.id}
+                                className={isFloorZoneConfirmed(zone) ? `plotOutlineFloorZone plotFloorZoneFill-${zone.finish}` : "plotOutlineFloorZone"}
+                                points={zone.polygon.map((point) => { const p = worldToPlanView(point, selectedBooth.widthMm!, selectedBooth.depthMm!); return `${p.x},${p.y}`; }).join(" ")}
+                              />
+                            ))}
+                          </svg>
+                        </div>
+                      )}
 
                       {editorTool === "measure" && measureHoverPoint && (() => {
                         const hover = worldToPlanView(measureHoverPoint, selectedBooth.widthMm!, selectedBooth.depthMm!);
@@ -3276,11 +4109,13 @@ export default function BoothGenerator() {
                               className={[
                                 "placedComponent",
 
-                                item.sceneLayer !== "furniture"
-                                  ? `technicalComponent ${item.sceneLayer}`
-                                  : item.type === "chair"
-                                    ? "chairComponent"
-                                    : "cabinetComponent",
+                                item.sceneLayer === "booth"
+                                  ? "constructionComponent"
+                                  : isTechnicalPointLayer(item.sceneLayer)
+                                    ? `technicalComponent ${item.sceneLayer}`
+                                    : item.type === "chair"
+                                      ? "chairComponent"
+                                      : "cabinetComponent",
 
                                 selected
                                   ? "selected"
@@ -3335,6 +4170,7 @@ export default function BoothGenerator() {
                               onPointerUp={
                                 handleComponentPointerUp
                               }
+                              onPointerCancel={handleComponentPointerUp}
                             >
                               {item.frontDirectionDeg !== undefined && (
                                 // ▼ (not ▲) to match .frontMarker's bottom-anchored baseline —
@@ -3353,7 +4189,7 @@ export default function BoothGenerator() {
                               )}
 
                               <span className="placedComponentName">
-                                {item.sceneLayer !== "furniture"
+                                {isTechnicalPointLayer(item.sceneLayer)
                                   ? componentCatalogItems.find(
                                       (definition) => definition.id === item.definitionId,
                                     )?.footprint2D?.symbol ?? item.name
@@ -3415,6 +4251,11 @@ export default function BoothGenerator() {
                     <div className="cadViewerMode">
                       <BoothCadViewer
                         asset={selectedBoothMasterModel}
+                        boothAsset={selectedBooth.boothAsset}
+                        constructionVisibility={constructionVisibility}
+                        boothVisible={constructionAssemblyVisible}
+                        cameraControlsRef={booth3DCameraControlsRef}
+                        onCameraZoomPercentChange={setBooth3DZoomPercent}
                         footprintWidthMm={selectedBooth.widthMm}
                         footprintDepthMm={selectedBooth.depthMm}
                         components={placedComponents}
@@ -3423,30 +4264,17 @@ export default function BoothGenerator() {
                         partDefinitions={selectedBooth.partDefinitions}
                         nominalDimensions={selectedBooth.nominalDimensions}
                         printSurfaces={selectedBooth.printSurfaces}
+                        floorPolygon={type === "individualni" ? individualPlotPolygon : undefined}
                         showPrintPlaceholder={printSurfaceAssignments.some((assignment) => assignment.selectedForPrint && assignment.artworkStatus === "missing")}
                         measurements={measurements3D}
                         onMeasurementsChange={(items) => setMeasurements3D([...items])}
                         dimensionOffsets={dimensionOffsets3D}
                         onDimensionOffsetsChange={(offsets) => setDimensionOffsets3D({ ...offsets })}
                         printSurfaceAssignments={printSurfaceAssignments}
+                        graphicsFiles={graphicsFiles}
                         selectedPrintSurfaceId={selectedPrintSurfaceId}
                         onSelectPrintSurface={setSelectedPrintSurfaceId}
                         defaultViews={selectedBooth.defaultViews}
-                        savedViews={savedViews}
-                        onSaveView={(view) =>
-                          setSavedViews((items) => [
-                            ...items,
-                            saveCameraView({
-                              ...view,
-                              name: `Vlastní pohled ${items.length + 1}`,
-                            }),
-                          ])
-                        }
-                        onDeleteView={(viewId) =>
-                          setSavedViews((items) =>
-                            items.filter((view) => view.id !== viewId),
-                          )
-                        }
                       />
                     </div>
                   )}
@@ -3581,6 +4409,7 @@ export default function BoothGenerator() {
                     carpetVariants={selectedBooth.carpetVariants}
                     carpetFinishId={carpetFinishId}
                     onCarpetFinishChange={setCarpetFinishId}
+                    showFloorControl={type !== "individualni"}
                     onSelectComponent={selectSceneComponent}
                     onSelectConstructionPart={selectConstructionPart}
                     onToggleComponentLock={toggleComponentLock}
@@ -3590,6 +4419,17 @@ export default function BoothGenerator() {
                     onMoveComponentDisplayOrder={(componentId, direction) => setPlacedComponents((items) => [...moveComponentDisplayOrder(items, componentId, direction)])}
                   />
                   {effectiveFasciaRequirement(technicalRequirements.fasciaGraphics, selectedBooth).message && <div className="packageOverrideNotice">{effectiveFasciaRequirement(technicalRequirements.fasciaGraphics, selectedBooth).message}</div>}
+                  <GraphicsSurfacePanel
+                    printSurfaces={selectedBooth.printSurfaces ?? []}
+                    assignments={printSurfaceAssignments}
+                    graphicsFiles={graphicsFiles}
+                    selectedSurfaceId={selectedPrintSurfaceId}
+                    upload={graphicsUpload}
+                    onSelectSurface={setSelectedPrintSurfaceId}
+                    onUpload={async (surfaceId, file) => { await addPersistentGraphics([file], surfaceId); }}
+                    onAssignExisting={assignExistingArtwork}
+                    onRemove={removeSurfaceArtwork}
+                  />
                   {selectedPrintSurface && selectedPrintAssignment && <section className="printSurfaceInspector">
                     <span className="propertySectionTitle">TISKOVÁ PLOCHA</span>
                     <div className="propertyRow"><span>Název</span><strong>{selectedPrintSurface.name}</strong></div>
@@ -3769,15 +4609,26 @@ export default function BoothGenerator() {
                   </div>
                 </aside>
               </div>
+              )}
 
               {/* BOTTOM */}
 
-              <PricingBar booth={selectedBooth} placedItems={placedComponents} currency={currency} />
-              <div className="workflowActions configuratorContinue">
-                <button className="primaryButton" onClick={() => setStep(4)}>
-                  Pokračovat na vizualizaci →
-                </button>
-              </div>
+              {type === "individualni" && individualSubStep === "konstrukce" ? (
+                <div className="workflowActions configuratorContinue">
+                  <button className="primaryButton" onClick={() => setIndividualSubStep("mobiliar")}>
+                    Pokračovat na mobiliář →
+                  </button>
+                </div>
+              ) : type === "individualni" && (individualSubStep === "plocha" || individualSubStep === "podlaha") ? null : (
+                <>
+                  <PricingBar booth={selectedBooth} placedItems={placedComponents} currency={currency} projectType={type} />
+                  <div className="workflowActions configuratorContinue">
+                    <button className="primaryButton" onClick={() => setStep(4)}>
+                      Pokračovat na vizualizaci →
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           )}
 
@@ -3785,17 +4636,31 @@ export default function BoothGenerator() {
           <VisualizationStep
             project={workflowProject}
             onSaveView={(view) =>
-              setSavedViews((items) => [
+              setVisualizationViews((items) => [
                 ...items,
                 saveCameraView({
                   ...view,
-                  name: `Vlastní pohled ${items.length + 1}`,
+                  name: `Pohled ${items.length + 1}`,
+                  order: items.length,
                 }),
               ])
             }
-            onDeleteView={(viewId) =>
-              setSavedViews((items) => items.filter((view) => view.id !== viewId))
+            onRenameView={(viewId, name) =>
+              setVisualizationViews((items) => items.map((view) =>
+                view.id === viewId ? renameVisualizationView(view, name) : view,
+              ))
             }
+            onMoveView={(viewId, direction) =>
+              setVisualizationViews((items) => [
+                ...moveVisualizationView(items, viewId, direction),
+              ])
+            }
+            onDeleteView={(viewId) => {
+              setVisualizationViews((items) => items
+                .filter((view) => view.id !== viewId)
+                .map((view, order) => ({ ...view, order })));
+              setSelectedVisualizationViewIds((items) => items.filter((id) => id !== viewId));
+            }}
             onAddVisualization={(item) =>
               void addPersistentVisualization(item)
             }

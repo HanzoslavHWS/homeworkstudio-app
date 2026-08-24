@@ -13,6 +13,7 @@ import { evaluateCatalogReadiness, isGeneratorEligible, isValidCatalogItemStatus
 import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
 import { SOURCE_ASSET_KINDS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "./assets.ts";
+import { resolveBoothAssetDefinition } from "./boothAssets.ts";
 
 export const CATALOG_ITEM_KIND_LABELS_CS: Readonly<Record<CatalogItemKind, string>> = {
   booth: "Stánek",
@@ -123,12 +124,7 @@ function isRuntimeGlbReference(value: string | undefined): boolean {
  * it got set.
  */
 export function documentHas3DAsset(document: CatalogItemAdminDocument): boolean {
-  const modelUrl = readString(document, "modelUrl");
-  if (modelUrl && isRuntimeGlbReference(modelUrl)) return true;
-  const modelAsset = documentModelAsset(document);
-  if (modelAsset && isRuntimeGlbReference(modelAsset.storageKey)) return true;
-  const assets = document.assets as { models3d?: readonly { url?: unknown }[] } | undefined;
-  return Boolean(assets?.models3d?.some((asset) => typeof asset.url === "string" && isRuntimeGlbReference(asset.url)));
+  return Boolean(documentEffectiveModelReference(document));
 }
 
 function isStoredAssetShape(value: unknown): value is StoredAsset {
@@ -207,6 +203,48 @@ export function documentPhotoUrl(document: CatalogItemAdminDocument): string | u
 /** Legacy static/public GLB URL fallback (P86's canonical seed). */
 export function documentModelUrl(document: CatalogItemAdminDocument): string | undefined {
   return readString(document, "modelUrl");
+}
+
+export type EffectiveDocumentModelReference = Readonly<
+  | { kind: "booth-asset"; url: string; fileName: string }
+  | { kind: "stored"; asset: StoredAsset; fileName: string }
+  | { kind: "legacy-url"; url: string; fileName: string }
+>;
+
+function modelFileName(url: string): string {
+  return url.split(/[?#]/u)[0]?.split("/").pop() || url;
+}
+
+/** Canonical boothAsset wins; R2 and legacy references remain supported as fallbacks. */
+export function documentEffectiveModelReference(
+  document: CatalogItemAdminDocument,
+): EffectiveDocumentModelReference | undefined {
+  const boothAsset = resolveBoothAssetDefinition(document);
+  if (boothAsset && isRuntimeGlbReference(boothAsset.glbAssetPath)) {
+    return {
+      kind: "booth-asset",
+      url: boothAsset.glbAssetPath,
+      fileName: modelFileName(boothAsset.glbAssetPath),
+    };
+  }
+
+  const stored = documentModelAsset(document);
+  if (stored && isRuntimeGlbReference(stored.storageKey)) {
+    return { kind: "stored", asset: stored, fileName: stored.originalFileName };
+  }
+
+  const legacyUrl = documentModelUrl(document);
+  if (legacyUrl && isRuntimeGlbReference(legacyUrl)) {
+    return { kind: "legacy-url", url: legacyUrl, fileName: modelFileName(legacyUrl) };
+  }
+
+  const assets = document.assets as { models3d?: readonly { url?: unknown }[] } | undefined;
+  const legacyAssetUrl = assets?.models3d?.find(
+    (asset) => typeof asset.url === "string" && isRuntimeGlbReference(asset.url),
+  )?.url;
+  return typeof legacyAssetUrl === "string"
+    ? { kind: "legacy-url", url: legacyAssetUrl, fileName: modelFileName(legacyAssetUrl) }
+    : undefined;
 }
 
 /** Set exclusively by the explicit "Označit jako zkontrolované" action (section 9) — never as a side effect of an asset upload. */

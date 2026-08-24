@@ -6,7 +6,17 @@ import { createEmptyNotes } from "../domain/notes.ts";
 
 const M57_ID = "chair-basic";
 const M57_DISPLAY_NAME = "Židle kovová čalouněná";
-const M57_MODEL_URL = "/models/chairs/zidle.glb";
+const M57_MODEL_URL = "/models/chairs/M57/M57_ZIDLE.glb";
+const M57_MODEL_ASSET = {
+  id: "0f3467af-e0b4-4b74-944f-38597cd7b178",
+  storageKey:
+    "catalog/furniture/m57/models/dbd83002-2ac6-4522-b384-02502761cbe6.glb",
+  originalFileName: "M57_ZIDLE.glb",
+  mimeType: "model/gltf-binary",
+  size: 176428,
+  createdAt: "2026-08-18T14:12:56.465Z",
+  category: "catalog-model",
+} as const;
 
 export const componentCatalog = {
   cabinet: {
@@ -93,6 +103,7 @@ export const componentCatalog = {
       category: "catalog-photo",
     },
     sketchupUrl: undefined,
+    modelAsset: M57_MODEL_ASSET,
     printSurfaces: [],
     partDefinitions: [],
     rotation: {
@@ -111,7 +122,7 @@ export const componentCatalog = {
           id: "chair-basic-model",
           url: M57_MODEL_URL,
           role: "component",
-          unit: "mm",
+          unit: "m",
           axisSystem: "x-right-y-depth-z-up",
           anchor: "footprint-center-floor",
         },
@@ -371,6 +382,7 @@ export function placeComponent(
   return {
     id: instanceId,
     definitionId: definition.id,
+    internalCode: definition.internalCode,
     type: definition.type,
     name: definition.displayName ?? definition.name,
     category: definition.category,
@@ -391,6 +403,8 @@ export function placeComponent(
     frontDirectionDeg: definition.frontDirectionDeg,
     sceneLabel: definition.sceneLabel,
     assets: definition.assets,
+    modelUrl: definition.modelUrl,
+    modelAsset: definition.modelAsset,
     showIn2D: definition.showIn2D !== false,
     showIn3D: definition.showIn3D !== false,
     sceneLayer: definition.sceneLayer ?? "furniture",

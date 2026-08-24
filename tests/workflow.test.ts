@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { componentCatalog, componentCatalogItems, placeComponent } from "../data/components.ts";
 import {
@@ -78,7 +79,18 @@ import { LocalEventRepository } from "../domain/eventRepository.ts";
 import { LocalPriceListRepository } from "../domain/priceListRepository.ts";
 import { createEventDocumentsFromFiles, eventHasUnsavedChanges } from "../domain/organizations.ts";
 import { cancelMeasurement, measurementClick, startMeasurement, updateMeasurementHover } from "../domain/spatialAnnotations.ts";
-import { createPlanRenderLayout, PLAN_RENDER_CONFIG } from "../lib/planExport.ts";
+import {
+  resolveBoothPlanGeometry,
+  resolveBoothPlanPresentation,
+  resolveBoothPlanVisualMode,
+  shouldRenderBoothCollisionOverlay,
+} from "../domain/boothPlan.ts";
+import { collisionObstacleToPlanRect } from "../geometry/construction.ts";
+import {
+  createPlanRenderLayout,
+  PLAN_RENDER_CONFIG,
+  resolveTechnicalPlanContent,
+} from "../lib/planExport.ts";
 
 test("nový project model obsahuje stabilní výchozí údaje", () => {
   const project = createProjectRecord(
@@ -664,6 +676,224 @@ test("shared 2D render layout drží orientaci, fit a kóty vně geometrie", () 
   assert.ok(PLAN_RENDER_CONFIG.dimensionFontPx >= 30);
 });
 
+test("Visualization 2D keeps P86 booth logic and furniture independently selectable beneath the GLB visual path", () => {
+  const booth = boothTypes.find((item) => item.internalCode === "P86")!;
+  const chair = placeComponent(componentCatalog.chair, "m57-plan", 1000, 1000);
+
+  const both = resolveTechnicalPlanContent({
+    booth,
+    sceneObjects: [chair],
+    layers: ["booth", "furniture"],
+  });
+  assert.deepEqual(
+    both.boothPlan.constructionAreas
+      .map((item) => item.constructionPartId),
+    ["back-wall", "left-wall", "right-wall"],
+  );
+  assert.deepEqual(both.boothPlan.collisionLines, []);
+  assert.deepEqual(both.sceneObjects.map((item) => item.id), [chair.id]);
+
+  const furnitureOnly = resolveTechnicalPlanContent({
+    booth,
+    sceneObjects: [chair],
+    layers: ["furniture"],
+  });
+  assert.deepEqual(furnitureOnly.boothPlan, {
+    constructionAreas: [],
+    constructionProfiles: [],
+    collisionLines: [],
+  });
+  assert.deepEqual(furnitureOnly.sceneObjects.map((item) => item.id), [chair.id]);
+
+  const boothOnly = resolveTechnicalPlanContent({
+    booth,
+    sceneObjects: [chair],
+    layers: ["booth"],
+  });
+  assert.equal(boothOnly.boothPlan.constructionAreas.length, 3);
+  assert.equal(boothOnly.boothPlan.constructionProfiles.length, 5);
+  assert.deepEqual(boothOnly.sceneObjects, []);
+});
+
+test("hard collision has no dashed presentation overlay in Editor, Visualization or export", () => {
+  const booth = boothTypes.find((item) => item.internalCode === "P86")!;
+  const generatorSource = readFileSync(
+    new URL("../components/BoothGenerator.tsx", import.meta.url),
+    "utf8",
+  );
+
+  assert.equal(
+    shouldRenderBoothCollisionOverlay("editor", { editorEnabled: true }),
+    false,
+  );
+  assert.equal(
+    shouldRenderBoothCollisionOverlay("editor", { editorEnabled: false }),
+    false,
+  );
+  assert.equal(shouldRenderBoothCollisionOverlay("visualization"), false);
+  assert.equal(shouldRenderBoothCollisionOverlay("export"), false);
+  assert.equal(
+    shouldRenderBoothCollisionOverlay("export", { includeInExport: true }),
+    false,
+  );
+  assert.doesNotMatch(generatorSource, /showCollisionOverlay|KOLIZE|collisionOn/u);
+
+  const standard = resolveTechnicalPlanContent({
+    booth,
+    sceneObjects: [],
+    layers: ["booth"],
+  });
+  const explicitlyIncluded = resolveTechnicalPlanContent({
+    booth,
+    sceneObjects: [],
+    layers: ["booth"],
+    includeCollisionOverlay: true,
+  });
+
+  assert.deepEqual(standard.boothPlan.collisionLines, []);
+  assert.deepEqual(explicitlyIncluded.boothPlan.collisionLines, []);
+});
+
+test("P86 canonical fallback retains wall footprints and profiles when its GLB is unavailable", () => {
+  const booth = boothTypes.find((item) => item.internalCode === "P86")!;
+  const plan = resolveBoothPlanPresentation(booth);
+  assert.equal(resolveBoothPlanVisualMode(booth, undefined), "canonical-fallback");
+
+  assert.deepEqual(
+    plan.constructionAreas.map(({ constructionPartId, rect }) => ({
+      constructionPartId,
+      rect,
+    })),
+    booth.collisionObstacles.map((obstacle) => ({
+      constructionPartId: obstacle.id,
+      rect: collisionObstacleToPlanRect(obstacle, booth.depthMm ?? 0),
+    })),
+  );
+  assert.equal("constructionLines" in plan, false, "konstrukce nesmí být jen tři center-lines");
+  assert.deepEqual(
+    plan.constructionProfiles.map(({ rect }) => [rect.x, rect.y, rect.width, rect.height]),
+    [
+      [0, 0, 80, 80],
+      [960, 0, 80, 80],
+      [1920, 0, 80, 80],
+      [0, 960, 80, 80],
+      [1920, 960, 80, 80],
+    ],
+  );
+  assert.deepEqual(
+    plan.collisionLines.map(({ constructionPartId, x1, y1, x2, y2 }) => ({
+      constructionPartId,
+      x1,
+      y1,
+      x2,
+      y2,
+    })),
+    [
+      { constructionPartId: "back-wall", x1: 0, y1: 30, x2: 2000, y2: 30 },
+      { constructionPartId: "left-wall", x1: 30, y1: 0, x2: 30, y2: 1000 },
+      { constructionPartId: "right-wall", x1: 1970, y1: 0, x2: 1970, y2: 1000 },
+    ],
+  );
+  assert.equal("collisionAreas" in plan, false, "no-placement overlay nesmí být block/teeth geometrie");
+  assert.equal(
+    plan.constructionAreas.some(({ rect }) => rect.y + rect.height > 1000),
+    false,
+    "přední 1 m musí zůstat otevřený",
+  );
+
+  const rawGroundGeometry = resolveBoothPlanGeometry(booth)
+    .filter((item) => item.viewType === "ground")
+    .map((item) => item.rect);
+  assert.deepEqual(
+    rawGroundGeometry,
+    booth.collisionObstacles.map((obstacle) =>
+      collisionObstacleToPlanRect(obstacle, booth.depthMm ?? 0),
+    ),
+  );
+  assert.equal(resolveBoothPlanGeometry(booth).length, 5, "detail límce a rastru zůstává v canonical datech");
+
+  const componentSource = readFileSync(
+    new URL("../components/configurator/BoothConstructionPlanView.tsx", import.meta.url),
+    "utf8",
+  );
+  const cssSource = readFileSync(
+    new URL("../app/globals.css", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(componentSource, /<line|canonicalBoothCollision|renderCollisionOverlay/u);
+  assert.match(componentSource, /<BoothCadPlanView/u);
+  assert.match(componentSource, /showCanonicalConstruction/u);
+  assert.match(componentSource, /canonicalBoothConstructionArea/u);
+  assert.match(componentSource, /canonicalBoothConstructionProfile/u);
+  assert.match(cssSource, /\.canonicalBoothConstructionArea\s*\{[\s\S]*?fill:\s*#24272a[\s\S]*?\}/u);
+  assert.match(cssSource, /\.canonicalBoothConstructionProfile\s*\{[\s\S]*?fill:\s*#111315[\s\S]*?\}/u);
+  assert.doesNotMatch(cssSource, /canonicalBoothCollisionLine/u);
+});
+
+test("P86 2D visibility odebere konstrukční symbol i jeho kolizní overlay", () => {
+  const booth = boothTypes.find((item) => item.internalCode === "P86")!;
+  const assemblyKeys = [
+    ["HWS_ASM_BACK_WALL", "back-wall"],
+    ["HWS_ASM_LEFT_WALL", "left-wall"],
+    ["HWS_ASM_RIGHT_WALL", "right-wall"],
+  ] as const;
+
+  for (const [assemblyKey, constructionPartId] of assemblyKeys) {
+    const plan = resolveBoothPlanPresentation(booth, { [assemblyKey]: false });
+    assert.equal(
+      plan.constructionAreas.some((item) => item.constructionPartId === constructionPartId),
+      false,
+    );
+    assert.equal(
+      plan.collisionLines.some((item) => item.constructionPartId === constructionPartId),
+      false,
+    );
+    assert.equal(
+      plan.constructionProfiles.some((item) => item.constructionPartId === constructionPartId),
+      false,
+    );
+  }
+
+  const content = resolveTechnicalPlanContent({
+    booth,
+    sceneObjects: [],
+    layers: ["booth"],
+    constructionVisibility: { HWS_ASM_LEFT_WALL: false },
+  });
+
+  assert.equal(
+    content.boothPlan.constructionAreas.some(
+      (item) => item.constructionPartId === "left-wall",
+    ),
+    false,
+  );
+  assert.equal(
+    content.boothPlan.collisionLines.some(
+      (item) => item.constructionPartId === "left-wall",
+    ),
+    false,
+  );
+  assert.equal(booth.nominalDimensions?.widthMm, 2000);
+  assert.equal(booth.nominalDimensions?.depthMm, 2000);
+  assert.equal(
+    Math.max(...content.boothPlan.constructionAreas.map(({ rect }) => rect.x + rect.width)),
+    2000,
+  );
+  assert.equal(
+    Math.max(...content.boothPlan.constructionAreas.map(({ rect }) => rect.y + rect.height)),
+    1000,
+  );
+
+  const exportSource = readFileSync(
+    new URL("../lib/planExport.ts", import.meta.url),
+    "utf8",
+  );
+  assert.doesNotMatch(exportSource, /cadSnapshot|querySelector|cadPlanCanvas|onSnapshot/u);
+  assert.match(exportSource, /renderBoothPlanGlbToCanvas/u);
+  assert.match(exportSource, /if \(layers\.includes\("booth"\) && !renderedBoothGlb\)/u);
+  assert.match(exportSource, /resolveBoothPlanPresentation/u);
+});
+
 test("M57 používá kompletní canonical katalogová data", () => {
   const m57: ComponentDefinition = componentCatalog.chair;
   const basePrice = getBasePricingEntry(m57.pricingEntries, "CZK");
@@ -752,7 +982,9 @@ test("P86 má fixní NET cenu, included obsah, koberec a print surface", () => {
   assert.equal(p86.defaultCarpetFinishId, "carpet-grey");
   assert.equal(p86.packageContents?.find((item) => item.kind === "floor-finish")?.quantity, 4);
   assert.equal(p86.packageContents?.every((item) => item.includedInBasePrice), true);
-  assert.deepEqual(p86.printSurfaces?.map((surface) => [surface.widthMm, surface.heightMm]), [[2000, 300]]);
+  assert.equal(p86.printSurfaces?.length, 9);
+  const fascia = p86.printSurfaces?.find((surface) => surface.id === "fascia-print");
+  assert.deepEqual(fascia && [fascia.widthMm, fascia.heightMm], [2000, 300]);
   assert.equal(p86.graphicsRequired, true);
 });
 
