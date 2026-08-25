@@ -5,6 +5,10 @@ import type {
   PrintSurfaceAssignment,
 } from "../domain/project.ts";
 import { resolvePrintSurfaceBinding } from "../domain/printSurfaces.ts";
+import {
+  calculateArtworkUvTransform,
+  type ArtworkUvTransform,
+} from "../domain/artworkPlacement.ts";
 
 export const PRINT_ARTWORK_OVERLAY_MARKER = "hwsPrintArtworkOverlay";
 const PRINT_ARTWORK_APPLY_TOKEN = "hwsPrintArtworkApplyToken";
@@ -20,6 +24,9 @@ export type PrintArtworkOverlayMetadata = Readonly<{
   artworkUpAxis: "+z";
   canonicalWidthMm: number;
   canonicalHeightMm: number;
+  sourceWidthPx: number;
+  sourceHeightPx: number;
+  uvTransform: ArtworkUvTransform;
 }>;
 
 export type PrintArtworkDecorationResult = Readonly<{
@@ -127,6 +134,11 @@ function disposeOverlay(overlay: THREE.Object3D): void {
   }
 }
 
+function removeAndDisposeOverlay(overlay: THREE.Object3D): void {
+  overlay.removeFromParent();
+  disposeOverlay(overlay);
+}
+
 export function clearPrintArtworkOverlays(scene: THREE.Object3D): number {
   scene.userData[PRINT_ARTWORK_APPLY_TOKEN] = `cleared-${Date.now()}-${Math.random()}`;
   const overlays: THREE.Object3D[] = [];
@@ -134,8 +146,7 @@ export function clearPrintArtworkOverlays(scene: THREE.Object3D): number {
     if (object.userData[PRINT_ARTWORK_OVERLAY_MARKER]) overlays.push(object);
   });
   for (const overlay of overlays) {
-    overlay.removeFromParent();
-    disposeOverlay(overlay);
+    removeAndDisposeOverlay(overlay);
   }
   return overlays.length;
 }
@@ -150,6 +161,71 @@ export function findPrintArtworkOverlays(scene: THREE.Object3D): readonly THREE.
 
 async function defaultTextureLoader(url: string): Promise<THREE.Texture> {
   return new THREE.TextureLoader().loadAsync(url);
+}
+
+function textureSourceDimensions(
+  file: GraphicFileReference,
+  texture: THREE.Texture,
+  surface: Pick<PrintSurface, "widthMm" | "heightMm">,
+): Readonly<{ widthPx: number; heightPx: number }> {
+  const image = texture.image as {
+    naturalWidth?: number;
+    naturalHeight?: number;
+    videoWidth?: number;
+    videoHeight?: number;
+    width?: number;
+    height?: number;
+  } | undefined;
+  const widthPx = file.widthPx ?? image?.naturalWidth ?? image?.videoWidth ?? image?.width;
+  const heightPx = file.heightPx ?? image?.naturalHeight ?? image?.videoHeight ?? image?.height;
+  return widthPx && heightPx && widthPx > 0 && heightPx > 0
+    ? { widthPx, heightPx }
+    : { widthPx: surface.widthMm, heightPx: surface.heightMm };
+}
+
+function configureArtworkTexture(
+  texture: THREE.Texture,
+  transform: ArtworkUvTransform,
+  initialize: boolean,
+): void {
+  texture.flipY = true;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  texture.wrapS = THREE.ClampToEdgeWrapping;
+  texture.wrapT = THREE.ClampToEdgeWrapping;
+  texture.repeat.set(transform.repeatU, transform.repeatV);
+  texture.offset.set(transform.offsetU, transform.offsetV);
+  texture.center.set(0, 0);
+  texture.rotation = 0;
+  texture.matrixAutoUpdate = true;
+  texture.updateMatrix();
+  if (initialize) texture.needsUpdate = true;
+}
+
+function createArtworkMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    side: THREE.FrontSide,
+    transparent: true,
+    depthTest: true,
+    depthWrite: true,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    polygonOffsetUnits: -1,
+    toneMapped: false,
+  });
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `#ifdef USE_MAP
+        vec2 hwsArtworkUv = vMapUv;
+        if (hwsArtworkUv.x < 0.0 || hwsArtworkUv.x > 1.0 || hwsArtworkUv.y < 0.0 || hwsArtworkUv.y > 1.0) discard;
+        vec4 sampledDiffuseColor = texture2D(map, hwsArtworkUv);
+        diffuseColor *= sampledDiffuseColor;
+      #endif`,
+    );
+  };
+  material.customProgramCacheKey = () => "hws-artwork-surface-clip-v1";
+  return material;
 }
 
 /**
@@ -167,13 +243,43 @@ export async function applyPrintArtworkOverlays(input: Readonly<{
   loadTexture?: PrintArtworkTextureLoader;
 }>): Promise<PrintArtworkDecorationResult> {
   const token = `${Date.now()}-${Math.random()}`;
-  clearPrintArtworkOverlays(input.scene);
   input.scene.userData[PRINT_ARTWORK_APPLY_TOKEN] = token;
 
   const appliedSurfaceIds: string[] = [];
   const sourceOnlySurfaceIds: string[] = [];
   const unresolvedSurfaceIds: string[] = [];
   const loadTexture = input.loadTexture ?? defaultTextureLoader;
+
+  const existingBySurface = new Map<string, THREE.Mesh>();
+  for (const overlay of findPrintArtworkOverlays(input.scene)) {
+    const metadata = overlay.userData[PRINT_ARTWORK_OVERLAY_MARKER] as PrintArtworkOverlayMetadata | undefined;
+    if (!metadata || existingBySurface.has(metadata.printSurfaceId)) {
+      removeAndDisposeOverlay(overlay);
+      continue;
+    }
+    existingBySurface.set(metadata.printSurfaceId, overlay);
+  }
+
+  const desiredSurfaceIds = new Set(input.printSurfaceAssignments.flatMap((assignment) => {
+    if (!assignment.artworkFileId) return [];
+    const binding = resolvePrintSurfaceBinding(input.printSurfaces, assignment.printSurfaceId);
+    const file = input.graphicsFiles.find((candidate) => candidate.id === assignment.artworkFileId);
+    const target = binding ? input.scene.getObjectByName(binding.nodeName) : undefined;
+    return binding && file && target && isRasterArtworkFile(file)
+      ? [assignment.printSurfaceId]
+      : [];
+  }));
+  for (const [surfaceId, overlay] of existingBySurface) {
+    const assignment = input.printSurfaceAssignments.find((item) => item.printSurfaceId === surfaceId);
+    const binding = resolvePrintSurfaceBinding(input.printSurfaces, surfaceId);
+    const metadata = overlay.userData[PRINT_ARTWORK_OVERLAY_MARKER] as PrintArtworkOverlayMetadata;
+    if (!desiredSurfaceIds.has(surfaceId) || !assignment?.artworkFileId ||
+      metadata.artworkFileId !== assignment.artworkFileId ||
+      !binding || overlay.parent !== input.scene.getObjectByName(binding.nodeName)) {
+      removeAndDisposeOverlay(overlay);
+      existingBySurface.delete(surfaceId);
+    }
+  }
 
   await Promise.all(input.printSurfaceAssignments.map(async (assignment) => {
     try {
@@ -193,43 +299,47 @@ export async function applyPrintArtworkOverlays(input: Readonly<{
         unresolvedSurfaceIds.push(assignment.printSurfaceId);
         return;
       }
-      const url = await input.resolveArtworkUrl(file);
-      if (!url) {
-        unresolvedSurfaceIds.push(assignment.printSurfaceId);
-        return;
+      let overlay = existingBySurface.get(binding.printSurfaceId);
+      let texture = overlay
+        ? (overlay.material as THREE.MeshBasicMaterial).map
+        : undefined;
+      const initializeTexture = !texture;
+      if (!texture) {
+        const url = await input.resolveArtworkUrl(file);
+        if (!url) {
+          unresolvedSurfaceIds.push(assignment.printSurfaceId);
+          return;
+        }
+        texture = await loadTexture(url, file);
+        if (input.scene.userData[PRINT_ARTWORK_APPLY_TOKEN] !== token) {
+          texture.dispose();
+          return;
+        }
       }
-      const texture = await loadTexture(url, file);
-      if (input.scene.userData[PRINT_ARTWORK_APPLY_TOKEN] !== token) {
-        texture.dispose();
-        return;
-      }
-      texture.flipY = true;
-      texture.colorSpace = THREE.SRGBColorSpace;
-      texture.needsUpdate = true;
-      const nodeBounds = objectLocalBounds(target);
-      if (nodeBounds.isEmpty()) {
-        texture.dispose();
-        unresolvedSurfaceIds.push(assignment.printSurfaceId);
-        return;
-      }
-      const geometry = createPrintArtworkOverlayGeometry({
-        surface: binding.surface,
-        face: binding.face,
-        nodeBounds,
-        modelUnit: input.modelUnit,
+      const source = textureSourceDimensions(file, texture, binding.surface);
+      const uvTransform = calculateArtworkUvTransform({
+        surfaceWidthMm: binding.surface.widthMm,
+        surfaceHeightMm: binding.surface.heightMm,
+        sourceWidthPx: source.widthPx,
+        sourceHeightPx: source.heightPx,
+        placement: assignment.artworkPlacement,
       });
-      const material = new THREE.MeshBasicMaterial({
-        map: texture,
-        side: THREE.FrontSide,
-        transparent: true,
-        depthTest: true,
-        depthWrite: true,
-        polygonOffset: true,
-        polygonOffsetFactor: -1,
-        polygonOffsetUnits: -1,
-        toneMapped: false,
-      });
-      const overlay = new THREE.Mesh(geometry, material);
+      configureArtworkTexture(texture, uvTransform, initializeTexture);
+      if (!overlay) {
+        const nodeBounds = objectLocalBounds(target);
+        if (nodeBounds.isEmpty()) {
+          texture.dispose();
+          unresolvedSurfaceIds.push(assignment.printSurfaceId);
+          return;
+        }
+        const geometry = createPrintArtworkOverlayGeometry({
+          surface: binding.surface,
+          face: binding.face,
+          nodeBounds,
+          modelUnit: input.modelUnit,
+        });
+        overlay = new THREE.Mesh(geometry, createArtworkMaterial(texture));
+      }
       const metadata: PrintArtworkOverlayMetadata = {
         printSurfaceId: binding.printSurfaceId,
         artworkFileId: file.id,
@@ -240,11 +350,14 @@ export async function applyPrintArtworkOverlays(input: Readonly<{
         artworkUpAxis: "+z",
         canonicalWidthMm: binding.surface.widthMm,
         canonicalHeightMm: binding.surface.heightMm,
+        sourceWidthPx: source.widthPx,
+        sourceHeightPx: source.heightPx,
+        uvTransform,
       };
       overlay.name = `HWS_ARTWORK__${binding.printSurfaceId}`;
       overlay.renderOrder = 10;
       overlay.userData[PRINT_ARTWORK_OVERLAY_MARKER] = metadata;
-      target.add(overlay);
+      if (!overlay.parent) target.add(overlay);
       appliedSurfaceIds.push(binding.printSurfaceId);
     } catch {
       if (!unresolvedSurfaceIds.includes(assignment.printSurfaceId)) {

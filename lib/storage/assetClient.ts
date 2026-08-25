@@ -3,6 +3,7 @@
 import type { AssetCategory, StoredAsset } from "../../domain/assets.ts";
 
 export type UploadProgress = Readonly<{ state: "uploading" | "success" | "error"; percent: number; message?: string }>;
+export type RasterImageDimensions = Readonly<{ widthPx: number; heightPx: number }>;
 
 export async function uploadAsset(
   file: File,
@@ -33,6 +34,37 @@ export function browserFileMimeType(file: Pick<File, "name" | "type">): string {
   if (file.type) return file.type;
   const extension = file.name.toLowerCase().split(".").pop();
   return ({ ai: "application/illustrator", eps: "application/postscript", pdf: "application/pdf", svg: "image/svg+xml", glb: "model/gltf-binary", doc: "application/msword", docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document", xls: "application/vnd.ms-excel", xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", txt: "text/plain", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" } as Record<string, string>)[extension ?? ""] ?? "application/octet-stream";
+}
+
+/** Reads real raster dimensions before upload so Fit/Fill remains deterministic after reload. */
+export async function readRasterImageDimensions(file: File): Promise<RasterImageDimensions | undefined> {
+  if (!["image/png", "image/jpeg", "image/jpg", "image/webp"].includes(browserFileMimeType(file))) {
+    return undefined;
+  }
+  try {
+    if (typeof createImageBitmap === "function") {
+      const bitmap = await createImageBitmap(file);
+      const dimensions = { widthPx: bitmap.width, heightPx: bitmap.height };
+      bitmap.close();
+      return dimensions.widthPx > 0 && dimensions.heightPx > 0 ? dimensions : undefined;
+    }
+    const url = URL.createObjectURL(file);
+    try {
+      const image = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const element = new Image();
+        element.onload = () => resolve(element);
+        element.onerror = () => reject(new Error("Rozměry obrázku se nepodařilo načíst."));
+        element.src = url;
+      });
+      return image.naturalWidth > 0 && image.naturalHeight > 0
+        ? { widthPx: image.naturalWidth, heightPx: image.naturalHeight }
+        : undefined;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+  } catch {
+    return undefined;
+  }
 }
 
 export async function getAssetDownloadUrl(storageKey: string): Promise<string> {

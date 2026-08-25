@@ -113,6 +113,22 @@ test("printSurfaceAssignmentsEqual: a real field difference is NOT equal", () =>
   assert.equal(printSurfaceAssignmentsEqual(a, b), false);
 });
 
+test("printSurfaceAssignmentsEqual: legacy missing placement equals explicit default, but a real placement change does not", () => {
+  const legacy: PrintSurfaceAssignment[] = [{
+    printSurfaceId: "s1", sceneReference: "b1", graphicsKind: "fascia", artworkStatus: "received",
+    artworkFileId: "artwork", selectedForPrint: true, canonicalWidthMm: 1000, canonicalHeightMm: 500,
+    productionWidthMm: 1000, productionHeightMm: 500, includedInPackage: true, pricedSeparately: false,
+  }];
+  const explicitDefault: PrintSurfaceAssignment[] = [{
+    ...legacy[0]!, artworkPlacement: { mode: "stretch", scale: 1, offsetXmm: 0, offsetYmm: 0 },
+  }];
+  const moved: PrintSurfaceAssignment[] = [{
+    ...legacy[0]!, artworkPlacement: { mode: "fit", scale: 1, offsetXmm: 10, offsetYmm: 0 },
+  }];
+  assert.equal(printSurfaceAssignmentsEqual(legacy, explicitDefault), true);
+  assert.equal(printSurfaceAssignmentsEqual(legacy, moved), false);
+});
+
 test("printSurfaceAssignmentsEqual: different lengths are NOT equal", () => {
   assert.equal(printSurfaceAssignmentsEqual([], [{
     printSurfaceId: "s1", sceneReference: "b1", graphicsKind: "fascia", artworkStatus: "missing",

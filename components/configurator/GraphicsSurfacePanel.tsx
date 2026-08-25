@@ -1,11 +1,20 @@
 "use client";
 
+import { useState } from "react";
 import type { PrintSurface } from "../../domain/models";
 import type {
+  ArtworkPlacement,
+  ArtworkPlacementMode,
   GraphicFileReference,
   PrintSurfaceAssignment,
 } from "../../domain/project";
-import { artworkPreviewLabel } from "../../lib/printArtworkOverlays";
+import {
+  artworkPlacementForMode,
+  MAX_ARTWORK_SCALE,
+  MIN_ARTWORK_SCALE,
+  normalizeArtworkPlacement,
+} from "../../domain/artworkPlacement";
+import { artworkPreviewLabel, isRasterArtworkFile } from "../../lib/printArtworkOverlays";
 import type { UploadProgress } from "../../lib/storage/assetClient";
 
 type GraphicsSurfacePanelProps = Readonly<{
@@ -18,6 +27,7 @@ type GraphicsSurfacePanelProps = Readonly<{
   onUpload: (surfaceId: string, file: File) => Promise<void>;
   onAssignExisting: (surfaceId: string, artworkFileId: string) => void;
   onRemove: (surfaceId: string) => void;
+  onPlacementChange: (surfaceId: string, placement: ArtworkPlacement) => void;
 }>;
 
 function surfaceFaceLabel(surface: PrintSurface): string {
@@ -41,7 +51,19 @@ export function GraphicsSurfacePanel({
   onUpload,
   onAssignExisting,
   onRemove,
+  onPlacementChange,
 }: GraphicsSurfacePanelProps) {
+  const [expandedSurfaceIds, setExpandedSurfaceIds] = useState<ReadonlySet<string>>(
+    () => new Set(),
+  );
+  const togglePlacementEditor = (surfaceId: string) => {
+    setExpandedSurfaceIds((current) => {
+      const next = new Set(current);
+      if (next.has(surfaceId)) next.delete(surfaceId);
+      else next.add(surfaceId);
+      return next;
+    });
+  };
   const active = printSurfaces
     .filter((surface) => surface.active && surface.sceneBinding)
     .sort((left, right) =>
@@ -80,6 +102,16 @@ export function GraphicsSurfacePanel({
             const status = file
               ? assignment?.artworkStatus === "ready" ? "Připraveno" : "Data přijata"
               : "Bez grafiky";
+            const placement = normalizeArtworkPlacement(assignment?.artworkPlacement);
+            const isPlacementExpanded = expandedSurfaceIds.has(surface.id);
+            const placementModeLabel = placement.mode === "stretch"
+              ? "Stretch"
+              : placement.mode === "fit"
+                ? "Fit"
+                : "Fill";
+            const changePlacement = (patch: Partial<ArtworkPlacement>) => {
+              onPlacementChange(surface.id, { ...placement, ...patch });
+            };
             return (
               <article
                 className={`graphicsSurfaceRow ${selectedSurfaceId === surface.id ? "selected" : ""}`}
@@ -118,6 +150,47 @@ export function GraphicsSurfacePanel({
                   )}
                   <button type="button" disabled={!file} onClick={() => onRemove(surface.id)}>Odebrat</button>
                 </div>
+                {file && isRasterArtworkFile(file) && assignment && (
+                  <div className="graphicsPlacementEditor" onClick={(event) => event.stopPropagation()}>
+                    <div className="graphicsPlacementSummary">
+                      <span>{placementModeLabel} · {Math.round(placement.scale * 100)} % · X {placement.offsetXmm} mm · Y {placement.offsetYmm} mm</span>
+                      <button
+                        type="button"
+                        aria-expanded={isPlacementExpanded}
+                        aria-controls={`graphics-placement-controls-${surface.id}`}
+                        onClick={() => togglePlacementEditor(surface.id)}
+                      >
+                        Upravit {isPlacementExpanded ? "▴" : "▾"}
+                      </button>
+                    </div>
+                    {isPlacementExpanded && (
+                      <div className="graphicsPlacementControls" id={`graphics-placement-controls-${surface.id}`}>
+                        <div className="graphicsPlacementModes">
+                          <span>Zobrazení</span>
+                          {(["stretch", "fit", "fill"] as const).map((mode: ArtworkPlacementMode) => (
+                            <button
+                              type="button"
+                              className={placement.mode === mode ? "active" : ""}
+                              key={mode}
+                              onClick={() => onPlacementChange(surface.id, artworkPlacementForMode(mode))}
+                            >
+                              {mode === "stretch" ? "Stretch" : mode === "fit" ? "Fit" : "Fill"}
+                            </button>
+                          ))}
+                        </div>
+                        <div className="graphicsPlacementScale">
+                          <span>Měřítko</span>
+                          <button type="button" aria-label="Zmenšit artwork" onClick={() => changePlacement({ scale: Math.max(MIN_ARTWORK_SCALE, placement.scale - 0.1) })}>−</button>
+                          <strong>{Math.round(placement.scale * 100)} %</strong>
+                          <button type="button" aria-label="Zvětšit artwork" onClick={() => changePlacement({ scale: Math.min(MAX_ARTWORK_SCALE, placement.scale + 0.1) })}>+</button>
+                        </div>
+                        <label><span>Posun X</span><input type="number" step="10" value={placement.offsetXmm} onChange={(event) => changePlacement({ offsetXmm: Number(event.target.value) || 0 })} /><small>mm</small></label>
+                        <label><span>Posun Y</span><input type="number" step="10" value={placement.offsetYmm} onChange={(event) => changePlacement({ offsetYmm: Number(event.target.value) || 0 })} /><small>mm</small></label>
+                        <button type="button" className="graphicsPlacementReset" onClick={() => onPlacementChange(surface.id, artworkPlacementForMode("stretch"))}>Reset</button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </article>
             );
           })}

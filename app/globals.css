@@ -5713,6 +5713,24 @@ select:focus {
 .graphicsSurfaceActions select { min-width: 0; flex: 1 1 110px; }
 .graphicsSurfaceActions .filePicker.compact { display: inline-flex; align-items: center; margin: 0; cursor: pointer; }
 .graphicsSurfaceActions .filePicker.compact input { display: none; }
+.graphicsPlacementEditor { display: grid; gap: 5px; padding-top: 6px; border-top: 1px solid #eceeef; }
+.graphicsPlacementSummary { display: flex; align-items: center; justify-content: space-between; gap: 6px; color: #777b7e; font-size: 7px; }
+.graphicsPlacementSummary > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.graphicsPlacementSummary button { flex: 0 0 auto; min-height: 24px; padding: 0 6px; border: 1px solid #d8dadd; border-radius: 4px; background: white; color: #5c6063; font-size: 7px; }
+.graphicsPlacementControls { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding-top: 5px; }
+.graphicsPlacementModes,
+.graphicsPlacementScale { grid-column: 1 / -1; display: flex; align-items: center; gap: 4px; }
+.graphicsPlacementModes > span,
+.graphicsPlacementScale > span { min-width: 52px; color: #777b7e; font-size: 7px; }
+.graphicsPlacementModes button,
+.graphicsPlacementScale button,
+.graphicsPlacementReset { min-height: 24px; padding: 0 6px; border: 1px solid #d8dadd; border-radius: 4px; background: white; color: #5c6063; font-size: 7px; }
+.graphicsPlacementModes button.active { border-color: #8c795c; background: #f3eee7; color: #695a45; }
+.graphicsPlacementScale strong { min-width: 42px; font-size: 7px; text-align: center; }
+.graphicsPlacementControls label { display: grid; grid-template-columns: 1fr 46px auto; align-items: center; gap: 3px; color: #777b7e; font-size: 7px; }
+.graphicsPlacementControls input { min-width: 0; height: 24px; padding: 0 4px; border: 1px solid #d8dadd; border-radius: 4px; font-size: 7px; }
+.graphicsPlacementControls label small { color: #96999c; font-size: 6px; }
+.graphicsPlacementReset { justify-self: start; }
 .sceneOrderButton { font-size: 9px; }
 .cadViewerToolbars { position: absolute; z-index: 8; top: 10px; left: 10px; right: 10px; display: grid; gap: 5px; pointer-events: none; }
 .cadViewerToolbars .cadViewerToolbar { position: static; pointer-events: auto; }

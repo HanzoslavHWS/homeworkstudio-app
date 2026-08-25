@@ -74,12 +74,26 @@ export type TechnicalRequirements = Readonly<{
 
 export type ArtworkStatus = "missing" | "received" | "ready";
 
+export type ArtworkPlacementMode = "stretch" | "fit" | "fill";
+
+export type ArtworkPlacement = Readonly<{
+  mode: ArtworkPlacementMode;
+  /** Uniform multiplier applied after the selected base mode. 1 = 100 %. */
+  scale: number;
+  /** Physical translation in canonical print-surface coordinates; positive X moves right. */
+  offsetXmm: number;
+  /** Physical translation in canonical print-surface coordinates; positive Y moves up. */
+  offsetYmm: number;
+}>;
+
 export type PrintSurfaceAssignment = Readonly<{
   printSurfaceId: string;
   sceneReference: string;
   graphicsKind: "fascia" | "fullWrap";
   artworkStatus: ArtworkStatus;
   artworkFileId?: string;
+  /** Missing on legacy projects and interpreted exactly as Stretch / 100 % / 0 / 0. */
+  artworkPlacement?: ArtworkPlacement;
   selectedForPrint: boolean;
   canonicalWidthMm: number;
   canonicalHeightMm: number;
@@ -192,6 +206,9 @@ export type GraphicFileReference = Readonly<{
   status?: "uploaded" | "dataReceived" | "ready";
   associatedRequirement?: "fascia" | "fullWrap";
   printSurfaceId?: string;
+  /** Persisted raster source dimensions used for deterministic Fit/Fill calculations. */
+  widthPx?: number;
+  heightPx?: number;
   createdAt?: string;
 }>;
 

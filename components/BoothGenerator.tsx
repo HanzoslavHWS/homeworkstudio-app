@@ -26,6 +26,7 @@ import type {
   RotationControlMode,
 } from "../domain/models";
 import type {
+  ArtworkPlacement,
   GraphicFileReference,
   GeneratedPlanOutput,
   ImportedOrder,
@@ -41,6 +42,7 @@ import type {
   TechnicalRequirements,
   VisualizationItem,
 } from "../domain/project";
+import { updatePrintSurfaceArtworkPlacement } from "../domain/artworkPlacement";
 import {
   createDefaultExportCalculationOptions,
   createDefaultTechnicalRequirements,
@@ -199,7 +201,12 @@ import {
   EventsPage,
   PriceListsPage,
 } from "./workflow/CatalogManagementPages";
-import { dataUrlToFile, uploadAsset, type UploadProgress } from "../lib/storage/assetClient";
+import {
+  dataUrlToFile,
+  readRasterImageDimensions,
+  uploadAsset,
+  type UploadProgress,
+} from "../lib/storage/assetClient";
 import { PricingAdminPage } from "./workflow/PricingAdminPages";
 import { RemoteApiPricingAdminRepository } from "../lib/db/pricingAdmin.remoteApi.client";
 import { RemoteApiCatalogItemsAdminRepository } from "../lib/db/catalogItemsAdmin.remoteApi.client";
@@ -955,7 +962,10 @@ export default function BoothGenerator() {
     const ownerId = ensureProjectStorageId();
     const batch = Array.from(files);
     const results = await Promise.allSettled(batch.map(async (file) => {
-      const asset = await uploadAsset(file, { category: "project-graphics", ownerId }, setGraphicsUpload);
+      const [asset, dimensions] = await Promise.all([
+        uploadAsset(file, { category: "project-graphics", ownerId }, setGraphicsUpload),
+        readRasterImageDimensions(file),
+      ]);
       return {
         id: asset.id,
         name: asset.originalFileName,
@@ -967,6 +977,8 @@ export default function BoothGenerator() {
         status: "uploaded" as const,
         associatedRequirement: !["unspecified", "notWanted"].includes(technicalRequirements.fullWrapGraphics.status) ? "fullWrap" as const : "fascia" as const,
         printSurfaceId: printSurfaceId ?? selectedPrintSurfaceId ?? undefined,
+        widthPx: dimensions?.widthPx,
+        heightPx: dimensions?.heightPx,
         createdAt: asset.createdAt,
       };
     }));
@@ -999,6 +1011,12 @@ export default function BoothGenerator() {
 
   function removeSurfaceArtwork(printSurfaceId: string) {
     setPrintSurfaceAssignments((current) => [...removeArtworkFromPrintSurface(current, printSurfaceId)]);
+  }
+
+  function updateSurfaceArtworkPlacement(printSurfaceId: string, placement: ArtworkPlacement) {
+    setPrintSurfaceAssignments((current) => [
+      ...updatePrintSurfaceArtworkPlacement(current, printSurfaceId, placement),
+    ]);
   }
 
   async function retryPersistentGraphics() {
@@ -4429,6 +4447,7 @@ export default function BoothGenerator() {
                     onUpload={async (surfaceId, file) => { await addPersistentGraphics([file], surfaceId); }}
                     onAssignExisting={assignExistingArtwork}
                     onRemove={removeSurfaceArtwork}
+                    onPlacementChange={updateSurfaceArtworkPlacement}
                   />
                   {selectedPrintSurface && selectedPrintAssignment && <section className="printSurfaceInspector">
                     <span className="propertySectionTitle">TISKOVÁ PLOCHA</span>

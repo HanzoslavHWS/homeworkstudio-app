@@ -12,6 +12,10 @@ import type {
 } from "./project.ts";
 import { nominalAreaSquareMeters } from "./finishes.ts";
 import { selectPricingEntry, type PricingContext } from "./catalog.ts";
+import {
+  artworkPlacementsEqual,
+  DEFAULT_ARTWORK_PLACEMENT,
+} from "./artworkPlacement.ts";
 
 export const TECHNICAL_SERVICE_IDS = {
   cleaningOneTime: "service-cleaning-one-time",
@@ -289,6 +293,7 @@ export function printSurfaceAssignmentsEqual(
       item.graphicsKind === other.graphicsKind &&
       item.artworkStatus === other.artworkStatus &&
       item.artworkFileId === other.artworkFileId &&
+      artworkPlacementsEqual(item.artworkPlacement, other.artworkPlacement) &&
       item.selectedForPrint === other.selectedForPrint &&
       item.canonicalWidthMm === other.canonicalWidthMm &&
       item.canonicalHeightMm === other.canonicalHeightMm &&
@@ -334,6 +339,7 @@ export function computePrintSurfaceAssignments(
       graphicsKind: existing?.graphicsKind ?? (included ? "fascia" as const : "fullWrap" as const),
       artworkStatus: existing?.artworkStatus ?? "missing" as const,
       artworkFileId: existing?.artworkFileId,
+      artworkPlacement: existing?.artworkPlacement,
       selectedForPrint: existing?.selectedForPrint ?? included,
       canonicalWidthMm: surface.widthMm,
       canonicalHeightMm: surface.heightMm,
@@ -367,6 +373,7 @@ export function assignArtworkToPrintSurface(
     graphicsKind: existing?.graphicsKind ?? (included ? "fascia" : "fullWrap"),
     artworkStatus: "received",
     artworkFileId,
+    artworkPlacement: existing?.artworkPlacement ?? DEFAULT_ARTWORK_PLACEMENT,
     selectedForPrint: true,
     canonicalWidthMm: surface.widthMm,
     canonicalHeightMm: surface.heightMm,

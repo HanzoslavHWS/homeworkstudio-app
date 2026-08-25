@@ -60,6 +60,15 @@ import {
   removeArtworkFromPrintSurface,
 } from "../domain/technicalServices.ts";
 import type { GraphicFileReference, PrintSurfaceAssignment } from "../domain/project.ts";
+import {
+  artworkPlacementForMode,
+  calculateArtworkUvTransform,
+  DEFAULT_ARTWORK_PLACEMENT,
+  MAX_ARTWORK_SCALE,
+  MIN_ARTWORK_SCALE,
+  normalizeArtworkPlacement,
+  updatePrintSurfaceArtworkPlacement,
+} from "../domain/artworkPlacement.ts";
 
 async function loadModel(path: string) {
   const file = readFileSync(path);
@@ -1092,6 +1101,20 @@ test("artwork FRONT overlay binds only to the explicit back-wall-01 CORE node", 
     artworkUpAxis: "+z",
     canonicalWidthMm: 950,
     canonicalHeightMm: 2340,
+    sourceWidthPx: 950,
+    sourceHeightPx: 2340,
+    uvTransform: {
+      mode: "stretch",
+      scale: 1,
+      offsetXmm: 0,
+      offsetYmm: 0,
+      displayedWidthMm: 950,
+      displayedHeightMm: 2340,
+      repeatU: 1,
+      repeatV: 1,
+      offsetU: 0,
+      offsetV: 0,
+    },
   });
 });
 
@@ -1238,5 +1261,285 @@ test("Graphics UI groups canonical surfaces and reuses graphicsFiles/artworkFile
   assert.match(panelSource, /onAssignExisting\(surface\.id, event\.target\.value\)/u);
   assert.match(generatorSource, /uploadAsset\(file, \{ category: "project-graphics", ownerId \}/u);
   assert.match(generatorSource, /assignArtworkToPrintSurface\([\s\S]*?additions\[0\]!\.id/u);
+  assert.match(panelSource, /\["stretch", "fit", "fill"\]/u);
+  assert.match(panelSource, /offsetXmm/u);
+  assert.match(panelSource, /offsetYmm/u);
+  assert.match(panelSource, />Reset</u);
+  assert.match(panelSource, /file && isRasterArtworkFile\(file\) && assignment/u);
+  assert.match(generatorSource, /readRasterImageDimensions\(file\)/u);
+  assert.match(generatorSource, /widthPx: dimensions\?\.widthPx/u);
+  assert.match(generatorSource, /heightPx: dimensions\?\.heightPx/u);
   assert.doesNotMatch(generatorSource, /graphicAssets|artworkAssets|graphicUploads/u);
+});
+
+test("Graphics placement controls are compact by default and expand independently per surface", () => {
+  const panelSource = readFileSync("components/configurator/GraphicsSurfacePanel.tsx", "utf8");
+  assert.match(panelSource, /useState<ReadonlySet<string>>\(\s*\(\) => new Set\(\)/u);
+  assert.match(panelSource, /const next = new Set\(current\)/u);
+  assert.match(panelSource, /if \(next\.has\(surfaceId\)\) next\.delete\(surfaceId\);\s*else next\.add\(surfaceId\)/u);
+  assert.match(panelSource, /expandedSurfaceIds\.has\(surface\.id\)/u);
+  assert.match(panelSource, /graphicsPlacementSummary/u);
+  assert.match(panelSource, /placementModeLabel\}[\s\S]*?Math\.round\(placement\.scale \* 100\)[\s\S]*?X \{placement\.offsetXmm\}[\s\S]*?Y \{placement\.offsetYmm\}/u);
+  assert.match(panelSource, /aria-expanded=\{isPlacementExpanded\}/u);
+  assert.match(panelSource, /\{isPlacementExpanded && \(\s*<div className="graphicsPlacementControls"/u);
+  assert.match(panelSource, /\["stretch", "fit", "fill"\]/u);
+  assert.match(panelSource, /artworkPlacementForMode\("stretch"\)[\s\S]*?>Reset</u);
+});
+
+test("legacy artworkPlacement absence is exactly the v1 Stretch mapping", () => {
+  const legacy = calculateArtworkUvTransform({
+    surfaceWidthMm: 950,
+    surfaceHeightMm: 2340,
+    sourceWidthPx: 1600,
+    sourceHeightPx: 900,
+  });
+  assert.deepEqual(legacy, {
+    ...DEFAULT_ARTWORK_PLACEMENT,
+    displayedWidthMm: 950,
+    displayedHeightMm: 2340,
+    repeatU: 1,
+    repeatV: 1,
+    offsetU: 0,
+    offsetV: 0,
+  });
+});
+
+test("Fit preserves source aspect ratio and keeps the complete artwork inside the surface", () => {
+  const fit = calculateArtworkUvTransform({
+    surfaceWidthMm: 950,
+    surfaceHeightMm: 2340,
+    sourceWidthPx: 1600,
+    sourceHeightPx: 900,
+    placement: artworkPlacementForMode("fit"),
+  });
+  assert.ok(fit.displayedWidthMm <= 950 && fit.displayedHeightMm <= 2340);
+  assert.ok(Math.abs(fit.displayedWidthMm / fit.displayedHeightMm - 1600 / 900) < 1e-12);
+  assert.equal(fit.displayedWidthMm, 950);
+  assert.ok(fit.repeatV > 1, "UV outside the image is clipped and reveals the base panel");
+});
+
+test("Fill preserves aspect ratio, fills the surface and crops from the exact center", () => {
+  const fill = calculateArtworkUvTransform({
+    surfaceWidthMm: 950,
+    surfaceHeightMm: 2340,
+    sourceWidthPx: 1600,
+    sourceHeightPx: 900,
+    placement: artworkPlacementForMode("fill"),
+  });
+  assert.ok(fill.displayedWidthMm >= 950 && fill.displayedHeightMm >= 2340);
+  assert.ok(Math.abs(fill.displayedWidthMm / fill.displayedHeightMm - 1600 / 900) < 1e-12);
+  assert.equal(fill.displayedHeightMm, 2340);
+  assert.ok(Math.abs(fill.offsetU - (1 - fill.repeatU) / 2) < 1e-12);
+  assert.equal(fill.offsetV, 0);
+});
+
+test("physical X/Y offsets affect only their matching UV axis", () => {
+  const base = calculateArtworkUvTransform({ surfaceWidthMm: 950, surfaceHeightMm: 2340, sourceWidthPx: 1000, sourceHeightPx: 1000, placement: artworkPlacementForMode("fit") });
+  const x = calculateArtworkUvTransform({ surfaceWidthMm: 950, surfaceHeightMm: 2340, sourceWidthPx: 1000, sourceHeightPx: 1000, placement: { ...artworkPlacementForMode("fit"), offsetXmm: 100 } });
+  const y = calculateArtworkUvTransform({ surfaceWidthMm: 950, surfaceHeightMm: 2340, sourceWidthPx: 1000, sourceHeightPx: 1000, placement: { ...artworkPlacementForMode("fit"), offsetYmm: 100 } });
+  assert.notEqual(x.offsetU, base.offsetU);
+  assert.equal(x.offsetV, base.offsetV);
+  assert.equal(y.offsetU, base.offsetU);
+  assert.notEqual(y.offsetV, base.offsetV);
+});
+
+test("custom scale is a uniform multiplier over the selected Fit/Fill base", () => {
+  const base = calculateArtworkUvTransform({ surfaceWidthMm: 950, surfaceHeightMm: 2340, sourceWidthPx: 1600, sourceHeightPx: 900, placement: artworkPlacementForMode("fill") });
+  const zoomed = calculateArtworkUvTransform({ surfaceWidthMm: 950, surfaceHeightMm: 2340, sourceWidthPx: 1600, sourceHeightPx: 900, placement: { ...artworkPlacementForMode("fill"), scale: 2 } });
+  assert.equal(zoomed.displayedWidthMm, base.displayedWidthMm * 2);
+  assert.equal(zoomed.displayedHeightMm, base.displayedHeightMm * 2);
+  assert.equal(zoomed.repeatU, base.repeatU / 2);
+  assert.equal(zoomed.repeatV, base.repeatV / 2);
+});
+
+test("fascia uses the same placement math and fixed-quad clipping shader as panel faces", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  const file = { ...artworkFile("fascia-wide"), widthPx: 1000, heightPx: 1000 };
+  const assignment = updatePrintSurfaceArtworkPlacement(
+    artworkAssignments([["fascia-print", file.id]]),
+    "fascia-print",
+    artworkPlacementForMode("fit"),
+  );
+  await decorateArtworkScene(scene, assignment, [file]);
+  const overlay = findPrintArtworkOverlays(scene)[0]!;
+  const metadata = overlayMetadata(overlay);
+  assert.equal(metadata.printSurfaceId, "fascia-print");
+  assert.equal(metadata.uvTransform.mode, "fit");
+  assert.equal(metadata.uvTransform.displayedWidthMm, 300);
+  assert.equal(metadata.uvTransform.displayedHeightMm, 300);
+  assert.match((overlay.material as THREE.MeshBasicMaterial).customProgramCacheKey(), /surface-clip/u);
+});
+
+test("one graphics file has independent placement per assignment", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  const shared = { ...artworkFile("shared-placement"), widthPx: 1600, heightPx: 900 };
+  let assignments = artworkAssignments([
+    ["back-wall-01-front", shared.id],
+    ["left-wall-01-front", shared.id],
+  ]);
+  assignments = updatePrintSurfaceArtworkPlacement(assignments, "back-wall-01-front", { mode: "fill", scale: 1.4, offsetXmm: 120, offsetYmm: -40 });
+  assignments = updatePrintSurfaceArtworkPlacement(assignments, "left-wall-01-front", artworkPlacementForMode("fit"));
+  await decorateArtworkScene(scene, assignments, [shared]);
+  const metadata = findPrintArtworkOverlays(scene).map(overlayMetadata);
+  assert.deepEqual(metadata.find((item) => item.printSurfaceId === "back-wall-01-front")!.uvTransform.mode, "fill");
+  assert.deepEqual(metadata.find((item) => item.printSurfaceId === "left-wall-01-front")!.uvTransform.mode, "fit");
+  assert.equal(assignments[0]?.artworkFileId, assignments[1]?.artworkFileId);
+});
+
+test("placement update reuses the live overlay texture and does not rebuild the booth scene", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  const file = { ...artworkFile("live-placement"), widthPx: 1600, heightPx: 900 };
+  const initial = artworkAssignments([["back-wall-01-front", file.id]]);
+  let textureLoads = 0;
+  const apply = (assignments: readonly PrintSurfaceAssignment[]) => applyPrintArtworkOverlays({
+    scene,
+    printSurfaces: p86ForArtwork.printSurfaces ?? [],
+    printSurfaceAssignments: assignments,
+    graphicsFiles: [file],
+    modelUnit: "m",
+    resolveArtworkUrl: async () => "memory://live-placement",
+    loadTexture: async () => { textureLoads += 1; return new THREE.Texture(); },
+  });
+  await apply(initial);
+  const firstOverlay = findPrintArtworkOverlays(scene)[0]!;
+  const firstTexture = (firstOverlay.material as THREE.MeshBasicMaterial).map;
+  await apply(updatePrintSurfaceArtworkPlacement(initial, "back-wall-01-front", { mode: "fill", scale: 1.2, offsetXmm: 25, offsetYmm: 50 }));
+  const secondOverlay = findPrintArtworkOverlays(scene)[0]!;
+  assert.equal(secondOverlay, firstOverlay);
+  assert.equal((secondOverlay.material as THREE.MeshBasicMaterial).map, firstTexture);
+  assert.equal(textureLoads, 1);
+  assert.equal(overlayMetadata(secondOverlay).uvTransform.offsetYmm, 50);
+});
+
+test("placement and raster dimensions persist, while Reset keeps artworkFileId assigned", () => {
+  const file = { ...artworkFile("persist-placement"), widthPx: 2400, heightPx: 1600 };
+  const assigned = updatePrintSurfaceArtworkPlacement(
+    artworkAssignments([["back-wall-01-front", file.id]]),
+    "back-wall-01-front",
+    { mode: "fill", scale: 1.3, offsetXmm: 80, offsetYmm: -35 },
+  );
+  const reloaded = normalizeProjectRecord(JSON.parse(JSON.stringify(createProjectRecord({
+    id: "placement-roundtrip",
+    graphicsFiles: [file],
+    printSurfaceAssignments: assigned,
+  }))));
+  assert.equal(reloaded.graphicsFiles[0]?.id, file.id);
+  assert.equal(reloaded.graphicsFiles[0]?.widthPx, 2400);
+  assert.equal(reloaded.graphicsFiles[0]?.heightPx, 1600);
+  assert.deepEqual(reloaded.printSurfaceAssignments[0]?.artworkPlacement, { mode: "fill", scale: 1.3, offsetXmm: 80, offsetYmm: -35 });
+  const reset = updatePrintSurfaceArtworkPlacement(reloaded.printSurfaceAssignments, "back-wall-01-front", artworkPlacementForMode("stretch"));
+  assert.deepEqual(reset[0]?.artworkPlacement, DEFAULT_ARTWORK_PLACEMENT);
+  assert.equal(reset[0]?.artworkFileId, file.id);
+});
+
+test("placement normalization clamps scale and rejects non-finite offsets", () => {
+  assert.deepEqual(normalizeArtworkPlacement({
+    mode: "fit",
+    scale: MAX_ARTWORK_SCALE + 10,
+    offsetXmm: Number.NaN,
+    offsetYmm: Number.POSITIVE_INFINITY,
+  }), {
+    mode: "fit",
+    scale: MAX_ARTWORK_SCALE,
+    offsetXmm: 0,
+    offsetYmm: 0,
+  });
+  assert.equal(normalizeArtworkPlacement({
+    mode: "fill",
+    scale: 0,
+    offsetXmm: 0,
+    offsetYmm: 0,
+  }).scale, MIN_ARTWORK_SCALE);
+});
+
+test("physical millimeter offsets have a precise, viewport-independent UV mapping", () => {
+  const moved = calculateArtworkUvTransform({
+    surfaceWidthMm: 1000,
+    surfaceHeightMm: 1000,
+    sourceWidthPx: 1000,
+    sourceHeightPx: 1000,
+    placement: { mode: "stretch", scale: 1, offsetXmm: 100, offsetYmm: -50 },
+  });
+  assert.equal(moved.offsetU, -0.1);
+  assert.equal(moved.offsetV, 0.05);
+});
+
+test("Stretch remains the legacy base while manual zoom is clipped on the fixed surface quad", () => {
+  const zoomed = calculateArtworkUvTransform({
+    surfaceWidthMm: 950,
+    surfaceHeightMm: 2340,
+    sourceWidthPx: 1600,
+    sourceHeightPx: 900,
+    placement: { mode: "stretch", scale: 2, offsetXmm: 0, offsetYmm: 0 },
+  });
+  assert.equal(zoomed.displayedWidthMm, 1900);
+  assert.equal(zoomed.displayedHeightMm, 4680);
+  assert.equal(zoomed.repeatU, 0.5);
+  assert.equal(zoomed.repeatV, 0.5);
+  assert.equal(zoomed.offsetU, 0.25);
+  assert.equal(zoomed.offsetV, 0.25);
+});
+
+test("renderer can recover real raster dimensions from the loaded texture for older file metadata", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  const file = artworkFile("legacy-raster-dimensions");
+  const assignments = updatePrintSurfaceArtworkPlacement(
+    artworkAssignments([["back-wall-01-front", file.id]]),
+    "back-wall-01-front",
+    artworkPlacementForMode("fit"),
+  );
+  await applyPrintArtworkOverlays({
+    scene,
+    printSurfaces: p86ForArtwork.printSurfaces ?? [],
+    printSurfaceAssignments: assignments,
+    graphicsFiles: [file],
+    modelUnit: "m",
+    resolveArtworkUrl: async () => "memory://legacy-raster-dimensions",
+    loadTexture: async () => {
+      const texture = new THREE.Texture();
+      texture.image = { width: 1600, height: 900 };
+      return texture;
+    },
+  });
+  const metadata = overlayMetadata(findPrintArtworkOverlays(scene)[0]!);
+  assert.equal(metadata.sourceWidthPx, 1600);
+  assert.equal(metadata.sourceHeightPx, 900);
+  assert.equal(metadata.uvTransform.mode, "fit");
+});
+
+test("PDF remains an assigned production source but never creates a placement overlay", async () => {
+  const { scene } = await loadModel("public/models/booths/koje-2x2/HWS_BOOTH_KOJE_2000x2000.glb");
+  const pdf: GraphicFileReference = {
+    ...artworkFile("production-pdf"),
+    name: "production.pdf",
+    mimeType: "application/pdf",
+  };
+  const assignments = artworkAssignments([["back-wall-01-front", pdf.id]]);
+  const result = await applyPrintArtworkOverlays({
+    scene,
+    printSurfaces: p86ForArtwork.printSurfaces ?? [],
+    printSurfaceAssignments: assignments,
+    graphicsFiles: [pdf],
+    modelUnit: "m",
+    resolveArtworkUrl: async () => "memory://production-pdf",
+    loadTexture: async () => { throw new Error("PDF texture must not load"); },
+  });
+  assert.deepEqual(result.sourceOnlySurfaceIds, ["back-wall-01-front"]);
+  assert.equal(findPrintArtworkOverlays(scene).length, 0);
+});
+
+test("Reset changes only the requested surface placement and keeps both artwork links", () => {
+  const sharedFileId = "shared-reset";
+  let assignments = artworkAssignments([
+    ["back-wall-01-front", sharedFileId],
+    ["left-wall-01-front", sharedFileId],
+  ]);
+  assignments = updatePrintSurfaceArtworkPlacement(assignments, "back-wall-01-front", {
+    mode: "fill", scale: 1.5, offsetXmm: 40, offsetYmm: -20,
+  });
+  assignments = updatePrintSurfaceArtworkPlacement(assignments, "left-wall-01-front", artworkPlacementForMode("fit"));
+  const reset = updatePrintSurfaceArtworkPlacement(assignments, "back-wall-01-front", artworkPlacementForMode("stretch"));
+  assert.deepEqual(reset[0]?.artworkPlacement, DEFAULT_ARTWORK_PLACEMENT);
+  assert.deepEqual(reset[1]?.artworkPlacement, artworkPlacementForMode("fit"));
+  assert.deepEqual(reset.map((assignment) => assignment.artworkFileId), [sharedFileId, sharedFileId]);
 });
