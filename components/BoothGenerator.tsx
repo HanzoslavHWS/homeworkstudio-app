@@ -4443,6 +4443,7 @@ export default function BoothGenerator() {
                     graphicsFiles={graphicsFiles}
                     selectedSurfaceId={selectedPrintSurfaceId}
                     upload={graphicsUpload}
+                    realizationProfileId={realizationProfileId}
                     onSelectSurface={setSelectedPrintSurfaceId}
                     onUpload={async (surfaceId, file) => { await addPersistentGraphics([file], surfaceId); }}
                     onAssignExisting={assignExistingArtwork}

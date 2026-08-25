@@ -399,15 +399,69 @@ export function removeArtworkFromPrintSurface(
   return printSurfaceAssignmentsEqual(current, next) ? current : next;
 }
 
+export type ResolvedProductionPrintSurface = Readonly<{
+  printSurfaceId: string;
+  canonicalWidthMm: number;
+  canonicalHeightMm: number;
+  productionWidthMm: number;
+  productionHeightMm: number;
+  bleedLeftMm: number;
+  bleedRightMm: number;
+  bleedTopMm: number;
+  bleedBottomMm: number;
+  realizationProfileId: string;
+}>;
+
+/**
+ * canonical print surface (PrintSurface.widthMm/heightMm — the design/render dimensions, e.g.
+ * P86's PANEL CORE 950×2340 or FASCIA 2000×300, stable regardless of realization) + realization
+ * production rule (PrintSurface.productionProfiles[realizationProfileId]) = production print
+ * surface (the physical/export size a specific realization's production process needs).
+ *
+ * Resolution order, generic for every PrintSurface (never a P86-only rule):
+ *  1. No matching productionProfiles[realizationProfileId] entry (includes today's "default"
+ *     profile, which defines no overrides) -> production = canonical, all bleed = 0. This is the
+ *     ordinary fallback for ANY surface/realization with no rule, not special-cased per booth.
+ *  2. An entry with bleedLeft/Right/Top/BottomMm (the PREFERRED model) -> production = canonical
+ *     + bleed on each edge independently (asymmetric bleed is a normal case, not an edge case).
+ *  3. An entry with an explicit widthMm/heightMm (escape hatch for a realization whose production
+ *     size genuinely isn't canonical+bleed, e.g. a fixed stock panel size) -> wins outright over
+ *     bleed math for that dimension.
+ *
+ * Never touches GLB geometry, collision, the UV overlay, or artworkPlacement — those all key off
+ * PrintSurface.widthMm/heightMm (canonical) directly (see lib/printArtworkOverlays.ts) and never
+ * read this function's output. Pure domain function; no React, no pricing.
+ */
+export function resolveProductionPrintSurface(
+  surface: PrintSurface,
+  realizationProfileId: string,
+): ResolvedProductionPrintSurface {
+  const override = surface.productionProfiles?.[realizationProfileId];
+  const bleedLeftMm = override?.bleedLeftMm ?? 0;
+  const bleedRightMm = override?.bleedRightMm ?? 0;
+  const bleedTopMm = override?.bleedTopMm ?? 0;
+  const bleedBottomMm = override?.bleedBottomMm ?? 0;
+  return {
+    printSurfaceId: surface.id,
+    canonicalWidthMm: surface.widthMm,
+    canonicalHeightMm: surface.heightMm,
+    productionWidthMm: override?.widthMm ?? surface.widthMm + bleedLeftMm + bleedRightMm,
+    productionHeightMm: override?.heightMm ?? surface.heightMm + bleedTopMm + bleedBottomMm,
+    bleedLeftMm,
+    bleedRightMm,
+    bleedTopMm,
+    bleedBottomMm,
+    realizationProfileId,
+  };
+}
+
+/** Thin projection of resolveProductionPrintSurface for the two existing call sites (computePrintSurfaceAssignments/assignArtworkToPrintSurface) that only ever needed the width/height pair — kept so neither had to change shape. */
 export function productionPrintSurfaceDimensions(
   surface: PrintSurface,
   realizationProfileId: string,
 ) {
-  const override = surface.productionProfiles?.[realizationProfileId];
-  return {
-    widthMm: override?.widthMm ?? surface.widthMm,
-    heightMm: override?.heightMm ?? surface.heightMm,
-  };
+  const resolved = resolveProductionPrintSurface(surface, realizationProfileId);
+  return { widthMm: resolved.productionWidthMm, heightMm: resolved.productionHeightMm };
 }
 
 export function printSurfaceProductionStatus(

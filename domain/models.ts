@@ -117,6 +117,25 @@ export type PrintSurfaceGroup = Readonly<{
   order: number;
 }>;
 
+/**
+ * A realization's production rule for one PrintSurface, keyed by realizationProfileId in
+ * PrintSurface.productionProfiles below — same "override map on the definition, keyed by
+ * realization id" shape ComponentDefinition/PlacedComponent.productionProfiles (see
+ * domain/production.ts) already uses for physical part export dimensions, extended here with the
+ * preferred bleed/allowance model (see domain/technicalServices.ts's resolveProductionPrintSurface
+ * for the resolution order between the two).
+ */
+export type PrintSurfaceProductionOverride = Readonly<{
+  /** Preferred model: production = canonical + bleed on each edge (a print/cut allowance a realization's production process requires). */
+  bleedLeftMm?: number;
+  bleedRightMm?: number;
+  bleedTopMm?: number;
+  bleedBottomMm?: number;
+  /** Explicit escape hatch for a realization whose production size genuinely isn't canonical+bleed — wins over bleed math when present. The original (pre-bleed) override shape, kept for backward compatibility. */
+  widthMm?: number;
+  heightMm?: number;
+}>;
+
 export type PrintSurface = Readonly<{
   id: string;
   name: string;
@@ -134,9 +153,8 @@ export type PrintSurface = Readonly<{
   active: boolean;
   allowanceLinearMeters?: number;
   pricingUnit?: "bm" | "m²";
-  productionProfiles?: Readonly<
-    Record<string, Readonly<{ widthMm?: number; heightMm?: number }>>
-  >;
+  /** Canonical widthMm/heightMm above are the design/render surface and never change here — see resolveProductionPrintSurface. Absent for a given realizationProfileId (including "default" today) resolves to production = canonical, never a P86-specific fallback. */
+  productionProfiles?: Readonly<Record<string, PrintSurfaceProductionOverride>>;
 }>;
 
 export type BoothPackageItem = Readonly<{

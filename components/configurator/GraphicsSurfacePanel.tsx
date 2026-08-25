@@ -15,6 +15,7 @@ import {
   normalizeArtworkPlacement,
 } from "../../domain/artworkPlacement";
 import { artworkPreviewLabel, isRasterArtworkFile } from "../../lib/printArtworkOverlays";
+import { resolveProductionPrintSurface } from "../../domain/technicalServices";
 import type { UploadProgress } from "../../lib/storage/assetClient";
 
 type GraphicsSurfacePanelProps = Readonly<{
@@ -23,6 +24,8 @@ type GraphicsSurfacePanelProps = Readonly<{
   graphicsFiles: readonly GraphicFileReference[];
   selectedSurfaceId: string | null;
   upload?: UploadProgress;
+  /** Resolves each surface's production dimensions live (domain/technicalServices.ts's resolveProductionPrintSurface) — never read from a possibly-stale PrintSurfaceAssignment snapshot, and available even for an on-demand surface that has no assignment yet. */
+  realizationProfileId: string;
   onSelectSurface: (surfaceId: string) => void;
   onUpload: (surfaceId: string, file: File) => Promise<void>;
   onAssignExisting: (surfaceId: string, artworkFileId: string) => void;
@@ -47,6 +50,7 @@ export function GraphicsSurfacePanel({
   graphicsFiles,
   selectedSurfaceId,
   upload,
+  realizationProfileId,
   onSelectSurface,
   onUpload,
   onAssignExisting,
@@ -104,6 +108,10 @@ export function GraphicsSurfacePanel({
               : "Bez grafiky";
             const placement = normalizeArtworkPlacement(assignment?.artworkPlacement);
             const isPlacementExpanded = expandedSurfaceIds.has(surface.id);
+            const production = resolveProductionPrintSurface(surface, realizationProfileId);
+            const hasProductionAllowance =
+              production.productionWidthMm !== production.canonicalWidthMm ||
+              production.productionHeightMm !== production.canonicalHeightMm;
             const placementModeLabel = placement.mode === "stretch"
               ? "Stretch"
               : placement.mode === "fit"
@@ -120,7 +128,10 @@ export function GraphicsSurfacePanel({
               >
                 <div className="graphicsSurfaceIdentity">
                   <strong>{surfacePanelLabel(surface)}</strong>
-                  <small>{surface.widthMm} × {surface.heightMm} mm · {status}</small>
+                  <small>Plocha: {surface.widthMm} × {surface.heightMm} mm · {status}</small>
+                  {hasProductionAllowance && (
+                    <small>Výroba: {production.productionWidthMm} × {production.productionHeightMm} mm</small>
+                  )}
                   {file && <><span>{file.name}</span><small>{artworkPreviewLabel(file)}</small></>}
                 </div>
                 <div className="graphicsSurfaceActions" onClick={(event) => event.stopPropagation()}>
