@@ -9,7 +9,7 @@
  */
 import type { PrintSurface, PrintSurfaceFace } from "./models.ts";
 
-const FACE_LABEL_CS: Readonly<Record<PrintSurfaceFace, string>> = {
+export const FACE_LABEL_CS: Readonly<Record<PrintSurfaceFace, string>> = {
   front: "Přední",
   back: "Zadní",
 };
@@ -52,6 +52,17 @@ export function printSurfaceHumanLabelParts(surface: PrintSurface): Readonly<{ g
 export function printSurfaceHumanLabel(surface: PrintSurface): string {
   const { groupLabel, panelLabel, faceLabel } = printSurfaceHumanLabelParts(surface);
   return panelLabel === groupLabel ? `${groupLabel} – ${faceLabel}` : `${groupLabel} – ${panelLabel} – ${faceLabel}`;
+}
+
+/**
+ * Graphics Production Package v1: the SAME collapse-when-equal label rule printSurfaceHumanLabel
+ * already applies, but for callers that only have already-built row primitives (groupName/name/
+ * face — e.g. GraphicsExportRow-derived readiness rows), never the original PrintSurface object.
+ * Never a second copy of the collapse logic — this is the one place it lives.
+ */
+export function graphicsRowHumanLabel(row: Readonly<{ groupName: string; name: string; face: PrintSurfaceFace }>): string {
+  const faceLabel = FACE_LABEL_CS[row.face];
+  return row.name === row.groupName ? `${row.groupName} – ${faceLabel}` : `${row.groupName} – ${row.name} – ${faceLabel}`;
 }
 
 /**
