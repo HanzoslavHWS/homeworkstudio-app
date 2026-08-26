@@ -146,6 +146,7 @@ import {
   effectiveFasciaRequirement,
   removeArtworkFromPrintSurface,
 } from "../domain/technicalServices";
+import { buildGraphicsFileDisplayName, extensionOf } from "../domain/graphicsFileNaming";
 import { isObjectLocked, toggleUserLock } from "../domain/locking";
 import {
   createEmptyNotes,
@@ -919,6 +920,7 @@ export default function BoothGenerator() {
     waitingForCustomer,
     requiresAction,
     realizationName: selectedRealizationProfile?.name ?? "—",
+    realizationProfileId,
     currency,
     booth: selectedBooth,
     sceneObjects: placedComponents,
@@ -961,14 +963,22 @@ export default function BoothGenerator() {
   ): Promise<void> {
     const ownerId = ensureProjectStorageId();
     const batch = Array.from(files);
+    // Report section 1/2: uploading FROM a specific print surface gets an immediately readable
+    // displayName derived from that surface's own metadata (buildGraphicsFileDisplayName) —
+    // never a P86 id lookup. The real uploaded filename is untouched: it stays in
+    // asset.originalFileName exactly as returned by the presign API. A generic (non-surface)
+    // upload keeps today's behavior — displayName undefined, so asset/originalFileName wins.
+    const resolvedPrintSurfaceId = printSurfaceId ?? selectedPrintSurfaceId ?? undefined;
+    const uploadSurface = selectedBooth?.printSurfaces?.find((surface) => surface.id === resolvedPrintSurfaceId);
     const results = await Promise.allSettled(batch.map(async (file) => {
+      const displayName = uploadSurface ? buildGraphicsFileDisplayName(uploadSurface, extensionOf(file.name)) : undefined;
       const [asset, dimensions] = await Promise.all([
-        uploadAsset(file, { category: "project-graphics", ownerId }, setGraphicsUpload),
+        uploadAsset(file, { category: "project-graphics", ownerId, displayName }, setGraphicsUpload),
         readRasterImageDimensions(file),
       ]);
       return {
         id: asset.id,
-        name: asset.originalFileName,
+        name: asset.displayName ?? asset.originalFileName,
         size: asset.size,
         mimeType: asset.mimeType,
         availability: "persistent" as const,
@@ -976,7 +986,7 @@ export default function BoothGenerator() {
         asset,
         status: "uploaded" as const,
         associatedRequirement: !["unspecified", "notWanted"].includes(technicalRequirements.fullWrapGraphics.status) ? "fullWrap" as const : "fascia" as const,
-        printSurfaceId: printSurfaceId ?? selectedPrintSurfaceId ?? undefined,
+        printSurfaceId: resolvedPrintSurfaceId,
         widthPx: dimensions?.widthPx,
         heightPx: dimensions?.heightPx,
         createdAt: asset.createdAt,
@@ -1017,6 +1027,14 @@ export default function BoothGenerator() {
     setPrintSurfaceAssignments((current) => [
       ...updatePrintSurfaceArtworkPlacement(current, printSurfaceId, placement),
     ]);
+  }
+
+  // Report sections 11/12: explicit, user-chosen role — never inferred from resolution/DPI/mime
+  // type. Never touches artwork assignment/placement, only this one metadata field on the
+  // graphicsFile itself (the same file may be assigned to several surfaces; the role travels
+  // with the file, not with any one assignment).
+  function updateGraphicsFileUsageRole(artworkFileId: string, usageRole: "preview" | "print-data") {
+    setGraphicsFiles((current) => current.map((file) => (file.id === artworkFileId ? { ...file, usageRole } : file)));
   }
 
   async function retryPersistentGraphics() {
@@ -4449,6 +4467,7 @@ export default function BoothGenerator() {
                     onAssignExisting={assignExistingArtwork}
                     onRemove={removeSurfaceArtwork}
                     onPlacementChange={updateSurfaceArtworkPlacement}
+                    onUsageRoleChange={updateGraphicsFileUsageRole}
                   />
                   {selectedPrintSurface && selectedPrintAssignment && <section className="printSurfaceInspector">
                     <span className="propertySectionTitle">TISKOVÁ PLOCHA</span>

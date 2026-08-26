@@ -30,6 +30,7 @@ import type {
 } from "../../domain/project";
 import {
   createCustomerCalculationViewModel,
+  resolvePricingContext,
   type CustomerCalculationViewModel,
 } from "../../domain/calculationExport";
 import { effectiveFasciaRequirement } from "../../domain/technicalServices";
@@ -56,7 +57,7 @@ import {
 import { createProjectPackage, packageFolderPath } from "../../domain/projectPackage";
 import { getMasterReferenceModel } from "../../domain/cad3d";
 import { createVisualizationCameraPresets } from "../../domain/visualization";
-import { downloadDataUrl, downloadText, renderTechnicalPlanPng } from "../../lib/planExport";
+import { downloadDataUrl, downloadText, printDocument, renderTechnicalPlanPng } from "../../lib/planExport";
 import { createZip, dataUrlZipEntry, textZipEntry, type ZipEntry } from "../../lib/zip";
 import {
   BoothCadViewer,
@@ -65,6 +66,7 @@ import {
 } from "../configurator/BoothCadViewer";
 import { EventLogo } from "./CatalogManagementPages";
 import { requirementStatusLabels } from "./TechnicalRequirementsEditor";
+import { GraphicsExportPanel } from "./GraphicsExportPanel";
 
 type CommonProject = {
   id?: string;
@@ -80,6 +82,8 @@ type CommonProject = {
   waitingForCustomer: boolean;
   requiresAction: boolean;
   realizationName: string;
+  /** Raw id (report Graphics Export v1): resolveProductionPrintSurface needs the id, never the display name — realizationName above stays display-only. */
+  realizationProfileId: string;
   currency: "CZK" | "EUR";
   booth?: BoothType;
   sceneObjects: readonly PlacedComponent[];
@@ -263,6 +267,16 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
   const [emailDraft, setEmailDraft] = useState<EmailDraft | null>(null);
   const [planPreviewDataUrl, setPlanPreviewDataUrl] = useState("");
   const booth = project.booth;
+  // Shared with GraphicsExportPanel below — one catalog/pricing-context resolution, never a
+  // second implementation (report Graphics Export v1.1, section 19).
+  // DB-backed items MUST come first: componentCatalogItems' graphics seed entries
+  // (fasciaGraphicsService/fullWrapGraphicsService) carry the SAME internalCode
+  // (GRAPHICS-FASCIA/GRAPHICS-FULL-WRAP) as the real catalog_items rows, but with
+  // pricingEntries: []. findCatalogItemByIdentity's internalCode lookup is a first-match
+  // .find() — putting the static seed first shadowed every DB-backed PricingEntry and
+  // forced needs-quote even when the live PriceList had a real rate.
+  const graphicsCatalogItems = [...project.technicalCatalogItems, ...componentCatalogItems];
+  const graphicsPricingContext = resolvePricingContext(project);
   const calculation = createCustomerCalculationViewModel({
     company: project.company,
     customerProjectNote: project.customerNote,
@@ -272,10 +286,11 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
     sceneObjects: project.sceneObjects,
     requirements: project.requirements,
     printSurfaceAssignments: project.printSurfaceAssignments,
+    realizationProfileId: project.realizationProfileId,
     generatedPlanOutputs: project.generatedPlanOutputs,
     visualizations: project.visualizations,
     options: project.exportCalculationOptions,
-    catalogItems: [...componentCatalogItems, ...project.technicalCatalogItems],
+    catalogItems: graphicsCatalogItems,
     priceLists: project.priceLists,
   });
   const summary = summaryText(project, language);
@@ -338,7 +353,7 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
     <section className="calculationWorkspace">
       <aside className="workflowCard calculationOptions"><div className="workflowCardHeader"><div><span>ZÁKAZNICKÝ EXPORT</span><strong>Kalkulace / nabídka</strong></div></div>
         <CalculationOptions options={project.exportCalculationOptions} outputs={[...project.generatedPlanOutputs, ...project.visualizations]} onChange={onCalculationOptionsChange} />
-        <button type="button" className="primaryButton" onClick={() => window.print()}>Vytisknout / uložit jako PDF</button>
+        <button type="button" className="primaryButton" onClick={() => printDocument("customer-calculation")}>Vytisknout / uložit jako PDF</button>
       </aside>
       <CalculationPreview calculation={calculation} currency={project.currency} />
     </section>
@@ -349,6 +364,18 @@ export function ExportStep({ project, temporaryGraphicFiles, onSelectedOutputIds
       <section className="workflowCard"><div className="workflowCardHeader"><div><span>PŘÍLOHY EVENTU</span><strong>Dokumenty</strong></div></div>{activeDocuments.length ? activeDocuments.map((document) => <label className="outputSelectionRow" key={document.id}><input type="checkbox" checked={project.selectedEventDocumentIds.includes(document.id)} onChange={() => toggleDocument(document.id)} /><span><strong>{document.title}</strong><small>{document.fileName} · {document.availability === "temporary-session" ? "dočasné" : "uložené"}</small></span></label>) : <p className="emptyState">Event nemá dostupné dokumenty.</p>}</section>
       <section className="workflowCard packageExport"><div className="workflowCardHeader"><div><span>PROJECT PACKAGE</span><strong>Celý projekt</strong></div></div><PackageTree projectPackage={projectPackage} /><button className="primaryButton" onClick={downloadPackage} disabled={!booth}>Stáhnout celý projekt jako ZIP</button><p className="workflowMuted">ZIP obsahuje jen skutečně dostupné a vybrané soubory.</p></section>
     </div>
+    <GraphicsExportPanel
+      booth={booth}
+      printSurfaceAssignments={project.printSurfaceAssignments}
+      graphicsFiles={project.graphicsFiles}
+      realizationProfileId={project.realizationProfileId}
+      realizationLabel={project.realizationName}
+      projectName={project.name}
+      company={project.company}
+      eventName={project.event?.name ?? ""}
+      catalogItems={graphicsCatalogItems}
+      pricingContext={graphicsPricingContext}
+    />
     <section className="workflowCard emailDraftSection"><div className="workflowCardHeader"><div><span>PŘÍPRAVA E-MAILU</span><strong>Pracovní prostor</strong></div></div><div className="emailPreparationGrid"><div><h3>A · Přílohy</h3>{outputAttachments.map((attachment) => <label className="outputSelectionRow" key={attachment.id}><input type="checkbox" checked={emailDraft?.attachments.find((item) => item.id === attachment.id)?.selected ?? emailAttachmentIds.includes(attachment.id)} onChange={() => { setEmailAttachmentIds((ids) => ids.includes(attachment.id) ? ids.filter((id) => id !== attachment.id) : [...ids, attachment.id]); if (emailDraft) setEmailDraft({ ...emailDraft, attachments: emailDraft.attachments.map((item) => item.id === attachment.id ? { ...item, selected: !item.selected } : item) }); }} /><span>{attachment.name}</span></label>)}</div><div><h3>B · Co zahrnout do e-mailu</h3>{EMAIL_TOPICS.map((topic) => <label className="outputSelectionRow" key={topic.id}><input type="checkbox" checked={emailTopics.includes(topic.id)} onChange={() => toggleTopic(topic.id)} /><span>{topic.label}</span></label>)}</div><div><h3>C · Jazyk</h3><strong>{language === "cs" ? "Čeština" : "English"}</strong><p className="workflowMuted">Draft respektuje tento exportní override.</p></div></div><button className="primaryButton" onClick={prepareEmail}>Vytvořit text e-mailu</button>{emailDraft ? <EmailDraftEditor draft={emailDraft} onChange={setEmailDraft} /> : <p className="workspaceEmpty">RuleBasedEmailDraftProvider sestaví text ze skutečného stavu projektu. Nic se automaticky neodesílá.</p>}</section>
   </div>;
 }
@@ -439,7 +466,7 @@ function stageLabel(stage: ProjectStage) { return stage === "quote" ? "Nabídka 
 function eventDate(event?: Exhibition) { return event?.eventFrom || event?.eventTo ? `${event.eventFrom || "?"}–${event.eventTo || "?"}` : "Termín neuveden"; }
 function safeName(value: string) { return (value || "Projekt").trim().replace(/[^a-zA-Z0-9ěščřžýáíéúůĚŠČŘŽÝÁÍÉÚŮ_-]+/g, "_"); }
 function formatBytes(size: number) { return size < 1024 ? `${size} B` : size < 1024 * 1024 ? `${Math.round(size / 1024)} kB` : `${(size / 1024 / 1024).toFixed(1)} MB`; }
-function projectPricing(project: CommonProject) { const calculation = createCustomerCalculationViewModel({ company: project.company, customerProjectNote: project.customerNote, currency: project.currency, booth: project.booth, event: project.event, sceneObjects: project.sceneObjects, requirements: project.requirements, printSurfaceAssignments: project.printSurfaceAssignments, generatedPlanOutputs: [], visualizations: [], options: { ...project.exportCalculationOptions, includePricingTable: true, includeVatSummary: true, includeVisuals: false }, catalogItems: [...componentCatalogItems, ...project.technicalCatalogItems], priceLists: project.priceLists }); return { net: calculation.totals.net, vat: calculation.totals.vat ?? 0, gross: calculation.totals.gross ?? calculation.totals.net, vatRatePercent: calculation.totals.vatRatePercent ?? 21, warnings: calculation.warnings }; }
+function projectPricing(project: CommonProject) { const calculation = createCustomerCalculationViewModel({ company: project.company, customerProjectNote: project.customerNote, currency: project.currency, booth: project.booth, event: project.event, sceneObjects: project.sceneObjects, requirements: project.requirements, printSurfaceAssignments: project.printSurfaceAssignments, realizationProfileId: project.realizationProfileId, generatedPlanOutputs: [], visualizations: [], options: { ...project.exportCalculationOptions, includePricingTable: true, includeVatSummary: true, includeVisuals: false }, catalogItems: [...project.technicalCatalogItems, ...componentCatalogItems], priceLists: project.priceLists }); return { net: calculation.totals.net, vat: calculation.totals.vat ?? 0, gross: calculation.totals.gross ?? calculation.totals.net, vatRatePercent: calculation.totals.vatRatePercent ?? 21, warnings: calculation.warnings }; }
 function formatMoney(value: number, currency: CommonProject["currency"]) { return `${value.toLocaleString("cs-CZ")} ${currency}`; }
 function photoExtension(url: string) { const extension = url.split(/[?#]/, 1)[0]?.split(".").pop()?.toLowerCase(); return extension && ["jpg", "jpeg", "png", "webp"].includes(extension) ? extension : "jpg"; }
 function StepTitle({ eyebrow, title, text }: { eyebrow: string; title: string; text: string }) { return <div className="workspacePageHeader"><div><span className="eyebrow">{eyebrow}</span><h1>{title}</h1><p>{text}</p></div></div>; }

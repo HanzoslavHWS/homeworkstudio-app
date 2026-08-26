@@ -35,6 +35,15 @@ export type PricingEntrySummary = Readonly<{
   catalogItemId: string;
   priceListId: string;
   eventId: string;
+  /**
+   * Soft reference, same as pricing_entries.realization_company_id (init_schema.sql) — null
+   * for every entry that isn't realization-scoped. Threading this through is what lets
+   * selectPricingEntry() (domain/catalog.ts) actually apply its existing exact-realization
+   * priority over a generic (null) entry; before this field existed here the runtime read
+   * path silently dropped the column, so no realization-scoped override could ever take
+   * effect even though the DB/admin model already supported writing one.
+   */
+  realizationCompanyId: string | null;
   currency: Currency;
   salePrice: number | null;
   priceMode: PricingEntryMode;
@@ -67,6 +76,7 @@ export function toTechnicalServiceComponentDefinition(item: CatalogItemSummary, 
       id: entry.id,
       itemId: item.id,
       exhibitionId: entry.eventId,
+      realizationCompanyId: entry.realizationCompanyId ?? undefined,
       priceListId: entry.priceListId,
       currency: entry.currency,
       salePrice: entry.salePrice ?? undefined,

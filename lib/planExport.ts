@@ -332,3 +332,21 @@ export function downloadText(text: string, fileName: string): void {
   downloadDataUrl(url, fileName);
   URL.revokeObjectURL(url);
 }
+
+/**
+ * Graphics Export v1.1, print isolation fix: root cause was that #customer-calculation and
+ * #graphics-export-document were BOTH always in the DOM (the Export step renders the calculation
+ * preview and the graphics export panel side by side) and the shared `@media print` rule made
+ * BOTH visible unconditionally, regardless of which "Vytisknout" button was clicked — so every
+ * print output contained both documents concatenated. This sets an explicit, unambiguous print
+ * target via a data attribute on <body> right before invoking the browser print dialog; the
+ * `@media print` CSS in app/globals.css scopes EVERY visibility/display rule under
+ * `body[data-print-target="..."]`, so only the one matching document is ever shown — never a
+ * z-index/position hack.
+ */
+export type PrintTarget = "customer-calculation" | "graphics-export";
+
+export function printDocument(target: PrintTarget): void {
+  if (typeof document !== "undefined") document.body.dataset.printTarget = target;
+  window.print();
+}

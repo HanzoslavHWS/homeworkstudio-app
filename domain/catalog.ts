@@ -210,6 +210,27 @@ export async function loadCatalogPhoto(
   }
 }
 
+/**
+ * The one DB-backed-catalog-item lookup contract every technical service should share:
+ * prefer the real DB row (matched by its confirmed internalCode) and only fall back to a
+ * literal legacy/static id when no such internalCode match exists — e.g. the static seed in
+ * data/components.ts, which predates the DB and is keyed by hand-written string ids like
+ * "service-graphics-fascia" that a real Postgres UUID can never equal. Never matches by
+ * display name (see matchCatalogItem's doc comment / Batch #1-#2A's false-positive lessons).
+ */
+export function findCatalogItemByIdentity(
+  items: readonly ComponentDefinition[],
+  identity: Readonly<{ internalCode?: string; fallbackId?: string }>,
+): ComponentDefinition | undefined {
+  if (identity.internalCode) {
+    const byCode = items.find((item) => item.internalCode === identity.internalCode);
+    if (byCode) return byCode;
+  }
+  return identity.fallbackId
+    ? items.find((item) => item.id === identity.fallbackId)
+    : undefined;
+}
+
 export function matchCatalogItem(
   items: readonly ComponentDefinition[],
   input: Readonly<{ internalCode?: string; name?: string }>,

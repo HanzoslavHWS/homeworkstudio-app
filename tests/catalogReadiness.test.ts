@@ -182,6 +182,7 @@ test("P86 included grafika límce nevytváří duplicitní účtování a odpov�
     { ...createDefaultTechnicalRequirements(), fasciaGraphics: { status: "notWanted", note: "" } },
     p86,
     [],
+    "default",
     componentCatalogItems,
     { currency: "CZK" },
   );

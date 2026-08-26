@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { boothTypes } from "../data/booths.ts";
 import { componentCatalog, componentCatalogItems, placeComponent } from "../data/components.ts";
+import type { BoothType } from "../domain/models.ts";
 import {
   calculationImageLayout,
   createCustomerCalculationViewModel,
@@ -56,6 +57,7 @@ test("zákaznická kalkulace nepropustí purchase price ani interní poznámky",
     sceneObjects: [chair],
     requirements: createDefaultTechnicalRequirements(),
     printSurfaceAssignments: [],
+    realizationProfileId: "default",
     generatedPlanOutputs: [],
     visualizations: [],
     options,
@@ -134,6 +136,7 @@ test("P86 ponechá původní volbu límce, ale efektivně jej účtuje jako zahr
     { ...createDefaultTechnicalRequirements(), fasciaGraphics: requested },
     p86,
     [],
+    "default",
     componentCatalogItems,
     { currency: "CZK" },
   );
@@ -145,17 +148,20 @@ test("P86 ponechá původní volbu límce, ale efektivně jej účtuje jako zahr
   assert.equal(graphics[0]?.totalNet, 0);
 });
 
-test("celopolep je nezávislý na límci a účtuje vybrané plochy v m²", () => {
+test("celopolep je nezávislý na límci a účtuje plochy s artwork assignmentem v m² (Graphics Export v1.1: artwork-driven, ne manuální status)", () => {
+  const wrapSurface = { id: "wrap", name: "Wrap", widthMm: 2000, heightMm: 3000, active: true };
+  const boothWithWrapSurface = { id: "booth", printSurfaces: [wrapSurface] } as unknown as BoothType;
   const assignment: PrintSurfaceAssignment = {
     printSurfaceId: "wrap",
     sceneReference: "booth",
     graphicsKind: "fullWrap",
     artworkStatus: "received",
+    artworkFileId: "artwork-1",
     selectedForPrint: true,
     canonicalWidthMm: 2000,
     canonicalHeightMm: 3000,
-    productionWidthMm: 2010,
-    productionHeightMm: 3010,
+    productionWidthMm: 2000,
+    productionHeightMm: 3000,
     includedInPackage: false,
     pricedSeparately: true,
   };
@@ -164,14 +170,15 @@ test("celopolep je nezávislý na límci a účtuje vybrané plochy v m²", () =
     pricingEntries: [{ id: "wrap-test-rate", itemId: TECHNICAL_SERVICE_IDS.fullWrapGraphics, currency: "CZK" as const, salePrice: 50 }],
   };
   const results = priceGraphics(
-    { ...createDefaultTechnicalRequirements(), fullWrapGraphics: { status: "ordered", note: "" } },
-    undefined,
+    { ...createDefaultTechnicalRequirements(), fullWrapGraphics: { status: "unspecified", note: "" } },
+    boothWithWrapSurface,
     [assignment],
+    "default",
     [definition],
     { currency: "CZK" },
   );
 
-  assert.equal(results.length, 1);
+  assert.equal(results.length, 1, "priced from the real artwork assignment even though fullWrapGraphics.status is still 'unspecified'");
   assert.equal(results[0]?.unit, "m²");
   assert.equal(results[0]?.quantity, 6);
   assert.equal(results[0]?.totalNet, 300);

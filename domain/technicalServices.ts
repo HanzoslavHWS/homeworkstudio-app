@@ -11,7 +11,7 @@ import type {
   TechnicalRequirements,
 } from "./project.ts";
 import { nominalAreaSquareMeters } from "./finishes.ts";
-import { selectPricingEntry, type PricingContext } from "./catalog.ts";
+import { findCatalogItemByIdentity, selectPricingEntry, type PricingContext } from "./catalog.ts";
 import {
   artworkPlacementsEqual,
   DEFAULT_ARTWORK_PLACEMENT,
@@ -38,6 +38,19 @@ export const CLEANING_INTERNAL_CODES = {
   daily: "U01", // "Úklid denní"
 } as const;
 
+/**
+ * Graphics Pricing foundation fix (2026-08-25 audit follow-up): the confirmed internal codes
+ * for the two graphics services, matching data/components.ts's fasciaGraphicsService /
+ * fullWrapGraphicsService seed and the catalog_items rows the accompanying migration creates
+ * (supabase/migrations/20260825120000_graphics_service_catalog_items.sql). Same
+ * internalCode-first, legacy-id-fallback contract as CLEANING_INTERNAL_CODES — see
+ * findCatalogItemByIdentity (domain/catalog.ts).
+ */
+export const GRAPHICS_INTERNAL_CODES = {
+  fascia: "GRAPHICS-FASCIA",
+  fullWrap: "GRAPHICS-FULL-WRAP",
+} as const;
+
 export const ELECTRICITY_POWER_INTERNAL_CODES: Readonly<Partial<Record<"2kw" | "3kw" | "5kw" | "9kw", string>>> = {
   "2kw": "L02",
   "3kw": "L03",
@@ -53,7 +66,7 @@ export type EffectiveRequirement = Readonly<{
 }>;
 
 export function boothIncludesPrintSurface(
-  booth: BoothType | undefined,
+  booth: Pick<BoothType, "packageContents"> | undefined,
   printSurfaceId: string,
 ): boolean {
   return Boolean(
@@ -127,7 +140,7 @@ export function priceCleaning(
   const internalCode = request.status === "daily" ? CLEANING_INTERNAL_CODES.daily : CLEANING_INTERNAL_CODES.oneTime;
   // Prefer the real DB-backed catalog item (Batch #2A: U01/U05) when present; the static
   // seed (id-based, pricingEntries: []) stays as the fallback until it's ever populated.
-  const definition = catalogItems.find((item) => item.internalCode === internalCode) ?? catalogItems.find((item) => item.id === itemId);
+  const definition = findCatalogItemByIdentity(catalogItems, { internalCode, fallbackId: itemId });
   const area = booth?.nominalDimensions
     ? nominalAreaSquareMeters(booth.nominalDimensions)
     : booth?.widthMm && booth.depthMm
@@ -232,18 +245,97 @@ export function fasciaQuantityBm(surfaces: readonly PrintSurface[]): number {
     .reduce((sum, surface) => sum + (surface.allowanceLinearMeters ?? surface.widthMm / 1000), 0);
 }
 
-export function fullWrapQuantitySquareMeters(
+/** The SAME generic "is this a bm/fascia-priced surface" signal fasciaQuantityBm already uses — never a P86 id check. A surface with neither marker is m²/full-wrap-priced. */
+function isFasciaLikeSurface(surface: PrintSurface): boolean {
+  return surface.pricingUnit === "bm" || surface.allowanceLinearMeters !== undefined;
+}
+
+/**
+ * Graphics Export v1.1: the ONE place production m² is computed (report section 19 — "no three
+ * different m² implementations"). Always resolves fresh via resolveProductionPrintSurface —
+ * never reads a possibly-stale PrintSurfaceAssignment.productionWidthMm/HeightMm snapshot.
+ */
+function productionAreaSquareMeters(surface: PrintSurface, realizationProfileId: string): number {
+  const production = resolveProductionPrintSurface(surface, realizationProfileId);
+  return (production.productionWidthMm * production.productionHeightMm) / 1_000_000;
+}
+
+/**
+ * Report sections 4/6-9/12: the full-wrap ("Grafika – celopolep") quantity for the MAIN project
+ * calculation — summed across every assignment that actually HAS artwork
+ * (assignment.artworkFileId), regardless of the manual technicalRequirements.fullWrapGraphics
+ * status (an explicit artwork assignment is a stronger, more current signal than a hand-set
+ * status, and the two must never contradict each other — see the report for why this session
+ * does not also auto-write the status field: no existing domain mechanism does that kind of
+ * write-back, so pricing is derived read-only instead). Package-included and bm/fascia-priced
+ * surfaces are excluded (fascia is priced separately via fasciaQuantityBm — never double-counted
+ * here). Uses PRODUCTION dimensions (report section 4): no existing pricing code explicitly
+ * required canonical dimensions for this quantity — fullWrapQuantitySquareMeters (removed) simply
+ * read canonicalWidthMm/HeightMm because it predates resolveProductionPrintSurface; production is
+ * the physically-correct print/manufacturing area, so this switches to it.
+ */
+export function deriveFullWrapCalculationQuantity(
+  surfaces: readonly PrintSurface[],
   assignments: readonly PrintSurfaceAssignment[],
+  realizationProfileId: string,
 ): number {
-  return assignments
-    .filter((assignment) => assignment.graphicsKind === "fullWrap" && assignment.selectedForPrint)
-    .reduce((sum, assignment) => sum + assignment.canonicalWidthMm * assignment.canonicalHeightMm / 1_000_000, 0);
+  return assignments.reduce((sum, assignment) => {
+    if (!assignment.artworkFileId || assignment.includedInPackage) return sum;
+    const surface = surfaces.find((candidate) => candidate.id === assignment.printSurfaceId);
+    if (!surface || isFasciaLikeSurface(surface)) return sum;
+    return sum + productionAreaSquareMeters(surface, realizationProfileId);
+  }, 0);
+}
+
+export type GraphicsSurfacePricingResult = Readonly<{
+  printSurfaceId: string;
+  pricingBasis: "bm" | "m²";
+  quantity: number;
+  unitPriceNet?: number;
+  totalNet?: number;
+  includedInPackage: boolean;
+  status: "priced" | "included" | "needs-quote";
+}>;
+
+/**
+ * Report sections 14-16/19: the SAME per-surface pricing primitive used by Export A (selected
+ * surfaces, artwork or not) and Export B (assigned-artwork surfaces) — never a duplicate m²/bm
+ * formula. `booth` is only consulted for boothIncludesPrintSurface's existing package-inclusion
+ * check (the SAME authoritative rule PrintSurfaceAssignment.includedInPackage is already seeded
+ * from at assignment-creation time — never re-derived as a P86 special case). Missing pricing
+ * configuration never invents a rate: status "needs-quote" with unitPriceNet/totalNet left
+ * undefined lets the UI show "Cena není nastavena" instead.
+ */
+export function resolveGraphicsSurfacePricing(
+  surface: PrintSurface,
+  booth: Pick<BoothType, "packageContents"> | undefined,
+  realizationProfileId: string,
+  catalogItems: readonly ComponentDefinition[],
+  context: PricingContext,
+): GraphicsSurfacePricingResult {
+  const includedInPackage = boothIncludesPrintSurface(booth, surface.id);
+  const isFascia = isFasciaLikeSurface(surface);
+  const pricingBasis: GraphicsSurfacePricingResult["pricingBasis"] = isFascia ? "bm" : "m²";
+  const quantity = isFascia ? fasciaQuantityBm([surface]) : productionAreaSquareMeters(surface, realizationProfileId);
+
+  if (includedInPackage) {
+    return { printSurfaceId: surface.id, pricingBasis, quantity, unitPriceNet: 0, totalNet: 0, includedInPackage: true, status: "included" };
+  }
+  const itemId = isFascia ? TECHNICAL_SERVICE_IDS.fasciaGraphics : TECHNICAL_SERVICE_IDS.fullWrapGraphics;
+  const internalCode = isFascia ? GRAPHICS_INTERNAL_CODES.fascia : GRAPHICS_INTERNAL_CODES.fullWrap;
+  const definition = findCatalogItemByIdentity(catalogItems, { internalCode, fallbackId: itemId });
+  const entry = priceFor(definition, context);
+  if (entry?.salePrice === undefined) {
+    return { printSurfaceId: surface.id, pricingBasis, quantity, includedInPackage: false, status: "needs-quote" };
+  }
+  return { printSurfaceId: surface.id, pricingBasis, quantity, unitPriceNet: entry.salePrice, totalNet: quantity * entry.salePrice, includedInPackage: false, status: "priced" };
 }
 
 export function priceGraphics(
   requirements: TechnicalRequirements,
   booth: BoothType | undefined,
   assignments: readonly PrintSurfaceAssignment[],
+  realizationProfileId: string,
   catalogItems: readonly ComponentDefinition[],
   context: PricingContext,
 ): readonly ServicePriceResult[] {
@@ -253,19 +345,28 @@ export function priceGraphics(
     results.push({ status: "priced", itemId: TECHNICAL_SERVICE_IDS.fasciaGraphics, name: "Grafika – límec", unit: "bm", quantity: fasciaQuantityBm(booth?.printSurfaces ?? []), unitPriceNet: 0, totalNet: 0, includedInPackage: true });
   } else if (!["unspecified", "notWanted"].includes(requirements.fasciaGraphics.status)) {
     const quantity = fasciaQuantityBm(booth?.printSurfaces ?? []);
-    const definition = catalogItems.find((item) => item.id === TECHNICAL_SERVICE_IDS.fasciaGraphics);
+    const definition = findCatalogItemByIdentity(catalogItems, {
+      internalCode: GRAPHICS_INTERNAL_CODES.fascia,
+      fallbackId: TECHNICAL_SERVICE_IDS.fasciaGraphics,
+    });
     const entry = priceFor(definition, context);
     results.push(entry?.salePrice !== undefined && quantity > 0
       ? { status: "priced", itemId: definition!.id, name: definition!.name, unit: "bm", quantity, unitPriceNet: entry.salePrice, totalNet: quantity * entry.salePrice }
       : { status: "needs-quote", itemId: TECHNICAL_SERVICE_IDS.fasciaGraphics, name: "Grafika – límec", unit: "bm", quantity, warning: quantity ? "Grafika límce – chybí sazba v aktivním ceníku" : "Vybraný stánek nemá tiskovou plochu límce" });
   }
-  if (!["unspecified", "notWanted"].includes(requirements.fullWrapGraphics.status)) {
-    const quantity = fullWrapQuantitySquareMeters(assignments);
-    const definition = catalogItems.find((item) => item.id === TECHNICAL_SERVICE_IDS.fullWrapGraphics);
+  // Report sections 6-9/12: no row at all when nothing has artwork — never a zero-quantity
+  // placeholder row (section 7's primary preference), and completely independent of
+  // requirements.fullWrapGraphics.status (an explicit artwork assignment always wins).
+  const fullWrapQuantity = deriveFullWrapCalculationQuantity(booth?.printSurfaces ?? [], assignments, realizationProfileId);
+  if (fullWrapQuantity > 0) {
+    const definition = findCatalogItemByIdentity(catalogItems, {
+      internalCode: GRAPHICS_INTERNAL_CODES.fullWrap,
+      fallbackId: TECHNICAL_SERVICE_IDS.fullWrapGraphics,
+    });
     const entry = priceFor(definition, context);
-    results.push(entry?.salePrice !== undefined && quantity > 0
-      ? { status: "priced", itemId: definition!.id, name: definition!.name, unit: "m²", quantity, unitPriceNet: entry.salePrice, totalNet: quantity * entry.salePrice }
-      : { status: "needs-quote", itemId: TECHNICAL_SERVICE_IDS.fullWrapGraphics, name: "Grafika – celopolep", unit: "m²", quantity, warning: quantity ? "Celopolep – chybí sazba v aktivním ceníku" : "Celopolep – nejsou vybrané žádné tiskové plochy" });
+    results.push(entry?.salePrice !== undefined
+      ? { status: "priced", itemId: definition!.id, name: definition!.name, unit: "m²", quantity: fullWrapQuantity, unitPriceNet: entry.salePrice, totalNet: fullWrapQuantity * entry.salePrice }
+      : { status: "needs-quote", itemId: TECHNICAL_SERVICE_IDS.fullWrapGraphics, name: "Grafika – celopolep", unit: "m²", quantity: fullWrapQuantity, warning: "Celopolep – chybí sazba v aktivním ceníku" });
   }
   return results;
 }

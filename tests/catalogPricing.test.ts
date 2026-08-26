@@ -13,9 +13,10 @@ import {
 } from "../domain/catalogPricing.ts";
 import { createSessionToken } from "../lib/auth/session.ts";
 import { SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
-import { selectPricingEntry, derivePricingAvailability } from "../domain/catalog.ts";
+import { selectPricingEntry, derivePricingAvailability, findCatalogItemByIdentity } from "../domain/catalog.ts";
 import { resolveEventPriceListForCurrency, normalizeExhibition } from "../domain/organizations.ts";
 import type { PriceList } from "../domain/organizations.ts";
+import type { ComponentDefinition } from "../domain/models.ts";
 import { priceElectricity, ELECTRICITY_POWER_INTERNAL_CODES, CLEANING_INTERNAL_CODES } from "../domain/technicalServices.ts";
 import { createDefaultTechnicalRequirements } from "../domain/project.ts";
 import { createCustomerCalculationViewModel } from "../domain/calculationExport.ts";
@@ -160,13 +161,85 @@ test("computeGeneratorEligible: needs_review nikdy nevrátí true, bez ohledu na
 });
 
 test("readPricingEntriesForPriceList: DB round-trip je vždy omezený na JEDEN priceListId (žádné cross-list čtení)", async () => {
-  const otherListRow: FakeRow = { id: "entry-other", catalog_item_id: L02_ID, price_list_id: "other-list", event_id: "arch", currency: "CZK", sale_price: 5500, price_mode: "fixed" };
-  const beautyCzkRow: FakeRow = { id: "entry-beauty-czk", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, event_id: "beauty", currency: "CZK", sale_price: 5100, price_mode: "fixed" };
+  const otherListRow: FakeRow = { id: "entry-other", catalog_item_id: L02_ID, price_list_id: "other-list", event_id: "arch", realization_company_id: null, currency: "CZK", sale_price: 5500, price_mode: "fixed" };
+  const beautyCzkRow: FakeRow = { id: "entry-beauty-czk", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, event_id: "beauty", realization_company_id: null, currency: "CZK", sale_price: 5100, price_mode: "fixed" };
   const client = fakeSupabaseClient({ pricing_entries: [otherListRow, beautyCzkRow] });
   const entries = await readPricingEntriesForPriceList(client as never, BEAUTY_CZK_LIST_ID);
   assert.equal(entries.length, 1);
   assert.equal(entries[0]?.id, "entry-beauty-czk");
   assert.equal(entries[0]?.salePrice, 5100);
+});
+
+// -----------------------------------------------------------------------------------------
+// Graphics Pricing foundation fix (2026-08-25 audit follow-up): realization_company_id was
+// present in the DB schema and the admin read/write path, but the RUNTIME read
+// (readPricingEntriesForPriceList) silently dropped the column, so selectPricingEntry()
+// could never apply its already-existing exact-realization-company priority. These tests
+// cover the fixed mapper plus the pre-existing selectPricingEntry specificity ranking now
+// that real data can actually reach it.
+// -----------------------------------------------------------------------------------------
+
+test("readPricingEntriesForPriceList: DB round-trip mapuje realization_company_id (dřív runtime tento sloupec vůbec nečetl)", async () => {
+  const scopedRow: FakeRow = { id: "entry-scoped", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, event_id: "beauty", realization_company_id: "acme", currency: "CZK", sale_price: 4800, price_mode: "fixed" };
+  const genericRow: FakeRow = { id: "entry-generic", catalog_item_id: L02_ID, price_list_id: BEAUTY_CZK_LIST_ID, event_id: "beauty", realization_company_id: null, currency: "CZK", sale_price: 5100, price_mode: "fixed" };
+  const client = fakeSupabaseClient({ pricing_entries: [scopedRow, genericRow] });
+  const entries = await readPricingEntriesForPriceList(client as never, BEAUTY_CZK_LIST_ID);
+  assert.equal(entries.find((entry) => entry.id === "entry-scoped")?.realizationCompanyId, "acme");
+  assert.equal(entries.find((entry) => entry.id === "entry-generic")?.realizationCompanyId, null);
+});
+
+test("selectPricingEntry: generic PricingEntry (realizationCompanyId=null) se stále použije, i když context.realizationCompanyId je nastavené — žádná regrese", () => {
+  const genericEntries: readonly PricingEntrySummary[] = [
+    { id: "entry-generic", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, priceMode: "fixed" },
+  ];
+  const [technicalItem] = buildTechnicalCatalogItems([l02Summary], genericEntries);
+  const entry = selectPricingEntry(technicalItem!.pricingEntries ?? [], { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", realizationCompanyId: "acme", currency: "CZK" });
+  assert.equal(entry?.salePrice, 5100);
+});
+
+test("selectPricingEntry: exact realization-company PricingEntry má přednost před generic (null) entry pro stejný context", () => {
+  const mixedEntries: readonly PricingEntrySummary[] = [
+    { id: "entry-generic", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, priceMode: "fixed" },
+    { id: "entry-acme", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: "acme", currency: "CZK", salePrice: 4800, priceMode: "fixed" },
+  ];
+  const [technicalItem] = buildTechnicalCatalogItems([l02Summary], mixedEntries);
+  const entry = selectPricingEntry(technicalItem!.pricingEntries ?? [], { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", realizationCompanyId: "acme", currency: "CZK" });
+  assert.equal(entry?.id, "entry-acme");
+  assert.equal(entry?.salePrice, 4800);
+});
+
+test("selectPricingEntry: jiná realization company nedostane cizí scoped entry — spadne na generic sazbu, nikdy na cizí", () => {
+  const mixedEntries: readonly PricingEntrySummary[] = [
+    { id: "entry-generic", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, priceMode: "fixed" },
+    { id: "entry-acme", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: "acme", currency: "CZK", salePrice: 4800, priceMode: "fixed" },
+  ];
+  const [technicalItem] = buildTechnicalCatalogItems([l02Summary], mixedEntries);
+  const entry = selectPricingEntry(technicalItem!.pricingEntries ?? [], { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", realizationCompanyId: "other-company", currency: "CZK" });
+  assert.equal(entry?.id, "entry-generic");
+  assert.equal(entry?.salePrice, 5100, "must never receive acme's scoped rate — falls back to the generic (null) entry instead");
+});
+
+// -----------------------------------------------------------------------------------------
+// findCatalogItemByIdentity (domain/catalog.ts) — the shared internalCode-first, legacy-id
+// -fallback contract now used by priceCleaning AND priceGraphics/resolveGraphicsSurfacePricing.
+// -----------------------------------------------------------------------------------------
+
+test("findCatalogItemByIdentity: DB-shaped item (real UUID id) se najde přes internalCode", () => {
+  const dbItem = { id: L02_ID, internalCode: "L02" } as unknown as ComponentDefinition;
+  const found = findCatalogItemByIdentity([dbItem], { internalCode: "L02", fallbackId: "service-electricity-legacy" });
+  assert.equal(found?.id, L02_ID);
+});
+
+test("findCatalogItemByIdentity: bez internalCode shody spadne na fallbackId (legacy static seed)", () => {
+  const legacyItem = { id: "service-graphics-fascia", internalCode: undefined } as unknown as ComponentDefinition;
+  const found = findCatalogItemByIdentity([legacyItem], { internalCode: "GRAPHICS-FASCIA", fallbackId: "service-graphics-fascia" });
+  assert.equal(found?.id, "service-graphics-fascia");
+});
+
+test("findCatalogItemByIdentity: žádná shoda ani na internalCode, ani na fallbackId vrátí undefined (nikdy náhodná položka)", () => {
+  const legacyItem = { id: "service-graphics-fascia", internalCode: undefined } as unknown as ComponentDefinition;
+  const found = findCatalogItemByIdentity([legacyItem], { internalCode: "GRAPHICS-FULL-WRAP", fallbackId: "service-graphics-full-wrap" });
+  assert.equal(found, undefined);
 });
 
 // -----------------------------------------------------------------------------------------
@@ -182,8 +255,8 @@ const beautyPriceLists = [beautyCzkList, beautyEurList];
 
 const l02Summary: CatalogItemSummary = { id: L02_ID, internalCode: "L02", kind: "service", lifecycleStatus: "active", displayName: "Elektrická energie – příkon do 2 kW / 230 V", category: "T. služby", unit: "ks", generatorEligible: false };
 const l02Entries: readonly PricingEntrySummary[] = [
-  { id: "entry-czk", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100, priceMode: "fixed" },
-  { id: "entry-eur", catalogItemId: L02_ID, priceListId: BEAUTY_EUR_LIST_ID, eventId: "beauty", currency: "EUR", salePrice: 231, priceMode: "fixed" },
+  { id: "entry-czk", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, priceMode: "fixed" },
+  { id: "entry-eur", catalogItemId: L02_ID, priceListId: BEAUTY_EUR_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "EUR", salePrice: 231, priceMode: "fixed" },
 ];
 
 test("Beauty CZK najde CZK PriceList podle event+currency (nikdy ne defaultPriceListId napevno)", () => {
@@ -226,7 +299,7 @@ test("přepnutí měny CZK -> EUR skutečně změní resolvovanou cenu (žádná
 });
 
 test("chybějící EUR cena NIKDY nepoužije CZK cenu jako náhradu (žádný cross-currency fallback)", () => {
-  const czkOnlyEntries: readonly PricingEntrySummary[] = [{ id: "entry-czk-only", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100, priceMode: "fixed" }];
+  const czkOnlyEntries: readonly PricingEntrySummary[] = [{ id: "entry-czk-only", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, priceMode: "fixed" }];
   const [technicalItem] = buildTechnicalCatalogItems([l02Summary], czkOnlyEntries);
   const eurPriceList = resolveEventPriceListForCurrency(beautyEvent, beautyPriceLists, "EUR");
   const entry = selectPricingEntry(technicalItem!.pricingEntries ?? [], { priceListId: eurPriceList?.id, exhibitionId: "beauty", currency: "EUR" });
@@ -235,7 +308,7 @@ test("chybějící EUR cena NIKDY nepoužije CZK cenu jako náhradu (žádný cr
 });
 
 test("chybějící CZK cena NIKDY nepoužije EUR cenu jako náhradu", () => {
-  const eurOnlyEntries: readonly PricingEntrySummary[] = [{ id: "entry-eur-only", catalogItemId: L02_ID, priceListId: BEAUTY_EUR_LIST_ID, eventId: "beauty", currency: "EUR", salePrice: 231, priceMode: "fixed" }];
+  const eurOnlyEntries: readonly PricingEntrySummary[] = [{ id: "entry-eur-only", catalogItemId: L02_ID, priceListId: BEAUTY_EUR_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "EUR", salePrice: 231, priceMode: "fixed" }];
   const [technicalItem] = buildTechnicalCatalogItems([l02Summary], eurOnlyEntries);
   const czkPriceList = resolveEventPriceListForCurrency(beautyEvent, beautyPriceLists, "CZK");
   const entry = selectPricingEntry(technicalItem!.pricingEntries ?? [], { priceListId: czkPriceList?.id, exhibitionId: "beauty", currency: "CZK" });
@@ -326,7 +399,7 @@ test("priceElectricity: přepnutí měny u 2kw skutečně vrátí jinou skutečn
 
 test("priceElectricity: 2kw pro event/měnu bez PricingEntry je needs-quote, nikdy 0 a nikdy fallback na jinou měnu", () => {
   const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "2kw" as const, customPower: "" } };
-  const czkOnlyEntries: readonly PricingEntrySummary[] = [{ id: "entry-czk-only", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5100, priceMode: "fixed" }];
+  const czkOnlyEntries: readonly PricingEntrySummary[] = [{ id: "entry-czk-only", catalogItemId: L02_ID, priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5100, priceMode: "fixed" }];
   const technicalItems = buildTechnicalCatalogItems([l02Summary], czkOnlyEntries);
   const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_EUR_LIST_ID, exhibitionId: "beauty", currency: "EUR" });
   assert.equal(result?.status, "needs-quote");
@@ -336,7 +409,7 @@ test("priceElectricity: 2kw pro event/měnu bez PricingEntry je needs-quote, nik
 
 test("priceElectricity: 3kw stále resolvuje L03 se skutečnou cenou (nerozbité stávající zapojení)", () => {
   const l03: CatalogItemSummary = { id: "l03-id", internalCode: "L03", kind: "service", lifecycleStatus: "needs_review", displayName: "Přípojka el. energie - 3kW", category: "T. služby", unit: "ks", generatorEligible: false };
-  const l03Entries: readonly PricingEntrySummary[] = [{ id: "entry-l03-czk", catalogItemId: "l03-id", priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 5900, priceMode: "fixed" }];
+  const l03Entries: readonly PricingEntrySummary[] = [{ id: "entry-l03-czk", catalogItemId: "l03-id", priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 5900, priceMode: "fixed" }];
   const technicalItems = buildTechnicalCatalogItems([l03], l03Entries);
   const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "3kw" as const, customPower: "" } };
   const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", currency: "CZK" });
@@ -346,7 +419,7 @@ test("priceElectricity: 3kw stále resolvuje L03 se skutečnou cenou (nerozbité
 
 test("priceElectricity: 5kw s reálnou DB cenou vrátí status priced a skutečnou cenu", () => {
   const l05: CatalogItemSummary = { id: "l05-id", internalCode: "L05", kind: "service", lifecycleStatus: "active", displayName: "Elektro 5kW", category: "T. služby", unit: "ks", generatorEligible: false };
-  const l05Entries: readonly PricingEntrySummary[] = [{ id: "entry-l05-czk", catalogItemId: "l05-id", priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 6900, priceMode: "fixed" }];
+  const l05Entries: readonly PricingEntrySummary[] = [{ id: "entry-l05-czk", catalogItemId: "l05-id", priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 6900, priceMode: "fixed" }];
   const technicalItems = buildTechnicalCatalogItems([l05], l05Entries);
   const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "5kw" as const, customPower: "" } };
   const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", currency: "CZK" });
@@ -356,7 +429,7 @@ test("priceElectricity: 5kw s reálnou DB cenou vrátí status priced a skutečn
 
 test("priceElectricity: 9kw stále resolvuje L09 se skutečnou cenou (nerozbité stávající zapojení)", () => {
   const l09: CatalogItemSummary = { id: "l09-id", internalCode: "L09", kind: "service", lifecycleStatus: "needs_review", displayName: "Přípojka el. energie - 9kW", category: "T. služby", unit: "ks", generatorEligible: false };
-  const l09Entries: readonly PricingEntrySummary[] = [{ id: "entry-l09-czk", catalogItemId: "l09-id", priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", currency: "CZK", salePrice: 8900, priceMode: "fixed" }];
+  const l09Entries: readonly PricingEntrySummary[] = [{ id: "entry-l09-czk", catalogItemId: "l09-id", priceListId: BEAUTY_CZK_LIST_ID, eventId: "beauty", realizationCompanyId: null, currency: "CZK", salePrice: 8900, priceMode: "fixed" }];
   const technicalItems = buildTechnicalCatalogItems([l09], l09Entries);
   const requirements = { ...createDefaultTechnicalRequirements(), electricity: { status: "ordered" as const, note: "", powerOption: "9kw" as const, customPower: "" } };
   const result = priceElectricity(requirements, technicalItems, { priceListId: BEAUTY_CZK_LIST_ID, exhibitionId: "beauty", currency: "CZK" });
@@ -384,6 +457,7 @@ test("zákaznická kalkulace po objednání 2 kW vstoupí do Cena/CalculationPre
     sceneObjects: [],
     requirements,
     printSurfaceAssignments: [],
+    realizationProfileId: "default",
     generatedPlanOutputs: [],
     visualizations: [],
     options: { includeVisuals: false, includePricingTable: true, includeVatSummary: true, includeContact: false, includeProjectNote: false, includeItemNotes: false, includeEventLogo: false, selectedOutputIds: [] } as never,

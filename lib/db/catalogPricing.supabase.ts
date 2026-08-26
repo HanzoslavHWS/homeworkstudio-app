@@ -39,6 +39,7 @@ type PricingEntryDbRow = Readonly<{
   catalog_item_id: string;
   price_list_id: string;
   event_id: string;
+  realization_company_id: string | null;
   currency: string;
   sale_price: number | null;
   price_mode: string;
@@ -46,13 +47,14 @@ type PricingEntryDbRow = Readonly<{
 
 /** READ-ONLY. Scoped to ONE price list (a single event+currency) — "pricing entries pro zvolený PriceList", never the whole table at once. */
 export async function readPricingEntriesForPriceList(client: SupabaseClient, priceListId: string): Promise<readonly PricingEntrySummary[]> {
-  const { data, error } = await client.from("pricing_entries").select("id, catalog_item_id, price_list_id, event_id, currency, sale_price, price_mode").eq("price_list_id", priceListId);
+  const { data, error } = await client.from("pricing_entries").select("id, catalog_item_id, price_list_id, event_id, realization_company_id, currency, sale_price, price_mode").eq("price_list_id", priceListId);
   if (error) throw error;
   return ((data ?? []) as PricingEntryDbRow[]).map((row) => ({
     id: row.id,
     catalogItemId: row.catalog_item_id,
     priceListId: row.price_list_id,
     eventId: row.event_id,
+    realizationCompanyId: row.realization_company_id,
     currency: row.currency as PricingEntrySummary["currency"],
     salePrice: row.sale_price,
     priceMode: row.price_mode as PricingEntrySummary["priceMode"],

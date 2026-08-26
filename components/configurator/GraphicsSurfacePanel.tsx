@@ -31,6 +31,7 @@ type GraphicsSurfacePanelProps = Readonly<{
   onAssignExisting: (surfaceId: string, artworkFileId: string) => void;
   onRemove: (surfaceId: string) => void;
   onPlacementChange: (surfaceId: string, placement: ArtworkPlacement) => void;
+  onUsageRoleChange: (artworkFileId: string, usageRole: "preview" | "print-data") => void;
 }>;
 
 function surfaceFaceLabel(surface: PrintSurface): string {
@@ -56,6 +57,7 @@ export function GraphicsSurfacePanel({
   onAssignExisting,
   onRemove,
   onPlacementChange,
+  onUsageRoleChange,
 }: GraphicsSurfacePanelProps) {
   const [expandedSurfaceIds, setExpandedSurfaceIds] = useState<ReadonlySet<string>>(
     () => new Set(),
@@ -132,7 +134,15 @@ export function GraphicsSurfacePanel({
                   {hasProductionAllowance && (
                     <small>Výroba: {production.productionWidthMm} × {production.productionHeightMm} mm</small>
                   )}
-                  {file && <><span>{file.name}</span><small>{artworkPreviewLabel(file)}</small></>}
+                  {file && (
+                    <>
+                      <span>{file.name}</span>
+                      {file.asset?.originalFileName && file.asset.originalFileName !== file.name && (
+                        <small className="graphicsOriginalFileName">původní soubor: {file.asset.originalFileName}</small>
+                      )}
+                      <small>{artworkPreviewLabel(file)}</small>
+                    </>
+                  )}
                 </div>
                 <div className="graphicsSurfaceActions" onClick={(event) => event.stopPropagation()}>
                   <label className="filePicker compact">
@@ -160,6 +170,24 @@ export function GraphicsSurfacePanel({
                     </select>
                   )}
                   <button type="button" disabled={!file} onClick={() => onRemove(surface.id)}>Odebrat</button>
+                  {file && (
+                    <div className="graphicsUsageRoleToggle" role="group" aria-label={`Použití souboru ${file.name}`}>
+                      <button
+                        type="button"
+                        className={(file.usageRole ?? "preview") === "preview" ? "active" : ""}
+                        onClick={() => onUsageRoleChange(file.id, "preview")}
+                      >
+                        Náhled
+                      </button>
+                      <button
+                        type="button"
+                        className={file.usageRole === "print-data" ? "active" : ""}
+                        onClick={() => onUsageRoleChange(file.id, "print-data")}
+                      >
+                        Tisková data
+                      </button>
+                    </div>
+                  )}
                 </div>
                 {file && isRasterArtworkFile(file) && assignment && (
                   <div className="graphicsPlacementEditor" onClick={(event) => event.stopPropagation()}>

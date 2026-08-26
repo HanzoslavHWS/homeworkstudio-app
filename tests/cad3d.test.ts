@@ -1259,7 +1259,9 @@ test("Graphics UI groups canonical surfaces and reuses graphicsFiles/artworkFile
   assert.match(panelSource, /surface\.sceneBinding\?\.face === "back"/u);
   assert.match(panelSource, /950|surface\.widthMm/u);
   assert.match(panelSource, /onAssignExisting\(surface\.id, event\.target\.value\)/u);
-  assert.match(generatorSource, /uploadAsset\(file, \{ category: "project-graphics", ownerId \}/u);
+  // Graphics Export v1: uploadAsset now also passes a surface-derived displayName (report
+  // section 1) — the category/ownerId upload target itself is unchanged.
+  assert.match(generatorSource, /uploadAsset\(file, \{ category: "project-graphics", ownerId, displayName \}/u);
   assert.match(generatorSource, /assignArtworkToPrintSurface\([\s\S]*?additions\[0\]!\.id/u);
   assert.match(panelSource, /\["stretch", "fit", "fill"\]/u);
   assert.match(panelSource, /offsetXmm/u);

@@ -102,8 +102,32 @@ export type CustomerCalculationSource = Readonly<{
   catalogItems: readonly ComponentDefinition[];
   /** Needed to resolve the event's PriceList for THIS project's currency (see pricingContext below) — never just event.defaultPriceListId, which is always the CZK list regardless of project currency. */
   priceLists: readonly PriceList[];
+  /** Report Graphics Export v1.1: priceGraphics needs this for resolveProductionPrintSurface (full-wrap quantity) — distinct from pricingContext.realizationCompanyId below, which is a pricing-lookup dimension, not the production-dimension profile. */
+  realizationProfileId: string;
   processedAt?: string;
 }>;
+
+/**
+ * Section 8: event + project currency -> PriceList, never event.defaultPriceListId (that's
+ * always the CZK list regardless of which currency this project actually uses — see
+ * resolveEventPriceListForCurrency's own doc for why the two must never be conflated). No
+ * fallback to the other currency's list, no conversion — an event with no PriceList yet in this
+ * currency correctly yields priceListId: undefined, and every service then reports
+ * "missing"/needs-quote rather than silently pricing against the wrong list.
+ *
+ * Graphics Export v1.1: extracted so the main calculation AND Graphics Export A/B resolve
+ * pricing against the exact SAME context — never two different PriceList-resolution paths.
+ */
+export function resolvePricingContext(
+  source: Readonly<{ event?: Exhibition; priceLists: readonly PriceList[]; currency: Currency }>,
+) {
+  return {
+    priceListId: source.event ? resolveEventPriceListForCurrency(source.event, source.priceLists, source.currency)?.id : undefined,
+    exhibitionId: source.event?.id,
+    realizationCompanyId: source.event?.realizationCompanyId,
+    currency: source.currency,
+  } as const;
+}
 
 export function createCustomerCalculationViewModel(
   source: CustomerCalculationSource,
@@ -133,23 +157,12 @@ export function createCustomerCalculationViewModel(
       customerNotes: source.options.includeItemNotes ? [...new Set(notes)] : undefined,
     });
   }
-  // Section 8: event + project currency -> PriceList, never event.defaultPriceListId (that's
-  // always the CZK list regardless of which currency this project actually uses — see
-  // resolveEventPriceListForCurrency's own doc for why the two must never be conflated). No
-  // fallback to the other currency's list, no conversion — an event with no PriceList yet in
-  // this currency correctly yields priceListId: undefined, and every service below then
-  // reports "missing"/needs-quote rather than silently pricing against the wrong list.
-  const pricingContext = {
-    priceListId: source.event ? resolveEventPriceListForCurrency(source.event, source.priceLists, source.currency)?.id : undefined,
-    exhibitionId: source.event?.id,
-    realizationCompanyId: source.event?.realizationCompanyId,
-    currency: source.currency,
-  } as const;
+  const pricingContext = resolvePricingContext(source);
   const services = [
     priceCleaning(source.requirements, source.booth, source.catalogItems, pricingContext),
     priceElectricity(source.requirements, source.catalogItems, pricingContext),
     priceContainer(source.requirements, source.currency),
-    ...priceGraphics(source.requirements, source.booth, source.printSurfaceAssignments, source.catalogItems, pricingContext),
+    ...priceGraphics(source.requirements, source.booth, source.printSurfaceAssignments, source.realizationProfileId, source.catalogItems, pricingContext),
   ].filter((service): service is NonNullable<typeof service> => Boolean(service));
   for (const service of services) {
     rows.push({ id: service.itemId, name: service.name, unit: service.unit, quantity: service.quantity, unitPriceNet: service.unitPriceNet, totalNet: service.totalNet, includedInPackage: service.includedInPackage, warning: service.warning });

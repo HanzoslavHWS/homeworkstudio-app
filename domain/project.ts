@@ -210,6 +210,13 @@ export type GraphicFileReference = Readonly<{
   widthPx?: number;
   heightPx?: number;
   createdAt?: string;
+  /**
+   * Explicit, user-chosen role — never inferred from resolution/DPI/mime type (a high-res JPG is
+   * not automatically "print data"). Absent (every legacy file) is interpreted as "preview": a
+   * file used for a 3D placement check is not assumed print-ready just because it exists. See
+   * domain/graphicsExport.ts's Export B, which warns on "preview" rows.
+   */
+  usageRole?: "preview" | "print-data";
 }>;
 
 export type ProjectRecord = Readonly<{
