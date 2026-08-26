@@ -99,3 +99,28 @@ export function extensionOf(fileName: string): string {
 export function buildSurfaceExportFileName(surface: PrintSurface, sourceFileName: string): string {
   return buildGraphicsFileDisplayName(surface, extensionOf(sourceFileName));
 }
+
+/**
+ * Generic extraction of Graphics Export's original per-row dedup logic (domain/graphicsExport.ts)
+ * so Visualization v2's render filenames can share the exact same deterministic `-2`, `-3`, ...
+ * suffix scheme instead of a second copy — never a random/UUID suffix, same stable
+ * encounter-order counting as before. `getName`/`setName` let this work over any item shape
+ * (GraphicsExportRow, a render descriptor, ...) without this module knowing either type.
+ */
+export function deduplicateFileNames<T>(
+  items: readonly T[],
+  getName: (item: T) => string | undefined,
+  setName: (item: T, name: string) => T,
+): readonly T[] {
+  const seenCounts = new Map<string, number>();
+  return items.map((item) => {
+    const name = getName(item);
+    if (!name) return item;
+    const count = (seenCounts.get(name) ?? 0) + 1;
+    seenCounts.set(name, count);
+    if (count === 1) return item;
+    const dot = name.lastIndexOf(".");
+    const deduplicated = dot > 0 ? `${name.slice(0, dot)}-${count}${name.slice(dot)}` : `${name}-${count}`;
+    return setName(item, deduplicated);
+  });
+}

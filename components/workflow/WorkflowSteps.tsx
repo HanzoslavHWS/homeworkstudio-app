@@ -51,12 +51,30 @@ import {
   EXPORT_LAYER_LABELS,
   EXPORT_PRESETS,
   TechnicalVisualizationProvider,
+  createCustomerVisualizationRender,
   type ExportLanguage,
   type ExportLayer,
 } from "../../domain/workflow";
 import { createProjectPackage, packageFolderPath } from "../../domain/projectPackage";
 import { getMasterReferenceModel } from "../../domain/cad3d";
 import { createVisualizationCameraPresets } from "../../domain/visualization";
+import {
+  buildVisualizationPackageName,
+  buildVisualizationRenderFileName,
+  buildVisualizationRenderFingerprint,
+  CUSTOMER_CAPTURE_RESOLUTIONS,
+  deduplicateRenderFileNames,
+  evaluateRenderStaleness,
+  isBackgroundModeAllowed,
+  latestCustomerRendersByView,
+  type CustomerCaptureResolutionPreset,
+  type CustomerRenderBackgroundMode,
+  type CustomerRenderFormat,
+} from "../../domain/visualizationRender";
+import { renderVisualizationBatch, type VisualizationRenderBatchProgress } from "../../lib/visualizationRenderBatch";
+import { assembleVisualizationZipEntries } from "../../lib/visualizationRenderDownloads";
+import { buildPresentationPdf, type PresentationPdfRenderPage } from "../../lib/presentationPdf";
+import type { GraphicsProductionPreparedBy } from "../../domain/graphicsProduction";
 import { downloadDataUrl, downloadText, printDocument, renderTechnicalPlanPng } from "../../lib/planExport";
 import { createZip, dataUrlZipEntry, textZipEntry, type ZipEntry } from "../../lib/zip";
 import {
@@ -73,6 +91,9 @@ type CommonProject = {
   name: string;
   fairName: string;
   event?: Exhibition;
+  /** Raw identity strings (distinct from the resolved `booth` object below) — Visualization v2's content fingerprint needs these to detect a booth/variant switch. */
+  boothId: string;
+  variantId: string;
   company: string;
   contact: ProjectContact;
   boothNumber: string;
@@ -152,10 +173,86 @@ export function VisualizationStep({ project, onSaveView, onRenameView, onMoveVie
     () => [...project.visualizationViews].sort((left, right) => left.order - right.order),
     [project.visualizationViews],
   );
+
+  // Visualization v2 — customer render options (export-session UI state only, never persisted).
+  const [resolutionPreset, setResolutionPreset] = useState<CustomerCaptureResolutionPreset>("fullhd");
+  const [renderFormat, setRenderFormat] = useState<CustomerRenderFormat>("jpeg");
+  const [backgroundMode, setBackgroundMode] = useState<CustomerRenderBackgroundMode>("light-neutral");
+  const [renderErrors, setRenderErrors] = useState<Readonly<Record<string, string>>>({});
+  const [batchProgress, setBatchProgress] = useState<VisualizationRenderBatchProgress | null>(null);
+  const [lightboxViewId, setLightboxViewId] = useState<string | null>(null);
+  const eventName = project.event?.name ?? project.fairName;
+  const latestRenders = useMemo(() => latestCustomerRendersByView(project.visualizations), [project.visualizations]);
+  const currentFingerprint = useMemo(
+    () => buildVisualizationRenderFingerprint(project),
+    [project.boothId, project.variantId, project.carpetFinishId, project.constructionFinishId, project.constructionVisibility, project.sceneObjects, project.printSurfaceAssignments, project.graphicsFiles],
+  );
+
   if (!booth?.widthMm || !booth.depthMm) return <StepEmpty title="Vizualizace" text="Nejprve vyberte konfigurovatelný stánek." />;
   const toggleView = (id: string) => onSelectedViewsChange(project.selectedVisualizationViewIds.includes(id) ? project.selectedVisualizationViewIds.filter((value) => value !== id) : [...project.selectedVisualizationViewIds, id]);
   const toggleLayer = (layer: ExportLayer) => on2DLayersChange(project.visualization2DLayers.includes(layer) ? project.visualization2DLayers.filter((value) => value !== layer) : [...project.visualization2DLayers, layer]);
   const layers = project.visualization2DLayers as ExportLayer[];
+
+  const captureOptions = { widthPx: CUSTOMER_CAPTURE_RESOLUTIONS[resolutionPreset].widthPx, heightPx: CUSTOMER_CAPTURE_RESOLUTIONS[resolutionPreset].heightPx, format: renderFormat, backgroundMode };
+  const captureBlocked = backgroundMode === "transparent" && renderFormat !== "png";
+
+  function renderCustomerItem(view: VisualizationView): VisualizationItem | undefined {
+    visualizationCameraControlsRef.current?.applyView(view);
+    const result = visualizationCameraControlsRef.current?.renderCustomerCapture(captureOptions);
+    if (!result || result.ok !== true) {
+      const reason = result?.ok === false ? result.reason : "capture-failed";
+      setRenderErrors((current) => ({ ...current, [view.id]: reason === "print-tool-active" ? "Přepněte nástroj zpět na Výběr před vyrenderováním." : "Vyrenderování se nezdařilo." }));
+      return undefined;
+    }
+    setRenderErrors((current) => { const { [view.id]: _dropped, ...rest } = current; return rest; });
+    return createCustomerVisualizationRender({
+      name: view.name,
+      viewId: view.id,
+      imageDataUrl: result.dataUrl,
+      widthPx: result.widthPx,
+      heightPx: result.heightPx,
+      format: renderFormat,
+      backgroundMode,
+      contentFingerprint: currentFingerprint,
+      purpose: project.visualizationPurpose,
+    });
+  }
+
+  function renderSingleView(view: VisualizationView) {
+    const item = renderCustomerItem(view);
+    if (item) onAddVisualization(item);
+  }
+
+  async function renderAllViews() {
+    setBatchProgress({ completed: 0, total: views.length });
+    await renderVisualizationBatch(
+      views.map((view) => ({ viewId: view.id, viewName: view.name })),
+      {
+        captureAndUploadOne: async (target) => {
+          const view = views.find((candidate) => candidate.id === target.viewId)!;
+          const item = renderCustomerItem(view);
+          if (!item) return { ok: false, viewName: view.name, reason: renderErrors[view.id] ?? "Vyrenderování se nezdařilo." };
+          onAddVisualization(item);
+          return { ok: true, item };
+        },
+        onProgress: setBatchProgress,
+      },
+    );
+    setBatchProgress(null);
+  }
+
+  function renderFileName(view: VisualizationView, render: VisualizationItem): string {
+    return buildVisualizationRenderFileName({ eventName, projectName: project.name, viewName: view.name, extension: render.format === "png" ? "png" : "jpg" });
+  }
+
+  function downloadSingleRender(view: VisualizationView) {
+    const render = latestRenders.get(view.id);
+    if (!render) return;
+    downloadDataUrl(render.imageDataUrl, renderFileName(view, render));
+  }
+
+  const lightboxView = lightboxViewId ? views.find((view) => view.id === lightboxViewId) : undefined;
+  const lightboxRender = lightboxView ? latestRenders.get(lightboxView.id) : undefined;
 
   function createPlanOutput() {
     if (!planPreviewDataUrl) return;
@@ -173,59 +270,290 @@ export function VisualizationStep({ project, onSaveView, onRenameView, onMoveVie
 
   return <div className="workflowStepPage">
     <StepTitle eyebrow="KROK 3" title="Vizualizace" text="Připravte a uložte konkrétní 3D pohledy i 2D půdorysy. AI se nespouští automaticky." />
-    <div className="visualizationStaging">
-      <section className="workflowCard visualizationSources">
-        <h2>Uložené 3D pohledy</h2>
-        <div className="viewSelectionList">
-          {views.length === 0 && <p className="emptyState">Zatím není uložen žádný pohled.</p>}
-          {views.map((view, index) => (
-            <article className="visualizationViewCard" key={view.id}>
-              <label>
-                <input type="checkbox" checked={project.selectedVisualizationViewIds.includes(view.id)} onChange={() => toggleView(view.id)} />
-                <span><strong>{view.name}</strong><small>3D · Perspektiva</small></span>
-              </label>
-              <button type="button" onClick={() => visualizationCameraControlsRef.current?.applyView(view)}>Otevřít</button>
-              <div className="visualizationViewActions">
-                <button type="button" onClick={() => { const name = window.prompt("Název pohledu", view.name); if (name !== null) onRenameView(view.id, name); }}>Přejmenovat</button>
-                <button type="button" aria-label={`Posunout ${view.name} nahoru`} disabled={index === 0} onClick={() => onMoveView(view.id, -1)}>↑</button>
-                <button type="button" aria-label={`Posunout ${view.name} dolů`} disabled={index === views.length - 1} onClick={() => onMoveView(view.id, 1)}>↓</button>
-                <button type="button" onClick={() => onDeleteView(view.id)}>Smazat</button>
-              </div>
-            </article>
-          ))}
-        </div>
-        <label className="purposeSelect"><span>Kategorie vizualizace</span><select value={project.visualizationPurpose} onChange={(event) => onPurposeChange(event.target.value as typeof project.visualizationPurpose)}><option value="working">Pracovní návrh</option><option value="presentation">Vizu / prezentační vizualizace</option></select></label>
-        <button type="button" disabled>Vytvořit AI vizualizace · budoucí provider</button>
-        <p className="workflowMuted">Pohled ukládá pouze kameru; scéna zůstává živá. Technický snímek je lokální Three.js capture.</p>
-      </section>
-      <div className="visualizationWorkspace">
-        <BoothCadViewer
-          asset={getMasterReferenceModel(booth.assets)}
-          boothAsset={booth.boothAsset}
-          constructionVisibility={project.constructionVisibility}
-          boothVisible={project.constructionVisibility.assembly ?? booth.visible}
-          footprintWidthMm={booth.widthMm}
-          footprintDepthMm={booth.depthMm}
-          components={project.sceneObjects}
-          defaultViews={cameraPresets}
-          cameraControlsRef={visualizationCameraControlsRef}
-          nominalDimensions={booth.nominalDimensions}
-          printSurfaces={booth.printSurfaces}
-          printSurfaceAssignments={project.printSurfaceAssignments}
-          graphicsFiles={project.graphicsFiles}
-          showPrintPlaceholder={project.printSurfaceAssignments.some((assignment) => assignment.selectedForPrint && assignment.artworkStatus === "missing")}
-          carpetFinish={selectedFinish(booth.carpetVariants ?? carpetFinishVariants, project.carpetFinishId)}
-          constructionFinish={selectedFinish(booth.finishVariants ?? constructionFinishVariants, project.constructionFinishId)}
-          partDefinitions={booth.partDefinitions}
-          onSaveView={onSaveView}
-          onCapture={async ({ imageDataUrl, view }) => onAddVisualization(await provider.create({ name: `Technický vizu ${project.visualizations.length + 1}`, sourceViewId: view.name, technicalRenderDataUrl: imageDataUrl, purpose: project.visualizationPurpose }))}
-        />
-      </div>
+    <div className="visualizationWorkspace">
+      <BoothCadViewer
+        asset={getMasterReferenceModel(booth.assets)}
+        boothAsset={booth.boothAsset}
+        constructionVisibility={project.constructionVisibility}
+        boothVisible={project.constructionVisibility.assembly ?? booth.visible}
+        footprintWidthMm={booth.widthMm}
+        footprintDepthMm={booth.depthMm}
+        components={project.sceneObjects}
+        defaultViews={cameraPresets}
+        cameraControlsRef={visualizationCameraControlsRef}
+        nominalDimensions={booth.nominalDimensions}
+        printSurfaces={booth.printSurfaces}
+        printSurfaceAssignments={project.printSurfaceAssignments}
+        graphicsFiles={project.graphicsFiles}
+        showPrintPlaceholder={project.printSurfaceAssignments.some((assignment) => assignment.selectedForPrint && assignment.artworkStatus === "missing")}
+        carpetFinish={selectedFinish(booth.carpetVariants ?? carpetFinishVariants, project.carpetFinishId)}
+        constructionFinish={selectedFinish(booth.finishVariants ?? constructionFinishVariants, project.constructionFinishId)}
+        partDefinitions={booth.partDefinitions}
+        onSaveView={onSaveView}
+        onCapture={async ({ imageDataUrl, view }) => onAddVisualization(await provider.create({ name: `Technický vizu ${project.visualizations.length + 1}`, sourceViewId: view.name, technicalRenderDataUrl: imageDataUrl, purpose: project.visualizationPurpose }))}
+      />
     </div>
+    <section className="workflowCard visualizationSources">
+      <div className="renderOptionsBar">
+        <span className="renderOptionsLabel">Render</span>
+        <select value={resolutionPreset} onChange={(event) => setResolutionPreset(event.target.value as CustomerCaptureResolutionPreset)}>{(Object.keys(CUSTOMER_CAPTURE_RESOLUTIONS) as CustomerCaptureResolutionPreset[]).map((preset) => <option key={preset} value={preset}>{CUSTOMER_CAPTURE_RESOLUTIONS[preset].label}</option>)}</select>
+        <select value={renderFormat} onChange={(event) => { const format = event.target.value as CustomerRenderFormat; setRenderFormat(format); if (!isBackgroundModeAllowed(format, backgroundMode)) setBackgroundMode("white"); }}><option value="jpeg">JPG</option><option value="png">PNG</option></select>
+        <select value={backgroundMode} onChange={(event) => setBackgroundMode(event.target.value as CustomerRenderBackgroundMode)}><option value="light-neutral">Světlé</option><option value="white">Bílé</option><option value="transparent" disabled={!isBackgroundModeAllowed(renderFormat, "transparent")}>Transparentní</option></select>
+      </div>
+      <h2>Pohledy</h2>
+      <div className="visualizationCardGrid">
+        {views.length === 0 && <p className="emptyState">Zatím není uložen žádný pohled.</p>}
+        {views.map((view, index) => {
+          const render = latestRenders.get(view.id);
+          const staleness = render ? evaluateRenderStaleness(render, currentFingerprint) : undefined;
+          return (
+            <ViewRenderCard
+              key={view.id}
+              view={view}
+              render={render}
+              staleness={staleness}
+              error={renderErrors[view.id]}
+              selected={project.selectedVisualizationViewIds.includes(view.id)}
+              canMoveUp={index > 0}
+              canMoveDown={index < views.length - 1}
+              renderBlocked={captureBlocked}
+              onOpenThumbnail={() => setLightboxViewId(view.id)}
+              onOpenCamera={() => visualizationCameraControlsRef.current?.applyView(view)}
+              onRender={() => renderSingleView(view)}
+              onDownload={() => downloadSingleRender(view)}
+              onRename={() => { const name = window.prompt("Název pohledu", view.name); if (name !== null) onRenameView(view.id, name); }}
+              onMoveUp={() => onMoveView(view.id, -1)}
+              onMoveDown={() => onMoveView(view.id, 1)}
+              onDelete={() => onDeleteView(view.id)}
+              onToggleSelected={() => toggleView(view.id)}
+            />
+          );
+        })}
+      </div>
+      {views.length > 0 && (
+        <button type="button" className="primaryButton" onClick={() => void renderAllViews()} disabled={captureBlocked || batchProgress !== null}>
+          {batchProgress ? `Generuji vizualizace… ${batchProgress.completed} / ${batchProgress.total}${batchProgress.currentViewName ? ` (${batchProgress.currentViewName})` : ""}` : "Vyrenderovat všechny"}
+        </button>
+      )}
+      <label className="purposeSelect"><span>Kategorie vizualizace</span><select value={project.visualizationPurpose} onChange={(event) => onPurposeChange(event.target.value as typeof project.visualizationPurpose)}><option value="working">Pracovní návrh</option><option value="presentation">Vizu / prezentační vizualizace</option></select></label>
+      <button type="button" disabled>Vytvořit AI vizualizace · budoucí provider</button>
+      <p className="workflowMuted">Pohled ukládá pouze kameru; scéna zůstává živá. Technický snímek je lokální Three.js capture.</p>
+    </section>
+    {lightboxView && lightboxRender && (
+      <RenderLightbox
+        viewName={lightboxView.name}
+        render={lightboxRender}
+        onClose={() => setLightboxViewId(null)}
+        onDownload={() => downloadDataUrl(lightboxRender.imageDataUrl, renderFileName(lightboxView, lightboxRender))}
+      />
+    )}
     <section className="workflowCard visualization2D"><div><h2>2D zdroj</h2><p>Vyberte vrstvy a vytvořte samostatný uložený výstup.</p><div className="layerOptions">{allLayers.map((layer) => <label key={layer}><input type="checkbox" checked={layers.includes(layer)} onChange={() => toggleLayer(layer)} /> {EXPORT_LAYER_LABELS[layer]}</label>)}</div><button className="primaryButton" type="button" onClick={createPlanOutput} disabled={!planPreviewDataUrl}>Vytvořit půdorys</button></div><PlanLayerPreview booth={booth} sceneObjects={project.sceneObjects} layers={layers} constructionVisibility={project.constructionVisibility} annotations={project.annotations} customDimensions={project.customDimensions} onRendered={setPlanPreviewDataUrl} /></section>
+    <PresentationExportPanel project={project} views={views} />
     <GeneratedOutputResults visualizations={project.visualizations} plans={project.generatedPlanOutputs} onUpdateVisualization={onUpdateVisualization} onDeleteVisualization={onDeleteVisualization} onUpdatePlan={onUpdatePlanOutput} onDeletePlan={onDeletePlanOutput} />
     <StepActions onContinue={onContinue} />
   </div>;
+}
+
+/**
+ * Visualization v2.1 — compact per-view card. Two states: a real render exists (thumbnail,
+ * status badge, primary "Stáhnout" action) or not yet ("Bez náhledu" placeholder, primary
+ * "Vyrenderovat" action). Secondary actions (Otevřít/Přejmenovat/reorder/Smazat/re-render) live
+ * in a native <details> disclosure menu — no new dropdown dependency. Purely presentational:
+ * every callback is owned by VisualizationStep, no render/capture logic here.
+ */
+function ViewRenderCard({
+  view, render, staleness, error, selected, canMoveUp, canMoveDown, renderBlocked,
+  onOpenThumbnail, onOpenCamera, onRender, onDownload, onRename, onMoveUp, onMoveDown, onDelete, onToggleSelected,
+}: {
+  view: VisualizationView;
+  render: VisualizationItem | undefined;
+  staleness: "current" | "possibly-outdated" | "unknown" | undefined;
+  error: string | undefined;
+  selected: boolean;
+  canMoveUp: boolean;
+  canMoveDown: boolean;
+  renderBlocked: boolean;
+  onOpenThumbnail: () => void;
+  onOpenCamera: () => void;
+  onRender: () => void;
+  onDownload: () => void;
+  onRename: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
+  onDelete: () => void;
+  onToggleSelected: () => void;
+}) {
+  return (
+    <article className="visualizationRenderCard">
+      {render ? (
+        <button type="button" className="visualizationRenderCardThumb" onClick={onOpenThumbnail} aria-label={`Zobrazit render – ${view.name} – na celou obrazovku`}>
+          <img src={render.imageDataUrl} alt={`Náhled – ${view.name}`} />
+        </button>
+      ) : (
+        <div className="visualizationRenderCardThumb visualizationRenderCardThumb--empty"><span>Bez náhledu</span></div>
+      )}
+      <div className="visualizationRenderCardBody">
+        <strong>{view.name}</strong>
+        {render && (staleness === "possibly-outdated"
+          ? <small className="visualizationStatusBadge visualizationStatusBadge--stale">Může být zastaralý</small>
+          : <small className="visualizationStatusBadge visualizationStatusBadge--current">Aktuální</small>)}
+        {error && <small className="visualizationRenderError">{error}</small>}
+        <div className="visualizationRenderCardActions">
+          {render
+            ? <button type="button" onClick={onDownload}>Stáhnout</button>
+            : <button type="button" onClick={onRender} disabled={renderBlocked}>Vyrenderovat</button>}
+          <details className="visualizationCardMenu">
+            <summary aria-label={`Další akce – ${view.name}`}>⋯</summary>
+            <div className="visualizationCardMenuList">
+              <button type="button" onClick={onOpenCamera}>Otevřít</button>
+              {render && <button type="button" onClick={onRender} disabled={renderBlocked}>Přerenderovat</button>}
+              <button type="button" onClick={onRename}>Přejmenovat</button>
+              <button type="button" disabled={!canMoveUp} onClick={onMoveUp}>Posunout nahoru</button>
+              <button type="button" disabled={!canMoveDown} onClick={onMoveDown}>Posunout dolů</button>
+              <label><input type="checkbox" checked={selected} onChange={onToggleSelected} /> Vybráno pro export</label>
+              <button type="button" onClick={onDelete}>Smazat</button>
+            </div>
+          </details>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/**
+ * Visualization v2.1 — full-size render preview. Reuses the app's existing overlay+stopPropagation
+ * modal pattern (see PricingAdminPages.tsx's .adminModalOverlay/.adminModalCard) rather than a new
+ * dialog dependency; only the sizing is render-specific (.visualizationLightbox*).
+ */
+function RenderLightbox({ viewName, render, onClose, onDownload }: {
+  viewName: string;
+  render: VisualizationItem;
+  onClose: () => void;
+  onDownload: () => void;
+}) {
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => { if (event.key === "Escape") onClose(); };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <div className="visualizationLightboxOverlay" role="dialog" aria-modal="true" aria-label={`Render – ${viewName}`} onClick={onClose}>
+      <div className="visualizationLightboxCard" onClick={(event) => event.stopPropagation()}>
+        <button type="button" className="visualizationLightboxClose" aria-label="Zavřít náhled" onClick={onClose}>×</button>
+        <img src={render.imageDataUrl} alt={`Render – ${viewName}`} />
+        <div className="visualizationLightboxFooter">
+          <span>{viewName}</span>
+          <button type="button" className="primaryButton" onClick={onDownload}>Stáhnout {render.format === "png" ? "PNG" : "JPG"}</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type PresentationBuildState =
+  | Readonly<{ status: "idle" }>
+  | Readonly<{ status: "building" }>
+  | Readonly<{ status: "error"; message: string }>
+  | Readonly<{ status: "success" }>;
+
+/**
+ * Visualization v2 (report sections 15-22) — customer presentation export. Only shown once at
+ * least one saved view has a customer render. All state here (selection order, branding,
+ * preparedBy, build progress) is export-session-only — never written to ProjectRecord, matching
+ * GraphicsExportPanel.tsx's existing precedent from Graphics Production Package v1.
+ */
+function PresentationExportPanel({ project, views }: { project: CommonProject; views: readonly VisualizationView[] }) {
+  const latestRenders = useMemo(() => latestCustomerRendersByView(project.visualizations), [project.visualizations]);
+  const renderableViews = useMemo(() => views.filter((view) => latestRenders.has(view.id)), [views, latestRenders]);
+  const [selectedIds, setSelectedIds] = useState<readonly string[]>([]);
+  const [companyBrand, setCompanyBrand] = useState("");
+  const [preparedByName, setPreparedByName] = useState("");
+  const [preparedByEmail, setPreparedByEmail] = useState("");
+  const [preparedByPhone, setPreparedByPhone] = useState("");
+  const [buildState, setBuildState] = useState<PresentationBuildState>({ status: "idle" });
+  const eventName = project.event?.name ?? project.fairName;
+
+  function toggleSelected(viewId: string) {
+    setSelectedIds((current) => current.includes(viewId) ? current.filter((id) => id !== viewId) : [...current, viewId]);
+  }
+
+  function preparedByInput(): GraphicsProductionPreparedBy | undefined {
+    return preparedByName.trim()
+      ? { name: preparedByName.trim(), email: preparedByEmail.trim() || undefined, phone: preparedByPhone.trim() || undefined }
+      : undefined;
+  }
+
+  async function createPresentationPdf() {
+    setBuildState({ status: "building" });
+    try {
+      const pages: PresentationPdfRenderPage[] = selectedIds.flatMap((viewId) => {
+        const view = renderableViews.find((candidate) => candidate.id === viewId);
+        const render = latestRenders.get(viewId);
+        if (!view || !render) return [];
+        return [{ visualizationId: render.id, name: view.name, imageDataUrl: render.imageDataUrl, widthPx: render.widthPx ?? 1920, heightPx: render.heightPx ?? 1080, format: render.format ?? "jpeg" }];
+      });
+      const bytes = await buildPresentationPdf(pages, {
+        project: { name: project.name, company: project.company },
+        event: { name: eventName, venue: project.event?.venue },
+        booth: { name: project.booth?.name ?? "—", boothNumber: project.boothNumber || undefined },
+        branding: companyBrand.trim() ? { companyBrand: companyBrand.trim() } : undefined,
+        preparedBy: preparedByInput(),
+        generatedAt: new Date().toISOString(),
+      });
+      const packageName = buildVisualizationPackageName({ eventName, projectName: project.name });
+      const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));
+      downloadDataUrl(url, `${packageName}.pdf`);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setBuildState({ status: "success" });
+    } catch {
+      setBuildState({ status: "error", message: "Prezentační PDF se nepodařilo vytvořit." });
+    }
+  }
+
+  async function downloadAllRenders() {
+    setBuildState({ status: "building" });
+    try {
+      const packageName = buildVisualizationPackageName({ eventName, projectName: project.name });
+      const namedFiles = deduplicateRenderFileNames(renderableViews.map((view) => ({
+        viewId: view.id,
+        fileName: buildVisualizationRenderFileName({ eventName, projectName: project.name, viewName: view.name, extension: latestRenders.get(view.id)?.format === "png" ? "png" : "jpg" }),
+      })));
+      const entries = namedFiles.map((file) => ({ fileName: file.fileName, dataUrl: latestRenders.get(file.viewId)?.imageDataUrl }));
+      const result = assembleVisualizationZipEntries(packageName, entries);
+      if (result.ok !== true) {
+        setBuildState({ status: "error", message: `Stažení selhalo u: ${result.failedFiles.join(", ")}` });
+        return;
+      }
+      const url = URL.createObjectURL(createZip(result.entries));
+      downloadDataUrl(url, `${packageName}.zip`);
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setBuildState({ status: "success" });
+    } catch {
+      setBuildState({ status: "error", message: "Stažení balíčku se nezdařilo." });
+    }
+  }
+
+  if (renderableViews.length === 0) return null;
+
+  return <section className="workflowCard presentationExportPanel">
+    <div className="workflowCardHeader"><div><span>PREZENTAČNÍ VÝSTUP</span><strong>Zákaznický dokument</strong></div></div>
+    <div className="presentationSelectionList">
+      {renderableViews.map((view) => <label className="outputSelectionRow" key={view.id}><input type="checkbox" checked={selectedIds.includes(view.id)} onChange={() => toggleSelected(view.id)} /><span>{view.name}</span></label>)}
+    </div>
+    <div className="presentationMeta">
+      <label><span>Firemní branding (nepovinné)</span><input type="text" value={companyBrand} onChange={(event) => setCompanyBrand(event.target.value)} placeholder="HOMEWORK STUDIO" /></label>
+      <label><span>Zpracoval (jméno)</span><input type="text" value={preparedByName} onChange={(event) => setPreparedByName(event.target.value)} /></label>
+      <label><span>E-mail</span><input type="email" value={preparedByEmail} onChange={(event) => setPreparedByEmail(event.target.value)} /></label>
+      <label><span>Telefon</span><input type="tel" value={preparedByPhone} onChange={(event) => setPreparedByPhone(event.target.value)} /></label>
+    </div>
+    {buildState.status === "error" && <p className="workflowWarning">{buildState.message}</p>}
+    {buildState.status === "success" && <p className="workflowMuted">Hotovo.</p>}
+    <div className="presentationActions">
+      <button type="button" className="primaryButton" onClick={() => void createPresentationPdf()} disabled={selectedIds.length === 0 || buildState.status === "building"}>Prezentační PDF</button>
+      <button type="button" onClick={() => void downloadAllRenders()} disabled={buildState.status === "building"}>Stáhnout všechny rendery (ZIP)</button>
+    </div>
+  </section>;
 }
 
 export function SummaryStep({ project, onAddGraphicsFiles, onRetryGraphics, onRemoveGraphicsFile, graphicsUpload, onContinue }: { project: CommonProject; onAddGraphicsFiles: (files: FileList) => Promise<void>; onRetryGraphics: () => Promise<void>; onRemoveGraphicsFile: (id: string) => void; graphicsUpload?: UploadProgress; onContinue: () => void }) {

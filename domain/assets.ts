@@ -127,7 +127,10 @@ const CATEGORY_RULES: Readonly<Record<AssetCategory, CategoryRule>> = {
   "catalog-source": { prefix: (id) => `catalog/furniture/${id}/source`, maxBytes: 150_000_000, mimeTypes: ["application/octet-stream", "application/pdf"] },
   "project-graphics": { prefix: (id) => `projects/${id}/graphics`, maxBytes: 100_000_000, mimeTypes: GRAPHICS_TYPES },
   "project-document": { prefix: (id) => `projects/${id}/documents`, maxBytes: 40_000_000, mimeTypes: DOCUMENT_TYPES },
-  "project-visualization": { prefix: (id) => `projects/${id}/visualizations`, maxBytes: 25_000_000, mimeTypes: IMAGE_TYPES },
+  // Visualization v2: bumped from 25MB — a "Print" preset (2400x1800) transparent RGBA PNG of a
+  // detailed booth render can realistically land in the high single-digit MB range; 40MB keeps a
+  // comfortable margin without removing the bound entirely.
+  "project-visualization": { prefix: (id) => `projects/${id}/visualizations`, maxBytes: 40_000_000, mimeTypes: IMAGE_TYPES },
   "project-floorplan": { prefix: (id) => `projects/${id}/floorplans`, maxBytes: 25_000_000, mimeTypes: IMAGE_TYPES },
   "project-export": { prefix: (id) => `projects/${id}/exports`, maxBytes: 150_000_000, mimeTypes: ["application/pdf", "application/zip", ...IMAGE_TYPES] },
   temporary: { prefix: () => "temporary", maxBytes: 5_000_000, mimeTypes: ["text/plain", ...IMAGE_TYPES] },

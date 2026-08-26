@@ -1070,15 +1070,62 @@ select:focus {
 .checkRow label { flex-direction: row; align-items: center; font-size: 8px; }
 .checkRow input { width: auto; height: auto; }
 
-.visualizationWorkspace { height: min(65vh, 690px); margin-bottom: 18px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
+.visualizationWorkspace { height: min(58vh, 560px); margin-bottom: 12px; overflow: hidden; border: 1px solid var(--border); border-radius: 12px; }
 .visualizationWorkspace .cadViewer { height: 100%; }
 .cadViewButtons { display: flex; flex-wrap: wrap; gap: 5px; }
-.visualizationViewCard { display: grid; gap: 5px; padding: 7px; border: 1px solid #e5e6e6; border-radius: 6px; background: #fff; }
-.visualizationViewCard > label { padding: 0; border: 0; }
-.visualizationViewCard > button { min-height: 28px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 8px; font-weight: 700; }
-.visualizationViewActions { display: grid; grid-template-columns: 1fr auto auto 1fr; gap: 4px; }
-.visualizationViewActions button { min-height: 25px; padding: 0 6px; border: 1px solid #e2e3e4; border-radius: 4px; background: white; font-size: 7px; }
-.visualizationViewActions button:disabled { opacity: 0.38; }
+
+/* Visualization v2.1 — compact render options bar (report section 3): one row, no card chrome. */
+.renderOptionsBar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.renderOptionsLabel { font-size: 8px; font-weight: 700; color: #6f7376; }
+.renderOptionsBar select { height: 28px; padding: 0 8px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 8px; }
+
+/* Visualization v2.1 — compact card grid replacing the old sidebar view list + unconstrained thumbnail (report sections 4/5/13). */
+.visualizationCardGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; margin-bottom: 12px; }
+.visualizationRenderCard { display: flex; flex-direction: column; overflow: hidden; border: 1px solid #e5e6e6; border-radius: 8px; background: #fff; }
+.visualizationRenderCardThumb { display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; border: 0; border-bottom: 1px solid #e5e6e6; background: #f2f3f3; cursor: pointer; }
+.visualizationRenderCardThumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.visualizationRenderCardThumb--empty { display: grid; place-items: center; cursor: default; }
+.visualizationRenderCardThumb--empty span { color: #9a9d9f; font-size: 7px; }
+.visualizationRenderCardBody { display: grid; gap: 4px; padding: 8px; }
+.visualizationRenderCardBody > strong { font-size: 8px; }
+.visualizationStatusBadge { justify-self: start; padding: 1px 6px; border-radius: 999px; font-size: 6px; font-style: normal; font-weight: 700; text-transform: uppercase; letter-spacing: .02em; }
+.visualizationStatusBadge--current { background: #e6f4ea; color: #2b7a41; }
+.visualizationStatusBadge--stale { background: #fbeee0; color: #a15c1c; }
+.visualizationRenderError { color: #b3261e; font-size: 7px; }
+.visualizationRenderCardActions { display: flex; align-items: center; justify-content: space-between; gap: 6px; margin-top: 2px; }
+.visualizationRenderCardActions > button { min-height: 26px; padding: 0 8px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 7px; font-weight: 700; }
+.visualizationRenderCardActions > button:disabled { opacity: .38; }
+
+/* Visualization v2.1 — "⋯" secondary-actions menu, native <details>/<summary>, no dropdown dependency. */
+.visualizationCardMenu { position: relative; }
+.visualizationCardMenu > summary { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 11px; line-height: 1; cursor: pointer; list-style: none; }
+.visualizationCardMenu > summary::-webkit-details-marker { display: none; }
+.visualizationCardMenuList { position: absolute; right: 0; bottom: calc(100% + 4px); z-index: 5; display: grid; gap: 2px; width: max-content; min-width: 150px; padding: 6px; border: 1px solid #e2e3e4; border-radius: 6px; background: white; box-shadow: 0 6px 18px rgba(20, 22, 23, .14); }
+.visualizationCardMenuList button,
+.visualizationCardMenuList label { justify-content: flex-start; padding: 5px 6px; border: 0; border-radius: 4px; background: none; font-size: 7px; text-align: left; }
+.visualizationCardMenuList label { display: flex; flex-direction: row; align-items: center; gap: 6px; }
+.visualizationCardMenuList label input { width: auto; height: auto; }
+.visualizationCardMenuList button:hover,
+.visualizationCardMenuList label:hover { background: #f2f3f3; }
+.visualizationCardMenuList button:disabled { opacity: .38; }
+
+/* Visualization v2.1 — full-size render lightbox (report section 6), same overlay+stopPropagation pattern as .adminModalOverlay/.adminModalCard, sized for an image rather than a form. */
+.visualizationLightboxOverlay { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(20, 22, 23, .8); }
+.visualizationLightboxCard { display: flex; flex-direction: column; position: relative; width: min(1100px, 94vw); max-height: 90vh; overflow: hidden; border-radius: 10px; background: #111; }
+.visualizationLightboxCard img { width: 100%; max-height: calc(90vh - 46px); object-fit: contain; background: #1c1d1e; }
+.visualizationLightboxClose { position: absolute; top: 8px; right: 8px; z-index: 1; display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 999px; background: rgba(255, 255, 255, .16); color: white; font-size: 16px; line-height: 1; cursor: pointer; }
+.visualizationLightboxClose:hover { background: rgba(255, 255, 255, .28); }
+.visualizationLightboxFooter { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 10px 14px; background: #1c1d1e; color: white; font-size: 8px; }
+
+/* Visualization v2.1 — compact presentation/bulk-download action row (report section 10): a
+   modest bottom section, never visually competing with the 3D viewer above it. */
+.presentationExportPanel { padding: 14px; }
+.presentationSelectionList { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
+.presentationSelectionList .outputSelectionRow { flex-direction: row; align-items: center; gap: 5px; padding: 5px 8px; border: 1px solid #e5e6e6; border-radius: 999px; font-size: 7px; }
+.presentationMeta { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; margin-bottom: 10px; }
+.presentationMeta input { height: 30px; font-size: 8px; }
+.presentationActions { display: flex; flex-wrap: wrap; gap: 8px; }
+.presentationActions button { min-height: 30px; }
 .visualizationGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
 .visualizationGrid figure { overflow: hidden; border: 1px solid #e4e5e5; border-radius: 8px; }
 .visualizationGrid img { width: 100%; display: block; }
@@ -5872,17 +5919,9 @@ select:focus {
 .deadlineEditor > div:first-child { display: flex; justify-content: space-between; }
 .deadlineEditor button { min-height: 28px; padding: 0 9px; border: 1px solid #dfe0e1; border-radius: 5px; background: #fafafa; font-size: 8px; }
 
-.visualizationStaging { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 14px; margin-bottom: 14px; }
 .visualizationSources h2,
 .visualization2D h2 { font-size: 13px; }
-.viewSelectionList { display: grid; gap: 6px; margin: 13px 0; }
-.viewSelectionList label { flex-direction: row; align-items: center; padding: 7px; border: 1px solid #e5e6e6; border-radius: 6px; }
-.viewSelectionList input { width: auto; height: auto; }
-.viewSelectionList span { display: grid; gap: 2px; }
-.viewSelectionList strong { font-size: 8px; }
-.viewSelectionList small { color: #999ca0; font-size: 7px; }
 .purposeSelect select { height: 36px; }
-.visualizationStaging .visualizationWorkspace { height: min(64vh, 650px); margin: 0; }
 .visualization2D { display: grid; grid-template-columns: 260px minmax(300px, 1fr); gap: 18px; margin-bottom: 14px; }
 .visualization2D > div:first-child > p { margin: 5px 0 12px; color: #96999c; font-size: 8px; }
 .planLayerPreview { display: grid; place-items: center; min-height: 480px; padding: 16px; background: #f4f5f5; }
@@ -6042,10 +6081,6 @@ select:focus {
   .projectFilters,
   .adminFilters { grid-template-columns: repeat(2, 1fr); }
   .projectStatusGrid { grid-template-columns: repeat(3, 1fr); }
-  .visualizationStaging { grid-template-columns: 1fr; }
-  .visualizationSources { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .visualizationSources h2,
-  .visualizationSources p { grid-column: 1 / -1; }
   .pricingFilters { grid-template-columns: repeat(2, 1fr); }
   .pricingCatalogRow { grid-template-columns: auto 1fr; }
 }

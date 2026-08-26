@@ -14,9 +14,7 @@
 import type { ArtworkPlacement } from "../domain/project.ts";
 import type { GraphicsProductionManifest, GraphicsProductionManifestSurface } from "../domain/graphicsProduction.ts";
 import { isRasterArtworkFile } from "./printArtworkOverlays.ts";
-import { NOTO_SANS_CZECH_BOLD_BASE64, NOTO_SANS_CZECH_REGULAR_BASE64 } from "./fonts/graphicsProductionFont.ts";
-
-const FONT_FAMILY = "NotoSansCzech";
+import { FONT_FAMILY, registerCzechFont, type PdfDoc } from "./pdf/czechFont.ts";
 
 const PAGE_MARGIN_MM = 15;
 const THUMBNAIL_BOX_MM = 22;
@@ -33,35 +31,6 @@ function formatArtworkPlacementSummary(placement: ArtworkPlacement | undefined):
 function extensionUpper(fileName: string): string {
   const match = /\.([a-z0-9]+)$/iu.exec(fileName);
   return match ? match[1]!.toUpperCase() : "SOUBOR";
-}
-
-type PdfDoc = Readonly<{
-  setFont: (name: string, style?: string) => void;
-  setFontSize: (size: number) => number;
-  text: (text: string | string[], x: number, y: number, options?: Readonly<{ align?: "left" | "center" | "right" }>) => void;
-  setDrawColor: (r: number, g: number, b: number) => void;
-  setLineWidth: (width: number) => void;
-  rect: (x: number, y: number, w: number, h: number) => void;
-  line: (x1: number, y1: number, x2: number, y2: number) => void;
-  addImage: (imageData: string, format: string, x: number, y: number, w: number, h: number) => void;
-  addPage: () => void;
-  addFileToVFS: (fileName: string, base64: string) => void;
-  addFont: (fileName: string, fontName: string, style: string) => void;
-  internal: { pageSize: { getWidth: () => number; getHeight: () => number } };
-  output: (type: "arraybuffer") => ArrayBuffer;
-}>;
-
-/**
- * jsPDF's built-in Helvetica/Times/Courier fonts only support WinAnsi encoding — no
- * č/ř/ě/ů/š/ž/etc. — which garbled every Czech line in this Czech-first document (confirmed by
- * generating and visually inspecting a real manifest.pdf during implementation). Embeds a real
- * Unicode font instead (see lib/fonts/graphicsProductionFont.ts for the subset/license details).
- */
-function registerCzechFont(doc: PdfDoc): void {
-  doc.addFileToVFS("NotoSansCzech-Regular.ttf", NOTO_SANS_CZECH_REGULAR_BASE64);
-  doc.addFont("NotoSansCzech-Regular.ttf", FONT_FAMILY, "normal");
-  doc.addFileToVFS("NotoSansCzech-Bold.ttf", NOTO_SANS_CZECH_BOLD_BASE64);
-  doc.addFont("NotoSansCzech-Bold.ttf", FONT_FAMILY, "bold");
 }
 
 function imageFormatForMimeType(mimeType: string): string | undefined {

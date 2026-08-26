@@ -91,12 +91,32 @@ export type BoothCadCameraControls = Readonly<{
   reset: () => void;
   applyView: (view: Pick<VisualizationView, "position" | "target" | "fov">) => void;
   currentView: () => BoothCadCameraSnapshot;
+  renderCustomerCapture: (options: CustomerCaptureOptions) => CustomerCaptureResult;
 }>;
 
 export type BoothCadCameraSnapshot = Pick<
   VisualizationView,
   "name" | "position" | "target" | "fov" | "projectionMode"
 >;
+
+/**
+ * Visualization v2 — a clean, high-resolution "customer render" capture, decoupled from the live
+ * browser viewport's physical pixel size. No camera fields here at all (position/target/fov) —
+ * that's a structural guarantee that a capture can never move the active camera, backing the
+ * "export must not change viewport/controls state" requirement at the type level.
+ */
+export type CustomerCaptureOptions = Readonly<{
+  widthPx: number;
+  heightPx: number;
+  format: "png" | "jpeg";
+  /** Default 0.92 when omitted. */
+  jpegQuality?: number;
+  backgroundMode: "white" | "light-neutral" | "transparent";
+}>;
+
+export type CustomerCaptureResult =
+  | Readonly<{ ok: true; dataUrl: string; widthPx: number; heightPx: number }>
+  | Readonly<{ ok: false; reason: "print-tool-active" | "capture-failed" }>;
 
 type ModelDimensionsMm = {
   width: number;
@@ -332,6 +352,10 @@ export function BoothCadViewer({
       renderer = new THREE.WebGLRenderer({
         antialias: true,
         preserveDrawingBuffer: true,
+        // Visualization v2: enables a transparent-background customer render capture
+        // (renderCustomerCapture below). scene.background stays an opaque Color in every
+        // existing code path, so live on-screen rendering is completely unaffected by this.
+        alpha: true,
       });
     } catch (reason) {
       console.error("WebGL renderer initialization failed", reason);
@@ -513,6 +537,65 @@ export function BoothCadViewer({
       controls.update();
       reportCameraZoom();
     };
+    /**
+     * Visualization v2 — the ONE customer-capture entry point, exposed via cameraControlsRef.
+     * Runs entirely synchronously (no await/microtask yield) between the mutation and the
+     * restore in the finally block, so the always-running requestAnimationFrame render loop
+     * (see `render` below) can never interleave and paint a half-mutated frame — by the time the
+     * next rAF callback fires, everything below has already been restored. Camera
+     * position/target/fov and OrbitControls are never referenced anywhere in this function — a
+     * structural guarantee (CustomerCaptureOptions carries no camera fields) that a capture can
+     * never move the active camera.
+     */
+    const renderCustomerCapture = (options: CustomerCaptureOptions): CustomerCaptureResult => {
+      // Print-surface selection applies a real scene-graph emissive tint (see the
+      // viewerTool === "print" branch below) — refusing here (rather than forcing viewerTool
+      // back to "select", which would re-trigger this whole effect via the dependency array and
+      // tear down/rebuild the entire scene) is the only non-disruptive option. The UI disables
+      // "Vyrenderovat" with an explanatory label while this tool is active.
+      if (viewerTool !== "select") return { ok: false, reason: "print-tool-active" };
+
+      const previousPixelRatio = renderer.getPixelRatio();
+      const previousAspect = camera.aspect;
+      const previousBackground = scene.background;
+      const previousClearAlpha = renderer.getClearAlpha();
+      const previousOverlaysVisible = editorOverlays.visible;
+      try {
+        renderer.setPixelRatio(1);
+        renderer.setSize(options.widthPx, options.heightPx, false);
+        camera.aspect = options.widthPx / options.heightPx;
+        camera.updateProjectionMatrix();
+        if (options.backgroundMode === "white") {
+          scene.background = new THREE.Color(0xffffff);
+        } else if (options.backgroundMode === "transparent") {
+          scene.background = null;
+          renderer.setClearAlpha(0);
+        }
+        // "light-neutral": no change — reuses the viewer's existing default scene.background.
+        editorOverlays.visible = false;
+
+        renderer.render(scene, camera);
+        const dataUrl = options.format === "png"
+          ? renderer.domElement.toDataURL("image/png")
+          : renderer.domElement.toDataURL("image/jpeg", options.jpegQuality ?? 0.92);
+        return { ok: true, dataUrl, widthPx: options.widthPx, heightPx: options.heightPx };
+      } catch (reason) {
+        console.error("Customer render capture failed", reason);
+        return { ok: false, reason: "capture-failed" };
+      } finally {
+        editorOverlays.visible = previousOverlaysVisible;
+        scene.background = previousBackground;
+        renderer.setClearAlpha(previousClearAlpha);
+        camera.aspect = previousAspect;
+        camera.updateProjectionMatrix();
+        renderer.setPixelRatio(previousPixelRatio);
+        // Re-derives the live DOM-mount-driven size/aspect fresh — guarantees the post-capture
+        // state is bit-identical to "as if the capture never happened," never a hand-rolled
+        // recompute that could drift from the viewer's normal resize logic.
+        resize();
+      }
+    };
+
     const cameraController: BoothCadCameraControls = {
       zoomOut: () => zoomBy(1.2),
       zoomIn: () => zoomBy(1 / 1.2),
@@ -523,6 +606,7 @@ export function BoothCadViewer({
         establishReferenceDistance();
       },
       currentView: () => currentViewRef.current(),
+      renderCustomerCapture,
     };
     if (cameraControlsRef) cameraControlsRef.current = cameraController;
     controls.addEventListener("change", reportCameraZoom);

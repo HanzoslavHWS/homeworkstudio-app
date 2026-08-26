@@ -18,7 +18,7 @@ import {
   resolveProductionPrintSurface,
   type GraphicsSurfacePricingResult,
 } from "./technicalServices.ts";
-import { buildSurfaceExportFileName, printSurfaceHumanLabelParts } from "./graphicsFileNaming.ts";
+import { buildSurfaceExportFileName, deduplicateFileNames, printSurfaceHumanLabelParts } from "./graphicsFileNaming.ts";
 
 export type GraphicsExportRow = Readonly<{
   printSurfaceId: string;
@@ -121,21 +121,11 @@ export function buildGraphicsExportRows(
  * expected in practice, but never assumed impossible either — e.g. a future component reusing an
  * identical group/panel/face label) get a deterministic `-2`, `-3`, ... suffix on every
  * repeat after the first, in the same stable group/order sort the rows already carry. Never a
- * random/UUID suffix.
+ * random/UUID suffix. Thin wrapper over graphicsFileNaming.ts's generic deduplicateFileNames —
+ * Visualization v2 reuses that same generic helper for render filenames instead of a second copy.
  */
 function deduplicateExportFileNames(rows: readonly GraphicsExportRow[]): readonly GraphicsExportRow[] {
-  const seenCounts = new Map<string, number>();
-  return rows.map((row) => {
-    if (!row.exportFileName) return row;
-    const count = (seenCounts.get(row.exportFileName) ?? 0) + 1;
-    seenCounts.set(row.exportFileName, count);
-    if (count === 1) return row;
-    const dot = row.exportFileName.lastIndexOf(".");
-    const deduplicated = dot > 0
-      ? `${row.exportFileName.slice(0, dot)}-${count}${row.exportFileName.slice(dot)}`
-      : `${row.exportFileName}-${count}`;
-    return { ...row, exportFileName: deduplicated };
-  });
+  return deduplicateFileNames(rows, (row) => row.exportFileName, (row, name) => ({ ...row, exportFileName: name }));
 }
 
 export type GraphicsExportGroup = Readonly<{ id: string; name: string; rows: readonly GraphicsExportRow[] }>;

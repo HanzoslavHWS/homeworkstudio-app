@@ -11,6 +11,7 @@ import type { StoredAsset } from "./assets.ts";
 import type { PlotPolygon, PlotStatus } from "./plot.ts";
 import type { FloorZone } from "./floorZones.ts";
 import type { RectanglePrimitive } from "./rectanglePrimitives.ts";
+import type { VisualizationRenderFingerprint } from "./visualizationRender.ts";
 
 export type ProjectMode = "proposal" | "order" | "production";
 export type ProjectStatus = "draft" | "inProgress" | "ready" | "archived";
@@ -177,11 +178,27 @@ export type VisualizationItem = Readonly<{
   sourceViewId: string;
   imageDataUrl: string;
   asset?: StoredAsset;
-  type: "technical" | "ai";
+  type: "technical" | "ai" | "customer";
   purpose: "working" | "presentation";
   createdAt: string;
   reviewStatus: "unreviewed" | "reviewed";
+  /**
+   * Visualization v2: a CUSTOMER render's tight FK to the VisualizationView it was captured
+   * from — only ever set by the new customer-render creation path. The pre-existing
+   * `sourceViewId` above is left exactly as before (populated with the view's NAME, not its id,
+   * for the technical-snapshot path) — never retrofitted, to avoid touching that working code.
+   */
+  viewId?: string;
+  widthPx?: number;
+  heightPx?: number;
+  format?: "png" | "jpeg";
+  backgroundMode?: "white" | "light-neutral" | "transparent";
+  /** Content fingerprint captured at render time — see domain/visualizationRender.ts's evaluateRenderStaleness for how this becomes "Aktuální" / "Může být zastaralý". Absent on every pre-v2/technical/ai item — never asserted stale in that case. */
+  contentFingerprint?: VisualizationRenderFingerprint;
 }>;
+
+/** Visualization v2: readability alias for a persisted customer render — same evolving VisualizationItem shape, never a parallel model (mirrors the existing SavedCameraView = VisualizationView precedent above). */
+export type VisualizationRender = VisualizationItem;
 
 export type GeneratedPlanOutput = Readonly<{
   id: string;

@@ -157,6 +157,49 @@ test("Visualization views persist, rename and reorder as project data", () => {
   );
 });
 
+// =========================================================================================
+// Visualization v2 — renderCustomerCapture (report sections 4/27): structural source-scan pins
+// for the parts of the save/mutate/render/restore sequence that can't run under node:test
+// (no live WebGL context). See the plan's manual browser QA checklist for the rest.
+// =========================================================================================
+
+test("CUSTOMER CAPTURE: CustomerCaptureOptions carries no camera fields — a structural guarantee export never moves the active camera", () => {
+  const viewerSource = readFileSync("components/configurator/BoothCadViewer.tsx", "utf8");
+  const match = viewerSource.match(/export type CustomerCaptureOptions = Readonly<\{[\s\S]*?\n\}>;/u);
+  assert.ok(match, "expected to find the CustomerCaptureOptions type");
+  assert.doesNotMatch(match![0], /position|target|fov/u);
+});
+
+test("CUSTOMER CAPTURE: refuses (never mutates the scene) while the print-surface tool is active, instead of forcing viewerTool back to select", () => {
+  const viewerSource = readFileSync("components/configurator/BoothCadViewer.tsx", "utf8");
+  const match = viewerSource.match(/const renderCustomerCapture = \(options: CustomerCaptureOptions\)[\s\S]*?\n    \};/u);
+  assert.ok(match, "expected to find renderCustomerCapture");
+  assert.match(match![0], /if \(viewerTool !== "select"\) return \{ ok: false, reason: "print-tool-active" \};/u);
+  assert.doesNotMatch(match![0], /setViewerTool/u, "must never call setViewerTool — that would retrigger the whole scene-rebuilding effect");
+});
+
+test("CUSTOMER CAPTURE: saves and restores pixelRatio/aspect/background/clearAlpha/overlay-visibility around an explicit (non-rAF-loop) render call", () => {
+  const viewerSource = readFileSync("components/configurator/BoothCadViewer.tsx", "utf8");
+  const match = viewerSource.match(/const renderCustomerCapture = \(options: CustomerCaptureOptions\)[\s\S]*?\n    \};/u);
+  assert.ok(match);
+  const body = match![0];
+  assert.match(body, /const previousPixelRatio = renderer\.getPixelRatio\(\)/u);
+  assert.match(body, /const previousBackground = scene\.background/u);
+  assert.match(body, /const previousClearAlpha = renderer\.getClearAlpha\(\)/u);
+  assert.match(body, /const previousOverlaysVisible = editorOverlays\.visible/u);
+  assert.match(body, /renderer\.render\(scene, camera\)/u);
+  assert.match(body, /finally \{/u);
+  assert.match(body, /renderer\.setPixelRatio\(previousPixelRatio\)/u);
+  assert.match(body, /resize\(\);/u);
+});
+
+test("CUSTOMER CAPTURE: WebGLRenderer is constructed with alpha:true (required for the transparent-background branch)", () => {
+  const viewerSource = readFileSync("components/configurator/BoothCadViewer.tsx", "utf8");
+  const match = viewerSource.match(/new THREE\.WebGLRenderer\(\{[\s\S]*?\}\)/u);
+  assert.ok(match);
+  assert.match(match![0], /alpha: true/u);
+});
+
 test("legacy project without views defaults to [] and legacy savedViews upgrade in place", () => {
   const empty = normalizeProjectRecord({ id: "legacy-empty", schemaVersion: 4 });
   assert.deepEqual(empty.visualizationViews, []);

@@ -3,6 +3,7 @@ import type {
   VisualizationView,
   VisualizationItem,
 } from "./project.ts";
+import type { CustomerRenderBackgroundMode, CustomerRenderFormat, VisualizationRenderFingerprint } from "./visualizationRender.ts";
 
 // "booth" now comes from SceneLayer itself (see domain/models.ts) rather than being unioned in
 // here separately — kept as one literal union member either way, this is just documentation of
@@ -119,6 +120,47 @@ export function saveCameraView(
     type: "3d",
     order: input.order ?? 0,
     createdAt: now,
+  };
+}
+
+let customerRenderSequence = 0;
+
+/**
+ * Visualization v2 — the CUSTOMER render creation path, a sibling to
+ * TechnicalVisualizationProvider above, never modifying it (the technical snapshot stays exactly
+ * as it was). Populates the tight `viewId` FK from day one (unlike the technical path's
+ * name-based `sourceViewId`, left alone) and stamps the fingerprint/format/background/dimensions
+ * Visualization v2's readiness/staleness UI needs.
+ */
+export function createCustomerVisualizationRender(
+  input: Readonly<{
+    name: string;
+    viewId: string;
+    imageDataUrl: string;
+    widthPx: number;
+    heightPx: number;
+    format: CustomerRenderFormat;
+    backgroundMode: CustomerRenderBackgroundMode;
+    contentFingerprint: VisualizationRenderFingerprint;
+    purpose?: "working" | "presentation";
+  }>,
+  now = new Date().toISOString(),
+): VisualizationItem {
+  return {
+    id: `visualization-customer-${Date.now()}-${customerRenderSequence++}`,
+    name: input.name,
+    sourceViewId: input.viewId,
+    viewId: input.viewId,
+    imageDataUrl: input.imageDataUrl,
+    widthPx: input.widthPx,
+    heightPx: input.heightPx,
+    format: input.format,
+    backgroundMode: input.backgroundMode,
+    contentFingerprint: input.contentFingerprint,
+    type: "customer",
+    purpose: input.purpose ?? "working",
+    createdAt: now,
+    reviewStatus: "unreviewed",
   };
 }
 

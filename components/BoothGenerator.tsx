@@ -911,6 +911,8 @@ export default function BoothGenerator() {
     name: projectName,
     fairName: selectedFair?.name ?? "—",
     event: selectedExhibition,
+    boothId: selectedBoothId,
+    variantId: selectedVariantId,
     company,
     contact: { name: contactName, phone: contactPhone, email: contactEmail },
     boothNumber,
