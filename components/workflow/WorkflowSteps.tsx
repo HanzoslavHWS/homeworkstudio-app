@@ -67,6 +67,7 @@ import {
   evaluateRenderStaleness,
   isBackgroundModeAllowed,
   latestCustomerRendersByView,
+  latestPresentableRendersByView,
   type CustomerCaptureResolutionPreset,
   type CustomerRenderBackgroundMode,
   type CustomerRenderFormat,
@@ -85,8 +86,10 @@ import {
 import { EventLogo } from "./CatalogManagementPages";
 import { requirementStatusLabels } from "./TechnicalRequirementsEditor";
 import { GraphicsExportPanel } from "./GraphicsExportPanel";
+import { AiVisualizationPanel } from "./AiVisualizationPanel";
+import { ControlPassDebugViewer } from "../configurator/ControlPassDebugViewer";
 
-type CommonProject = {
+export type CommonProject = {
   id?: string;
   name: string;
   fairName: string;
@@ -336,9 +339,28 @@ export function VisualizationStep({ project, onSaveView, onRenameView, onMoveVie
         </button>
       )}
       <label className="purposeSelect"><span>Kategorie vizualizace</span><select value={project.visualizationPurpose} onChange={(event) => onPurposeChange(event.target.value as typeof project.visualizationPurpose)}><option value="working">Pracovní návrh</option><option value="presentation">Vizu / prezentační vizualizace</option></select></label>
-      <button type="button" disabled>Vytvořit AI vizualizace · budoucí provider</button>
       <p className="workflowMuted">Pohled ukládá pouze kameru; scéna zůstává živá. Technický snímek je lokální Three.js capture.</p>
     </section>
+    <section className="workflowCard">
+      <AiVisualizationPanel
+        project={project}
+        views={views}
+        cameraControlsRef={visualizationCameraControlsRef}
+        latestCustomerRenders={latestRenders}
+        currentFingerprint={currentFingerprint}
+        onAddVisualization={onAddVisualization}
+        onDeleteVisualization={onDeleteVisualization}
+        onUpdateVisualization={onUpdateVisualization}
+        selectedVisualizationViewIds={project.selectedVisualizationViewIds}
+        onToggleView={toggleView}
+      />
+    </section>
+    <ControlPassDebugViewer
+      cameraControlsRef={visualizationCameraControlsRef}
+      widthPx={captureOptions.widthPx}
+      heightPx={captureOptions.heightPx}
+      backgroundMode={captureOptions.backgroundMode}
+    />
     {lightboxView && lightboxRender && (
       <RenderLightbox
         viewName={lightboxView.name}
@@ -361,7 +383,7 @@ export function VisualizationStep({ project, onSaveView, onRenameView, onMoveVie
  * in a native <details> disclosure menu — no new dropdown dependency. Purely presentational:
  * every callback is owned by VisualizationStep, no render/capture logic here.
  */
-function ViewRenderCard({
+export function ViewRenderCard({
   view, render, staleness, error, selected, canMoveUp, canMoveDown, renderBlocked,
   onOpenThumbnail, onOpenCamera, onRender, onDownload, onRename, onMoveUp, onMoveDown, onDelete, onToggleSelected,
 }: {
@@ -425,7 +447,7 @@ function ViewRenderCard({
  * modal pattern (see PricingAdminPages.tsx's .adminModalOverlay/.adminModalCard) rather than a new
  * dialog dependency; only the sizing is render-specific (.visualizationLightbox*).
  */
-function RenderLightbox({ viewName, render, onClose, onDownload }: {
+export function RenderLightbox({ viewName, render, onClose, onDownload }: {
   viewName: string;
   render: VisualizationItem;
   onClose: () => void;
@@ -459,12 +481,14 @@ type PresentationBuildState =
 
 /**
  * Visualization v2 (report sections 15-22) — customer presentation export. Only shown once at
- * least one saved view has a customer render. All state here (selection order, branding,
+ * least one saved view has a customer OR AI render (Visualization v3: latestPresentableRendersByView
+ * admits both, picking whichever is most recent per view — the customer chooses the exact render,
+ * this only decides which one is offered by default). All state here (selection order, branding,
  * preparedBy, build progress) is export-session-only — never written to ProjectRecord, matching
  * GraphicsExportPanel.tsx's existing precedent from Graphics Production Package v1.
  */
 function PresentationExportPanel({ project, views }: { project: CommonProject; views: readonly VisualizationView[] }) {
-  const latestRenders = useMemo(() => latestCustomerRendersByView(project.visualizations), [project.visualizations]);
+  const latestRenders = useMemo(() => latestPresentableRendersByView(project.visualizations), [project.visualizations]);
   const renderableViews = useMemo(() => views.filter((view) => latestRenders.has(view.id)), [views, latestRenders]);
   const [selectedIds, setSelectedIds] = useState<readonly string[]>([]);
   const [companyBrand, setCompanyBrand] = useState("");

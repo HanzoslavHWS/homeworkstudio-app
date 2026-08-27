@@ -187,7 +187,14 @@ test("CUSTOMER CAPTURE: saves and restores pixelRatio/aspect/background/clearAlp
   assert.match(body, /const previousBackground = scene\.background/u);
   assert.match(body, /const previousClearAlpha = renderer\.getClearAlpha\(\)/u);
   assert.match(body, /const previousOverlaysVisible = editorOverlays\.visible/u);
-  assert.match(body, /renderer\.render\(scene, camera\)/u);
+  // Visualization v3: the actual renderer.render(scene, camera) call was extracted into a shared
+  // performCustomerCaptureRender helper (so renderControlPassCapture's beauty pass can call the
+  // SAME body — see tests/visualizationAiControlPasses.test.ts) — renderCustomerCapture now calls
+  // it directly, a behavior-preserving refactor, not a change to this function's own contract.
+  assert.match(body, /const dataUrl = performCustomerCaptureRender\(options\)/u);
+  const performCaptureMatch = viewerSource.match(/const performCustomerCaptureRender = \([\s\S]*?\n    \};/u);
+  assert.ok(performCaptureMatch, "expected to find performCustomerCaptureRender");
+  assert.match(performCaptureMatch![0], /renderer\.render\(scene, camera\)/u);
   assert.match(body, /finally \{/u);
   assert.match(body, /renderer\.setPixelRatio\(previousPixelRatio\)/u);
   assert.match(body, /resize\(\);/u);

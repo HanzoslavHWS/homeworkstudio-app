@@ -24,7 +24,14 @@ import { getAssetDownloadUrl } from "../../lib/storage/assetClient";
 import {
   applyPrintArtworkOverlays,
   clearPrintArtworkOverlays,
+  createArtworkMaskMaterial,
+  findPrintArtworkOverlays,
 } from "../../lib/printArtworkOverlays";
+import {
+  SEMANTIC_CATEGORY_COLORS,
+  SEMANTIC_CATEGORY_USERDATA_KEY,
+  type ProtectedCategory,
+} from "../../domain/visualizationSemantics";
 import type {
   CadModelAsset,
   BoothAssetDefinition,
@@ -43,6 +50,7 @@ import type {
   VisualizationView,
 } from "../../domain/project";
 import { createMeasurement3D, nominalDimensionAnchors } from "../../domain/spatialAnnotations";
+import { unpackLinearDepthRGB } from "../../domain/visualizationDepth";
 
 type BoothCadViewerProps = {
   asset?: CadModelAsset;
@@ -92,6 +100,9 @@ export type BoothCadCameraControls = Readonly<{
   applyView: (view: Pick<VisualizationView, "position" | "target" | "fov">) => void;
   currentView: () => BoothCadCameraSnapshot;
   renderCustomerCapture: (options: CustomerCaptureOptions) => CustomerCaptureResult;
+  renderControlPassCapture: (options: ControlPassCaptureOptions) => ControlPassCaptureResult;
+  /** v3.2d report section 7 — isolated known-distance GPU sanity check for the Depth data material. Never touches the live scene/canvas; builds and disposes its own tiny scene/render target. */
+  runDepthSanityCheck: () => DepthSanityCheckResult;
 }>;
 
 export type BoothCadCameraSnapshot = Pick<
@@ -116,6 +127,79 @@ export type CustomerCaptureOptions = Readonly<{
 
 export type CustomerCaptureResult =
   | Readonly<{ ok: true; dataUrl: string; widthPx: number; heightPx: number }>
+  | Readonly<{ ok: false; reason: "print-tool-active" | "capture-failed" }>;
+
+/**
+ * Visualization v3 — control-pass capture, feeding the strict-lock AI compositing pipeline.
+ * Same non-camera-field structural guarantee as CustomerCaptureOptions. `backgroundMode` must
+ * match the source Customer Render's own backgroundMode so the beauty pass here is genuinely
+ * pixel-identical to that render (both call the same performCustomerCaptureRender body).
+ */
+export type ControlPassCaptureOptions = Readonly<{
+  widthPx: number;
+  heightPx: number;
+  backgroundMode: CustomerCaptureOptions["backgroundMode"];
+}>;
+
+/**
+ * v3.2d report section 2 — a snapshot of the ACTUAL runtime material instance used for the Depth
+ * pass, captured right after the render call (so onBeforeCompile has definitely fired). Lets a
+ * human confirm from real browser output what's really running, rather than trusting a source
+ * read — this is what would have caught the v3.2d MeshDepthMaterial degeneration immediately.
+ */
+export type DepthMaterialRuntimeDiagnostics = Readonly<{
+  type: string;
+  transparent: boolean;
+  blending: THREE.Blending;
+  colorWrite: boolean;
+  depthWrite: boolean;
+  depthTest: boolean;
+  precision: string | null;
+  /** The actual compiled fragment shader source for this material/mesh combination — report section 3's "verify compiled shader" ask, satisfied directly rather than via a separate reverse-engineering step. */
+  compiledFragmentShader: string | null;
+}>;
+
+/** v3.2d report section 7 — one sampled pixel from the isolated known-distance sanity scene. */
+export type DepthSanityCheckSample = Readonly<{
+  label: "near" | "mid" | "far";
+  r: number;
+  g: number;
+  b: number;
+  a: number;
+  linearDepth: number;
+}>;
+
+export type DepthSanityCheckResult =
+  | Readonly<{ ok: true; samples: readonly DepthSanityCheckSample[]; monotonic: boolean }>
+  | Readonly<{ ok: false; reason: "capture-failed" }>;
+
+/**
+ * The 6 control passes (report section 3), all captured from the SAME camera/size/visibility in
+ * one atomic synchronous sequence. None of these are ever persisted — ephemeral, in-memory only,
+ * used for one generation request and discarded (see domain/visualizationCompositing.ts and the
+ * AI generation flow, which are the only consumers).
+ */
+export type ControlPassBundle = Readonly<{
+  beautyDataUrl: string;
+  /** Flat-white silhouette of every scene object (booth/furniture/artwork/floor) over black — the raw, unfeathered protected mask. Feathering happens only later, at compositing. */
+  protectedMaskDataUrl: string;
+  /** Flat-white silhouette of ONLY the print-artwork overlay meshes over black — independent of the protected-mask technique, so it survives any future change to booth-mask strategy. */
+  artworkMaskDataUrl: string;
+  depthDataUrl: string;
+  normalDataUrl: string;
+  objectIdDataUrl: string;
+  /** camera.near/far read LIVE at capture time (fitView() overwrites them) — never assume a fixed range when linearizing depthDataUrl. */
+  depthNear: number;
+  depthFar: number;
+  normalSpace: "view";
+  widthPx: number;
+  heightPx: number;
+  /** v3.2d — runtime audit of the actual Depth pass material (report section 2/3). */
+  depthMaterialDiagnostics: DepthMaterialRuntimeDiagnostics;
+}>;
+
+export type ControlPassCaptureResult =
+  | Readonly<{ ok: true; passes: ControlPassBundle }>
   | Readonly<{ ok: false; reason: "print-tool-active" | "capture-failed" }>;
 
 type ModelDimensionsMm = {
@@ -211,6 +295,105 @@ function lineBetween(a: THREE.Vector3, b: THREE.Vector3, color = 0x34383a) {
     new THREE.BufferGeometry().setFromPoints([a, b]),
     new THREE.LineBasicMaterial({ color, depthTest: false }),
   );
+}
+
+/**
+ * Visualization v3.2b — turns a raw RGBA byte buffer (read straight off the GPU via
+ * WebGLRenderer.readRenderTargetPixels, never off the live color-managed canvas) into a PNG data
+ * URL via a plain 2D <canvas>. 2D canvas ImageData is always straight (non-premultiplied) alpha
+ * by spec and toDataURL() on a 2D context never divides by alpha — unlike the WebGL default
+ * framebuffer's PNG export path, this can never corrupt packed non-color data (see the Depth
+ * pass's own comment below for why that corruption happened). `flipY` undoes readRenderTargetPixels'
+ * bottom-up (OpenGL/WebGL) row order so the result lines up with every other top-down pass PNG.
+ */
+function rgbaBufferToDataUrl(pixels: Uint8Array, width: number, height: number, options: Readonly<{ flipY: boolean }>): string {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext("2d")!;
+  const imageData = ctx.createImageData(width, height);
+  if (options.flipY) {
+    const rowBytes = width * 4;
+    for (let y = 0; y < height; y++) {
+      const sourceRow = height - 1 - y;
+      imageData.data.set(pixels.subarray(sourceRow * rowBytes, sourceRow * rowBytes + rowBytes), y * rowBytes);
+    }
+  } else {
+    imageData.data.set(pixels);
+  }
+  ctx.putImageData(imageData, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
+/**
+ * Visualization v3.2d — dedicated depth-data material for the Depth control pass. Live browser
+ * diagnostics (v3.2d report) proved MeshDepthMaterial(RGBADepthPacking) was producing a
+ * DEGENERATE capture in this app's actual runtime — raw RGB always (0,0,0), alpha binary 0/255
+ * correlating almost exactly with the Protected Mask silhouette (i.e. a coverage mask, not depth
+ * data) — despite every checkable piece of its public API (the depthPacking constant, constructor
+ * option application, the compiled #define) being verifiably correct by reading three.js's own
+ * source. Rather than keep chasing an unreproducible framework issue, this is a small, fully
+ * self-written, easily-audited replacement:
+ *  - computes LINEAR view-space depth directly from modelViewMatrix (never THREE's own
+ *    packDepthToRGBA/gl_FragCoord.z/vHighPrecisionZW machinery),
+ *  - packs it deterministically into RGB only (domain/visualizationDepth.ts's
+ *    packLinearDepthRGB/unpackLinearDepthRGB are the JS-side mirror of this exact math — a
+ *    source-scan test pins the shared 16777215.0 constant),
+ *  - ALWAYS writes alpha = 1.0 — numeric depth can never again be mistaken for real opacity by any
+ *    canvas/PNG pipeline (the actual root motivation for the whole v3.2b/c/d chain, report
+ *    section 8).
+ * `precision: "highp"` is set explicitly (defensive — the pack needs float32 exact-integer range
+ * up to 2^24, comfortably inside highp but not guaranteed in mediump).
+ */
+function createDepthDataMaterial(near: number, far: number): Readonly<{
+  material: THREE.ShaderMaterial;
+  readDiagnostics: () => DepthMaterialRuntimeDiagnostics;
+}> {
+  let compiledFragmentShader: string | null = null;
+  const material = new THREE.ShaderMaterial({
+    uniforms: { uNear: { value: near }, uFar: { value: far } },
+    vertexShader: /* glsl */ `
+      varying float vViewDistance;
+      void main() {
+        vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+        vViewDistance = -mvPosition.z;
+        gl_Position = projectionMatrix * mvPosition;
+      }
+    `,
+    // 16777215.0 = 2^24 - 1 — MUST match domain/visualizationDepth.ts's LINEAR_DEPTH_PACK_MAX.
+    fragmentShader: /* glsl */ `
+      precision highp float;
+      uniform float uNear;
+      uniform float uFar;
+      varying float vViewDistance;
+      void main() {
+        float normalized = clamp((vViewDistance - uNear) / (uFar - uNear), 0.0, 1.0);
+        float scaled = floor(normalized * 16777215.0 + 0.5);
+        float r = floor(scaled / 65536.0);
+        float g = floor(mod(scaled, 65536.0) / 256.0);
+        float b = mod(scaled, 256.0);
+        gl_FragColor = vec4(r, g, b, 255.0) / 255.0;
+      }
+    `,
+    precision: "highp",
+    transparent: false,
+    depthTest: true,
+    depthWrite: true,
+  });
+  material.onBeforeCompile = (shader) => { compiledFragmentShader = shader.fragmentShader; };
+  return {
+    material,
+    readDiagnostics: () => ({
+      type: material.type,
+      transparent: material.transparent,
+      blending: material.blending,
+      colorWrite: material.colorWrite,
+      depthWrite: material.depthWrite,
+      depthTest: material.depthTest,
+      precision: material.precision,
+      compiledFragmentShader,
+    }),
+  };
 }
 
 function labelSprite(text: string, color = "#25292b") {
@@ -456,6 +639,7 @@ export function BoothCadViewer({
         }),
       );
       carpet.name = hasRealFinish ? `Carpet ${carpetFinish!.name}` : "Floor (no finish)";
+      carpet.userData[SEMANTIC_CATEGORY_USERDATA_KEY] = "booth-floor";
       carpet.rotation.x = -Math.PI / 2;
       if (hasRealPlotPolygon || usesCenteredBoothOrigin) {
         carpet.position.set(0, -0.002, 0);
@@ -547,6 +731,32 @@ export function BoothCadViewer({
      * structural guarantee (CustomerCaptureOptions carries no camera fields) that a capture can
      * never move the active camera.
      */
+    /**
+     * The exact render body renderCustomerCapture always used, extracted unchanged so
+     * renderControlPassCapture's beauty pass can share it verbatim (report section 2) — this is
+     * a pure extraction, renderCustomerCapture's own behavior is byte-for-byte unchanged.
+     */
+    const performCustomerCaptureRender = (
+      options: Pick<CustomerCaptureOptions, "widthPx" | "heightPx" | "format" | "jpegQuality" | "backgroundMode">,
+    ): string => {
+      renderer.setSize(options.widthPx, options.heightPx, false);
+      camera.aspect = options.widthPx / options.heightPx;
+      camera.updateProjectionMatrix();
+      if (options.backgroundMode === "white") {
+        scene.background = new THREE.Color(0xffffff);
+      } else if (options.backgroundMode === "transparent") {
+        scene.background = null;
+        renderer.setClearAlpha(0);
+      }
+      // "light-neutral": no change — reuses the viewer's existing default scene.background.
+      editorOverlays.visible = false;
+
+      renderer.render(scene, camera);
+      return options.format === "png"
+        ? renderer.domElement.toDataURL("image/png")
+        : renderer.domElement.toDataURL("image/jpeg", options.jpegQuality ?? 0.92);
+    };
+
     const renderCustomerCapture = (options: CustomerCaptureOptions): CustomerCaptureResult => {
       // Print-surface selection applies a real scene-graph emissive tint (see the
       // viewerTool === "print" branch below) — refusing here (rather than forcing viewerTool
@@ -562,22 +772,7 @@ export function BoothCadViewer({
       const previousOverlaysVisible = editorOverlays.visible;
       try {
         renderer.setPixelRatio(1);
-        renderer.setSize(options.widthPx, options.heightPx, false);
-        camera.aspect = options.widthPx / options.heightPx;
-        camera.updateProjectionMatrix();
-        if (options.backgroundMode === "white") {
-          scene.background = new THREE.Color(0xffffff);
-        } else if (options.backgroundMode === "transparent") {
-          scene.background = null;
-          renderer.setClearAlpha(0);
-        }
-        // "light-neutral": no change — reuses the viewer's existing default scene.background.
-        editorOverlays.visible = false;
-
-        renderer.render(scene, camera);
-        const dataUrl = options.format === "png"
-          ? renderer.domElement.toDataURL("image/png")
-          : renderer.domElement.toDataURL("image/jpeg", options.jpegQuality ?? 0.92);
+        const dataUrl = performCustomerCaptureRender(options);
         return { ok: true, dataUrl, widthPx: options.widthPx, heightPx: options.heightPx };
       } catch (reason) {
         console.error("Customer render capture failed", reason);
@@ -596,6 +791,288 @@ export function BoothCadViewer({
       }
     };
 
+    /**
+     * Resolves the semantic category of a mesh by walking up its ancestor chain — never a
+     * P86/koje-specific id, only identifiers that exist for any booth (see
+     * domain/visualizationSemantics.ts's SEMANTIC_TAGGING_CONTRACT, which this follows exactly).
+     * Falls back to "booth-construction" since `content` only ever holds the carpet, the booth
+     * GLTF, and furniture — there is no fourth kind of object to misclassify.
+     */
+    const classifyObjectCategory = (object: THREE.Object3D, artworkMeshes: ReadonlySet<THREE.Object3D>): ProtectedCategory => {
+      let current: THREE.Object3D | null = object;
+      while (current) {
+        if (artworkMeshes.has(current)) return "artwork";
+        if (current === carpet) return "booth-floor";
+        if (current.userData[SEMANTIC_CATEGORY_USERDATA_KEY] === "furniture") return "furniture";
+        current = current.parent;
+      }
+      return "booth-construction";
+    };
+
+    /**
+     * One combined synchronous function (never 6 separate calls) — an await between two
+     * internally-atomic calls would reopen exactly the rAF-interleaving race renderCustomerCapture
+     * was built to prevent. Saves state once, mutates size/aspect/pixelRatio once (identical
+     * camera transform across all 6 passes), restores materials/visibility between each pass
+     * (never compounding), and restores everything once at the end in `finally` — same tail as
+     * renderCustomerCapture.
+     */
+    const renderControlPassCapture = (options: ControlPassCaptureOptions): ControlPassCaptureResult => {
+      if (viewerTool !== "select") return { ok: false, reason: "print-tool-active" };
+
+      const previousPixelRatio = renderer.getPixelRatio();
+      const previousAspect = camera.aspect;
+      const previousBackground = scene.background;
+      const previousClearAlpha = renderer.getClearAlpha();
+      const previousOverlaysVisible = editorOverlays.visible;
+
+      const meshes: THREE.Mesh[] = [];
+      content.traverse((object) => {
+        if ((object as THREE.Mesh).isMesh) meshes.push(object as THREE.Mesh);
+      });
+      const originalMaterials = new Map<THREE.Mesh, THREE.Material | THREE.Material[]>();
+      const originalVisibility = new Map<THREE.Mesh, boolean>();
+      for (const mesh of meshes) {
+        originalMaterials.set(mesh, mesh.material);
+        originalVisibility.set(mesh, mesh.visible);
+      }
+      const restoreMaterials = () => { for (const mesh of meshes) mesh.material = originalMaterials.get(mesh)!; };
+      const restoreVisibility = () => { for (const mesh of meshes) mesh.visible = originalVisibility.get(mesh)!; };
+
+      const flatWhiteMaterial = new THREE.MeshBasicMaterial({ color: 0xffffff });
+      const maskBlackMaterial = new THREE.MeshBasicMaterial({ color: 0x000000 });
+      const normalMaterial = new THREE.MeshNormalMaterial();
+      const categoryMaterials: Record<ProtectedCategory, THREE.MeshBasicMaterial> = {
+        "booth-construction": new THREE.MeshBasicMaterial({ color: new THREE.Color(SEMANTIC_CATEGORY_COLORS["booth-construction"].r / 255, SEMANTIC_CATEGORY_COLORS["booth-construction"].g / 255, SEMANTIC_CATEGORY_COLORS["booth-construction"].b / 255) }),
+        artwork: new THREE.MeshBasicMaterial({ color: new THREE.Color(SEMANTIC_CATEGORY_COLORS.artwork.r / 255, SEMANTIC_CATEGORY_COLORS.artwork.g / 255, SEMANTIC_CATEGORY_COLORS.artwork.b / 255) }),
+        furniture: new THREE.MeshBasicMaterial({ color: new THREE.Color(SEMANTIC_CATEGORY_COLORS.furniture.r / 255, SEMANTIC_CATEGORY_COLORS.furniture.g / 255, SEMANTIC_CATEGORY_COLORS.furniture.b / 255) }),
+        "booth-floor": new THREE.MeshBasicMaterial({ color: new THREE.Color(SEMANTIC_CATEGORY_COLORS["booth-floor"].r / 255, SEMANTIC_CATEGORY_COLORS["booth-floor"].g / 255, SEMANTIC_CATEGORY_COLORS["booth-floor"].b / 255) }),
+      };
+      const disposablePassMaterials = [flatWhiteMaterial, maskBlackMaterial, normalMaterial, ...Object.values(categoryMaterials)];
+      // v3.2b: the Depth pass renders to this offscreen target instead of the live canvas (see
+      // the Depth step's own comment below for why). Declared here (not inside the try body) so
+      // the `finally` safety net can always reach it, even if capture throws mid-read.
+      let depthRenderTarget: THREE.WebGLRenderTarget | null = null;
+      // v3.2d: the Depth pass's dedicated data material (createDepthDataMaterial) — built fresh
+      // each capture (its uniforms need the LIVE depthNear/depthFar), never part of the static
+      // disposablePassMaterials list above. Same finally-safety-net reasoning as depthRenderTarget.
+      let depthDataMaterialRef: THREE.ShaderMaterial | null = null;
+
+      try {
+        renderer.setPixelRatio(1);
+        renderer.setSize(options.widthPx, options.heightPx, false);
+        camera.aspect = options.widthPx / options.heightPx;
+        camera.updateProjectionMatrix();
+        editorOverlays.visible = false;
+
+        // 1. Beauty — literally the same render body as the official Customer Render.
+        const beautyDataUrl = performCustomerCaptureRender({
+          widthPx: options.widthPx, heightPx: options.heightPx, format: "png", backgroundMode: options.backgroundMode,
+        });
+        restoreMaterials();
+
+        // 2. Protected mask — flat-white silhouette of every scene object over black.
+        scene.background = new THREE.Color(0x000000);
+        for (const mesh of meshes) mesh.material = flatWhiteMaterial;
+        renderer.render(scene, camera);
+        const protectedMaskDataUrl = renderer.domElement.toDataURL("image/png");
+        restoreMaterials();
+
+        // 3. Artwork mask — ONLY the print-artwork overlay meshes (reused verbatim via
+        // findPrintArtworkOverlays), independent of the protected-mask technique above. Never
+        // hides non-artwork meshes to "isolate" the overlays — an overlay is parented to its own
+        // panel mesh (lib/printArtworkOverlays.ts target.add(overlay)), so hiding the panel would
+        // also stop WebGLRenderer's traversal from ever reaching its overlay child (a
+        // `visible = false` object's children are never visited) — that was the v3.1 root cause of
+        // a fully black mask. Every mesh stays at its real Beauty visibility; only materials
+        // differ: createArtworkMaskMaterial's alpha-aware discard for overlays (white on actually-
+        // printed pixels only, report section 5), flat black for everything else. depthTest/
+        // depthWrite stay on throughout, so BACK-face artwork occluded by its own panel in Beauty
+        // stays occluded here too (report section 4).
+        scene.background = new THREE.Color(0x000000);
+        const artworkMeshes = new Set<THREE.Object3D>(findPrintArtworkOverlays(scene));
+        const artworkMaskMaterials: THREE.Material[] = [];
+        for (const mesh of meshes) {
+          if (!artworkMeshes.has(mesh)) {
+            mesh.material = maskBlackMaterial;
+            continue;
+          }
+          const map = (mesh.material as THREE.MeshBasicMaterial).map;
+          if (!map) {
+            mesh.material = flatWhiteMaterial;
+            continue;
+          }
+          const maskMaterial = createArtworkMaskMaterial(map);
+          artworkMaskMaterials.push(maskMaterial);
+          mesh.material = maskMaterial;
+        }
+        renderer.render(scene, camera);
+        const artworkMaskDataUrl = renderer.domElement.toDataURL("image/png");
+        for (const material of artworkMaskMaterials) material.dispose();
+        restoreMaterials();
+
+        // 4. Depth — camera-space depth. near/far read LIVE (fitView() overwrites them).
+        //
+        // v3.2b: MeshDepthMaterial's packed RGBA output is pure numeric data, not a real color —
+        // reading it off the live `alpha:true`/premultipliedAlpha:true canvas via toDataURL() was
+        // unsafe (browser un-premultiplies RGB by alpha on PNG export), so this pass renders into
+        // an offscreen WebGLRenderTarget and reads it back with renderer.readRenderTargetPixels —
+        // gl.readPixels on an FBO returns the literal stored bytes, no canvas
+        // alpha-premultiplication/PNG-export math involved. Never touches the live canvas (no
+        // flash), same camera/width/height as every other pass.
+        //
+        // v3.2d: LIVE BROWSER DIAGNOSTICS (not just the above reasoning) then proved
+        // MeshDepthMaterial(RGBADepthPacking) was ALSO producing a degenerate capture through this
+        // exact WebGLRenderTarget path — raw RGB always (0,0,0), alpha binary 0/255 correlating
+        // almost exactly with the Protected Mask silhouette (a coverage mask, not depth data) —
+        // despite the depthPacking constant/constructor option/compiled #define all checking out
+        // correct by reading three.js's own source. Rather than keep chasing that, the Depth pass
+        // now uses createDepthDataMaterial — a small, fully self-written ShaderMaterial (see its
+        // own doc comment) — instead of MeshDepthMaterial. Disposed/restored in `finally` even if
+        // capture throws mid-read (report section 3/20).
+        const depthNear = camera.near;
+        const depthFar = camera.far;
+        scene.background = new THREE.Color(0x000000);
+        const { material: depthDataMaterial, readDiagnostics: readDepthMaterialDiagnostics } = createDepthDataMaterial(depthNear, depthFar);
+        depthDataMaterialRef = depthDataMaterial;
+        for (const mesh of meshes) mesh.material = depthDataMaterial;
+        depthRenderTarget = new THREE.WebGLRenderTarget(options.widthPx, options.heightPx, {
+          type: THREE.UnsignedByteType,
+          format: THREE.RGBAFormat,
+        });
+        depthRenderTarget.texture.colorSpace = THREE.NoColorSpace;
+        renderer.setRenderTarget(depthRenderTarget);
+        renderer.render(scene, camera);
+        // Read AFTER render — onBeforeCompile (and so compiledFragmentShader) only fires once the
+        // GPU program has actually been built for this draw call.
+        const depthMaterialDiagnostics = readDepthMaterialDiagnostics();
+        const rawDepthPixels = new Uint8Array(options.widthPx * options.heightPx * 4);
+        renderer.readRenderTargetPixels(depthRenderTarget, 0, 0, options.widthPx, options.heightPx, rawDepthPixels);
+        renderer.setRenderTarget(null);
+        depthRenderTarget.dispose();
+        depthRenderTarget = null;
+        depthDataMaterial.dispose();
+        depthDataMaterialRef = null;
+        // readRenderTargetPixels rows are bottom-up (GL convention) — flip so this PNG is
+        // top-down like every other pass's canvas-derived PNG.
+        const depthDataUrl = rgbaBufferToDataUrl(rawDepthPixels, options.widthPx, options.heightPx, { flipY: true });
+        restoreMaterials();
+
+        // 5. Normal — view-space normals, Three.js's standard MeshNormalMaterial encoding.
+        for (const mesh of meshes) mesh.material = normalMaterial;
+        renderer.render(scene, camera);
+        const normalDataUrl = renderer.domElement.toDataURL("image/png");
+        restoreMaterials();
+
+        // 6. Object/semantic-ID — flat per-category color, black = editable-environment.
+        scene.background = new THREE.Color(0x000000);
+        for (const mesh of meshes) mesh.material = categoryMaterials[classifyObjectCategory(mesh, artworkMeshes)];
+        renderer.render(scene, camera);
+        const objectIdDataUrl = renderer.domElement.toDataURL("image/png");
+        restoreMaterials();
+
+        return {
+          ok: true,
+          passes: {
+            beautyDataUrl, protectedMaskDataUrl, artworkMaskDataUrl, depthDataUrl, normalDataUrl, objectIdDataUrl,
+            depthNear, depthFar, normalSpace: "view",
+            widthPx: options.widthPx, heightPx: options.heightPx,
+            depthMaterialDiagnostics,
+          },
+        };
+      } catch (reason) {
+        console.error("Control pass capture failed", reason);
+        return { ok: false, reason: "capture-failed" };
+      } finally {
+        restoreMaterials();
+        restoreVisibility();
+        for (const material of disposablePassMaterials) material.dispose();
+        // Safety net only — the normal path already sets these back to null and disposes them
+        // right after reading the pixels back; this only fires if something threw in between.
+        if (depthRenderTarget) {
+          renderer.setRenderTarget(null);
+          depthRenderTarget.dispose();
+          depthRenderTarget = null;
+        }
+        if (depthDataMaterialRef) {
+          depthDataMaterialRef.dispose();
+          depthDataMaterialRef = null;
+        }
+        editorOverlays.visible = previousOverlaysVisible;
+        scene.background = previousBackground;
+        renderer.setClearAlpha(previousClearAlpha);
+        camera.aspect = previousAspect;
+        camera.updateProjectionMatrix();
+        renderer.setPixelRatio(previousPixelRatio);
+        resize();
+      }
+    };
+
+    /**
+     * v3.2d report section 7 — isolated known-distance GPU sanity check: 3 boxes at known
+     * view-space distances (1/8/18 units), captured with createDepthDataMaterial through the SAME
+     * renderer as the real capture path, but a throwaway orthographic camera/scene/render target
+     * built and disposed entirely within this call — never touches the live scene/canvas/camera,
+     * never persisted. An orthographic camera (not perspective) is used deliberately: it makes
+     * each box's SCREEN position independent of its distance, so 3 laterally-offset boxes at very
+     * different depths never occlude each other and are trivial to locate by a fixed pixel column.
+     */
+    const runDepthSanityCheck = (): DepthSanityCheckResult => {
+      const previousTarget = renderer.getRenderTarget();
+      const isolatedScene = new THREE.Scene();
+      isolatedScene.background = new THREE.Color(0x000000);
+      const isolatedCamera = new THREE.OrthographicCamera(-4, 4, 1.5, -1.5, 0.1, 20);
+      isolatedCamera.position.set(0, 0, 0);
+      isolatedCamera.lookAt(0, 0, -1);
+      isolatedCamera.updateProjectionMatrix();
+
+      const { material, readDiagnostics } = createDepthDataMaterial(isolatedCamera.near, isolatedCamera.far);
+      const boxGeometry = new THREE.BoxGeometry(1, 1, 1);
+      const configs: readonly Readonly<{ label: "near" | "mid" | "far"; x: number; z: number }>[] = [
+        { label: "near", x: -2, z: -1 },
+        { label: "mid", x: 0, z: -8 },
+        { label: "far", x: 2, z: -18 },
+      ];
+      for (const config of configs) {
+        const mesh = new THREE.Mesh(boxGeometry, material);
+        mesh.position.set(config.x, 0, config.z);
+        isolatedScene.add(mesh);
+      }
+
+      const width = 80, height = 30;
+      const target = new THREE.WebGLRenderTarget(width, height, { type: THREE.UnsignedByteType, format: THREE.RGBAFormat });
+      target.texture.colorSpace = THREE.NoColorSpace;
+
+      try {
+        renderer.setRenderTarget(target);
+        renderer.render(isolatedScene, isolatedCamera);
+        void readDiagnostics(); // triggers/confirms compilation; not surfaced here, renderControlPassCapture's own diagnostics cover that
+        const pixels = new Uint8Array(width * height * 4);
+        renderer.readRenderTargetPixels(target, 0, 0, width, height, pixels);
+
+        // World x=-4..4 maps linearly to screen columns 0..width (the ortho frustum's left/right)
+        // — no row flip needed, any row inside each 1-unit-tall box's vertical extent works.
+        const rowY = Math.floor(height / 2);
+        const sampleAt = (label: "near" | "mid" | "far", worldX: number): DepthSanityCheckSample => {
+          const x = Math.min(width - 1, Math.max(0, Math.round(((worldX - -4) / 8) * width)));
+          const offset = (rowY * width + x) * 4;
+          const r = pixels[offset]!, g = pixels[offset + 1]!, b = pixels[offset + 2]!, a = pixels[offset + 3]!;
+          return { label, r, g, b, a, linearDepth: unpackLinearDepthRGB(r, g, b) };
+        };
+        const samples = configs.map((config) => sampleAt(config.label, config.x));
+        const monotonic = samples[0]!.linearDepth < samples[1]!.linearDepth && samples[1]!.linearDepth < samples[2]!.linearDepth;
+        return { ok: true, samples, monotonic };
+      } catch (reason) {
+        console.error("Depth sanity check failed", reason);
+        return { ok: false, reason: "capture-failed" };
+      } finally {
+        renderer.setRenderTarget(previousTarget);
+        target.dispose();
+        material.dispose();
+        boxGeometry.dispose();
+      }
+    };
+
     const cameraController: BoothCadCameraControls = {
       zoomOut: () => zoomBy(1.2),
       zoomIn: () => zoomBy(1 / 1.2),
@@ -607,6 +1084,8 @@ export function BoothCadViewer({
       },
       currentView: () => currentViewRef.current(),
       renderCustomerCapture,
+      runDepthSanityCheck,
+      renderControlPassCapture,
     };
     if (cameraControlsRef) cameraControlsRef.current = cameraController;
     controls.addEventListener("change", reportCameraZoom);
@@ -771,6 +1250,7 @@ export function BoothCadViewer({
           const transform = placedComponentToViewerTransform(component);
           const instance = new THREE.Group();
           instance.name = component.id;
+          instance.userData[SEMANTIC_CATEGORY_USERDATA_KEY] = "furniture";
           instance.position.set(
             transform.position.x,
             transform.position.y,

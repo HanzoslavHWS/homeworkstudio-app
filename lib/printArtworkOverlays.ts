@@ -229,6 +229,49 @@ function createArtworkMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial 
 }
 
 /**
+ * Below-this-alpha texels are not "printed" — matches the artwork material's own transparent
+ * contract (near-zero alpha reads as fully see-through), not an arbitrary cutoff.
+ */
+const ARTWORK_MASK_ALPHA_THRESHOLD = 0.02;
+
+/**
+ * The Artwork Mask control pass's per-overlay material (v3.2 fix — report section 3/5): reuses
+ * the SAME texture object the beauty material already has bound (no re-upload, no second shader
+ * pipeline), and the exact same "clip outside this overlay's own UV rect" technique as
+ * createArtworkMaterial above, but outputs flat opaque WHITE only where the artwork's own alpha
+ * channel is above {@link ARTWORK_MASK_ALPHA_THRESHOLD} — discards (leaves the pass's black
+ * background) everywhere else, including the transparent parts of the source PNG/WebP. This is
+ * what makes the mask track the actually-printed pixels rather than the full rectangular overlay
+ * quad. depthTest/depthWrite stay on so a BACK-face overlay occluded by its own panel in Beauty
+ * stays occluded here too (report section 4) — never a special-cased visibility toggle.
+ */
+export function createArtworkMaskMaterial(texture: THREE.Texture): THREE.MeshBasicMaterial {
+  const material = new THREE.MeshBasicMaterial({
+    map: texture,
+    color: 0xffffff,
+    side: THREE.FrontSide,
+    transparent: false,
+    depthTest: true,
+    depthWrite: true,
+    toneMapped: false,
+  });
+  material.onBeforeCompile = (shader) => {
+    shader.fragmentShader = shader.fragmentShader.replace(
+      "#include <map_fragment>",
+      `#ifdef USE_MAP
+        vec2 hwsArtworkUv = vMapUv;
+        if (hwsArtworkUv.x < 0.0 || hwsArtworkUv.x > 1.0 || hwsArtworkUv.y < 0.0 || hwsArtworkUv.y > 1.0) discard;
+        vec4 hwsArtworkSample = texture2D(map, hwsArtworkUv);
+        if (hwsArtworkSample.a < ${ARTWORK_MASK_ALPHA_THRESHOLD.toFixed(3)}) discard;
+        diffuseColor = vec4(1.0, 1.0, 1.0, 1.0);
+      #endif`,
+    );
+  };
+  material.customProgramCacheKey = () => "hws-artwork-mask-alpha-v1";
+  return material;
+}
+
+/**
  * Re-applies project artwork to one freshly loaded or already-live booth scene. Explicit
  * printSurface.sceneBinding is the only mapping source. Each overlay owns its geometry,
  * material and texture so FRONT/BACK can be changed and disposed independently.

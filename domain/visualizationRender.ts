@@ -67,29 +67,72 @@ export function deduplicateRenderFileNames(files: readonly NamedRenderFile[]): r
 // Latest render per view — pure derived selectors, never a redundant stored pointer
 // ============================================================================
 
-export function latestCustomerRenderForView(
+/**
+ * Visualization v3: shared implementation behind every "latest render for a view" selector,
+ * parameterized by which VisualizationItem.type(s) count — so admitting "ai" renders (v3) never
+ * meant duplicating this logic a second time. `latestCustomerRenderForView`/
+ * `latestCustomerRendersByView` below become thin, still fully backward-compatible wrappers
+ * (types: ["customer"]) — every existing call site keeps its exact signature and behavior.
+ */
+function latestRenderForViewOfTypes(
   renders: readonly VisualizationItem[],
   viewId: string,
+  types: readonly VisualizationItem["type"][],
 ): VisualizationItem | undefined {
   return renders
-    .filter((item) => item.type === "customer" && item.viewId === viewId)
+    .filter((item) => (types as readonly string[]).includes(item.type) && item.viewId === viewId)
     .reduce<VisualizationItem | undefined>(
       (latest, item) => (!latest || item.createdAt > latest.createdAt ? item : latest),
       undefined,
     );
 }
 
-/** One-pass version of latestCustomerRenderForView for a whole view-card list — avoids re-filtering the renders array once per card. */
-export function latestCustomerRendersByView(
+function latestRendersByViewOfTypes(
   renders: readonly VisualizationItem[],
+  types: readonly VisualizationItem["type"][],
 ): ReadonlyMap<string, VisualizationItem> {
   const latest = new Map<string, VisualizationItem>();
   for (const item of renders) {
-    if (item.type !== "customer" || !item.viewId) continue;
+    if (!(types as readonly string[]).includes(item.type) || !item.viewId) continue;
     const existing = latest.get(item.viewId);
     if (!existing || item.createdAt > existing.createdAt) latest.set(item.viewId, item);
   }
   return latest;
+}
+
+export function latestCustomerRenderForView(
+  renders: readonly VisualizationItem[],
+  viewId: string,
+): VisualizationItem | undefined {
+  return latestRenderForViewOfTypes(renders, viewId, ["customer"]);
+}
+
+/** One-pass version of latestCustomerRenderForView for a whole view-card list — avoids re-filtering the renders array once per card. */
+export function latestCustomerRendersByView(
+  renders: readonly VisualizationItem[],
+): ReadonlyMap<string, VisualizationItem> {
+  return latestRendersByViewOfTypes(renders, ["customer"]);
+}
+
+/** Visualization v3: the AI-render equivalents, same shared implementation. */
+export function latestAiRenderForView(
+  renders: readonly VisualizationItem[],
+  viewId: string,
+): VisualizationItem | undefined {
+  return latestRenderForViewOfTypes(renders, viewId, ["ai"]);
+}
+
+export function latestAiRendersByView(
+  renders: readonly VisualizationItem[],
+): ReadonlyMap<string, VisualizationItem> {
+  return latestRendersByViewOfTypes(renders, ["ai"]);
+}
+
+/** Visualization v3: PresentationExportPanel needs "either customer or ai, whichever is latest" per view — the combined-type variant, still the same shared implementation. */
+export function latestPresentableRendersByView(
+  renders: readonly VisualizationItem[],
+): ReadonlyMap<string, VisualizationItem> {
+  return latestRendersByViewOfTypes(renders, ["customer", "ai"]);
 }
 
 // ============================================================================
@@ -189,17 +232,21 @@ export function fingerprintsEqual(a: VisualizationRenderFingerprint, b: Visualiz
 export type RenderStalenessResult = "current" | "possibly-outdated" | "unknown";
 
 /**
- * Report section 14: never report "possibly-outdated" when we can't reliably tell — a
- * non-customer render (technical/ai) or a customer render captured before this fingerprint
- * mechanism existed (contentFingerprint undefined) is always "unknown", and the UI treats
- * "unknown" identically to "current" (no warning badge). Only an ACTUAL fingerprint mismatch
- * against the live project ever produces "possibly-outdated".
+ * Report section 14/34: never report "possibly-outdated" when we can't reliably tell — a
+ * technical render (no fingerprint concept at all) or a customer/ai render captured before this
+ * fingerprint mechanism existed (contentFingerprint undefined) is always "unknown", and the UI
+ * treats "unknown" identically to "current" (no warning badge). Only an ACTUAL fingerprint
+ * mismatch against the live project ever produces "possibly-outdated". Visualization v3: "ai"
+ * admitted alongside "customer" — an AI render's contentFingerprint is copied verbatim from its
+ * source customer render at generation time (domain/visualizationAi.ts's
+ * createAiVisualizationRender), so comparing it against the CURRENT live fingerprint here
+ * transitively answers "is the render's source now stale" with no separate algorithm needed.
  */
 export function evaluateRenderStaleness(
   render: Pick<VisualizationItem, "type" | "contentFingerprint">,
   currentFingerprint: VisualizationRenderFingerprint,
 ): RenderStalenessResult {
-  if (render.type !== "customer") return "unknown";
+  if (render.type !== "customer" && render.type !== "ai") return "unknown";
   if (!render.contentFingerprint) return "unknown";
   return fingerprintsEqual(render.contentFingerprint, currentFingerprint) ? "current" : "possibly-outdated";
 }

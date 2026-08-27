@@ -12,6 +12,7 @@ import type { PlotPolygon, PlotStatus } from "./plot.ts";
 import type { FloorZone } from "./floorZones.ts";
 import type { RectanglePrimitive } from "./rectanglePrimitives.ts";
 import type { VisualizationRenderFingerprint } from "./visualizationRender.ts";
+import type { EnvironmentPreset, LightingPreset, PeoplePreset, VisualizationAiMode } from "./visualizationAi.ts";
 
 export type ProjectMode = "proposal" | "order" | "production";
 export type ProjectStatus = "draft" | "inProgress" | "ready" | "archived";
@@ -195,6 +196,20 @@ export type VisualizationItem = Readonly<{
   backgroundMode?: "white" | "light-neutral" | "transparent";
   /** Content fingerprint captured at render time — see domain/visualizationRender.ts's evaluateRenderStaleness for how this becomes "Aktuální" / "Může být zastaralý". Absent on every pre-v2/technical/ai item — never asserted stale in that case. */
   contentFingerprint?: VisualizationRenderFingerprint;
+
+  // ---- Visualization v3: AI render fields — only ever set on type: "ai" items. ----
+  /** Only "strict-lock" is ever produced this batch; "enhanced" is a reserved future value, never written by any code path yet. */
+  mode?: VisualizationAiMode;
+  environmentPreset?: EnvironmentPreset;
+  peoplePreset?: PeoplePreset;
+  lightingPreset?: LightingPreset;
+  /** FK to the source Customer Render's VisualizationItem.id this AI render was generated from. `sourceViewId`/`viewId` above are reused verbatim — no separate AI-specific view FK. */
+  sourceRenderId?: string;
+  /** Provider/model identifiers only — e.g. "deterministic-fake" — NEVER a secret/API key. */
+  provider?: string;
+  model?: string;
+  /** True when the provider's maxInputSize forced a smaller working resolution than the source render, later upscaled back for compositing (report section 26/27 — this is a mechanical resize, never the excluded "AI upscaler" feature). */
+  resolutionDownscaled?: boolean;
 }>;
 
 /** Visualization v2: readability alias for a persisted customer render — same evolving VisualizationItem shape, never a parallel model (mirrors the existing SavedCameraView = VisualizationView precedent above). */

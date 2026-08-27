@@ -52,7 +52,9 @@ import { worldToPlanView } from "../domain/planView.ts";
 import { measuredDistance3DMm, measuredDistanceMm } from "../domain/spatialAnnotations.ts";
 import {
   applyPrintArtworkOverlays,
+  createArtworkMaskMaterial,
   findPrintArtworkOverlays,
+  PRINT_ARTWORK_OVERLAY_MARKER,
   type PrintArtworkOverlayMetadata,
 } from "../lib/printArtworkOverlays.ts";
 import {
@@ -1222,6 +1224,102 @@ test("PDF remains a persisted production source but intentionally creates no 3D 
   const result = await decorateArtworkScene(scene, artworkAssignments([["back-wall-01-front", pdf.id]]), [pdf]);
   assert.deepEqual(result.sourceOnlySurfaceIds, ["back-wall-01-front"]);
   assert.equal(findPrintArtworkOverlays(scene).length, 0);
+});
+
+// =========================================================================================
+// Visualization v3.2 — Artwork Mask fix (report section 7). A minimal SYNTHETIC scene (never a
+// full GLB load) using the real production marker constant, proving findPrintArtworkOverlays'
+// discovery contract independent of the koje-2x2 asset: it returns exactly the marked mesh(es),
+// never an unrelated sibling mesh, and never anything from the printSurface registry (which has
+// no scene presence at all — only PRINT_ARTWORK_OVERLAY_MARKER on a live Object3D matters).
+// =========================================================================================
+
+function markedOverlayMesh(name: string): THREE.Mesh {
+  const mesh = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
+  mesh.name = name;
+  mesh.userData[PRINT_ARTWORK_OVERLAY_MARKER] = { printSurfaceId: name } satisfies Partial<PrintArtworkOverlayMetadata>;
+  return mesh;
+}
+
+test("SYNTHETIC SCENE — discovery finds the marked mesh and ignores an unrelated sibling", () => {
+  const scene = new THREE.Group();
+  const panel = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial());
+  panel.name = "unrelated-panel";
+  const overlay = markedOverlayMesh("overlay-a");
+  scene.add(panel, overlay);
+
+  const found = findPrintArtworkOverlays(scene);
+  assert.equal(found.length, 1);
+  assert.equal(found[0], overlay);
+  assert.notEqual(found[0], panel);
+});
+
+test("SYNTHETIC SCENE — the overlay marker lives on the Mesh itself; a Group carrying it as a CHILD's userData is not conflated with the Group being marked", () => {
+  const scene = new THREE.Group();
+  const groupWithMarkedChild = new THREE.Group();
+  const overlay = markedOverlayMesh("nested-overlay");
+  groupWithMarkedChild.add(overlay);
+  scene.add(groupWithMarkedChild);
+
+  const found = findPrintArtworkOverlays(scene);
+  assert.equal(found.length, 1);
+  assert.equal(found[0], overlay);
+  assert.equal(groupWithMarkedChild.userData[PRINT_ARTWORK_OVERLAY_MARKER], undefined);
+});
+
+test("SYNTHETIC SCENE — MULTIPLE overlays under different parents are all found", () => {
+  const scene = new THREE.Group();
+  const panelA = new THREE.Object3D();
+  const panelB = new THREE.Object3D();
+  const overlayA = markedOverlayMesh("overlay-a");
+  const overlayB = markedOverlayMesh("overlay-b");
+  panelA.add(overlayA);
+  panelB.add(overlayB);
+  scene.add(panelA, panelB);
+
+  const found = findPrintArtworkOverlays(scene);
+  assert.equal(found.length, 2);
+  assert.ok(found.includes(overlayA));
+  assert.ok(found.includes(overlayB));
+});
+
+test("V3.2 ROOT CAUSE, PINNED: hiding an overlay's PARENT stops WebGLRenderer's own scene-graph traversal from ever reaching the overlay child — proves why the artwork-mask pass must never toggle mesh.visible to 'isolate' overlays (report section 2/4). This mirrors three.js's projectObject: `if (object.visible === false) return;` before recursing into children.", () => {
+  const scene = new THREE.Group();
+  const panel = new THREE.Object3D();
+  const overlay = markedOverlayMesh("overlay-under-hidden-panel");
+  panel.add(overlay);
+  scene.add(panel);
+
+  panel.visible = false;
+
+  const visited: THREE.Object3D[] = [];
+  const projectObject = (object: THREE.Object3D) => {
+    if (object.visible === false) return;
+    visited.push(object);
+    for (const child of object.children) projectObject(child);
+  };
+  projectObject(scene);
+
+  assert.ok(!visited.includes(overlay), "hiding the panel must have prevented the renderer from ever visiting its overlay child");
+  // findPrintArtworkOverlays itself is unaffected (it's a plain traverse, not a renderer walk) —
+  // the bug was specific to how the OLD artwork-mask pass abused Object3D.visible, not discovery.
+  assert.equal(findPrintArtworkOverlays(scene).length, 1);
+});
+
+test("ARTWORK MASK MATERIAL CONTRACT: createArtworkMaskMaterial binds the given texture, keeps depth test/write on (occlusion must match Beauty — report section 4), and is a distinct program from the beauty material (own onBeforeCompile/cache key, so it can't silently render the artwork's real colors instead of a flat mask)", () => {
+  const texture = new THREE.Texture();
+  const maskMaterial = createArtworkMaskMaterial(texture);
+  assert.equal(maskMaterial.map, texture);
+  assert.equal(maskMaterial.depthTest, true);
+  assert.equal(maskMaterial.depthWrite, true);
+  assert.equal(typeof maskMaterial.onBeforeCompile, "function");
+  assert.equal(maskMaterial.customProgramCacheKey(), "hws-artwork-mask-alpha-v1");
+
+  const fakeShader = { fragmentShader: "#include <map_fragment>" };
+  maskMaterial.onBeforeCompile(fakeShader as never, undefined as never);
+  assert.match(fakeShader.fragmentShader, /discard/u);
+  assert.match(fakeShader.fragmentShader, /hwsArtworkSample\.a </u, "must gate on the texture's OWN alpha channel, not render the full rectangular quad unconditionally");
+  assert.match(fakeShader.fragmentShader, /diffuseColor = vec4\(1\.0, 1\.0, 1\.0, 1\.0\)/u, "visible artwork pixels must become flat opaque white, never the artwork's real color");
 });
 
 test("artwork project save/load keeps stable file id and FRONT/BACK assignment links", () => {

@@ -1126,6 +1126,39 @@ select:focus {
 .presentationMeta input { height: 30px; font-size: 8px; }
 .presentationActions { display: flex; flex-wrap: wrap; gap: 8px; }
 .presentationActions button { min-height: 30px; }
+/* Visualization v3 — AI-generated environment panel: compact settings row, simple before/after
+   toggle (never a slider), and the reused .visualizationCardGrid for AI renders. */
+.aiVisualizationPanel { display: grid; gap: 10px; }
+.aiVisualizationPanel h3 { font-size: 11px; margin: 0; }
+.aiVisualizationSettingsRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.aiVisualizationSettingsRow select { height: 28px; padding: 0 8px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 8px; }
+.aiVisualizationBeforeAfter { display: grid; gap: 6px; }
+.aiVisualizationBeforeAfterToggle { display: inline-flex; gap: 4px; }
+.aiVisualizationBeforeAfterToggle button { min-height: 26px; padding: 0 10px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 7px; font-weight: 700; }
+.aiVisualizationBeforeAfterToggle button.toggleActive { background: #2b2f31; color: white; border-color: #2b2f31; }
+.aiVisualizationBeforeAfter img { max-width: 100%; max-height: 420px; object-fit: contain; border-radius: 8px; background: #f2f3f3; }
+
+/* Visualization v3.1 — dev-only control-pass debug section, collapsed by default, never shown in production. */
+.controlPassDebugSection { margin-top: 14px; padding: 10px 12px; border: 1px dashed #d8dadd; border-radius: 8px; }
+.controlPassDebugSection > summary { cursor: pointer; font-size: 9px; font-weight: 700; color: #6f7376; list-style: none; }
+.controlPassDebugSection > summary::-webkit-details-marker { display: none; }
+.controlPassDebugBody { display: grid; gap: 10px; margin-top: 10px; }
+.controlPassDebugGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; }
+.controlPassDebugTile { margin: 0; overflow: hidden; border: 1px solid #e4e5e5; border-radius: 6px; }
+.controlPassDebugThumb { display: block; width: 100%; aspect-ratio: 4 / 3; padding: 0; border: 0; border-bottom: 1px solid #e4e5e5; background: #111; cursor: pointer; }
+.controlPassDebugThumb img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.controlPassDebugTile figcaption { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; padding: 4px 6px; font-size: 7px; color: #6f7376; }
+.controlPassDebugTile figcaption button { min-height: 20px; padding: 0 6px; border: 1px solid #dfe1e2; border-radius: 4px; background: #f7f8f8; font-size: 6px; }
+.controlPassDebugTileNote { flex-basis: 100%; font-size: 6px; color: #9a9d9f; }
+.controlPassDebugLegend { display: grid; gap: 4px; font-size: 7px; color: #6f7376; }
+.controlPassDebugLegend ul { display: flex; flex-wrap: wrap; gap: 10px; margin: 4px 0 0; padding: 0; list-style: none; }
+.controlPassDebugLegend li { display: flex; align-items: center; gap: 5px; }
+.controlPassDebugSwatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; border: 1px solid rgba(0, 0, 0, .15); }
+.controlPassDebugDepthDiagnostics { border: 1px dashed #d8dadd; border-radius: 6px; padding: 6px 8px; font-size: 7px; color: #6f7376; }
+.controlPassDebugDepthDiagnostics > summary { cursor: pointer; font-weight: 700; list-style: none; }
+.controlPassDebugDepthDiagnostics > summary::-webkit-details-marker { display: none; }
+.controlPassDebugDepthSamples { max-height: 160px; overflow: auto; margin: 6px 0 0; padding: 6px; background: #f7f8f8; border-radius: 4px; font-size: 6px; }
+
 .visualizationGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 12px; }
 .visualizationGrid figure { overflow: hidden; border: 1px solid #e4e5e5; border-radius: 8px; }
 .visualizationGrid img { width: 100%; display: block; }
