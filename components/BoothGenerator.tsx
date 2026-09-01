@@ -211,6 +211,9 @@ import {
 import { PricingAdminPage } from "./workflow/PricingAdminPages";
 import { RemoteApiPricingAdminRepository } from "../lib/db/pricingAdmin.remoteApi.client";
 import { RemoteApiCatalogItemsAdminRepository } from "../lib/db/catalogItemsAdmin.remoteApi.client";
+import { EmailsPage } from "./workflow/EmailsPage";
+import { RemoteApiEmailTemplateRepository } from "../lib/db/emailTemplateRepository.remoteApi.client";
+import { RemoteApiEmailHistoryRepository } from "../lib/db/emailHistoryRepository.remoteApi.client";
 
 /** Individual-booth plot size defaults (mode=individualni, before the user has entered anything) — a neutral starting point on the 250 mm layout grid, never a fabricated real-world footprint. */
 const INDIVIDUAL_DEFAULT_WIDTH_MM = 3000;
@@ -276,9 +279,11 @@ export default function BoothGenerator() {
   const priceListRepositoryRef = useRef<PriceListRepository | null>(null);
   const pricingAdminRepositoryRef = useRef(new RemoteApiPricingAdminRepository());
   const catalogItemsAdminRepositoryRef = useRef(new RemoteApiCatalogItemsAdminRepository());
+  const emailTemplateRepositoryRef = useRef(new RemoteApiEmailTemplateRepository());
+  const emailHistoryRepositoryRef = useRef(new RemoteApiEmailHistoryRepository());
   const [pricingAdminPreselect, setPricingAdminPreselect] = useState<string | undefined>(undefined);
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin"
+    "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails"
   >("project");
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
@@ -2670,6 +2675,14 @@ export default function BoothGenerator() {
             events={adminEvents}
             repository={pricingAdminRepositoryRef.current}
             initialCatalogItemId={pricingAdminPreselect}
+          />
+        )}
+
+        {workspaceSection === "emails" && (
+          <EmailsPage
+            templateRepository={emailTemplateRepositoryRef.current}
+            historyRepository={emailHistoryRepositoryRef.current}
+            events={adminEvents}
           />
         )}
 

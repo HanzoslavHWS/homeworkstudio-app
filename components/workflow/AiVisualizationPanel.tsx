@@ -14,9 +14,9 @@ import {
   type LightingPreset,
   type PeoplePreset,
 } from "../../domain/visualizationAi";
-import { buildEnvironmentPrompt, buildSceneMetadataForAi } from "../../domain/visualizationAiPrompt";
+import { buildEnvironmentPrompt, buildSceneMetadataForAi, type StructuredAiPrompt } from "../../domain/visualizationAiPrompt";
 import { latestAiRendersByView, evaluateRenderStaleness, type VisualizationRenderFingerprint } from "../../domain/visualizationRender";
-import { compositeStrictLockInBrowser } from "../../lib/visualizationAiComposite.browser";
+import { compositeStrictLockInBrowser, type CompositeDebugOverlays } from "../../lib/visualizationAiComposite.browser";
 import { downloadDataUrl } from "../../lib/planExport";
 import type { BoothCadCameraControls } from "../configurator/BoothCadViewer";
 import { ViewRenderCard, RenderLightbox, type CommonProject } from "./WorkflowSteps";
@@ -29,6 +29,80 @@ const PROGRESS_LABELS: Readonly<Record<AiGenerationProgress, string>> = {
   compositing: "Skládám finální vizualizaci…",
   saving: "Ukládám…",
 };
+
+/**
+ * v3.3d — dev-only diagnostics for the "ghosting only on the FIRST request" audit (report
+ * v3.3d). Pure read-only inspection of what's ABOUT to be sent — never mutates state, never
+ * changes what gets captured/sent/composited. Hashes are SHA-256 (Web Crypto), one-way, and no
+ * API key ever reaches the browser to begin with, so there's nothing sensitive in any of this.
+ */
+async function sha256Hex(bytes: ArrayBuffer | Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes as BufferSource);
+  return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function sha256HexOfDataUrl(dataUrl: string): Promise<string> {
+  const response = await fetch(dataUrl);
+  return sha256Hex(await response.arrayBuffer());
+}
+
+async function sha256HexOfText(text: string): Promise<string> {
+  return sha256Hex(new TextEncoder().encode(text));
+}
+
+async function decodedImageDimensions(dataUrl: string): Promise<Readonly<{ width: number; height: number }>> {
+  const image = new Image();
+  image.src = dataUrl;
+  await image.decode();
+  return { width: image.naturalWidth, height: image.naturalHeight };
+}
+
+/**
+ * Logs exactly what THIS generate() call is about to send, captured right after
+ * renderControlPassCapture returns and the prompt is built — i.e. the actual state at the moment
+ * of the click, not a value re-derived later. Compare this log across two consecutive
+ * Generate clicks (same view, same settings) to see whether the CAPTURE itself differed (a
+ * client-side/camera-timing bug) before ever suspecting provider variability. Independent
+ * server-side logs exist in app/api/visualizations/ai-generate/route.ts (what the route actually
+ * received — catches transport bugs) and lib/ai/openaiVisualizationAiProvider.server.ts (prompt
+ * hash + requested OpenAI size, computed server-side).
+ */
+async function logAiGenerationRequestDiagnostics(input: Readonly<{
+  sourceRenderId: string;
+  viewId: string;
+  beautyDataUrl: string;
+  protectedMaskDataUrl: string;
+  structuredPrompt: StructuredAiPrompt;
+  settings: AiGenerationSettings;
+}>): Promise<void> {
+  try {
+    const [beautyDimensions, maskDimensions, beautySha256, protectedMaskSha256, promptSha256] = await Promise.all([
+      decodedImageDimensions(input.beautyDataUrl),
+      decodedImageDimensions(input.protectedMaskDataUrl),
+      sha256HexOfDataUrl(input.beautyDataUrl),
+      sha256HexOfDataUrl(input.protectedMaskDataUrl),
+      sha256HexOfText(JSON.stringify(input.structuredPrompt)),
+    ]);
+    // eslint-disable-next-line no-console
+    console.info("[ai-generation-diagnostics] client about to send request", {
+      timestamp: new Date().toISOString(),
+      sourceRenderId: input.sourceRenderId,
+      viewId: input.viewId,
+      beautyWidthPx: beautyDimensions.width,
+      beautyHeightPx: beautyDimensions.height,
+      protectedMaskWidthPx: maskDimensions.width,
+      protectedMaskHeightPx: maskDimensions.height,
+      beautySha256,
+      protectedMaskSha256,
+      promptSha256,
+      environmentPreset: input.settings.environmentPreset,
+      peoplePreset: input.settings.peoplePreset,
+      lightingPreset: input.settings.lightingPreset,
+    });
+  } catch (reason) {
+    console.warn("[ai-generation-diagnostics] failed to compute client request diagnostics", reason);
+  }
+}
 
 /**
  * Visualization v3 — the AI-generation workflow panel. Gated entirely on an existing Customer
@@ -61,6 +135,9 @@ export function AiVisualizationPanel({
   const [error, setError] = useState<string>("");
   const [showAfter, setShowAfter] = useState(true);
   const [lightboxViewId, setLightboxViewId] = useState<string | null>(null);
+  // v3.3c — dev-only debug overlay (protected mask / feather band / diff-vs-beauty), never shown
+  // in a production build, never persisted, never affects the saved render.
+  const [debugOverlays, setDebugOverlays] = useState<CompositeDebugOverlays | null>(null);
 
   const latestAiRenders = useMemo(() => latestAiRendersByView(project.visualizations), [project.visualizations]);
   const aiRenderedViews = useMemo(() => views.filter((view) => latestAiRenders.has(view.id)), [views, latestAiRenders]);
@@ -110,7 +187,21 @@ export function AiVisualizationPanel({
       // provider has it available, but is intentionally NOT the mask/compositing guarantee — a
       // provider implementation decides internally how (or whether) to use it; the deterministic
       // fake provider ignores it entirely, which is fine, since protection never depends on it.
-      buildEnvironmentPrompt({ metadata, environmentPreset: settings.environmentPreset, peoplePreset: settings.peoplePreset, lightingPreset: settings.lightingPreset });
+      const structuredPrompt = buildEnvironmentPrompt({ metadata, environmentPreset: settings.environmentPreset, peoplePreset: settings.peoplePreset, lightingPreset: settings.lightingPreset });
+
+      // v3.3d — dev-only diagnostics (report v3.3d), captured at the EXACT moment this request is
+      // about to be sent, from the SAME passes/settings the fetch below uses. Never changes what
+      // gets sent; purely observational.
+      if (process.env.NODE_ENV !== "production") {
+        await logAiGenerationRequestDiagnostics({
+          sourceRenderId: source.id,
+          viewId: view.id,
+          beautyDataUrl: passes.beautyDataUrl,
+          protectedMaskDataUrl: passes.protectedMaskDataUrl,
+          structuredPrompt,
+          settings,
+        });
+      }
 
       setProgress("generating");
       const response = await fetch("/api/visualizations/ai-generate", {
@@ -141,12 +232,14 @@ export function AiVisualizationPanel({
         beautyDataUrl: passes.beautyDataUrl,
         aiEnvironmentDataUrl: generated.environmentImageDataUrl,
         protectedMaskDataUrl: passes.protectedMaskDataUrl,
+        debug: process.env.NODE_ENV !== "production",
       });
       if (composite.ok !== true) {
         setError("Skládání finální vizualizace se nezdařilo.");
         setProgress(null);
         return;
       }
+      setDebugOverlays(composite.debug ?? null);
 
       setProgress("saving");
       const currentSource = latestCustomerRenders.get(view.id);
@@ -237,6 +330,36 @@ export function AiVisualizationPanel({
           </div>
           <img src={showAfter ? existingAiRender.imageDataUrl : sourceRender.imageDataUrl} alt={showAfter ? "AI vizuál" : "Customer Render"} />
         </div>
+      )}
+
+      {process.env.NODE_ENV !== "production" && debugOverlays && (
+        <details className="controlPassDebugSection">
+          <summary>Debug strict-lock compositu ▾</summary>
+          <div className="controlPassDebugBody">
+            <p className="workflowMuted">
+              Dev-only: efektivní maska (po binarizeMask + outward-only feather), feather band (fialově zvýrazněné pixely, kde se blenduje —
+              nesmí zasahovat do chráněné oblasti) a rozdíl finálního composite vůči Beauty (černá = beze změny; jakékoliv jasné místo uvnitř
+              chráněné oblasti značí duplikaci/ghosting).
+            </p>
+            <div className="controlPassDebugGrid">
+              {[
+                { slug: "effective-mask", label: "Efektivní protected mask", dataUrl: debugOverlays.effectiveMaskDataUrl },
+                { slug: "feather-band", label: "Feather band", dataUrl: debugOverlays.featherBandDataUrl },
+                { slug: "diff-vs-beauty", label: "Diff vs. Beauty", dataUrl: debugOverlays.diffVsBeautyDataUrl },
+              ].map((tile) => (
+                <figure key={tile.slug} className="controlPassDebugTile">
+                  <div className="controlPassDebugThumb">
+                    <img src={tile.dataUrl} alt={tile.label} />
+                  </div>
+                  <figcaption>
+                    <span>{tile.label}</span>
+                    <button type="button" onClick={() => downloadDataUrl(tile.dataUrl, `strict-lock-debug-${tile.slug}.png`)}>Stáhnout PNG</button>
+                  </figcaption>
+                </figure>
+              ))}
+            </div>
+          </div>
+        </details>
       )}
 
       {aiRenderedViews.length > 0 && (

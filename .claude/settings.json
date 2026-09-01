@@ -1,7 +1,23 @@
 {
   "permissions": {
     "allow": [
-      "Bash(node --no-warnings --test tests/visualizationRenderUI.test.ts)"
+      "Bash(node --no-warnings --test tests/visualizationRenderUI.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationSemantics.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationCompositing.test.ts)",
+      "Bash(node --no-warnings -e ' *)",
+      "Bash(node --no-warnings --test --test-name-pattern=\"LARGE RADIUS STRESS\" tests/visualizationCompositing.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationRender.test.ts tests/visualization.test.ts tests/visualizationRenderUI.test.ts tests/visualizationRenderBatch.test.ts tests/visualizationDownloads.test.ts tests/presentationPdf.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationAi.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationAiPrompt.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationSemantics.test.ts tests/visualizationCompositing.test.ts tests/visualizationAi.test.ts tests/visualizationAiPrompt.test.ts tests/visualizationAiProvider.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationAiRoute.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationAiControlPasses.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationAiUI.test.ts)",
+      "Bash(node --no-warnings --test tests/visualizationSemantics.test.ts tests/visualizationCompositing.test.ts tests/visualizationAi.test.ts tests/visualizationAiPrompt.test.ts tests/visualizationAiProvider.test.ts tests/visualizationAiRoute.test.ts tests/visualizationAiControlPasses.test.ts tests/visualizationAiUI.test.ts tests/visualization.test.ts tests/visualizationRender.test.ts tests/visualizationRenderBatch.test.ts tests/visualizationRenderUI.test.ts tests/visualizationDownloads.test.ts)",
+      "Bash(node --no-warnings --test tests/controlPassDebugViewer.test.ts)",
+      "Bash(node --no-warnings --test tests/controlPassDebugViewer.test.ts tests/visualizationSemantics.test.ts tests/visualizationCompositing.test.ts tests/visualizationAi.test.ts tests/visualizationAiPrompt.test.ts tests/visualizationAiProvider.test.ts tests/visualizationAiRoute.test.ts tests/visualizationAiControlPasses.test.ts tests/visualizationAiUI.test.ts tests/visualization.test.ts tests/visualizationRender.test.ts tests/visualizationRenderBatch.test.ts tests/visualizationRenderUI.test.ts tests/visualizationDownloads.test.ts)",
+      "Bash(node --no-warnings --test tests/emailAiConfig.test.ts tests/emailAiPrompt.test.ts tests/emailAiProvider.test.ts tests/openaiEmailAiProvider.test.ts)",
+      "Bash(node --no-warnings --test tests/emailAiConfig.test.ts tests/emailAiPrompt.test.ts tests/emailAiProvider.test.ts tests/emailEventContext.test.ts tests/emailHistory.test.ts tests/emailTemplate.test.ts tests/openaiEmailAiProvider.test.ts)"
     ]
   }
 }

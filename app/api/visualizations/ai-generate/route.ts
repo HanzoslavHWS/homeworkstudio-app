@@ -1,13 +1,53 @@
+import { createHash } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server.js";
 import {
   assertValidVisualizationAiGenerateRequestBody,
   fitWithinMaxInputSize,
   VisualizationAiRequestError,
+  type VisualizationAiGenerateRequestBody,
 } from "../../../../domain/visualizationAi.ts";
 import { isVisualizationAiRequestAuthorized } from "../../../../lib/ai/visualizationAiRouteAuth.server.ts";
 import { resolveVisualizationAiProvider } from "../../../../lib/ai/visualizationAiProvider.server.ts";
+import { dataUrlToPngBytes, PngDecodeError, readPngDimensions } from "../../../../lib/ai/pngDecoder.ts";
 import type { CuratedAiSceneMetadata } from "../../../../domain/visualizationAiPrompt.ts";
 import type { VisualizationAiProvider } from "../../../../lib/ai/visualizationAiProvider.server.ts";
+
+/**
+ * v3.3d — dev-only diagnostics for the "ghosting only on the FIRST request" audit (report
+ * v3.3d). Logs exactly what this route actually received for a given request — never anything
+ * sensitive (no API key ever touches this route at all), just dimensions/hashes/presets — so two
+ * consecutive requests with the SAME view/settings can be compared byte-for-byte. Independent of
+ * (and a cross-check against) the client-side log in AiVisualizationPanel.tsx: if the two
+ * disagree, the request body was altered in transit; if they agree but the AI output still
+ * differs, the capture itself (client-side state/timing) is the next place to look, not the
+ * network layer. Gated on NODE_ENV, never runs in production, never affects the response.
+ */
+function logAiGenerationRequestDiagnostics(body: VisualizationAiGenerateRequestBody): void {
+  if (process.env.NODE_ENV === "production") return;
+  try {
+    const beautyBytes = dataUrlToPngBytes(body.beautyImageDataUrl);
+    const maskBytes = dataUrlToPngBytes(body.protectedMaskDataUrl);
+    const beautyDimensions = readPngDimensions(beautyBytes);
+    const maskDimensions = readPngDimensions(maskBytes);
+    // eslint-disable-next-line no-console
+    console.info("[ai-generation-diagnostics] route received request", {
+      timestamp: new Date().toISOString(),
+      viewId: body.viewId,
+      sourceRenderId: body.sourceRenderId,
+      beautyWidthPx: beautyDimensions.width,
+      beautyHeightPx: beautyDimensions.height,
+      protectedMaskWidthPx: maskDimensions.width,
+      protectedMaskHeightPx: maskDimensions.height,
+      beautySha256: createHash("sha256").update(beautyBytes).digest("hex"),
+      protectedMaskSha256: createHash("sha256").update(maskBytes).digest("hex"),
+      environmentPreset: body.environmentPreset,
+      peoplePreset: body.peoplePreset,
+      lightingPreset: body.lightingPreset,
+    });
+  } catch (reason) {
+    console.warn("[ai-generation-diagnostics] failed to compute route diagnostics", reason instanceof PngDecodeError ? reason.message : reason);
+  }
+}
 
 /**
  * Scoped to exactly one job: validate → resolve provider → call generateEnvironment → return the
@@ -37,6 +77,7 @@ export async function handleVisualizationAiGenerate(
     if (error instanceof VisualizationAiRequestError) return NextResponse.json({ error: error.message, code: error.code }, { status: 400 });
     throw error;
   }
+  logAiGenerationRequestDiagnostics(body);
 
   const provider = providerFactory();
   if (provider === undefined) {

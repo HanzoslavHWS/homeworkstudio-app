@@ -71,6 +71,11 @@ export type StructuredAiPrompt = Readonly<{
 /**
  * Report section 12's structure verbatim (GOAL / LOCKED CONTENT / EDITABLE CONTENT / STYLE /
  * CAMERA). This is a systematic builder, never free-form string concatenation in React.
+ *
+ * v3.3b: wording strengthened per the first real-render smoke test's feedback (still the SAME 5
+ * fields, same builder, no architecture change) — photorealistic professional trade-show hall,
+ * exact camera perspective match, natural booth integration, believable ambient light/contact
+ * shadows around the footprint, and an explicit no-redesign/duplicate/move/alter instruction.
  */
 export function buildEnvironmentPrompt(input: Readonly<{
   metadata: CuratedAiSceneMetadata;
@@ -82,15 +87,15 @@ export function buildEnvironmentPrompt(input: Readonly<{
   const footprint = `${metadata.footprintMm.widthMm}×${metadata.footprintMm.depthMm} mm`;
 
   return {
-    goal: "Create a photorealistic exhibition environment around the supplied locked booth.",
-    lockedContent: `The supplied booth geometry, furniture, artwork, logos, text, colors and perspective are authoritative and must not be redesigned, resized, or repositioned. Booth footprint: ${footprint}. Protected object count: ${metadata.protectedObjectCount}.`,
-    editableContent: `Exhibition hall, surrounding floor beyond the booth footprint, distant booths, people (${PEOPLE_PRESET_LABELS[input.peoplePreset]}), ambient lighting and environmental atmosphere. People must remain in the surrounding environment only, never inside or overlapping the booth.`,
+    goal: "Create a photorealistic environment for a professional trade-show hall around the supplied locked booth.",
+    lockedContent: `The supplied booth geometry, furniture, artwork, logos, text, colors and perspective are authoritative and must not be redesigned, resized, repositioned, duplicated, or otherwise altered. Booth footprint: ${footprint}. Protected object count: ${metadata.protectedObjectCount}.`,
+    editableContent: `Exhibition hall, surrounding floor beyond the booth footprint, distant booths, people (${PEOPLE_PRESET_LABELS[input.peoplePreset]}), ambient lighting and environmental atmosphere. Integrate the booth naturally into the surrounding hall, with realistic ambient illumination and believable contact shadows around the booth footprint. People must remain in the surrounding environment only, never inside or overlapping the booth.`,
     style: [
       ENVIRONMENT_PRESET_LABELS[input.environmentPreset],
       `${LIGHTING_PRESET_LABELS[input.lightingPreset]} lighting`,
       metadata.floorType ? `hall floor transitioning realistically from the booth's own ${metadata.floorType}` : undefined,
       metadata.environmentIntent,
     ].filter(Boolean).join(". "),
-    camera: `Preserve the supplied framing and perspective exactly — ${metadata.cameraSummary}. Never reframe, crop, or change the field of view.`,
+    camera: `Match the exact camera perspective of the input booth. Preserve the supplied framing and perspective exactly — ${metadata.cameraSummary}. Never reframe, crop, or change the field of view.`,
   };
 }

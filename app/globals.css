@@ -5952,6 +5952,55 @@ select:focus {
 .deadlineEditor > div:first-child { display: flex; justify-content: space-between; }
 .deadlineEditor button { min-height: 28px; padding: 0 9px; border: 1px solid #dfe0e1; border-radius: 5px; background: #fafafa; font-size: 8px; }
 
+.emailsTopRow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.emailsTopRow select,
+.emailsTopRow input { height: 38px; }
+.emailsWorkspace { display: grid; grid-template-columns: 1fr 1fr; align-items: start; gap: 16px; }
+.emailsPane { display: grid; gap: 12px; }
+.emailsFreeText,
+.emailsResultBody { width: 100%; resize: vertical; padding: 12px; border: 1px solid #dcdedf; border-radius: 8px; background: #fbfbfb; color: #161718; font: inherit; font-size: 10px; line-height: 1.5; }
+.emailsFreeText { min-height: 220px; }
+.emailsResultBody { min-height: 260px; }
+.emailsTemplateBar { display: flex; align-items: center; gap: 8px; }
+.emailsTemplateBar select { height: 38px; flex: 1; }
+.emailsTemplateBar button,
+.emailsSaveTemplateActions button { min-height: 38px; padding: 0 12px; border: 1px solid #dfe0e1; border-radius: 6px; background: #fafafa; color: #55595c; font-size: 8px; cursor: pointer; }
+.emailsSaveTemplateForm { display: grid; gap: 8px; padding: 12px; margin-top: 12px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fbfbfb; }
+.emailsSaveTemplateForm input,
+.emailsSaveTemplateForm textarea { height: auto; min-height: 38px; padding: 9px; border: 1px solid #dcdedf; border-radius: 7px; font: inherit; font-size: 9px; }
+.emailsSaveTemplateForm textarea { min-height: 60px; resize: vertical; }
+.emailsSaveTemplateActions { display: flex; gap: 8px; }
+.emailsCreateButton { justify-self: start; }
+.emailsQuickActions { display: flex; flex-wrap: wrap; gap: 6px; }
+.emailsQuickActions button { min-height: 30px; padding: 0 10px; border: 1px solid #dfe0e1; border-radius: 99px; background: #fafafa; color: #55595c; font-size: 8px; cursor: pointer; }
+.emailsQuickActions button:disabled { cursor: not-allowed; opacity: .5; }
+.emailsResultActions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.emailsResultActions button:disabled { cursor: not-allowed; opacity: .5; }
+.emailsConfirmation { margin: 0 0 12px; padding: 9px 14px; border: 1px solid #cfe3d2; border-radius: 7px; background: #f1f8f2; color: #3d6b45; font-size: 9px; }
+
+.emailsHistoryLayout { display: grid; grid-template-columns: 340px minmax(0, 1fr); align-items: start; gap: 16px; }
+.emailsHistoryList { display: grid; gap: 6px; align-content: start; }
+.emailsHistoryRow { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fff; text-align: left; cursor: pointer; }
+.emailsHistoryRow.active { border-color: #242628; background: #fafafa; }
+.emailsHistoryRow strong { font-size: 10px; }
+.emailsHistoryRowTime { color: #96999c; font-size: 7px; letter-spacing: .3px; }
+.emailsHistoryRowMeta { color: #85898c; font-size: 8px; }
+.emailsHistoryDetail { display: grid; gap: 12px; }
+
+.emailsTemplatesView { display: grid; gap: 10px; }
+.emailsTemplateList { display: grid; gap: 8px; list-style: none; margin: 0 0 8px; padding: 0; }
+.emailsTemplateList li { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 12px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fff; font-size: 8px; }
+.emailsTemplateList li.workspaceEmpty { border: 0; background: transparent; }
+.emailsTemplateListActions { display: flex; gap: 6px; flex-shrink: 0; }
+.emailsTemplateListActions button,
+.emailsTemplateList > li > button { min-height: 30px; padding: 0 10px; border: 1px solid #dfe0e1; border-radius: 6px; background: #fafafa; color: #55595c; font-size: 8px; cursor: pointer; }
+
+@media (max-width: 980px) {
+  .emailsWorkspace,
+  .emailsTopRow,
+  .emailsHistoryLayout { grid-template-columns: 1fr; }
+}
+
 .visualizationSources h2,
 .visualization2D h2 { font-size: 13px; }
 .purposeSelect select { height: 36px; }

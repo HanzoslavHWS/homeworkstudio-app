@@ -79,3 +79,16 @@ test("PROMPT CAMERA: preserves framing instruction and includes the camera summa
   assert.match(prompt.camera, /Preserve the supplied framing/u);
   assert.match(prompt.camera, /Never reframe/u);
 });
+
+test("PROMPT POLISH (v3.3b): strengthened environment instructions land in the SAME 5 fields — no new section, no architecture change", () => {
+  const metadata = buildSceneMetadataForAi(fixtureInput());
+  const prompt = buildEnvironmentPrompt({ metadata, environmentPreset: "clean-hall", peoplePreset: "none", lightingPreset: "neutral" });
+  assert.match(prompt.goal, /photorealistic/iu);
+  assert.match(prompt.goal, /trade-show hall/iu);
+  assert.match(prompt.camera, /exact camera perspective/iu);
+  assert.match(prompt.editableContent, /naturally/iu);
+  assert.match(prompt.editableContent, /contact shadows/iu);
+  assert.match(prompt.lockedContent, /duplicated/iu);
+  assert.match(prompt.lockedContent, /altered/iu);
+  assert.deepEqual(Object.keys(prompt).sort(), ["camera", "editableContent", "goal", "lockedContent", "style"], "still exactly the same 5 fields");
+});

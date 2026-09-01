@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { DeterministicFakeAiProvider } from "../lib/ai/deterministicFakeAiProvider.ts";
 import { resolveVisualizationAiProvider } from "../lib/ai/visualizationAiProvider.server.ts";
+import { DEFAULT_OPENAI_IMAGE_MODEL, DEFAULT_OPENAI_IMAGE_QUALITY, OpenAiVisualizationAiProvider } from "../lib/ai/openaiVisualizationAiProvider.server.ts";
 import { pngBytesToDataUrl, encodeRgbaToPng } from "../lib/ai/pngEncoder.ts";
 import type { CuratedAiSceneMetadata } from "../domain/visualizationAiPrompt.ts";
 
@@ -38,6 +39,39 @@ test("RESOLUTION: resolveVisualizationAiProvider enables the fake provider only 
   const provider = resolveVisualizationAiProvider({ AI_VISUALIZATION_USE_FAKE_PROVIDER: "1" });
   assert.ok(provider);
   assert.equal(provider?.id, "deterministic-fake");
+});
+
+test("RESOLUTION (v3.3): OPENAI_API_KEY present -> the real OpenAI provider, with the default model and default (low, v3.3a) quality", () => {
+  const provider = resolveVisualizationAiProvider({ OPENAI_API_KEY: "sk-test-key" });
+  assert.ok(provider);
+  assert.equal(provider?.id, "openai");
+  assert.ok(provider instanceof OpenAiVisualizationAiProvider);
+  assert.equal((provider as OpenAiVisualizationAiProvider).model, DEFAULT_OPENAI_IMAGE_MODEL);
+  assert.equal((provider as OpenAiVisualizationAiProvider).quality, DEFAULT_OPENAI_IMAGE_QUALITY);
+});
+
+test("RESOLUTION (v3.3): OPENAI_IMAGE_MODEL overrides the default model when OPENAI_API_KEY is present", () => {
+  const provider = resolveVisualizationAiProvider({ OPENAI_API_KEY: "sk-test-key", OPENAI_IMAGE_MODEL: "gpt-image-custom" });
+  assert.ok(provider);
+  assert.equal((provider as OpenAiVisualizationAiProvider).model, "gpt-image-custom");
+});
+
+test("RESOLUTION (v3.3a): OPENAI_IMAGE_QUALITY overrides the low default when OPENAI_API_KEY is present", () => {
+  const provider = resolveVisualizationAiProvider({ OPENAI_API_KEY: "sk-test-key", OPENAI_IMAGE_QUALITY: "medium" });
+  assert.ok(provider);
+  assert.equal((provider as OpenAiVisualizationAiProvider).quality, "medium");
+});
+
+test("RESOLUTION (v3.3): OPENAI_API_KEY takes priority over the fake-provider opt-in flag when both are set", () => {
+  const provider = resolveVisualizationAiProvider({ OPENAI_API_KEY: "sk-test-key", AI_VISUALIZATION_USE_FAKE_PROVIDER: "1" });
+  assert.equal(provider?.id, "openai");
+});
+
+test("RESOLUTION (v3.3): an empty-string OPENAI_API_KEY does not count as configured — falls through to the fake-provider flag, then undefined", () => {
+  const withFakeFlag = resolveVisualizationAiProvider({ OPENAI_API_KEY: "", AI_VISUALIZATION_USE_FAKE_PROVIDER: "1" });
+  assert.equal(withFakeFlag?.id, "deterministic-fake");
+  const withNeither = resolveVisualizationAiProvider({ OPENAI_API_KEY: "" });
+  assert.equal(withNeither, undefined);
 });
 
 test("CAPABILITIES: the fake provider declares its capabilities honestly — no native mask/depth/normal support claimed", () => {

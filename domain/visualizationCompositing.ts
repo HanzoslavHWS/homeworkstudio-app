@@ -36,7 +36,12 @@ export type ComposeStrictLockInput = Readonly<{
 }>;
 
 export type ComposeStrictLockResult =
-  | Readonly<{ ok: true; composed: PixelBuffer }>
+  | Readonly<{
+      ok: true;
+      composed: PixelBuffer;
+      /** v3.3c debug overlay support (report "debug overlay... protected mask, feather band") — the ACTUAL mask used for this composite (post binarizeMask + computeProtectedFeatherMask), never the raw captured one. Lets a debug view show exactly what governed each pixel's beauty/AI/blend decision. */
+      effectiveMask: PixelBuffer;
+    }>
   | Readonly<{ ok: false; reason: "dimension-mismatch" | "invalid-buffer-length" }>;
 
 export const DEFAULT_FEATHER_RADIUS_PX = 3;
@@ -106,6 +111,60 @@ export function featherMask(mask: PixelBuffer, radiusPx: number): PixelBuffer {
 }
 
 /**
+ * v3.3c fix — the RAW captured protected mask is NOT actually strictly binary in practice, even
+ * though renderControlPassCapture's own comment documents it as such: it's rendered on the SAME
+ * `antialias: true` WebGL canvas as every other pass, so the GPU's own MSAA resolve already
+ * softens every silhouette edge before this code ever sees it. For most large protected shapes
+ * (booth panels, walls) that sub-pixel softness is invisible. For THIN protected geometry — chair
+ * legs, fascia edges, anything only 1-3px wide at capture resolution — the AA softening can reach
+ * every single pixel across the feature's whole width, so it never contains a single raw value
+ * that's cleanly 255. This function removes that GPU-introduced ambiguity by thresholding at the
+ * midpoint BEFORE any of our own intentional feathering — turning "quietly always partially
+ * transparent" back into "definitely protected, exactly as wide as the real geometry."
+ */
+export function binarizeMask(mask: PixelBuffer, threshold = 128): PixelBuffer {
+  const { width, height } = mask;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    const value = mask.data[i * 4]! >= threshold ? 255 : 0;
+    data[i * 4] = value; data[i * 4 + 1] = value; data[i * 4 + 2] = value; data[i * 4 + 3] = 255;
+  }
+  return { width, height, data };
+}
+
+/**
+ * v3.3c fix — the mask actually used to composite (report "binary protected interior... feather
+ * jen na hraně masky, ne uvnitř"). Previous behavior fed the RAW captured mask straight into
+ * featherMask's symmetric box blur, which produces a ramp centered ON the edge — eroding radiusPx
+ * INTO genuinely-protected territory on every boundary, which for thin objects (a 2px-wide chair
+ * leg with a 3px feather radius) meant the ENTIRE feature never had a single fully-protected
+ * pixel — a visible blend/ghost of AI content through supposedly-locked geometry.
+ *
+ * This combinator instead: (1) binarizes the raw mask (see binarizeMask above, strips GPU AA
+ * softness), (2) box-blurs THAT clean binary mask, (3) takes the pixelwise MAX of the binarized
+ * and blurred values. Because max(255, anything) is always 255, every pixel the binarized mask
+ * calls protected stays at EXACTLY 255 — 100% beauty, zero blend — no matter how thin the feature
+ * or how close to an edge. The blur's only remaining effect is on pixels the binarized mask calls
+ * editable (0): there, max(0, blurred) yields a smooth ramp UP toward 255 as the pixel nears a
+ * protected edge — i.e. the feather band only ever grows OUTWARD into the editable/environment
+ * side of the boundary, never inward. `radiusPx <= 0` skips the blur entirely (still binarized,
+ * still a hard cutoff, matching featherMask's own documented no-op convention).
+ */
+export function computeProtectedFeatherMask(rawMask: PixelBuffer, radiusPx: number): PixelBuffer {
+  const binarized = binarizeMask(rawMask);
+  if (!Number.isFinite(radiusPx) || radiusPx <= 0) return binarized;
+
+  const blurred = featherMask(binarized, radiusPx);
+  const { width, height } = binarized;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    const value = Math.max(binarized.data[i * 4]!, blurred.data[i * 4]!);
+    data[i * 4] = value; data[i * 4 + 1] = value; data[i * 4 + 2] = value; data[i * 4 + 3] = 255;
+  }
+  return { width, height, data };
+}
+
+/**
  * Report section 6: FINAL = authoritative booth OVER AI environment, masked. Never resizes —
  * output dimensions always equal the input (beauty) dimensions; any provider-driven resize is
  * the caller's job (domain/visualizationAi.ts's fitWithinMaxInputSize), never this function's.
@@ -124,7 +183,7 @@ export function composeStrictLockImage(input: ComposeStrictLockInput): ComposeSt
   }
 
   const radius = input.featherRadiusPx ?? DEFAULT_FEATHER_RADIUS_PX;
-  const effectiveMask = featherMask(protectedMask, radius);
+  const effectiveMask = computeProtectedFeatherMask(protectedMask, radius);
   const { width, height } = beauty;
   const data = new Uint8ClampedArray(width * height * 4);
 
@@ -150,5 +209,53 @@ export function composeStrictLockImage(input: ComposeStrictLockInput): ComposeSt
     }
   }
 
-  return { ok: true, composed: { width, height, data } };
+  return { ok: true, composed: { width, height, data }, effectiveMask };
+}
+
+/**
+ * v3.3c debug overlay (report "debug overlay... feather band"): highlights exactly the pixels
+ * computeProtectedFeatherMask actually blended (0 < effectiveMask value < 255) — everywhere else
+ * is black. Since the fix, this band can only ever appear on the EDITABLE side of a protected
+ * boundary (see computeProtectedFeatherMask's own doc comment) — a human looking at this overlay
+ * can directly confirm the band never reaches into protected geometry.
+ */
+export function visualizeFeatherBand(
+  effectiveMask: PixelBuffer,
+  highlightColor: Readonly<{ r: number; g: number; b: number }> = { r: 255, g: 0, b: 255 },
+): PixelBuffer {
+  const { width, height } = effectiveMask;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    const offset = i * 4;
+    const value = effectiveMask.data[offset]!;
+    const inBand = value > 0 && value < 255;
+    data[offset] = inBand ? highlightColor.r : 0;
+    data[offset + 1] = inBand ? highlightColor.g : 0;
+    data[offset + 2] = inBand ? highlightColor.b : 0;
+    data[offset + 3] = 255;
+  }
+  return { width, height, data };
+}
+
+/**
+ * v3.3c debug overlay (report "final composite difference vs beauty, ať je hned vidět, kde se to
+ * duplikuje"): a grayscale heatmap of |composed - beauty| per pixel (max across R/G/B, amplified
+ * for visibility). A CORRECT composite reads as solid black across the entire protected region
+ * (composed === beauty there, by construction) and only shows brightness in the legitimately
+ * AI-replaced editable region — any unexpected bright spot INSIDE what should be protected
+ * geometry is a duplication/ghosting bug, made visible at a glance instead of needing a pixel
+ * inspector.
+ */
+export function visualizeDiffVsBeauty(composed: PixelBuffer, beauty: PixelBuffer, amplify = 4): PixelBuffer {
+  const { width, height } = composed;
+  const data = new Uint8ClampedArray(width * height * 4);
+  for (let i = 0; i < width * height; i++) {
+    const offset = i * 4;
+    const diffR = Math.abs(composed.data[offset]! - beauty.data[offset]!);
+    const diffG = Math.abs(composed.data[offset + 1]! - beauty.data[offset + 1]!);
+    const diffB = Math.abs(composed.data[offset + 2]! - beauty.data[offset + 2]!);
+    const value = Math.min(255, Math.max(diffR, diffG, diffB) * amplify);
+    data[offset] = value; data[offset + 1] = value; data[offset + 2] = value; data[offset + 3] = 255;
+  }
+  return { width, height, data };
 }
