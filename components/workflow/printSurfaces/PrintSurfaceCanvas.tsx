@@ -2,62 +2,73 @@
 
 import { useRef, type PointerEvent as ReactPointerEvent } from "react";
 import { useBoothViewport } from "../../../hooks/useBoothViewport";
-import { readRasterImageDimensions } from "../../../lib/storage/assetClient";
+import { useAssetUrl } from "../../../hooks/useAssetUrl";
+import { uploadAsset, readRasterImageDimensions } from "../../../lib/storage/assetClient";
 import {
+  itemForPlacement,
   normalizeImagePosition,
+  type MarkerPlacement,
   type PrintSurfaceItem,
   type PrintSurfaceProjectImage,
 } from "../../../domain/printSurfaceProject";
-import { printSurfaceTypeLabel, type PrintSurfaceTypeId } from "../../../domain/printSurfaceTypeCatalog";
+import { printSurfaceTypeLabel } from "../../../domain/printSurfaceTypeCatalog";
 import { ViewportToolbar } from "../../configurator/ViewportToolbar";
-
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(new Error("Soubor se nepodařilo načíst."));
-    reader.readAsDataURL(file);
-  });
-}
 
 type DragSession = { id: string; pointerId: number };
 
+/**
+ * Renders one view's MarkerPlacements (pins), never PrintSurfaceItems directly — the same
+ * physical item can have a placement here AND on the other view, each an independent pin with
+ * its own drag/position, both resolving back to the exact same item (label/type/etc — see
+ * itemForPlacement) for display.
+ */
 export function PrintSurfaceCanvas({
+  projectId,
   image,
   items,
-  selectedItemId,
-  activeTool,
+  placements,
+  selectedPlacementId,
+  canCreate,
   uploadError,
-  onSelectItem,
-  onCreateItemAt,
-  onMoveItem,
+  onSelectPlacement,
+  onCreateAt,
+  onMovePlacement,
   onUploadImage,
   onUploadError,
 }: {
+  projectId: string;
   image: PrintSurfaceProjectImage | undefined;
   items: readonly PrintSurfaceItem[];
-  selectedItemId: string | undefined;
-  activeTool: "select" | PrintSurfaceTypeId;
+  placements: readonly MarkerPlacement[];
+  selectedPlacementId: string | undefined;
+  canCreate: boolean;
   uploadError: string;
-  onSelectItem: (id: string | undefined) => void;
-  onCreateItemAt: (xNormalized: number, yNormalized: number) => void;
-  onMoveItem: (id: string, xNormalized: number, yNormalized: number) => void;
+  onSelectPlacement: (id: string | undefined) => void;
+  onCreateAt: (xNormalized: number, yNormalized: number) => void;
+  onMovePlacement: (id: string, xNormalized: number, yNormalized: number) => void;
   onUploadImage: (image: PrintSurfaceProjectImage) => void;
   onUploadError: (message: string) => void;
 }) {
   const dragRef = useRef<DragSession | null>(null);
+  const { url: imageUrl } = useAssetUrl(image?.asset);
 
-  // world units = the uploaded image's own pixel dimensions — normalized marker positions
+  // world units = the uploaded image's own pixel dimensions — normalized placement positions
   // (xNormalized/yNormalized, 0–1) are relative to THIS, never to viewport/screen pixels, so a
-  // marker stays glued to the same spot on the photo across zoom/pan/Fit/viewport-resize.
+  // pin stays glued to the same spot on the photo across zoom/pan/Fit/viewport-resize.
   const viewport = useBoothViewport({
     worldWidthMm: image?.widthPx ?? 1,
     worldHeightMm: image?.heightPx ?? 1,
     enabled: image !== undefined,
-    fitKey: image ? `${image.fileName}-${image.widthPx}x${image.heightPx}` : "no-image",
+    fitKey: image ? `${image.asset.id}-${image.widthPx}x${image.heightPx}` : "no-image",
   });
 
   async function handleFileSelected(file: File) {
+    if (image && placements.length > 0) {
+      const confirmed = window.confirm(
+        "Tento pohled už má umístěné tiskové plochy — jejich pozice jsou vázané na tento konkrétní obrázek. Nahrazením obrázku zůstanou plochy na stejných relativních souřadnicích, ale mohou už neodpovídat novému obrázku. Opravdu nahradit?",
+      );
+      if (!confirmed) return;
+    }
     onUploadError("");
     const dimensions = await readRasterImageDimensions(file);
     if (!dimensions) {
@@ -65,15 +76,10 @@ export function PrintSurfaceCanvas({
       return;
     }
     try {
-      const dataUrl = await readFileAsDataUrl(file);
-      onUploadImage({
-        dataUrl,
-        widthPx: dimensions.widthPx,
-        heightPx: dimensions.heightPx,
-        fileName: file.name,
-      });
-    } catch {
-      onUploadError("Nepodařilo se načíst obrázek.");
+      const asset = await uploadAsset(file, { category: "print-surface-image", ownerId: projectId });
+      onUploadImage({ asset, widthPx: dimensions.widthPx, heightPx: dimensions.heightPx });
+    } catch (error) {
+      onUploadError(error instanceof Error ? error.message : "Nepodařilo se nahrát obrázek.");
     }
   }
 
@@ -85,25 +91,25 @@ export function PrintSurfaceCanvas({
     if (!world) return;
 
     if (world.x < 0 || world.y < 0 || world.x > image.widthPx || world.y > image.heightPx) {
-      onSelectItem(undefined);
+      onSelectPlacement(undefined);
       return;
     }
 
-    if (activeTool === "select") {
-      onSelectItem(undefined);
+    if (!canCreate) {
+      onSelectPlacement(undefined);
       return;
     }
 
     const { xNormalized, yNormalized } = normalizeImagePosition(world.x, world.y, image.widthPx, image.heightPx);
-    onCreateItemAt(xNormalized, yNormalized);
+    onCreateAt(xNormalized, yNormalized);
   }
 
-  function handleMarkerPointerDown(event: ReactPointerEvent<HTMLButtonElement>, item: PrintSurfaceItem) {
+  function handleMarkerPointerDown(event: ReactPointerEvent<HTMLButtonElement>, placement: MarkerPlacement) {
     event.stopPropagation();
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
-    dragRef.current = { id: item.id, pointerId: event.pointerId };
-    onSelectItem(item.id);
+    dragRef.current = { id: placement.id, pointerId: event.pointerId };
+    onSelectPlacement(placement.id);
   }
 
   function handleMarkerPointerMove(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -112,7 +118,7 @@ export function PrintSurfaceCanvas({
     const world = viewport.clientToWorld(event.clientX, event.clientY);
     if (!world) return;
     const { xNormalized, yNormalized } = normalizeImagePosition(world.x, world.y, image.widthPx, image.heightPx);
-    onMoveItem(drag.id, xNormalized, yNormalized);
+    onMovePlacement(drag.id, xNormalized, yNormalized);
   }
 
   function handleMarkerPointerUp(event: ReactPointerEvent<HTMLButtonElement>) {
@@ -126,7 +132,7 @@ export function PrintSurfaceCanvas({
   const viewportClassName = [
     "printSurfaceViewport",
     viewport.isPanning ? "panning" : viewport.isSpacePressed ? "panReady" : "",
-    activeTool !== "select" ? "addMode" : "",
+    canCreate ? "addMode" : "",
   ].filter(Boolean).join(" ");
 
   return (
@@ -191,22 +197,25 @@ export function PrintSurfaceCanvas({
                 transform: `translate(${viewport.transform.pan.x}px, ${viewport.transform.pan.y}px) scale(${viewport.transform.zoom})`,
               }}
             >
-              <img src={image.dataUrl} alt="" draggable={false} className="printSurfaceImage" />
-              {items.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  className={item.id === selectedItemId ? "printSurfaceMarker active" : "printSurfaceMarker"}
-                  style={{ left: `${item.xNormalized * 100}%`, top: `${item.yNormalized * 100}%` }}
-                  onPointerDown={(event) => handleMarkerPointerDown(event, item)}
-                  onPointerMove={handleMarkerPointerMove}
-                  onPointerUp={handleMarkerPointerUp}
-                  onPointerCancel={handleMarkerPointerUp}
-                  title={printSurfaceTypeLabel(item.typeId)}
-                >
-                  {item.label}
-                </button>
-              ))}
+              {imageUrl && <img src={imageUrl} alt="" draggable={false} className="printSurfaceImage" />}
+              {placements.map((placement) => {
+                const item = itemForPlacement(items, placement);
+                return (
+                  <button
+                    key={placement.id}
+                    type="button"
+                    className={placement.id === selectedPlacementId ? "printSurfaceMarker active" : "printSurfaceMarker"}
+                    style={{ left: `${placement.xNormalized * 100}%`, top: `${placement.yNormalized * 100}%` }}
+                    onPointerDown={(event) => handleMarkerPointerDown(event, placement)}
+                    onPointerMove={handleMarkerPointerMove}
+                    onPointerUp={handleMarkerPointerUp}
+                    onPointerCancel={handleMarkerPointerUp}
+                    title={item ? printSurfaceTypeLabel(item.typeId) : undefined}
+                  >
+                    {item?.label ?? "?"}
+                  </button>
+                );
+              })}
             </div>
           </div>
         </>

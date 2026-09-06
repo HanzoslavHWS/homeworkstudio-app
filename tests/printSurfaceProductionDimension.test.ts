@@ -7,62 +7,72 @@ import {
 } from "../domain/printSurfaceProductionDimension.ts";
 
 const DIMENSIONS: readonly PrintSurfaceProductionDimension[] = [
-  { realizationCompanyId: "company-a", presetId: "panel-standard", widthMm: 950, heightMm: 2340 },
-  { realizationCompanyId: "company-b", presetId: "panel-standard", widthMm: 1000, heightMm: 2300 },
-  { realizationCompanyId: "company-a", presetId: "fascia-standard", widthMm: 300, heightMm: 950 },
+  { realizationCompanyId: "company-a", presetId: "panel-standard", status: "available", widthMm: 950, heightMm: 2340 },
+  { realizationCompanyId: "company-b", presetId: "panel-standard", status: "available", widthMm: 1000, heightMm: 2300 },
+  { realizationCompanyId: "company-a", presetId: "fascia-standard", status: "available", widthMm: 300, heightMm: 950 },
+  { realizationCompanyId: "company-c", presetId: "panel-standard", status: "unavailable" },
 ];
 
-test("resolver: existující kombinace realizačka + preset vrátí found s rozměrem", () => {
+test("resolver: existující kombinace realizačka + preset vrátí available s rozměrem", () => {
   const result = resolvePrintSurfaceProductionDimension(
     { realizationCompanyId: "company-a", presetId: "panel-standard" },
     DIMENSIONS,
   );
-  assert.equal(result.status, "found");
-  assert.equal(result.status === "found" && result.dimension.widthMm, 950);
-  assert.equal(result.status === "found" && result.dimension.heightMm, 2340);
+  assert.equal(result.status, "available");
+  assert.equal(result.status === "available" && result.widthMm, 950);
+  assert.equal(result.status === "available" && result.heightMm, 2340);
 });
 
-test("resolver: neexistující kombinace vrátí not_found (bez hádání rozměru)", () => {
+test("resolver: kombinace bez záznamu vrátí not_defined (bez hádání rozměru)", () => {
+  const result = resolvePrintSurfaceProductionDimension(
+    { realizationCompanyId: "company-a", presetId: "unknown-preset" },
+    DIMENSIONS,
+  );
+  assert.equal(result.status, "not_defined");
+});
+
+test("resolver: explicitně nedostupná kombinace (NO/NO) vrátí unavailable, nikdy ne 0x0 nebo not_defined", () => {
   const result = resolvePrintSurfaceProductionDimension(
     { realizationCompanyId: "company-c", presetId: "panel-standard" },
     DIMENSIONS,
   );
-  assert.equal(result.status, "not_found");
+  assert.equal(result.status, "unavailable");
+  assert.equal("widthMm" in result, false);
+  assert.equal("heightMm" in result, false);
 });
 
 test("resolver: stejný preset má rozdílné rozměry pro dvě realizačky", () => {
   const forA = resolvePrintSurfaceProductionDimension({ realizationCompanyId: "company-a", presetId: "panel-standard" }, DIMENSIONS);
   const forB = resolvePrintSurfaceProductionDimension({ realizationCompanyId: "company-b", presetId: "panel-standard" }, DIMENSIONS);
-  assert.equal(forA.status === "found" && forA.dimension.widthMm, 950);
-  assert.equal(forB.status === "found" && forB.dimension.widthMm, 1000);
+  assert.equal(forA.status === "available" && forA.widthMm, 950);
+  assert.equal(forB.status === "available" && forB.widthMm, 1000);
 });
 
-test("resolver: změna realizationCompanyId změní resolved dimension pro stejný preset", () => {
-  const input1 = { realizationCompanyId: "company-a", presetId: "panel-standard" };
-  const input2 = { ...input1, realizationCompanyId: "company-b" };
-  const result1 = resolvePrintSurfaceProductionDimension(input1, DIMENSIONS);
-  const result2 = resolvePrintSurfaceProductionDimension(input2, DIMENSIONS);
-  assert.notDeepEqual(result1, result2);
+test("resolver: změna realizationCompanyId změní resolved dimension pro stejný preset (available -> unavailable)", () => {
+  const forA = resolvePrintSurfaceProductionDimension({ realizationCompanyId: "company-a", presetId: "panel-standard" }, DIMENSIONS);
+  const forC = resolvePrintSurfaceProductionDimension({ realizationCompanyId: "company-c", presetId: "panel-standard" }, DIMENSIONS);
+  assert.equal(forA.status, "available");
+  assert.equal(forC.status, "unavailable");
 });
 
-test("resolver: neexistující/undefined presetId vrátí bezpečný not_found stav, nikdy nehodí chybu", () => {
+test("resolver: neexistující preset (a chybějící realizačka/preset) vrátí bezpečný not_defined stav, nikdy nehodí chybu", () => {
   const withoutPreset = resolvePrintSurfaceProductionDimension({ realizationCompanyId: "company-a", presetId: undefined }, DIMENSIONS);
-  assert.equal(withoutPreset.status, "not_found");
+  assert.equal(withoutPreset.status, "not_defined");
   const withoutCompany = resolvePrintSurfaceProductionDimension({ realizationCompanyId: undefined, presetId: "panel-standard" }, DIMENSIONS);
-  assert.equal(withoutCompany.status, "not_found");
-  const bothMissing = resolvePrintSurfaceProductionDimension({ realizationCompanyId: undefined, presetId: undefined }, DIMENSIONS);
-  assert.equal(bothMissing.status, "not_found");
+  assert.equal(withoutCompany.status, "not_defined");
+  const unknownPreset = resolvePrintSurfaceProductionDimension({ realizationCompanyId: "company-a", presetId: "does-not-exist" }, DIMENSIONS);
+  assert.equal(unknownPreset.status, "not_defined");
 });
 
-test("resolver: prázdný seznam rozměrů vrátí not_found (počáteční stav před importem)", () => {
+test("resolver: prázdný seznam rozměrů vrátí not_defined (počáteční stav před importem)", () => {
   const result = resolvePrintSurfaceProductionDimension({ realizationCompanyId: "company-a", presetId: "panel-standard" }, []);
-  assert.equal(result.status, "not_found");
+  assert.equal(result.status, "not_defined");
 });
 
 test("findDuplicateProductionDimensionKeys: detekuje duplicitní kombinaci realizationCompanyId + presetId", () => {
   const withDuplicate: readonly PrintSurfaceProductionDimension[] = [
     ...DIMENSIONS,
-    { realizationCompanyId: "company-a", presetId: "panel-standard", widthMm: 999, heightMm: 999, note: "duplicitní řádek" },
+    { realizationCompanyId: "company-a", presetId: "panel-standard", status: "available", widthMm: 999, heightMm: 999, note: "duplicitní řádek" },
   ];
   const duplicates = findDuplicateProductionDimensionKeys(withDuplicate);
   assert.deepEqual(duplicates, [{ realizationCompanyId: "company-a", presetId: "panel-standard" }]);

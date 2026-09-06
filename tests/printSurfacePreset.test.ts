@@ -15,10 +15,9 @@ function makeItem(overrides: Partial<PrintSurfaceItem> = {}): PrintSurfaceItem {
     id: overrides.id ?? "item-1",
     label: overrides.label ?? "A",
     typeId: overrides.typeId ?? "panel",
-    xNormalized: overrides.xNormalized ?? 0.5,
-    yNormalized: overrides.yNormalized ?? 0.5,
     note: overrides.note ?? "",
     presetId: overrides.presetId,
+    includeInCalculation: overrides.includeInCalculation ?? false,
   };
 }
 

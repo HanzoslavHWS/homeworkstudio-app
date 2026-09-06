@@ -1,76 +1,97 @@
 "use client";
 
-import type { PrintSurfaceItem } from "../../../domain/printSurfaceProject";
-import { printSurfaceTypeLabel } from "../../../domain/printSurfaceTypeCatalog";
-import { findPreset, type PrintSurfacePreset } from "../../../domain/printSurfacePreset";
 import {
-  resolvePrintSurfaceProductionDimension,
-  type PrintSurfaceProductionDimension,
-} from "../../../domain/printSurfaceProductionDimension";
+  formatPrintSurfaceItemDimension,
+  itemForPlacement,
+  placementsForItem,
+  printSurfaceItemSurfaceName,
+  resolvePrintSurfaceItemDimension,
+  type MarkerPlacement,
+  type PrintSurfaceItem,
+} from "../../../domain/printSurfaceProject";
+import { formatPrintSurfacePriceStatus, type PrintSurfacePriceResolution } from "../../../domain/printSurfacePricing";
+import { printSurfaceTypeLabel } from "../../../domain/printSurfaceTypeCatalog";
+import type { PrintSurfacePreset } from "../../../domain/printSurfacePreset";
+import type { PrintSurfaceProductionDimension } from "../../../domain/printSurfaceProductionDimension";
 
 export function PrintSurfaceList({
   items,
-  selectedItemId,
+  placements,
+  allPlacements,
+  selectedPlacementId,
   presets,
   productionDimensions,
   realizationCompanyId,
-  onSelectItem,
-  onDeleteItem,
+  priceResolutions,
+  onSelectPlacement,
+  onDeletePlacement,
 }: {
+  /** All physical items in the project — used to resolve each placement's item (label/type/etc). */
   items: readonly PrintSurfaceItem[];
-  selectedItemId: string | undefined;
+  /** Placements belonging to the currently active view only — one row per placement, matching what's pinned on the canvas right now. */
+  placements: readonly MarkerPlacement[];
+  /** Every placement in the project (all views) — used only to detect an item pinned on more than one view, for the "2 pohledy" badge. */
+  allPlacements: readonly MarkerPlacement[];
+  selectedPlacementId: string | undefined;
   presets: readonly PrintSurfacePreset[];
   productionDimensions: readonly PrintSurfaceProductionDimension[];
   realizationCompanyId: string | undefined;
-  onSelectItem: (id: string) => void;
-  onDeleteItem: (id: string) => void;
+  priceResolutions: ReadonlyMap<string, PrintSurfacePriceResolution>;
+  onSelectPlacement: (id: string) => void;
+  onDeletePlacement: (id: string) => void;
 }) {
   return (
     <section className="workflowCard printSurfaceListCard">
       <div className="workflowCardHeader">
         <div>
           <span>SEZNAM</span>
-          <strong>Tiskové plochy ({items.length})</strong>
+          <strong>Tiskové plochy ({placements.length})</strong>
         </div>
       </div>
 
-      {items.length === 0 && (
-        <p className="workspaceEmpty">Zatím žádné plochy — vyberte typ plochy a klikněte do obrázku.</p>
+      {placements.length === 0 && (
+        <p className="workspaceEmpty">Zatím žádné plochy — vyberte nástroj v toolbaru a klikněte do obrázku.</p>
       )}
 
-      {items.length > 0 && (
+      {placements.length > 0 && (
         <div className="printSurfaceTable">
           <div className="printSurfaceTableRow printSurfaceTableHeader">
             <span>Označení</span>
             <span>Typ</span>
             <span>Název plochy</span>
             <span>Výrobní rozměr</span>
+            <span>Cena</span>
             <span>Poznámka</span>
             <span>Akce</span>
           </div>
-          {items.map((item) => {
-            const preset = findPreset(presets, item.presetId);
-            const resolution = resolvePrintSurfaceProductionDimension(
-              { realizationCompanyId, presetId: item.presetId },
-              productionDimensions,
-            );
+          {placements.map((placement) => {
+            const item = itemForPlacement(items, placement);
+            if (!item) return null;
+            const resolution = resolvePrintSurfaceItemDimension(item, realizationCompanyId, productionDimensions);
+            const priceResolution = priceResolutions.get(item.id);
+            const placementCount = placementsForItem(allPlacements, item.id).length;
             return (
               <div
-                key={item.id}
-                className={item.id === selectedItemId ? "printSurfaceTableRow active" : "printSurfaceTableRow"}
-                onClick={() => onSelectItem(item.id)}
+                key={placement.id}
+                className={placement.id === selectedPlacementId ? "printSurfaceTableRow active" : "printSurfaceTableRow"}
+                onClick={() => onSelectPlacement(placement.id)}
               >
-                <strong>{item.label}</strong>
+                <strong>{item.label}{placementCount > 1 && <span className="printSurfaceMultiViewBadge" title="Umístěno na více pohledech"> · {placementCount} pohledy</span>}</strong>
                 <span>{printSurfaceTypeLabel(item.typeId)}</span>
-                <span>{preset?.name ?? "—"}</span>
-                <span>{resolution.status === "found" ? `${resolution.dimension.widthMm} × ${resolution.dimension.heightMm} mm` : "—"}</span>
+                <span>{printSurfaceItemSurfaceName(item, presets)}</span>
+                <span className={resolution.status === "unavailable" ? "printSurfaceDimensionUnavailable" : ""}>
+                  {formatPrintSurfaceItemDimension(resolution)}
+                </span>
+                <span className={priceResolution ? `status-${priceResolution.status}` : ""}>
+                  {item.includeInCalculation && priceResolution ? formatPrintSurfacePriceStatus(priceResolution) : "—"}
+                </span>
                 <span className="printSurfaceTableNote">{item.note || "—"}</span>
                 <button
                   type="button"
                   className="textButton"
                   onClick={(event) => {
                     event.stopPropagation();
-                    onDeleteItem(item.id);
+                    onDeletePlacement(placement.id);
                   }}
                 >
                   Smazat

@@ -13,4 +13,6 @@ export type RealizationCompany = Readonly<{
 
 export interface RealizationCompanyRepository {
   list(): Promise<readonly RealizationCompany[]>;
+  /** Full atomic replace — how a fresh Excel import applies its result (see domain/printSurfaceExcelImport.ts). */
+  replaceAll(companies: readonly RealizationCompany[]): Promise<void>;
 }

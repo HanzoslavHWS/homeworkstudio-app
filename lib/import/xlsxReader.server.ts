@@ -15,6 +15,18 @@ export async function readWorkbookSheets(filePath: string): Promise<ExcelJS.Work
   return workbook;
 }
 
+/** Same safety guarantees as readWorkbookSheets, for an in-memory upload (e.g. a browser file posted to an API route) rather than a server filesystem path. */
+export async function readWorkbookFromBuffer(buffer: Buffer): Promise<ExcelJS.Workbook> {
+  const workbook = new ExcelJS.Workbook();
+  // exceljs's bundled .d.ts resolves a Buffer shape that disagrees with this project's own
+  // @types/node (a versions-skew over ArrayBuffer's resizable/maxByteLength members) — both are
+  // the same Node Buffer at runtime; `any` is needed here because even `unknown as Buffer` still
+  // gets structurally checked against exceljs's own (mismatched) Buffer declaration.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  await workbook.xlsx.load(buffer as any);
+  return workbook;
+}
+
 function cellToRawValue(value: ExcelJS.CellValue): RawCellValue {
   if (value === null || value === undefined) return null;
   if (typeof value === "number" || typeof value === "string") return value;

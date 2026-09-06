@@ -11,6 +11,7 @@ export const ASSET_CATEGORIES = [
   "project-visualization",
   "project-floorplan",
   "project-export",
+  "print-surface-image",
   "temporary",
 ] as const;
 
@@ -133,6 +134,9 @@ const CATEGORY_RULES: Readonly<Record<AssetCategory, CategoryRule>> = {
   "project-visualization": { prefix: (id) => `projects/${id}/visualizations`, maxBytes: 40_000_000, mimeTypes: IMAGE_TYPES },
   "project-floorplan": { prefix: (id) => `projects/${id}/floorplans`, maxBytes: 25_000_000, mimeTypes: IMAGE_TYPES },
   "project-export": { prefix: (id) => `projects/${id}/exports`, maxBytes: 150_000_000, mimeTypes: ["application/pdf", "application/zip", ...IMAGE_TYPES] },
+  // Tiskové plochy V2: the uploaded booth photo/visualization a project's markers sit on top of.
+  // JPG/PNG only (spec) — narrower than the shared IMAGE_TYPES (no gif/webp/svg needed here).
+  "print-surface-image": { prefix: (id) => `print-surfaces/${id}/image`, maxBytes: 25_000_000, mimeTypes: ["image/jpeg", "image/png"] },
   temporary: { prefix: () => "temporary", maxBytes: 5_000_000, mimeTypes: ["text/plain", ...IMAGE_TYPES] },
 };
 
@@ -189,7 +193,7 @@ export function createStorageKey(input: Readonly<{ category: AssetCategory; owne
 }
 
 export function isValidStorageKey(value: string): boolean {
-  return value.length <= 512 && /^(events|catalog|projects|temporary)\/[A-Za-z0-9_./-]+$/u.test(value) && !value.includes("..") && !value.includes("//");
+  return value.length <= 512 && /^(events|catalog|projects|print-surfaces|temporary)\/[A-Za-z0-9_./-]+$/u.test(value) && !value.includes("..") && !value.includes("//");
 }
 
 export function assertValidStorageKey(value: string): void {

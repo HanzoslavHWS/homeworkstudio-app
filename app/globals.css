@@ -6199,43 +6199,163 @@ select:focus {
 .printSurfaceStage { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
 .printSurfaceImage { display: block; width: 100%; height: 100%; user-select: none; pointer-events: none; }
 
+/*
+ * Deliberately smaller than the original 26px badge (spec: "méně překrývaly vizualizaci"), but
+ * the CLICKABLE hit area is kept large via the ::before pseudo-element extending well beyond the
+ * visible circle — pseudo-elements count as part of the button's own hit-test box, so this never
+ * shrinks what's actually draggable/clickable, only what's visually drawn.
+ */
 .printSurfaceMarker {
   position: absolute;
   display: grid;
   place-items: center;
-  width: 26px;
-  height: 26px;
-  margin: -13px 0 0 -13px;
-  border: 2px solid white;
+  width: 17px;
+  height: 17px;
+  margin: -8.5px 0 0 -8.5px;
+  border: 1.5px solid white;
   border-radius: 50%;
   background: #242628;
   color: white;
-  font-size: 10px;
+  font-size: 7.5px;
   font-weight: 600;
   line-height: 1;
   cursor: grab;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, .35);
   touch-action: none;
 }
-.printSurfaceMarker.active { background: #b5432c; box-shadow: 0 0 0 3px rgba(181, 67, 44, .28); }
+.printSurfaceMarker::before {
+  content: "";
+  position: absolute;
+  inset: -9px;
+}
+.printSurfaceMarker.active { background: #b5432c; box-shadow: 0 0 0 2.5px rgba(181, 67, 44, .28); }
 
 .printSurfaceMarkerInspector { display: grid; gap: 10px; align-content: start; }
 .printSurfaceMarkerInspector input,
 .printSurfaceMarkerInspector select { height: 36px; }
 .printSurfaceMarkerInspector textarea { min-height: 70px; resize: vertical; padding: 8px; border: 1px solid #dcdedf; border-radius: 7px; font: inherit; font-size: 9px; }
-.printSurfaceDimensionField { display: grid; gap: 2px; font-size: 9px; }
+.printSurfaceDimensionField { display: grid; gap: 2px; font-size: 9px; padding: 8px 0; }
 .printSurfaceDimensionField > span { color: #85898c; font-size: 8px; }
-.printSurfaceDimensionField > strong.unresolved { color: #96999c; font-weight: 400; font-style: italic; }
+.printSurfaceDimensionField.status-not_defined > strong { color: #96999c; font-weight: 400; font-style: italic; }
+.printSurfaceDimensionField.status-unavailable > strong { color: #a13f2b; font-weight: 600; }
 .printSurfaceDataStatus { color: #85898c; }
 
 .printSurfaceListCard { display: grid; gap: 10px; }
 .printSurfaceTable { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: white; }
-.printSurfaceTableRow { display: grid; grid-template-columns: 60px 120px 140px 110px 1fr 80px; align-items: center; gap: 12px; min-height: 44px; padding: 8px 14px; border-bottom: 1px solid #ededee; font-size: 8px; cursor: pointer; }
+.printSurfaceTableRow { display: grid; grid-template-columns: 70px 120px 140px 110px 90px 1fr 80px; align-items: center; gap: 12px; min-height: 44px; padding: 8px 14px; border-bottom: 1px solid #ededee; font-size: 8px; cursor: pointer; }
 .printSurfaceTableRow:last-child { border-bottom: 0; }
 .printSurfaceTableHeader { color: #96999c; text-transform: uppercase; font-size: 7px; cursor: default; background: #fafafa; }
 .printSurfaceTableRow.active { background: #f6f0ee; }
 .printSurfaceTableNote { color: #74787b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.printSurfaceDimensionUnavailable { color: #a13f2b; font-weight: 600; }
+
+.printSurfaceDataStatusCard { margin-bottom: 14px; }
+.printSurfaceImportPanel { display: grid; gap: 10px; margin-top: 8px; }
+.printSurfaceImportSummary { display: grid; gap: 8px; }
+.printSurfaceImportIssues { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; max-height: 220px; overflow-y: auto; }
+.printSurfaceImportIssues li { padding: 6px 10px; border-radius: 6px; font-size: 8px; }
+.printSurfaceImportIssues li.error { background: #fdf1ef; color: #8a3a2b; }
+.printSurfaceImportIssues li.warning { background: #fdf8ea; color: #8a6d1f; }
 
 @media (max-width: 980px) {
   .printSurfacesWorkspace { grid-template-columns: 1fr; }
 }
+
+/* ===== Tiskové plochy V2 — project list / create / editor header ===== */
+
+.printSurfaceBackButton { display: block; margin-bottom: 6px; padding: 0; }
+.printSurfaceEditorHeaderActions { display: flex; align-items: center; gap: 14px; }
+.printSurfaceSaveStatus { font-size: 8px; color: #96999c; }
+.printSurfaceSaveStatus.status-saving { color: #8a6d1f; }
+.printSurfaceSaveStatus.status-saved { color: #45634f; }
+.printSurfaceSaveStatus.status-error { color: #a13f2b; font-weight: 600; }
+
+.printSurfaceStatusRow { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; font-size: 9px; color: #666a6d; }
+.printSurfaceStatusRow select { height: 32px; }
+
+.stageBadge.ready { background: #edf5ef; color: #45634f; }
+.stageBadge.sent { background: #e8ebec; color: #44494c; }
+
+.printSurfaceCreateForm { display: grid; gap: 12px; margin-bottom: 16px; }
+.printSurfaceCreateFormActions { display: flex; gap: 8px; }
+
+.printSurfaceProjectFilters input,
+.printSurfaceProjectFilters select { height: 38px; }
+
+.printSurfaceProjectTable { margin-bottom: 16px; }
+.printSurfaceProjectRow {
+  display: grid;
+  grid-template-columns: minmax(200px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) 70px 110px 110px 150px;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px 14px;
+  border-bottom: 1px solid #ededee;
+  font-size: 8px;
+  cursor: pointer;
+}
+.printSurfaceProjectRow:last-child { border-bottom: 0; }
+.printSurfaceProjectRow:hover:not(.printSurfaceTableHeader) { background: #fafafa; }
+
+/* ===== Toolbar V2 (product groups + sticky tool) ===== */
+
+.printSurfaceToolbarV2 { display: grid; gap: 8px; margin-bottom: 14px; }
+.printSurfaceGroupIcon { margin-right: 3px; }
+.printSurfaceCompactOptionRow { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; padding: 8px 10px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fbfbfb; }
+.printSurfaceCompactOptionRow label { display: flex; align-items: center; gap: 6px; font-size: 8px; color: #55595c; }
+.printSurfaceCompactOptionRow input[type="number"] { width: 90px; height: 30px; padding: 0 8px; border: 1px solid #dcdedf; border-radius: 6px; font: inherit; font-size: 9px; }
+.printSurfaceProductRow { align-items: flex-start; }
+.printSurfaceProductGroup { display: grid; gap: 6px; }
+.printSurfaceProductGroup > button { min-height: 28px; padding: 0 10px; border: 1px solid #dddfe0; border-radius: 99px; background: #fff; color: #74787b; font-size: 8px; }
+.printSurfaceProductGroup > button.active { border-color: #242628; background: #242628; color: #fff; }
+.printSurfaceProductGroup > button.unavailable { color: #b7bABC; border-color: #ececec; background: #f7f7f7; cursor: not-allowed; }
+.printSurfaceProductPresets { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 10px; }
+.printSurfaceProductPresets button { min-height: 26px; padding: 0 9px; border: 1px solid #dddfe0; border-radius: 99px; background: #fff; color: #55595c; font-size: 8px; }
+.printSurfaceProductPresets button.unavailable { color: #b7bABC; border-color: #ececec; background: #f7f7f7; cursor: not-allowed; }
+.printSurfaceActiveToolLabel { margin: 0; font-size: 9px; color: #55595c; }
+.printSurfaceActiveToolLabel strong { color: #151515; }
+
+/* ===== Export ===== */
+
+.printSurfaceExportPanel { position: relative; }
+.printSurfaceExportMenu { position: absolute; z-index: 20; top: calc(100% + 6px); right: 0; display: grid; gap: 2px; min-width: 200px; padding: 6px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fff; box-shadow: 0 8px 24px rgba(0, 0, 0, .12); }
+.printSurfaceExportMenu button { min-height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: #151515; font-size: 9px; text-align: left; cursor: pointer; }
+.printSurfaceExportMenu button:hover:not(:disabled) { background: #f4f5f6; }
+.printSurfaceExportMenu button:disabled { color: #b7bABC; cursor: not-allowed; }
+
+/* ===== Tiskové plochy V3 — view tabs (pohledy) ===== */
+
+.printSurfaceViewTabs { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.printSurfaceViewTab {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid #dddfe0;
+  border-radius: 99px;
+  background: #fff;
+  color: #74787b;
+  font: inherit;
+  font-size: 8px;
+  width: auto;
+  min-width: 80px;
+}
+.printSurfaceViewTab.active { border-color: #242628; background: #242628; color: #fff; }
+.printSurfaceAddViewButton { margin: 0; }
+
+/* ===== Tiskové plochy V4 — volitelná kalkulace ceny ===== */
+
+.printSurfaceIncludeCheckbox { display: flex; flex-direction: row; align-items: center; gap: 7px; padding: 6px 0; font-size: 9px; color: #55595c; }
+.printSurfaceIncludeCheckbox input { width: auto; height: auto; }
+
+.printSurfacePricingBlock { display: grid; gap: 2px; padding: 8px 10px; margin: 2px 0 6px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fafafa; }
+.printSurfacePricingBlock .printSurfaceDimensionField { padding: 4px 0; }
+.printSurfacePricingBlock .status-price_not_defined > strong,
+.printSurfacePricingBlock .status-dimension_unavailable > strong,
+.printSurfacePricingBlock .status-dimension_not_defined > strong { color: #a13f2b; font-weight: 600; }
+.printSurfacePricingBlock .status-priced > strong { color: #151515; font-weight: 700; }
+
+.printSurfacePriceSummary { margin-left: auto; font-size: 9px; color: #45634f; font-weight: 600; }
+
+.printSurfaceMultiViewBadge { font-size: 7.5px; font-weight: 400; color: #85898c; }
+
+.printSurfaceExportPricesToggle { display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 9px; color: #55595c; }
+.printSurfaceExportPricesToggle input { width: auto; height: auto; }

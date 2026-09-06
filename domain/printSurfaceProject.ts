@@ -1,61 +1,113 @@
 /**
- * Tiskové plochy — MVP editor for marking print surfaces on an uploaded booth photo/visualization.
+ * Tiskové plochy — editor for marking print surfaces on an uploaded booth photo/visualization.
  * Deliberately a standalone module, NOT wired into domain/printSurfaces.ts / PrintSurfaceAssignment
  * (the existing project-scoped "assign artwork to a booth panel" feature consumed by
  * components/configurator/GraphicsSurfacePanel.tsx) — same spirit as this app's project-independent
  * "E-maily" tab (see domain/emailTemplate.ts), not a replacement for the 3D generator's own concept.
  *
- * Marker positions are stored NORMALIZED (0–1) relative to the uploaded image's own pixel
+ * V2 (database-first): a project is now a real, independently persisted, listable/openable
+ * record — see PrintSurfaceProjectRepository below — not a single always-current localStorage
+ * draft.
+ *
+ * V3: a project can have up to MAX_PRINT_SURFACE_VIEWS uploaded images ("pohledy").
+ *
+ * V4 (pricing): PrintSurfaceItem and "a pin on the image" are now TWO separate things —
+ * PrintSurfaceItem is the physical print surface (what gets priced, once), MarkerPlacement is one
+ * pin of it on one specific view. The same physical surface can have a placement on more than one
+ * view (e.g. panel A visible on both Pohled 1 and Pohled 2) while still being ONE PrintSurfaceItem
+ * — priced/counted exactly once regardless of how many placements it has. Every placement
+ * references its item via itemId; every placement belongs to exactly one view via imageId. See
+ * placementsForView / itemForPlacement / addPrintSurfaceItemWithPlacement /
+ * addMarkerPlacementForExistingItem.
+ *
+ * Marker positions are stored NORMALIZED (0–1) relative to their OWN view's image pixel
  * dimensions, never in absolute screen/viewport pixels — that's what keeps a marker glued to the
  * right spot on the photo across zoom, pan, Fit and viewport-resize (see xNormalized/yNormalized).
- *
- * Several fields below are reserved for later phases (real production dimensions from an
- * Excel-imported realizačka, quantity, a dimension preset) and are intentionally optional/unused —
- * see the module doc in the task spec, section 9/10. No dimension logic is implemented yet.
  */
 
+import type { StoredAsset } from "./assets.ts";
+import type { PrintSurfaceTypeId } from "./printSurfaceTypeCatalog.ts";
+import { findPreset, printSurfacePresetDisplayName, type PrintSurfacePreset } from "./printSurfacePreset.ts";
+import {
+  resolvePrintSurfaceProductionDimension,
+  type PrintSurfaceProductionDimension,
+} from "./printSurfaceProductionDimension.ts";
+import { printSurfaceTypeLabel } from "./printSurfaceTypeCatalog.ts";
+
 export type PrintSurfaceProjectImage = Readonly<{
-  /** Client-side only for this MVP phase — see lib/db/printSurfaceProjectRepository.localStorage.client.ts. */
-  dataUrl: string;
+  asset: StoredAsset;
   /** Real pixel dimensions of the uploaded raster — the basis xNormalized/yNormalized are relative to. */
   widthPx: number;
   heightPx: number;
-  fileName: string;
 }>;
 
-import type { PrintSurfaceTypeId } from "./printSurfaceTypeCatalog.ts";
-import { findPreset, type PrintSurfacePreset } from "./printSurfacePreset.ts";
+/** One uploaded "pohled" (view) of the booth — a project may have up to MAX_PRINT_SURFACE_VIEWS of these. */
+export type PrintSurfaceView = Readonly<{
+  id: string;
+  /** User-renamable — defaults to "Pohled 1"/"Pohled 2" at creation, see nextDefaultViewLabel. */
+  label: string;
+  image: PrintSurfaceProjectImage;
+  /** Display/tab order — always the order views were added in for this MVP (no manual reordering yet). */
+  order: number;
+}>;
 
+export const MAX_PRINT_SURFACE_VIEWS = 2;
+
+export function canAddPrintSurfaceView(views: readonly PrintSurfaceView[]): boolean {
+  return views.length < MAX_PRINT_SURFACE_VIEWS;
+}
+
+export function findPrintSurfaceView(views: readonly PrintSurfaceView[], id: string | undefined): PrintSurfaceView | undefined {
+  if (!id) return undefined;
+  return views.find((view) => view.id === id);
+}
+
+/**
+ * A PHYSICAL print surface — the thing that gets manufactured and priced. Deliberately has NO
+ * position/view of its own (see MarkerPlacement) — the same physical surface can be pinned on more
+ * than one view while remaining exactly one PrintSurfaceItem, priced/counted once.
+ */
 export type PrintSurfaceItem = Readonly<{
   id: string;
-  /** Auto-generated as A/B/C… on creation (see nextPrintSurfaceLabel) but freely re-editable afterwards — may later hold "01"/"02" or any custom text, so it's a plain string, not a generated-only enum. */
+  /** Auto-generated as A/B/C… on creation (project-wide — see nextPrintSurfaceLabel), freely re-editable afterwards. */
   label: string;
   typeId: PrintSurfaceTypeId;
-  /** 0–1, relative to the image's own widthPx — NOT absolute screen pixels. */
-  xNormalized: number;
-  /** 0–1, relative to the image's own heightPx — NOT absolute screen pixels. */
-  yNormalized: number;
   note: string;
   /**
-   * The concrete PrintSurfacePreset this marker is tagged with (see domain/printSurfacePreset.ts)
+   * The concrete PrintSurfacePreset this item is tagged with (see domain/printSurfacePreset.ts)
    * — must belong to this item's own typeId; see changePrintSurfaceItemType for the invariant that
-   * keeps it that way whenever typeId changes. The item's actual production SIZE is never stored
-   * here — it's always resolved on the fly from (project.realizationCompanyId, presetId) via
-   * domain/printSurfaceProductionDimension.ts's resolvePrintSurfaceProductionDimension.
+   * keeps it that way whenever typeId changes. Never set together with customWidthMm/customHeightMm
+   * — an item is either catalog-backed (presetId) or manual/custom (customWidthMm/customHeightMm),
+   * never both (see resolvePrintSurfaceItemDimension).
    */
   presetId?: string;
-
-  // ---- Reserved for a later phase — never read/written by this MVP's logic yet ----
-  /** Real-world size on the MASTER (design) print file, once known. */
-  widthMasterMm?: number;
-  heightMasterMm?: number;
-  /** Real-world size actually produced for a specific realizačka, once an Excel import supplies it. */
-  widthProductionMm?: number;
-  heightProductionMm?: number;
-  /** Per-surface override of the project's realizationCompanyId, for the rare case production splits across realizačky. */
-  realizationCompanyId?: string;
+  /**
+   * Manual/explicit dimension, used ONLY for typeId "fascia" (límec — customHeightMm is always
+   * exactly 300) and "custom" (jiná plocha — both dimensions are free). Deliberately never copied
+   * from a catalog production dimension automatically (spec) — resolvePrintSurfaceItemDimension
+   * always prefers these over any catalog lookup whenever they're present.
+   */
+  customWidthMm?: number;
+  customHeightMm?: number;
+  /** How many physical prints of this exact graphic are needed — defaults to 1 (see the export table's "Počet" column, and pricing's quantity multiplier). */
   quantity?: number;
+  /** Explicit opt-in to the pricing calculation (spec section 9.1) — defaults to false; a surface never silently affects the project total just by existing. */
+  includeInCalculation: boolean;
 }>;
+
+/** One pin of a PrintSurfaceItem on one specific view — see the module doc for why this is a separate entity from the item itself. */
+export type MarkerPlacement = Readonly<{
+  id: string;
+  itemId: string;
+  imageId: string;
+  /** 0–1, relative to its view's image widthPx — NOT absolute screen pixels. */
+  xNormalized: number;
+  /** 0–1, relative to its view's image heightPx — NOT absolute screen pixels. */
+  yNormalized: number;
+}>;
+
+export const PRINT_SURFACE_PROJECT_STATUSES = ["draft", "ready", "sent"] as const;
+export type PrintSurfaceProjectStatus = (typeof PRINT_SURFACE_PROJECT_STATUSES)[number];
 
 export type PrintSurfaceProject = Readonly<{
   id: string;
@@ -63,20 +115,73 @@ export type PrintSurfaceProject = Readonly<{
   companyName: string;
   eventId?: string;
   realizationCompanyId?: string;
-  image?: PrintSurfaceProjectImage;
+  views: readonly PrintSurfaceView[];
   items: readonly PrintSurfaceItem[];
+  placements: readonly MarkerPlacement[];
+  status: PrintSurfaceProjectStatus;
+  /** Reserved for a future real per-user login — always undefined until real accounts exist (same convention as domain/emailHistory.ts's userId). */
+  createdBy?: string;
   /**
-   * @deprecated Kept only for backward compatibility with already-persisted projects — no longer
-   * read or written when generating a new label. The source of truth for the next free auto label
-   * is always the CURRENT items' labels (see nextPrintSurfaceLabel) — a plain incrementing counter
-   * can't express "reuse a freed letter" (A,B,C,D → delete C → next new marker becomes C again) or
-   * "skip a letter a manually renamed marker now occupies" (existing A,B + a marker manually
-   * renamed to C → next new marker becomes D), both of which are required behavior.
+   * Only ever set by an explicit, real "mark as sent" action — NEVER just because an Outlook
+   * draft/PDF was opened (spec section 14). Both present together or both absent.
    */
-  nextLabelIndex: number;
+  sentAt?: string;
+  sentBy?: string;
   createdAt: string;
   updatedAt: string;
 }>;
+
+/** Lightweight projection for the project list/home screen — never ships the full items/placements/views. */
+export type PrintSurfaceProjectSummary = Readonly<{
+  id: string;
+  name: string;
+  companyName: string;
+  eventId?: string;
+  realizationCompanyId?: string;
+  status: PrintSurfaceProjectStatus;
+  itemCount: number;
+  createdBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}>;
+
+export function summarizePrintSurfaceProject(project: PrintSurfaceProject): PrintSurfaceProjectSummary {
+  return {
+    id: project.id,
+    name: project.name,
+    companyName: project.companyName,
+    eventId: project.eventId,
+    realizationCompanyId: project.realizationCompanyId,
+    status: project.status,
+    itemCount: project.items.length,
+    createdBy: project.createdBy,
+    createdAt: project.createdAt,
+    updatedAt: project.updatedAt,
+  };
+}
+
+export type PrintSurfaceProjectCreateInput = Readonly<{
+  name: string;
+  companyName: string;
+  eventId?: string;
+  realizationCompanyId?: string;
+  createdBy?: string;
+}>;
+
+/**
+ * A real, independently persisted project record — list/get/create/save/delete, not a single
+ * always-current draft (see the now-removed load/save/clear shape from the localStorage-only
+ * phase). `save` persists the full project (views/items/placements/status included) — the caller
+ * is expected to have already applied whichever pure `with*`/`add*`/`remove*` helper below before
+ * calling it.
+ */
+export interface PrintSurfaceProjectRepository {
+  list(): Promise<readonly PrintSurfaceProjectSummary[]>;
+  get(id: string): Promise<PrintSurfaceProject | undefined>;
+  create(input: PrintSurfaceProjectCreateInput): Promise<PrintSurfaceProject>;
+  save(project: PrintSurfaceProject): Promise<PrintSurfaceProject>;
+  delete(id: string): Promise<void>;
+}
 
 export function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -98,14 +203,15 @@ function letterLabelForIndex(index: number): string {
  * The first currently-unused auto label — A, B, C, … Z, AA, AB, … — given the labels every
  * existing item currently holds, whether auto-generated or manually renamed. A slot counts as
  * "used" purely by whether some item's label currently equals it (trimmed, case-insensitive), so:
- *   - deleting a marker FREES its label for reuse by the next created marker (A,B,C,D → delete C
- *     → next new marker becomes C again — never left permanently retired);
- *   - manually renaming another marker to "C" occupies C just the same, so the next created
- *     marker skips it (existing A,B + a marker renamed to C → next new marker becomes D);
- *   - several gaps are filled lowest-first, one at a time, as markers are created (A,B,C,D →
- *     delete B and D → next new marker gets B, the one after that gets D).
- * Existing markers are NEVER renamed/renumbered by this function — it only decides the label for
- * a marker being created right now.
+ *   - deleting an item FREES its label for reuse by the next created item (A,B,C,D → delete C
+ *     → next new item becomes C again — never left permanently retired);
+ *   - manually renaming another item to "C" occupies C just the same, so the next created
+ *     item skips it (existing A,B + an item renamed to C → next new item becomes D);
+ *   - several gaps are filled lowest-first, one at a time, as items are created (A,B,C,D →
+ *     delete B and D → next new item gets B, the one after that gets D).
+ * Existing items are NEVER renamed/renumbered by this function — it only decides the label for
+ * an item being created right now. Project-wide (not per-view) — an item's label identifies the
+ * physical surface, independent of which view(s) it happens to be pinned on.
  */
 export function nextPrintSurfaceLabel(existingLabels: readonly string[]): string {
   const used = new Set(existingLabels.map((label) => label.trim().toUpperCase()));
@@ -117,11 +223,12 @@ export function nextPrintSurfaceLabel(existingLabels: readonly string[]): string
 
 export type PrintSurfaceItemCreateInput = Readonly<{
   typeId: PrintSurfaceTypeId;
-  xNormalized: number;
-  yNormalized: number;
+  presetId?: string;
+  customWidthMm?: number;
+  customHeightMm?: number;
 }>;
 
-/** Pure preview of the item addPrintSurfaceItem would create — label picked from the CURRENT items' labels (see nextPrintSurfaceLabel), never from the project's deprecated nextLabelIndex counter. */
+/** Pure preview of the item addPrintSurfaceItemWithPlacement would create — label picked from the CURRENT project-wide items (see nextPrintSurfaceLabel). */
 export function createPrintSurfaceItem(
   existingItems: readonly PrintSurfaceItem[],
   input: PrintSurfaceItemCreateInput,
@@ -131,13 +238,25 @@ export function createPrintSurfaceItem(
     id,
     label: nextPrintSurfaceLabel(existingItems.map((item) => item.label)),
     typeId: input.typeId,
-    xNormalized: clamp01(input.xNormalized),
-    yNormalized: clamp01(input.yNormalized),
     note: "",
+    presetId: input.presetId,
+    customWidthMm: input.customWidthMm,
+    customHeightMm: input.customHeightMm,
+    includeInCalculation: false,
   };
 }
 
-export type PrintSurfaceItemEdit = Partial<Pick<PrintSurfaceItem, "label" | "typeId" | "note" | "presetId">>;
+export function createMarkerPlacement(
+  itemId: string,
+  imageId: string,
+  xNormalized: number,
+  yNormalized: number,
+  id: string = crypto.randomUUID(),
+): MarkerPlacement {
+  return { id, itemId, imageId, xNormalized: clamp01(xNormalized), yNormalized: clamp01(yNormalized) };
+}
+
+export type PrintSurfaceItemEdit = Partial<Pick<PrintSurfaceItem, "label" | "typeId" | "note" | "presetId" | "customWidthMm" | "customHeightMm" | "quantity" | "includeInCalculation">>;
 
 export function updatePrintSurfaceItem(
   items: readonly PrintSurfaceItem[],
@@ -151,7 +270,7 @@ export function updatePrintSurfaceItem(
  * Applies a type change to a single item, resetting presetId whenever the CURRENT preset no
  * longer belongs to the new type (spec section 5) — a preset must always belong to its item's own
  * typeId, so this is the only correct way to change typeId once a preset may already be set.
- * Existing markers are never touched — only the targeted item.
+ * Existing items are never touched — only the targeted item.
  */
 export function changePrintSurfaceItemType(
   item: PrintSurfaceItem,
@@ -172,28 +291,45 @@ export function updatePrintSurfaceItemType(
   return items.map((item) => (item.id === id ? changePrintSurfaceItemType(item, newTypeId, presets) : item));
 }
 
-export function movePrintSurfaceItem(
-  items: readonly PrintSurfaceItem[],
-  id: string,
-  xNormalized: number,
-  yNormalized: number,
-): readonly PrintSurfaceItem[] {
-  return items.map((item) =>
-    item.id === id ? { ...item, xNormalized: clamp01(xNormalized), yNormalized: clamp01(yNormalized) } : item,
-  );
-}
-
-export function removePrintSurfaceItem(items: readonly PrintSurfaceItem[], id: string): readonly PrintSurfaceItem[] {
-  return items.filter((item) => item.id !== id);
-}
-
 export function findPrintSurfaceItem(items: readonly PrintSurfaceItem[], id: string | undefined): PrintSurfaceItem | undefined {
   if (!id) return undefined;
   return items.find((item) => item.id === id);
 }
 
+export function findMarkerPlacement(placements: readonly MarkerPlacement[], id: string | undefined): MarkerPlacement | undefined {
+  if (!id) return undefined;
+  return placements.find((placement) => placement.id === id);
+}
+
+/** All placements belonging to one specific view — the single place the canvas (visible/editable pins) filters this. */
+export function placementsForView(placements: readonly MarkerPlacement[], imageId: string | undefined): readonly MarkerPlacement[] {
+  if (!imageId) return [];
+  return placements.filter((placement) => placement.imageId === imageId);
+}
+
+/** All placements referencing one specific item — used to detect "is this the item's last placement" (removeMarkerPlacement) and to show "also on: Pohled X" in the Inspector. */
+export function placementsForItem(placements: readonly MarkerPlacement[], itemId: string): readonly MarkerPlacement[] {
+  return placements.filter((placement) => placement.itemId === itemId);
+}
+
+export function itemForPlacement(items: readonly PrintSurfaceItem[], placement: MarkerPlacement | undefined): PrintSurfaceItem | undefined {
+  if (!placement) return undefined;
+  return findPrintSurfaceItem(items, placement.itemId);
+}
+
+/** Items that do NOT yet have a placement on the given view — what a "Propojit existující plochu" picker should offer (placing the same item twice on one view would be redundant/ambiguous). */
+export function itemsWithoutPlacementOnView(
+  items: readonly PrintSurfaceItem[],
+  placements: readonly MarkerPlacement[],
+  imageId: string | undefined,
+): readonly PrintSurfaceItem[] {
+  if (!imageId) return items;
+  const placedItemIds = new Set(placementsForView(placements, imageId).map((placement) => placement.itemId));
+  return items.filter((item) => !placedItemIds.has(item.id));
+}
+
 export function createPrintSurfaceProject(
-  input: Readonly<{ name: string; companyName: string; eventId?: string; realizationCompanyId?: string }>,
+  input: PrintSurfaceProjectCreateInput,
   id: string = crypto.randomUUID(),
   now: string = new Date().toISOString(),
 ): PrintSurfaceProject {
@@ -203,24 +339,95 @@ export function createPrintSurfaceProject(
     companyName: input.companyName,
     eventId: input.eventId,
     realizationCompanyId: input.realizationCompanyId,
-    image: undefined,
+    views: [],
     items: [],
-    nextLabelIndex: 0,
+    placements: [],
+    status: "draft",
+    createdBy: input.createdBy,
     createdAt: now,
     updatedAt: now,
   };
 }
 
-/** Adds a new item to the project — the only way an item should be added. Label comes from the project's CURRENT items (see createPrintSurfaceItem/nextPrintSurfaceLabel); nextLabelIndex is left untouched (deprecated, no longer meaningful). */
-export function addPrintSurfaceItem(
+/** Creates a BRAND NEW physical surface (item) and its first placement (pin) together — the normal "click the image with a catalog/límec/custom tool active" flow (spec: a marker is never created without an item, and vice versa). */
+export function addPrintSurfaceItemWithPlacement(
   project: PrintSurfaceProject,
-  input: PrintSurfaceItemCreateInput,
-  id?: string,
-): Readonly<{ project: PrintSurfaceProject; item: PrintSurfaceItem }> {
-  const item = createPrintSurfaceItem(project.items, input, id);
+  itemInput: PrintSurfaceItemCreateInput,
+  imageId: string,
+  xNormalized: number,
+  yNormalized: number,
+  ids?: Readonly<{ itemId?: string; placementId?: string }>,
+): Readonly<{ project: PrintSurfaceProject; item: PrintSurfaceItem; placement: MarkerPlacement }> {
+  const item = createPrintSurfaceItem(project.items, itemInput, ids?.itemId);
+  const placement = createMarkerPlacement(item.id, imageId, xNormalized, yNormalized, ids?.placementId);
   return {
-    project: { ...project, items: [...project.items, item], updatedAt: new Date().toISOString() },
+    project: { ...project, items: [...project.items, item], placements: [...project.placements, placement], updatedAt: new Date().toISOString() },
     item,
+    placement,
+  };
+}
+
+/**
+ * Adds a placement for an ALREADY-EXISTING item on the given view — "the same physical plocha A
+ * is also visible on Pohled 2" (spec section 9: priced once regardless). Refuses (no-op) if that
+ * item already has a placement on this exact view — a second pin for the same item on the same
+ * view would be redundant/ambiguous, never silently duplicated.
+ */
+export function addMarkerPlacementForExistingItem(
+  project: PrintSurfaceProject,
+  itemId: string,
+  imageId: string,
+  xNormalized: number,
+  yNormalized: number,
+  id?: string,
+): Readonly<{ project: PrintSurfaceProject; placement: MarkerPlacement | undefined }> {
+  const alreadyPlaced = placementsForView(project.placements, imageId).some((placement) => placement.itemId === itemId);
+  if (alreadyPlaced) return { project, placement: undefined };
+  const placement = createMarkerPlacement(itemId, imageId, xNormalized, yNormalized, id);
+  return {
+    project: { ...project, placements: [...project.placements, placement], updatedAt: new Date().toISOString() },
+    placement,
+  };
+}
+
+export function movePlacement(
+  placements: readonly MarkerPlacement[],
+  id: string,
+  xNormalized: number,
+  yNormalized: number,
+): readonly MarkerPlacement[] {
+  return placements.map((placement) =>
+    placement.id === id ? { ...placement, xNormalized: clamp01(xNormalized), yNormalized: clamp01(yNormalized) } : placement,
+  );
+}
+
+/**
+ * Removes ONE placement (unpin this marker from this view). If that was the item's LAST placement
+ * anywhere in the project, the now-orphaned item is removed too — an item with zero placements
+ * would never be visible/editable again anyway, so this avoids silently accumulating zombie
+ * pricing entries. Use deletePrintSurfaceItem instead when the intent is explicitly "delete this
+ * whole physical surface, including every placement it has".
+ */
+export function removeMarkerPlacement(project: PrintSurfaceProject, placementId: string): PrintSurfaceProject {
+  const target = findMarkerPlacement(project.placements, placementId);
+  if (!target) return project;
+  const remainingPlacements = project.placements.filter((placement) => placement.id !== placementId);
+  const itemStillPlaced = remainingPlacements.some((placement) => placement.itemId === target.itemId);
+  return {
+    ...project,
+    placements: remainingPlacements,
+    items: itemStillPlaced ? project.items : project.items.filter((item) => item.id !== target.itemId),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+/** Deletes a physical surface AND every placement it has, on every view — the explicit "remove this plocha entirely" action. */
+export function deletePrintSurfaceItem(project: PrintSurfaceProject, itemId: string): PrintSurfaceProject {
+  return {
+    ...project,
+    items: project.items.filter((item) => item.id !== itemId),
+    placements: project.placements.filter((placement) => placement.itemId !== itemId),
+    updatedAt: new Date().toISOString(),
   };
 }
 
@@ -240,12 +447,53 @@ export function normalizeImagePosition(
   };
 }
 
-export function withImage(project: PrintSurfaceProject, image: PrintSurfaceProjectImage): PrintSurfaceProject {
-  return { ...project, image, updatedAt: new Date().toISOString() };
+function nextDefaultViewLabel(existingViews: readonly PrintSurfaceView[]): string {
+  return `Pohled ${existingViews.length + 1}`;
+}
+
+/**
+ * Adds a brand new view (uploaded image) to the project — up to MAX_PRINT_SURFACE_VIEWS (spec
+ * section 5). Silently refuses beyond the limit rather than throwing, since the UI is expected to
+ * hide/disable the "add view" action once canAddPrintSurfaceView is false; callers that need to
+ * distinguish "refused" from "added" can compare views.length before/after.
+ */
+export function addPrintSurfaceView(
+  project: PrintSurfaceProject,
+  image: PrintSurfaceProjectImage,
+  id: string = crypto.randomUUID(),
+): PrintSurfaceProject {
+  if (!canAddPrintSurfaceView(project.views)) return project;
+  const view: PrintSurfaceView = { id, label: nextDefaultViewLabel(project.views), image, order: project.views.length };
+  return { ...project, views: [...project.views, view], updatedAt: new Date().toISOString() };
+}
+
+/** Replaces an EXISTING view's image (re-upload) — keeps its id/label/order, so placements already on it stay linked, even though their x/y may now visually mismatch the new photo (the caller is expected to warn the user before calling this — see PrintSurfaceCanvas). */
+export function replacePrintSurfaceViewImage(
+  project: PrintSurfaceProject,
+  viewId: string,
+  image: PrintSurfaceProjectImage,
+): PrintSurfaceProject {
+  return {
+    ...project,
+    views: project.views.map((view) => (view.id === viewId ? { ...view, image } : view)),
+    updatedAt: new Date().toISOString(),
+  };
+}
+
+export function renamePrintSurfaceView(project: PrintSurfaceProject, viewId: string, label: string): PrintSurfaceProject {
+  return {
+    ...project,
+    views: project.views.map((view) => (view.id === viewId ? { ...view, label } : view)),
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 export function withItems(project: PrintSurfaceProject, items: readonly PrintSurfaceItem[]): PrintSurfaceProject {
   return { ...project, items, updatedAt: new Date().toISOString() };
+}
+
+export function withPlacements(project: PrintSurfaceProject, placements: readonly MarkerPlacement[]): PrintSurfaceProject {
+  return { ...project, placements, updatedAt: new Date().toISOString() };
 }
 
 export function withProjectFields(
@@ -253,4 +501,127 @@ export function withProjectFields(
   fields: Partial<Pick<PrintSurfaceProject, "name" | "companyName" | "eventId" | "realizationCompanyId">>,
 ): PrintSurfaceProject {
   return { ...project, ...fields, updatedAt: new Date().toISOString() };
+}
+
+/** Manual draft/ready status toggle — never used to set "sent", see markPrintSurfaceProjectSent. */
+export function setPrintSurfaceProjectStatus(
+  project: PrintSurfaceProject,
+  status: Extract<PrintSurfaceProjectStatus, "draft" | "ready">,
+): PrintSurfaceProject {
+  return { ...project, status, updatedAt: new Date().toISOString() };
+}
+
+/**
+ * The ONLY way a project may become "sent" — always records who/when. Never call this just
+ * because an Outlook draft or a PDF preview was opened (spec section 14) — only once a real send
+ * action actually completes.
+ */
+export function markPrintSurfaceProjectSent(
+  project: PrintSurfaceProject,
+  sentBy: string | undefined,
+  now: string = new Date().toISOString(),
+): PrintSurfaceProject {
+  return { ...project, status: "sent", sentAt: now, sentBy, updatedAt: now };
+}
+
+export type PrintSurfaceItemDimensionResolution =
+  | Readonly<{ status: "available"; widthMm: number; heightMm: number; source: "catalog" | "custom" }>
+  | Readonly<{ status: "unavailable" }>
+  | Readonly<{ status: "not_defined" }>;
+
+/**
+ * The single source of truth for "what size does THIS item actually get produced at" —
+ * fascia/custom items ALWAYS resolve from their own customWidthMm/customHeightMm and NEVER
+ * consult the catalog resolver at all (spec section 11: "resolver musí bezpečně preferovat
+ * explicitní custom dimension před katalogovým resolverem" — the strongest form of preference is
+ * to never look at the catalog in the first place for these two types). Every other type resolves
+ * through the catalog via resolvePrintSurfaceProductionDimension, unchanged.
+ */
+export function resolvePrintSurfaceItemDimension(
+  item: Pick<PrintSurfaceItem, "typeId" | "presetId" | "customWidthMm" | "customHeightMm">,
+  realizationCompanyId: string | undefined,
+  productionDimensions: readonly PrintSurfaceProductionDimension[],
+): PrintSurfaceItemDimensionResolution {
+  if (item.typeId === "fascia" || item.typeId === "custom") {
+    if (typeof item.customWidthMm === "number" && item.customWidthMm > 0 && typeof item.customHeightMm === "number" && item.customHeightMm > 0) {
+      return { status: "available", widthMm: item.customWidthMm, heightMm: item.customHeightMm, source: "custom" };
+    }
+    return { status: "not_defined" };
+  }
+  const catalogResolution = resolvePrintSurfaceProductionDimension({ realizationCompanyId, presetId: item.presetId }, productionDimensions);
+  if (catalogResolution.status === "available") {
+    return { status: "available", widthMm: catalogResolution.widthMm, heightMm: catalogResolution.heightMm, source: "catalog" };
+  }
+  return catalogResolution;
+}
+
+/** The single place a resolved item dimension becomes Czech display text — Inspector, list and export must all go through this, never re-implement it. */
+export function formatPrintSurfaceItemDimension(resolution: PrintSurfaceItemDimensionResolution): string {
+  if (resolution.status === "available") return `${resolution.widthMm} × ${resolution.heightMm} mm`;
+  if (resolution.status === "unavailable") return "Není v nabídce";
+  return "Rozměr není definován";
+}
+
+/** The single place an item's display name is composed — preset display name when catalog-backed, else the plain type label (Límec/Jiná plocha). */
+export function printSurfaceItemSurfaceName(item: Pick<PrintSurfaceItem, "typeId" | "presetId">, presets: readonly PrintSurfacePreset[]): string {
+  const preset = findPreset(presets, item.presetId);
+  return preset ? printSurfacePresetDisplayName(preset) : printSurfaceTypeLabel(item.typeId);
+}
+
+/**
+ * Legacy documents (saved before V4) embedded position/imageId directly on each item — one
+ * "item" WAS one placement, 1:1. Splits each such legacy item into a position-less PrintSurfaceItem
+ * (+ includeInCalculation defaulted false) and its own single MarkerPlacement, so
+ * already-persisted V2/V3 projects keep working under the current views[]/items[]/placements[]
+ * shape rather than silently losing data — see lib/db/printSurfaceProjectRepository.supabase.ts's
+ * rowToProject, the only caller. Documents already in the current shape (`placements` present)
+ * pass through unchanged.
+ */
+export function migrateLegacyPrintSurfaceDocument(document: Readonly<{
+  image?: PrintSurfaceProjectImage;
+  views?: readonly PrintSurfaceView[];
+  placements?: readonly MarkerPlacement[];
+  items?: readonly unknown[];
+}>): Readonly<{ views: readonly PrintSurfaceView[]; items: readonly PrintSurfaceItem[]; placements: readonly MarkerPlacement[] }> {
+  if (document.placements) {
+    return {
+      views: document.views ?? [],
+      items: (document.items ?? []) as readonly PrintSurfaceItem[],
+      placements: document.placements,
+    };
+  }
+
+  // Pre-V4: `views` may already exist (V3), or we may still be on a single pre-V3 `image`.
+  let views = document.views ?? [];
+  let legacyItems = (document.items ?? []) as readonly (Readonly<{
+    id: string;
+    label: string;
+    typeId: PrintSurfaceTypeId;
+    note: string;
+    presetId?: string;
+    customWidthMm?: number;
+    customHeightMm?: number;
+    quantity?: number;
+    imageId?: string;
+    xNormalized?: number;
+    yNormalized?: number;
+  }>)[];
+
+  if (views.length === 0 && document.image) {
+    const legacyViewId = "legacy-view-1";
+    views = [{ id: legacyViewId, label: "Pohled 1", image: document.image, order: 0 }];
+    legacyItems = legacyItems.map((item) => ({ ...item, imageId: item.imageId ?? legacyViewId }));
+  }
+
+  const items: PrintSurfaceItem[] = [];
+  const placements: MarkerPlacement[] = [];
+  for (const legacyItem of legacyItems) {
+    const { imageId, xNormalized, yNormalized, ...rest } = legacyItem;
+    items.push({ ...rest, includeInCalculation: false });
+    if (imageId !== undefined && xNormalized !== undefined && yNormalized !== undefined) {
+      placements.push({ id: `placement-${legacyItem.id}`, itemId: legacyItem.id, imageId, xNormalized, yNormalized });
+    }
+  }
+
+  return { views, items, placements };
 }
