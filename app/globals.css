@@ -6219,14 +6219,18 @@ select:focus {
 }
 .printSurfaceMarker.active { background: #b5432c; box-shadow: 0 0 0 3px rgba(181, 67, 44, .28); }
 
-.printSurfaceInspector { display: grid; gap: 10px; align-content: start; }
-.printSurfaceInspector input,
-.printSurfaceInspector select { height: 36px; }
-.printSurfaceInspector textarea { min-height: 70px; resize: vertical; padding: 8px; border: 1px solid #dcdedf; border-radius: 7px; font: inherit; font-size: 9px; }
+.printSurfaceMarkerInspector { display: grid; gap: 10px; align-content: start; }
+.printSurfaceMarkerInspector input,
+.printSurfaceMarkerInspector select { height: 36px; }
+.printSurfaceMarkerInspector textarea { min-height: 70px; resize: vertical; padding: 8px; border: 1px solid #dcdedf; border-radius: 7px; font: inherit; font-size: 9px; }
+.printSurfaceDimensionField { display: grid; gap: 2px; font-size: 9px; }
+.printSurfaceDimensionField > span { color: #85898c; font-size: 8px; }
+.printSurfaceDimensionField > strong.unresolved { color: #96999c; font-weight: 400; font-style: italic; }
+.printSurfaceDataStatus { color: #85898c; }
 
 .printSurfaceListCard { display: grid; gap: 10px; }
 .printSurfaceTable { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: white; }
-.printSurfaceTableRow { display: grid; grid-template-columns: 90px 160px 1fr 90px; align-items: center; gap: 12px; min-height: 44px; padding: 8px 14px; border-bottom: 1px solid #ededee; font-size: 8px; cursor: pointer; }
+.printSurfaceTableRow { display: grid; grid-template-columns: 60px 120px 140px 110px 1fr 80px; align-items: center; gap: 12px; min-height: 44px; padding: 8px 14px; border-bottom: 1px solid #ededee; font-size: 8px; cursor: pointer; }
 .printSurfaceTableRow:last-child { border-bottom: 0; }
 .printSurfaceTableHeader { color: #96999c; text-transform: uppercase; font-size: 7px; cursor: default; background: #fafafa; }
 .printSurfaceTableRow.active { background: #f6f0ee; }

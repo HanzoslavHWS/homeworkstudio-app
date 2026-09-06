@@ -216,6 +216,9 @@ import { RemoteApiEmailTemplateRepository } from "../lib/db/emailTemplateReposit
 import { RemoteApiEmailHistoryRepository } from "../lib/db/emailHistoryRepository.remoteApi.client";
 import { PrintSurfacesPage } from "./workflow/PrintSurfacesPage";
 import { LocalStoragePrintSurfaceProjectRepository } from "../lib/db/printSurfaceProjectRepository.localStorage.client";
+import { ConfigRealizationCompanyRepository } from "../lib/db/realizationCompanyRepository.config.client";
+import { ConfigPrintSurfacePresetRepository } from "../lib/db/printSurfacePresetRepository.config.client";
+import { ConfigPrintSurfaceProductionDimensionRepository } from "../lib/db/printSurfaceProductionDimensionRepository.config.client";
 
 /** Individual-booth plot size defaults (mode=individualni, before the user has entered anything) — a neutral starting point on the 250 mm layout grid, never a fabricated real-world footprint. */
 const INDIVIDUAL_DEFAULT_WIDTH_MM = 3000;
@@ -284,6 +287,9 @@ export default function BoothGenerator() {
   const emailTemplateRepositoryRef = useRef(new RemoteApiEmailTemplateRepository());
   const emailHistoryRepositoryRef = useRef(new RemoteApiEmailHistoryRepository());
   const printSurfaceProjectRepositoryRef = useRef(new LocalStoragePrintSurfaceProjectRepository());
+  const realizationCompanyRepositoryRef = useRef(new ConfigRealizationCompanyRepository());
+  const printSurfacePresetRepositoryRef = useRef(new ConfigPrintSurfacePresetRepository());
+  const printSurfaceProductionDimensionRepositoryRef = useRef(new ConfigPrintSurfaceProductionDimensionRepository());
   const [pricingAdminPreselect, setPricingAdminPreselect] = useState<string | undefined>(undefined);
   const [workspaceSection, setWorkspaceSection] = useState<
     "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces"
@@ -2692,6 +2698,9 @@ export default function BoothGenerator() {
         {workspaceSection === "printSurfaces" && (
           <PrintSurfacesPage
             repository={printSurfaceProjectRepositoryRef.current}
+            companyRepository={realizationCompanyRepositoryRef.current}
+            presetRepository={printSurfacePresetRepositoryRef.current}
+            productionDimensionRepository={printSurfaceProductionDimensionRepositoryRef.current}
             events={adminEvents}
           />
         )}

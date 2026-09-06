@@ -2,22 +2,36 @@
 
 import type { PrintSurfaceItem } from "../../../domain/printSurfaceProject";
 import { PRINT_SURFACE_TYPES, type PrintSurfaceTypeId } from "../../../domain/printSurfaceTypeCatalog";
+import { presetsForType, type PrintSurfacePreset } from "../../../domain/printSurfacePreset";
+import type { ProductionDimensionResolution } from "../../../domain/printSurfaceProductionDimension";
+
+function formatResolution(resolution: ProductionDimensionResolution): string {
+  return resolution.status === "found"
+    ? `${resolution.dimension.widthMm} × ${resolution.dimension.heightMm} mm`
+    : "Rozměr není definován";
+}
 
 export function PrintSurfaceInspector({
   item,
+  presets,
+  productionDimensionResolution,
   onChangeLabel,
   onChangeType,
+  onChangePreset,
   onChangeNote,
   onDelete,
 }: {
   item: PrintSurfaceItem | undefined;
+  presets: readonly PrintSurfacePreset[];
+  productionDimensionResolution: ProductionDimensionResolution;
   onChangeLabel: (label: string) => void;
   onChangeType: (typeId: PrintSurfaceTypeId) => void;
+  onChangePreset: (presetId: string | undefined) => void;
   onChangeNote: (note: string) => void;
   onDelete: () => void;
 }) {
   return (
-    <aside className="workflowCard printSurfaceInspector">
+    <aside className="workflowCard printSurfaceMarkerInspector">
       <div className="workflowCardHeader">
         <div>
           <span>PLOCHA</span>
@@ -41,6 +55,21 @@ export function PrintSurfaceInspector({
               ))}
             </select>
           </label>
+          <label>
+            <span>Preset / Název tiskové plochy</span>
+            <select value={item.presetId ?? ""} onChange={(event) => onChangePreset(event.target.value || undefined)}>
+              <option value="">— Bez presetu —</option>
+              {presetsForType(presets, item.typeId).map((preset) => (
+                <option key={preset.id} value={preset.id}>{preset.name}</option>
+              ))}
+            </select>
+          </label>
+          <div className="printSurfaceDimensionField">
+            <span>Výrobní rozměr</span>
+            <strong className={productionDimensionResolution.status === "found" ? "" : "unresolved"}>
+              {formatResolution(productionDimensionResolution)}
+            </strong>
+          </div>
           <label>
             <span>Poznámka</span>
             <textarea value={item.note} onChange={(event) => onChangeNote(event.target.value)} rows={4} />

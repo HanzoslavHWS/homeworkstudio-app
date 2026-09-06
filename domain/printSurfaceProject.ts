@@ -24,6 +24,7 @@ export type PrintSurfaceProjectImage = Readonly<{
 }>;
 
 import type { PrintSurfaceTypeId } from "./printSurfaceTypeCatalog.ts";
+import { findPreset, type PrintSurfacePreset } from "./printSurfacePreset.ts";
 
 export type PrintSurfaceItem = Readonly<{
   id: string;
@@ -35,6 +36,14 @@ export type PrintSurfaceItem = Readonly<{
   /** 0–1, relative to the image's own heightPx — NOT absolute screen pixels. */
   yNormalized: number;
   note: string;
+  /**
+   * The concrete PrintSurfacePreset this marker is tagged with (see domain/printSurfacePreset.ts)
+   * — must belong to this item's own typeId; see changePrintSurfaceItemType for the invariant that
+   * keeps it that way whenever typeId changes. The item's actual production SIZE is never stored
+   * here — it's always resolved on the fly from (project.realizationCompanyId, presetId) via
+   * domain/printSurfaceProductionDimension.ts's resolvePrintSurfaceProductionDimension.
+   */
+  presetId?: string;
 
   // ---- Reserved for a later phase — never read/written by this MVP's logic yet ----
   /** Real-world size on the MASTER (design) print file, once known. */
@@ -45,8 +54,6 @@ export type PrintSurfaceItem = Readonly<{
   heightProductionMm?: number;
   /** Per-surface override of the project's realizationCompanyId, for the rare case production splits across realizačky. */
   realizationCompanyId?: string;
-  /** A future named dimension preset (distinct from both the surface TYPE and the realizačka's own production size — see spec section 10). */
-  presetId?: string;
   quantity?: number;
 }>;
 
@@ -130,7 +137,7 @@ export function createPrintSurfaceItem(
   };
 }
 
-export type PrintSurfaceItemEdit = Partial<Pick<PrintSurfaceItem, "label" | "typeId" | "note">>;
+export type PrintSurfaceItemEdit = Partial<Pick<PrintSurfaceItem, "label" | "typeId" | "note" | "presetId">>;
 
 export function updatePrintSurfaceItem(
   items: readonly PrintSurfaceItem[],
@@ -138,6 +145,31 @@ export function updatePrintSurfaceItem(
   edit: PrintSurfaceItemEdit,
 ): readonly PrintSurfaceItem[] {
   return items.map((item) => (item.id === id ? { ...item, ...edit } : item));
+}
+
+/**
+ * Applies a type change to a single item, resetting presetId whenever the CURRENT preset no
+ * longer belongs to the new type (spec section 5) — a preset must always belong to its item's own
+ * typeId, so this is the only correct way to change typeId once a preset may already be set.
+ * Existing markers are never touched — only the targeted item.
+ */
+export function changePrintSurfaceItemType(
+  item: PrintSurfaceItem,
+  newTypeId: PrintSurfaceTypeId,
+  presets: readonly PrintSurfacePreset[],
+): PrintSurfaceItem {
+  const currentPreset = findPreset(presets, item.presetId);
+  const presetStillValid = currentPreset?.typeId === newTypeId;
+  return { ...item, typeId: newTypeId, presetId: presetStillValid ? item.presetId : undefined };
+}
+
+export function updatePrintSurfaceItemType(
+  items: readonly PrintSurfaceItem[],
+  id: string,
+  newTypeId: PrintSurfaceTypeId,
+  presets: readonly PrintSurfacePreset[],
+): readonly PrintSurfaceItem[] {
+  return items.map((item) => (item.id === id ? changePrintSurfaceItemType(item, newTypeId, presets) : item));
 }
 
 export function movePrintSurfaceItem(

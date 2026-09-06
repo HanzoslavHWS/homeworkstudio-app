@@ -8,6 +8,7 @@ import {
   movePrintSurfaceItem,
   removePrintSurfaceItem,
   updatePrintSurfaceItem,
+  updatePrintSurfaceItemType,
   withImage,
   withItems,
   withProjectFields,
@@ -15,9 +16,14 @@ import {
   type PrintSurfaceProjectImage,
 } from "../../domain/printSurfaceProject";
 import { PRINT_SURFACE_TYPES, type PrintSurfaceTypeId } from "../../domain/printSurfaceTypeCatalog";
+import { resolvePrintSurfaceProductionDimension, type PrintSurfaceProductionDimension } from "../../domain/printSurfaceProductionDimension";
+import type { PrintSurfacePreset } from "../../domain/printSurfacePreset";
+import type { RealizationCompany } from "../../domain/realizationCompany";
 import type { PrintSurfaceProjectRepository } from "../../lib/db/printSurfaceProjectRepository";
+import type { RealizationCompanyRepository } from "../../domain/realizationCompany";
+import type { PrintSurfacePresetRepository } from "../../domain/printSurfacePreset";
+import type { PrintSurfaceProductionDimensionRepository } from "../../domain/printSurfaceProductionDimension";
 import type { Exhibition } from "../../domain/organizations";
-import { TEST_REALIZATION_COMPANIES } from "../../data/printSurfaceTestData";
 import { PrintSurfaceCanvas } from "./printSurfaces/PrintSurfaceCanvas";
 import { PrintSurfaceInspector } from "./printSurfaces/PrintSurfaceInspector";
 import { PrintSurfaceList } from "./printSurfaces/PrintSurfaceList";
@@ -26,14 +32,25 @@ import { PrintSurfaceList } from "./printSurfaces/PrintSurfaceList";
  * "Tiskové plochy" — standalone MVP workflow (spec: click an image to drop lettered markers,
  * tag each with a print-surface type). Deliberately independent of BoothGenerator's own project
  * state, same as EmailsPage: it owns 100% of its local state and only receives cross-cutting
- * data (events) + its repository as props. `selectedItemId` here is the SINGLE source of truth
+ * data (events) + its repositories as props. `selectedItemId` here is the SINGLE source of truth
  * shared by both PrintSurfaceCanvas and PrintSurfaceList (section 8) — neither owns its own copy.
+ *
+ * Phase 2 (realizačky/presety/produkční rozměry): a marker's actual production SIZE is NEVER
+ * stored on the item — it's always resolved fresh from (project.realizationCompanyId,
+ * item.presetId) via resolvePrintSurfaceProductionDimension, so changing the project's realizačka
+ * automatically updates every displayed dimension without touching any marker data.
  */
 export function PrintSurfacesPage({
   repository,
+  companyRepository,
+  presetRepository,
+  productionDimensionRepository,
   events,
 }: {
   repository: PrintSurfaceProjectRepository;
+  companyRepository: RealizationCompanyRepository;
+  presetRepository: PrintSurfacePresetRepository;
+  productionDimensionRepository: PrintSurfaceProductionDimensionRepository;
   events: readonly Exhibition[];
 }) {
   const [project, setProject] = useState<PrintSurfaceProject | null>(null);
@@ -41,6 +58,9 @@ export function PrintSurfacesPage({
   const [activeTool, setActiveTool] = useState<"select" | PrintSurfaceTypeId>("select");
   const [uploadError, setUploadError] = useState("");
   const [persistError, setPersistError] = useState("");
+  const [companies, setCompanies] = useState<readonly RealizationCompany[]>([]);
+  const [presets, setPresets] = useState<readonly PrintSurfacePreset[]>([]);
+  const [productionDimensions, setProductionDimensions] = useState<readonly PrintSurfaceProductionDimension[]>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,6 +70,24 @@ export function PrintSurfacesPage({
     });
     return () => { cancelled = true; };
   }, [repository]);
+
+  useEffect(() => {
+    let cancelled = false;
+    companyRepository.list().then((loaded) => { if (!cancelled) setCompanies(loaded); });
+    return () => { cancelled = true; };
+  }, [companyRepository]);
+
+  useEffect(() => {
+    let cancelled = false;
+    presetRepository.list().then((loaded) => { if (!cancelled) setPresets(loaded); });
+    return () => { cancelled = true; };
+  }, [presetRepository]);
+
+  useEffect(() => {
+    let cancelled = false;
+    productionDimensionRepository.list().then((loaded) => { if (!cancelled) setProductionDimensions(loaded); });
+    return () => { cancelled = true; };
+  }, [productionDimensionRepository]);
 
   useEffect(() => {
     if (!project) return;
@@ -70,6 +108,11 @@ export function PrintSurfacesPage({
   }
 
   const selectedItem = findPrintSurfaceItem(project.items, selectedItemId);
+  const selectedItemResolution = resolvePrintSurfaceProductionDimension(
+    { realizationCompanyId: project.realizationCompanyId, presetId: selectedItem?.presetId },
+    productionDimensions,
+  );
+  const activeCompanies = companies.filter((company) => company.isActive);
 
   function updateProjectFields(fields: Parameters<typeof withProjectFields>[1]) {
     setProject((current) => (current ? withProjectFields(current, fields) : current));
@@ -109,7 +152,12 @@ export function PrintSurfacesPage({
 
   function handleChangeSelectedType(typeId: PrintSurfaceTypeId) {
     if (!selectedItem) return;
-    setProject((current) => (current ? withItems(current, updatePrintSurfaceItem(current.items, selectedItem.id, { typeId })) : current));
+    setProject((current) => (current ? withItems(current, updatePrintSurfaceItemType(current.items, selectedItem.id, typeId, presets)) : current));
+  }
+
+  function handleChangeSelectedPreset(presetId: string | undefined) {
+    if (!selectedItem) return;
+    setProject((current) => (current ? withItems(current, updatePrintSurfaceItem(current.items, selectedItem.id, { presetId })) : current));
   }
 
   function handleChangeSelectedNote(note: string) {
@@ -150,12 +198,17 @@ export function PrintSurfacesPage({
           <span>Realizačka</span>
           <select value={project.realizationCompanyId ?? ""} onChange={(event) => updateProjectFields({ realizationCompanyId: event.target.value || undefined })}>
             <option value="">— Bez realizačky —</option>
-            {TEST_REALIZATION_COMPANIES.map((company) => (
+            {activeCompanies.map((company) => (
               <option key={company.id} value={company.id}>{company.name}</option>
             ))}
           </select>
         </label>
       </div>
+
+      <p className="fieldHint printSurfaceDataStatus">
+        Realizačky: {companies.length} · Tiskové plochy (presety): {presets.length} · Výrobní rozměry: {productionDimensions.length}
+        {productionDimensions.length === 0 && " — Rozměry tiskových ploch zatím nejsou importovány."}
+      </p>
 
       <div className="adminCategoryTabs printSurfaceToolbar">
         <button type="button" className={activeTool === "select" ? "active" : ""} onClick={() => setActiveTool("select")}>
@@ -183,8 +236,11 @@ export function PrintSurfacesPage({
         />
         <PrintSurfaceInspector
           item={selectedItem}
+          presets={presets}
+          productionDimensionResolution={selectedItemResolution}
           onChangeLabel={handleChangeSelectedLabel}
           onChangeType={handleChangeSelectedType}
+          onChangePreset={handleChangeSelectedPreset}
           onChangeNote={handleChangeSelectedNote}
           onDelete={() => selectedItem && handleDeleteItem(selectedItem.id)}
         />
@@ -193,6 +249,9 @@ export function PrintSurfacesPage({
       <PrintSurfaceList
         items={project.items}
         selectedItemId={selectedItemId}
+        presets={presets}
+        productionDimensions={productionDimensions}
+        realizationCompanyId={project.realizationCompanyId}
         onSelectItem={handleSelectItem}
         onDeleteItem={handleDeleteItem}
       />
