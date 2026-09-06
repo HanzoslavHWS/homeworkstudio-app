@@ -214,6 +214,8 @@ import { RemoteApiCatalogItemsAdminRepository } from "../lib/db/catalogItemsAdmi
 import { EmailsPage } from "./workflow/EmailsPage";
 import { RemoteApiEmailTemplateRepository } from "../lib/db/emailTemplateRepository.remoteApi.client";
 import { RemoteApiEmailHistoryRepository } from "../lib/db/emailHistoryRepository.remoteApi.client";
+import { PrintSurfacesPage } from "./workflow/PrintSurfacesPage";
+import { LocalStoragePrintSurfaceProjectRepository } from "../lib/db/printSurfaceProjectRepository.localStorage.client";
 
 /** Individual-booth plot size defaults (mode=individualni, before the user has entered anything) — a neutral starting point on the 250 mm layout grid, never a fabricated real-world footprint. */
 const INDIVIDUAL_DEFAULT_WIDTH_MM = 3000;
@@ -281,9 +283,10 @@ export default function BoothGenerator() {
   const catalogItemsAdminRepositoryRef = useRef(new RemoteApiCatalogItemsAdminRepository());
   const emailTemplateRepositoryRef = useRef(new RemoteApiEmailTemplateRepository());
   const emailHistoryRepositoryRef = useRef(new RemoteApiEmailHistoryRepository());
+  const printSurfaceProjectRepositoryRef = useRef(new LocalStoragePrintSurfaceProjectRepository());
   const [pricingAdminPreselect, setPricingAdminPreselect] = useState<string | undefined>(undefined);
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails"
+    "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces"
   >("project");
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
@@ -2682,6 +2685,13 @@ export default function BoothGenerator() {
           <EmailsPage
             templateRepository={emailTemplateRepositoryRef.current}
             historyRepository={emailHistoryRepositoryRef.current}
+            events={adminEvents}
+          />
+        )}
+
+        {workspaceSection === "printSurfaces" && (
+          <PrintSurfacesPage
+            repository={printSurfaceProjectRepositoryRef.current}
             events={adminEvents}
           />
         )}

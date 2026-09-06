@@ -2,8 +2,8 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onStartNewProject: () => void;
-  activeSection?: "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails";
-  onNavigate?: (section: "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails") => void;
+  activeSection?: "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces";
+  onNavigate?: (section: "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces") => void;
 };
 
 export function AppSidebar({
@@ -63,6 +63,10 @@ export function AppSidebar({
         <button type="button" className={activeSection === "emails" ? "navItem active" : "navItem"} title="E-maily" onClick={() => onNavigate?.("emails")}>
           <span className="navIcon">✉</span>
           <span className="navLabel">E-maily</span>
+        </button>
+        <button type="button" className={activeSection === "printSurfaces" ? "navItem active" : "navItem"} title="Tiskové plochy" onClick={() => onNavigate?.("printSurfaces")}>
+          <span className="navIcon">▧</span>
+          <span className="navLabel">Tiskové plochy</span>
         </button>
       </nav>
 

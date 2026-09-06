@@ -6166,3 +6166,72 @@ select:focus {
   .pricingFilters { grid-template-columns: repeat(2, 1fr); }
   .pricingCatalogRow { grid-template-columns: auto 1fr; }
 }
+
+/* ===== Tiskové plochy ===== */
+
+.workspaceFormRow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
+.workspaceFormRow select,
+.workspaceFormRow input { height: 38px; }
+
+.printSurfaceToolbar { margin-bottom: 14px; }
+
+.printSurfacesWorkspace { display: grid; grid-template-columns: minmax(0, 1fr) 300px; align-items: start; gap: 16px; margin-bottom: 16px; }
+
+.printSurfaceCanvasPanel { display: grid; gap: 10px; }
+.printSurfaceUploadPrompt { display: grid; justify-items: start; gap: 10px; padding: 40px 20px; border: 1px dashed #dfe0e1; border-radius: 10px; background: #fafafa; }
+.printSurfaceCanvasToolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+
+.printSurfaceViewport {
+  position: relative;
+  width: 100%;
+  height: min(62vh, 650px);
+  min-height: 420px;
+  overflow: hidden;
+  cursor: crosshair;
+  border: 1px solid #dfe1e2;
+  border-radius: 10px;
+  background: #f5f6f6;
+}
+.printSurfaceViewport:not(.addMode) { cursor: default; }
+.printSurfaceViewport.panReady { cursor: grab; }
+.printSurfaceViewport.panning { cursor: grabbing; }
+
+.printSurfaceStage { position: absolute; top: 0; left: 0; transform-origin: 0 0; will-change: transform; }
+.printSurfaceImage { display: block; width: 100%; height: 100%; user-select: none; pointer-events: none; }
+
+.printSurfaceMarker {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid white;
+  border-radius: 50%;
+  background: #242628;
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: grab;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .35);
+  touch-action: none;
+}
+.printSurfaceMarker.active { background: #b5432c; box-shadow: 0 0 0 3px rgba(181, 67, 44, .28); }
+
+.printSurfaceInspector { display: grid; gap: 10px; align-content: start; }
+.printSurfaceInspector input,
+.printSurfaceInspector select { height: 36px; }
+.printSurfaceInspector textarea { min-height: 70px; resize: vertical; padding: 8px; border: 1px solid #dcdedf; border-radius: 7px; font: inherit; font-size: 9px; }
+
+.printSurfaceListCard { display: grid; gap: 10px; }
+.printSurfaceTable { overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.printSurfaceTableRow { display: grid; grid-template-columns: 90px 160px 1fr 90px; align-items: center; gap: 12px; min-height: 44px; padding: 8px 14px; border-bottom: 1px solid #ededee; font-size: 8px; cursor: pointer; }
+.printSurfaceTableRow:last-child { border-bottom: 0; }
+.printSurfaceTableHeader { color: #96999c; text-transform: uppercase; font-size: 7px; cursor: default; background: #fafafa; }
+.printSurfaceTableRow.active { background: #f6f0ee; }
+.printSurfaceTableNote { color: #74787b; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 980px) {
+  .printSurfacesWorkspace { grid-template-columns: 1fr; }
+}
