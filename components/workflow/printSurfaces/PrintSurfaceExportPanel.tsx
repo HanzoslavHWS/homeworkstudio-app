@@ -147,8 +147,10 @@ export function PrintSurfaceExportPanel({
     setError("");
     setIsBusy(true);
     try {
-      const storageKey = pdfIsCurrent && project.latestPdf ? project.latestPdf.storageKey : (await generateAndUploadCurrentPdf()).storageKey;
-      const downloadUrl = await getAssetDownloadUrl(storageKey);
+      const pdf = pdfIsCurrent && project.latestPdf
+        ? { storageKey: project.latestPdf.storageKey, fileName: project.latestPdf.fileName }
+        : await generateAndUploadCurrentPdf();
+      const downloadUrl = await getAssetDownloadUrl(pdf.storageKey, pdf.fileName);
       window.open(downloadUrl, "_blank");
     } catch {
       setError("Vytvoření PDF souboru se nezdařilo.");

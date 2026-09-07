@@ -63,7 +63,12 @@ test("export button label reflects PDF state: none -> Vygenerovat, current -> St
 
 test("Stáhnout PDF (current) skips regeneration entirely — only a stale/missing PDF triggers generateAndUploadCurrentPdf", () => {
   const handleExportButtonClick = extractFunction(exportPanelSource, "handleExportButtonClick");
-  assert.match(handleExportButtonClick, /pdfIsCurrent && project\.latestPdf \? project\.latestPdf\.storageKey : \(await generateAndUploadCurrentPdf\(\)\)\.storageKey/u);
+  assert.match(handleExportButtonClick, /pdfIsCurrent && project\.latestPdf\s*\n\s*\? \{ storageKey: project\.latestPdf\.storageKey, fileName: project\.latestPdf\.fileName \}\s*\n\s*: await generateAndUploadCurrentPdf\(\)/u);
+});
+
+test("downloaded filename always matches the logical PDF name: handleExportButtonClick passes pdf.fileName to getAssetDownloadUrl, never just the raw storageKey", () => {
+  const handleExportButtonClick = extractFunction(exportPanelSource, "handleExportButtonClick");
+  assert.match(handleExportButtonClick, /getAssetDownloadUrl\(pdf\.storageKey, pdf\.fileName\)/u);
 });
 
 test("mailto receives subject and body: openInOutlook builds a mailto: URL from the current AI result", () => {
@@ -85,10 +90,10 @@ test("Otevřít v Outlooku attempts a real Outlook draft first (current PDF atta
   assert.match(openInOutlook, /catch \{/u);
 });
 
-test("attachment card references the correct PDF asset: downloadPreparedPdf resolves the download URL from the handoff context's own pdfAssetStorageKey", () => {
+test("attachment card references the correct PDF asset: downloadPreparedPdf resolves the download URL from the handoff context's own pdfAssetStorageKey, and passes pdfFileName through so the browser saves it under the logical name, not the raw storageKey", () => {
   const download = extractFunction(emailsPageSource, "downloadPreparedPdf");
   assert.match(download, /printSurfaceContext\?\.pdfAssetStorageKey/u);
-  assert.match(download, /getAssetDownloadUrl\(printSurfaceContext\.pdfAssetStorageKey\)/u);
+  assert.match(download, /getAssetDownloadUrl\(printSurfaceContext\.pdfAssetStorageKey, printSurfaceContext\.pdfFileName\)/u);
 });
 
 test("attachment card UI shows the filename and a manual-attach note near 'Otevřít v Outlooku', never claiming an automatic attachment", () => {
@@ -132,7 +137,7 @@ test("project list exposes a current-PDF quick action (Stáhnout PDF) plus a fre
   // quick download only resolves the existing storageKey — it must never call buildPrintSurfacePdf/generate anything itself.
   const handleDownloadPdf = extractFunction(listPageSource, "handleDownloadPdf");
   assert.doesNotMatch(handleDownloadPdf, /buildPrintSurfacePdf|generateAndUpload/u);
-  assert.match(handleDownloadPdf, /getAssetDownloadUrl\(storageKey\)/u);
+  assert.match(handleDownloadPdf, /getAssetDownloadUrl\(storageKey, fileName\)/u);
 });
 
 test("AI prompt does not invent a missing deadline: the print-surfaces aiInstruction never mentions one itself, and it's steered through the SAME generic prompt builder whose NO_FABRICATION_RULE already forbids inventing dates/deadlines (see tests/emailAiPrompt.test.ts)", () => {

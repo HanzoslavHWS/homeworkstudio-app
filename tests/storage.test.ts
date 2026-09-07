@@ -8,6 +8,7 @@ import {
 } from "@aws-sdk/client-s3";
 import {
   AssetValidationError,
+  buildContentDispositionHeader,
   createStorageKey,
   preferredAsset,
   sanitizeStorageSegment,
@@ -29,6 +30,7 @@ import { R2ConfigurationError, readR2Config } from "../lib/storage/r2Config.ts";
 import { createSessionToken } from "../lib/auth/session.ts";
 import { handleAssetPresign } from "../app/api/assets/presign/route.ts";
 import { handleAssetDelete } from "../app/api/assets/delete/route.ts";
+import { handleAssetDownload } from "../app/api/assets/download/route.ts";
 
 const r2Config = {
   accountId: "account",
@@ -134,6 +136,93 @@ test("R2 provider presignuje GetObject a HEAD metadata nevrací obsah", async ()
   assert.ok(signed[0] instanceof GetObjectCommand);
   assert.equal((await provider.getMetadata("events/event/logo/id.png"))?.contentLength, 42);
   assert.ok(sent[0] instanceof HeadObjectCommand);
+});
+
+// =========================================================================================
+// Download filename fix: a UUID storageKey stays the physical object's name, but the browser
+// must save the file under its human-readable LOGICAL name (e.g. a Print Surfaces PDF) via a
+// Content-Disposition header on the presigned GET — never a renamed R2 object.
+// =========================================================================================
+
+test("buildContentDispositionHeader: UUID storage key scenario — logical filename becomes both the ASCII fallback and the RFC 5987 UTF-8 form", () => {
+  const header = buildContentDispositionHeader("Tiskove_plochy_FOR_BEAUTY_Test_001.pdf");
+  assert.equal(header, "attachment; filename=\"Tiskove_plochy_FOR_BEAUTY_Test_001.pdf\"; filename*=UTF-8''Tiskove_plochy_FOR_BEAUTY_Test_001.pdf");
+});
+
+test("buildContentDispositionHeader: diacritics are stripped for the ASCII fallback but preserved exactly in the UTF-8 form", () => {
+  const header = buildContentDispositionHeader("Nabídka Krásná Žížala.pdf");
+  assert.match(header, /filename="Nabidka Krasna Zizala\.pdf"/u);
+  assert.match(header, /filename\*=UTF-8''Nab%C3%ADdka%20Kr%C3%A1sn%C3%A1%20%C5%BD%C3%AD%C5%BEala\.pdf/u);
+});
+
+test("buildContentDispositionHeader: control characters (including CR/LF) are stripped so a caller-supplied name can never inject a second header line", () => {
+  const header = buildContentDispositionHeader("evil\r\nSet-Cookie: hacked=1.pdf");
+  assert.doesNotMatch(header, /[\r\n]/u);
+  assert.equal(header.split("\n").length, 1, "the whole header must stay exactly one line, however unusual the input");
+});
+
+test("buildContentDispositionHeader: quotes/backslashes in the ASCII fallback never break out of the quoted filename", () => {
+  const header = buildContentDispositionHeader('weird"name\\.pdf');
+  assert.doesNotMatch(header, /filename="[^"]*"[^"]*"/u);
+});
+
+test("buildContentDispositionHeader: empty/whitespace-only input never produces a blank filename", () => {
+  assert.match(buildContentDispositionHeader("   "), /filename="download"/u);
+});
+
+test("R2 provider: getDownloadUrl WITHOUT a downloadFileName never sets ResponseContentDisposition (backward compatible, unchanged for every existing caller)", async () => {
+  const signed: unknown[] = [];
+  const provider = new CloudflareR2StorageProvider(r2Config, { send: async () => ({}) } as never, async (_client, command) => { signed.push(command); return "https://signed.example/download"; });
+  await provider.getDownloadUrl("print-surfaces/p1/export/3e433687-6b53-4d98-8734-d5e27075be5f.pdf");
+  const command = signed[0] as GetObjectCommand;
+  assert.equal(command.input.ResponseContentDisposition, undefined);
+});
+
+test("R2 provider: getDownloadUrl WITH a downloadFileName signs ResponseContentDisposition with the logical name — the UUID storageKey itself is untouched", async () => {
+  const signed: unknown[] = [];
+  const provider = new CloudflareR2StorageProvider(r2Config, { send: async () => ({}) } as never, async (_client, command) => { signed.push(command); return "https://signed.example/download"; });
+  const uuidKey = "print-surfaces/p1/export/3e433687-6b53-4d98-8734-d5e27075be5f.pdf";
+  await provider.getDownloadUrl(uuidKey, undefined, "Tiskove_plochy_FOR_BEAUTY_Test_001.pdf");
+  const command = signed[0] as GetObjectCommand;
+  assert.equal(command.input.Key, uuidKey, "the physical storage key must stay the UUID — never renamed");
+  assert.equal(command.input.ResponseContentDisposition, buildContentDispositionHeader("Tiskove_plochy_FOR_BEAUTY_Test_001.pdf"));
+  assert.match(command.input.ResponseContentDisposition!, /filename="Tiskove_plochy_FOR_BEAUTY_Test_001\.pdf"/u);
+});
+
+test("download route: a UUID storageKey + logical fileName in the request body reaches the provider's getDownloadUrl as the 3rd argument (end-to-end wiring, request -> route -> provider)", async () => {
+  const secret = "download-session-secret-with-at-least-32-characters";
+  process.env.APP_SESSION_SECRET = secret;
+  const token = await createSessionToken(secret);
+  const uuidKey = "print-surfaces/p1/export/3e433687-6b53-4d98-8734-d5e27075be5f.pdf";
+  const received: unknown[] = [];
+  const provider: AssetStorageProvider = {
+    id: "mock",
+    async createUploadUrl() { throw new Error("must not run"); },
+    async getDownloadUrl(storageKey, expiresInSeconds, downloadFileName) { received.push([storageKey, expiresInSeconds, downloadFileName]); return "https://signed.example/download"; },
+    async deleteObject() { /* unused */ },
+    async objectExists() { return true; },
+    async getMetadata(key) { return { storageKey: key }; },
+  };
+  const response = await handleAssetDownload(authenticatedRequest(token, { storageKey: uuidKey, fileName: "Tiskove_plochy_FOR_BEAUTY_Test_001.pdf" }), () => provider);
+  assert.equal(response.status, 200);
+  assert.deepEqual(received[0], [uuidKey, undefined, "Tiskove_plochy_FOR_BEAUTY_Test_001.pdf"]);
+});
+
+test("download route: omitting fileName keeps today's behavior — undefined reaches the provider, never a literal 'undefined' string", async () => {
+  const secret = "download-session-secret-with-at-least-32-characters";
+  process.env.APP_SESSION_SECRET = secret;
+  const token = await createSessionToken(secret);
+  const received: unknown[] = [];
+  const provider: AssetStorageProvider = {
+    id: "mock",
+    async createUploadUrl() { throw new Error("must not run"); },
+    async getDownloadUrl(storageKey, expiresInSeconds, downloadFileName) { received.push(downloadFileName); return "https://signed.example/download"; },
+    async deleteObject() { /* unused */ },
+    async objectExists() { return true; },
+    async getMetadata(key) { return { storageKey: key }; },
+  };
+  await handleAssetDownload(authenticatedRequest(token, { storageKey: "events/event/logo/id.png" }), () => provider);
+  assert.equal(received[0], undefined);
 });
 
 test("provider a API response nepropustí access key ani secret", async () => {

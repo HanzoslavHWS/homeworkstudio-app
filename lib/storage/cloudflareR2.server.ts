@@ -8,7 +8,7 @@ import {
 } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 import type { AssetObjectMetadata, AssetStorageProvider } from "../../domain/assets.ts";
-import { assertValidStorageKey } from "../../domain/assets.ts";
+import { assertValidStorageKey, buildContentDispositionHeader } from "../../domain/assets.ts";
 import { readR2Config, type R2Config, type R2Environment } from "./r2Config.ts";
 
 type S3Transport = Pick<S3Client, "send">;
@@ -66,9 +66,17 @@ export class CloudflareR2StorageProvider implements AssetStorageProvider {
     };
   }
 
-  async getDownloadUrl(storageKey: string, expiresInSeconds?: number): Promise<string> {
+  async getDownloadUrl(storageKey: string, expiresInSeconds?: number, downloadFileName?: string): Promise<string> {
     assertValidStorageKey(storageKey);
-    return this.signUrl(this.client as S3Client, new GetObjectCommand({ Bucket: this.config.bucketName, Key: storageKey }), { expiresIn: boundedExpiry(expiresInSeconds, 900) });
+    const command = new GetObjectCommand({
+      Bucket: this.config.bucketName,
+      Key: storageKey,
+      // R2 is S3-API-compatible: a signed ResponseContentDisposition param makes R2 itself add a
+      // real Content-Disposition header to the GET response for THIS presigned URL — the object
+      // in the bucket is never renamed, only this one download's response header changes.
+      ...(downloadFileName ? { ResponseContentDisposition: buildContentDispositionHeader(downloadFileName) } : {}),
+    });
+    return this.signUrl(this.client as S3Client, command, { expiresIn: boundedExpiry(expiresInSeconds, 900) });
   }
 
   async deleteObject(storageKey: string): Promise<void> {

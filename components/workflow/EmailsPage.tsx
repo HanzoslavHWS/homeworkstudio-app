@@ -399,7 +399,7 @@ export function EmailsPage({
     if (!printSurfaceContext?.pdfAssetStorageKey) return;
     setPdfDownloadError("");
     try {
-      const downloadUrl = await getAssetDownloadUrl(printSurfaceContext.pdfAssetStorageKey);
+      const downloadUrl = await getAssetDownloadUrl(printSurfaceContext.pdfAssetStorageKey, printSurfaceContext.pdfFileName);
       window.open(downloadUrl, "_blank");
     } catch {
       setPdfDownloadError("Stažení PDF se nezdařilo.");

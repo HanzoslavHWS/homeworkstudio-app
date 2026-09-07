@@ -67,8 +67,9 @@ export async function readRasterImageDimensions(file: File): Promise<RasterImage
   }
 }
 
-export async function getAssetDownloadUrl(storageKey: string): Promise<string> {
-  const response = await fetch("/api/assets/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storageKey }) });
+/** `fileName`, when given, makes the browser save the download under this LOGICAL name (e.g. "Tiskove_plochy_FOR_BEAUTY_Test_001.pdf") instead of the raw storageKey — the storage object itself is never renamed. Optional/backward-compatible: every existing caller that omits it keeps today's behavior. */
+export async function getAssetDownloadUrl(storageKey: string, fileName?: string): Promise<string> {
+  const response = await fetch("/api/assets/download", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ storageKey, fileName }) });
   const result = await response.json() as { downloadUrl?: string; error?: string };
   if (!response.ok || !result.downloadUrl) throw new Error(result.error ?? "Asset není dostupný.");
   return result.downloadUrl;

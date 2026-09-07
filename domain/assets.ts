@@ -84,7 +84,8 @@ export type PresignedUpload = Readonly<{
 export interface AssetStorageProvider {
   readonly id: string;
   createUploadUrl(input: Readonly<{ storageKey: string; mimeType: string; originalFileName: string; checksum?: string; expiresInSeconds?: number }>): Promise<PresignedUpload>;
-  getDownloadUrl(storageKey: string, expiresInSeconds?: number): Promise<string>;
+  /** `downloadFileName`, when given, makes the returned URL respond with a Content-Disposition naming this LOGICAL filename (buildContentDispositionHeader above) — the storageKey itself is never renamed. Optional and backward-compatible: omitting it keeps today's behavior (storage provider's default response headers). */
+  getDownloadUrl(storageKey: string, expiresInSeconds?: number, downloadFileName?: string): Promise<string>;
   deleteObject(storageKey: string): Promise<void>;
   objectExists(storageKey: string): Promise<boolean>;
   getMetadata(storageKey: string): Promise<AssetObjectMetadata | undefined>;
@@ -205,4 +206,28 @@ export function assertValidStorageKey(value: string): void {
 
 export function preferredAsset(asset: StoredAsset | undefined, legacyUrl: string | undefined): Readonly<{ storageKey?: string; legacyUrl?: string }> {
   return asset?.storageKey ? { storageKey: asset.storageKey, legacyUrl } : { legacyUrl };
+}
+
+/**
+ * RFC 6266 `Content-Disposition` header value for a download response, letting the browser save a
+ * file under a human-readable LOGICAL name (e.g. "Tiskove_plochy_FOR_BEAUTY_Test_001.pdf") while
+ * the underlying storageKey stays whatever opaque id storage actually uses (a UUID) — never
+ * renaming the physical object. Carries both an ASCII-safe `filename` fallback (diacritics
+ * stripped, matching sanitizeStorageSegment's own spirit — never a raw non-ASCII byte in the
+ * quoted form) and the exact real name via the RFC 5987 `filename*=UTF-8''...` form, so modern
+ * browsers show the precise (possibly accented) name while older/non-compliant clients still get
+ * a safe fallback instead of a malformed header. Strips control characters (CR/LF included) from
+ * both forms so a caller-supplied name can never inject extra header lines.
+ */
+export function buildContentDispositionHeader(fileName: string, disposition: "attachment" | "inline" = "attachment"): string {
+  // eslint-disable-next-line no-control-regex -- deliberately stripping C0/C1 control chars (incl. CR/LF) to prevent header injection
+  const controlCharsPattern = /[\x00-\x1f\x7f]/gu;
+  const safeName = fileName.replace(controlCharsPattern, "").trim() || "download";
+  const asciiFallback = safeName
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/gu, "")
+    .replace(/[^\x20-\x7e]/gu, "_")
+    .replace(/["\\]/gu, "_") || "download";
+  const encoded = encodeURIComponent(safeName).replace(/[!'()*]/gu, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }

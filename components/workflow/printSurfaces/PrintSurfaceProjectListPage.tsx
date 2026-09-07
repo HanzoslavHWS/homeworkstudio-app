@@ -81,10 +81,10 @@ export function PrintSurfaceProjectListPage({
     });
   }, [projects, searchText, eventFilter, statusFilter]);
 
-  /** Quick download without opening the editor (spec: "Stáhnout PDF pokud current PDF existuje") — just resolves the already-uploaded storageKey, never regenerates anything from the list screen. */
-  async function handleDownloadPdf(storageKey: string) {
+  /** Quick download without opening the editor (spec: "Stáhnout PDF pokud current PDF existuje") — just resolves the already-uploaded storageKey, never regenerates anything from the list screen. Passes the logical fileName through so the browser saves it under the human-readable name, not the (often UUID) storageKey. */
+  async function handleDownloadPdf(storageKey: string, fileName: string) {
     try {
-      const url = await getAssetDownloadUrl(storageKey);
+      const url = await getAssetDownloadUrl(storageKey, fileName);
       window.open(url, "_blank");
     } catch {
       setListError("Stažení PDF se nezdařilo.");
@@ -251,7 +251,7 @@ export function PrintSurfaceProjectListPage({
               <span className="printSurfaceProjectPdfCell">
                 {project.latestPdf ? (
                   <>
-                    <button type="button" className="textButton" onClick={(event) => { event.stopPropagation(); void handleDownloadPdf(project.latestPdf!.storageKey); }}>Stáhnout PDF</button>
+                    <button type="button" className="textButton" onClick={(event) => { event.stopPropagation(); void handleDownloadPdf(project.latestPdf!.storageKey, project.latestPdf!.fileName); }}>Stáhnout PDF</button>
                     <span className={project.latestPdf.isCurrent ? "printSurfacePdfBadge current" : "printSurfacePdfBadge stale"}>
                       {project.latestPdf.isCurrent ? "PDF aktuální" : "PDF není aktuální"}
                     </span>
