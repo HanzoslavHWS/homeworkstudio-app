@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   PrintSurfaceExportCreateInput,
+  PrintSurfaceExportMarkSentInput,
   PrintSurfaceExportRecord,
   PrintSurfaceExportRepository,
   PrintSurfaceExportType,
@@ -54,7 +55,28 @@ export class SupabasePrintSurfaceExportRepository implements PrintSurfaceExportR
   async create(input: PrintSurfaceExportCreateInput): Promise<PrintSurfaceExportRecord> {
     const { data, error } = await this.client
       .from("print_surface_exports")
-      .insert({ project_id: input.projectId, export_type: input.exportType, created_by: input.createdBy ?? null })
+      .insert({
+        project_id: input.projectId,
+        export_type: input.exportType,
+        created_by: input.createdBy ?? null,
+        file_storage_key: input.fileStorageKey ?? null,
+      })
+      .select()
+      .single();
+    if (error) throw error;
+    return rowToExport(data as PrintSurfaceExportRow);
+  }
+
+  async markSent(id: string, input: PrintSurfaceExportMarkSentInput): Promise<PrintSurfaceExportRecord> {
+    const { data, error } = await this.client
+      .from("print_surface_exports")
+      .update({
+        sent_at: new Date().toISOString(),
+        sent_by: input.sentBy ?? null,
+        recipient: input.recipient ?? null,
+        language: input.language ?? null,
+      })
+      .eq("id", id)
       .select()
       .single();
     if (error) throw error;

@@ -12,6 +12,7 @@ import {
   movePlacement,
   placementsForItem,
   placementsForView,
+  markPrintSurfaceProjectSent,
   removeMarkerPlacement,
   renamePrintSurfaceView,
   replacePrintSurfaceViewImage,
@@ -44,6 +45,8 @@ import type { Currency } from "../../../domain/models";
 import type { PriceListRepository } from "../../../domain/priceListRepository";
 import type { RemoteApiCatalogPricingRepository } from "../../../lib/db/catalogPricing.remoteApi.client";
 import { resolvePrintSurfacePrice, sumPrintSurfacePrices, type PrintSurfacePriceResolution } from "../../../domain/printSurfacePricing";
+import { resolveEventBranding } from "../../../domain/eventBranding";
+import type { PrintSurfaceEmailContext } from "../../../domain/printSurfaceEmailContext";
 import { useAssetUrl } from "../../../hooks/useAssetUrl";
 import { uploadAsset, readRasterImageDimensions } from "../../../lib/storage/assetClient";
 import { PrintSurfaceCanvas } from "./PrintSurfaceCanvas";
@@ -79,6 +82,7 @@ export function PrintSurfaceEditorPage({
   catalogPricingRepository,
   events,
   onBackToList,
+  onEmailHandoff,
 }: {
   projectId: string;
   projectRepository: PrintSurfaceProjectRepository;
@@ -90,6 +94,8 @@ export function PrintSurfaceEditorPage({
   catalogPricingRepository: RemoteApiCatalogPricingRepository;
   events: readonly Exhibition[];
   onBackToList: () => void;
+  /** Switches to the E-maily tab with this print-surfaces handoff context prefilled (spec section 9) — implemented once at the BoothGenerator level, reused by every module that hands off to E-maily, never a second composer here. */
+  onEmailHandoff: (context: PrintSurfaceEmailContext) => void;
 }) {
   const [project, setProject] = useState<PrintSurfaceProject | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -215,6 +221,11 @@ export function PrintSurfaceEditorPage({
 
   const activeView = project ? findPrintSurfaceView(project.views, activeViewId) : undefined;
   const { url: imageUrl } = useAssetUrl(activeView?.image.asset);
+  // Section 1/2: an event's own DB-uploaded logoAsset (curated) wins over the static
+  // `/events/<slug>/logo.png` convention when present — useAssetUrl already falls back to the
+  // legacy/static logoUrl itself while the asset resolves, so resolveEventBranding below never
+  // needs to duplicate that fallback logic.
+  const { url: eventLogoUrl } = useAssetUrl(resolvedEvent?.logoAsset, resolvedEvent?.logoUrl);
 
   if (loadError) {
     return (
@@ -245,9 +256,10 @@ export function PrintSurfaceEditorPage({
         .map((placement) => findPrintSurfaceView(project.views, placement.imageId)?.label ?? "?")
     : [];
   const linkableItems = activeViewId ? itemsWithoutPlacementOnView(project.items, project.placements, activeViewId) : [];
-  const eventName = events.find((event) => event.id === project.eventId)?.name;
-  const realizationCompanyName = companies.find((company) => company.id === project.realizationCompanyId)?.name;
+  const realizationCompany = companies.find((company) => company.id === project.realizationCompanyId);
+  const realizationCompanyName = realizationCompany?.name;
   const activeCompanies = companies.filter((company) => company.isActive);
+  const eventBranding = resolveEventBranding(resolvedEvent, eventLogoUrl);
 
   const pricingContext: PricingContext = {
     exhibitionId: project.eventId,
@@ -392,8 +404,18 @@ export function PrintSurfaceEditorPage({
   }
 
   function handleChangeStatus(status: PrintSurfaceProjectStatus) {
-    if (status === "sent") return; // "sent" is only ever set by a real send action — none exists yet (spec section 14)
+    if (status === "sent") return; // "sent" is only ever set via handleMarkSent below, never this dropdown (spec section 8/10)
     setProject((current) => (current ? setPrintSurfaceProjectStatus(current, status) : current));
+  }
+
+  /** The ONLY path to status "sent" — called by PrintSurfaceExportPanel's "Potvrdit jako odesláno", itself only enabled after a real PDF was generated for the email handoff (spec section 10/14: never a fake "Odesláno" from a plain menu click). Persists immediately, bypassing the autosave debounce, same as handleManualSave. */
+  function handleMarkSent() {
+    setProject((current) => {
+      if (!current) return current;
+      const next = markPrintSurfaceProjectSent(current, current.createdBy);
+      void persistNow(next);
+      return next;
+    });
   }
 
   return (
@@ -416,10 +438,13 @@ export function PrintSurfaceEditorPage({
             views={project.views}
             presets={presets}
             productionDimensions={productionDimensions}
-            eventName={eventName}
+            eventBranding={eventBranding}
             realizationCompanyName={realizationCompanyName}
+            realizationCompany={realizationCompany}
             exportRepository={exportRepository}
             priceResolutions={itemPriceResolutions}
+            onEmailHandoff={onEmailHandoff}
+            onMarkSent={handleMarkSent}
           />
         </div>
       </div>

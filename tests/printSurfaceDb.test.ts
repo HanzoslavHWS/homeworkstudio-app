@@ -264,3 +264,30 @@ test("SupabasePrintSurfaceExportRepository: create + list vrací záznamy pro da
   const otherProjectList = await repository.list("project-2");
   assert.deepEqual(otherProjectList, []);
 });
+
+test("SupabasePrintSurfaceExportRepository: create() persists fileStorageKey when a real PDF was uploaded (spec section 13/14)", async () => {
+  const client = createFakeSupabaseClient();
+  const repository = new SupabasePrintSurfaceExportRepository(client as never);
+  const record = await repository.create({ projectId: "project-1", exportType: "pdf_overview", fileStorageKey: "print-surfaces/project-1/export/r1.pdf" });
+  assert.equal(record.fileStorageKey, "print-surfaces/project-1/export/r1.pdf");
+  assert.equal(record.sentAt, undefined);
+  assert.equal(record.sentBy, undefined);
+});
+
+test("SupabasePrintSurfaceExportRepository: markSent is a SEPARATE, later write — creating a PDF export never sets sentAt on its own (spec section 14: 'PDF vytvořen' != 'email odeslán')", async () => {
+  const client = createFakeSupabaseClient();
+  const repository = new SupabasePrintSurfaceExportRepository(client as never);
+  const created = await repository.create({ projectId: "project-1", exportType: "pdf_overview", fileStorageKey: "k1" });
+  assert.equal(created.sentAt, undefined);
+
+  const sent = await repository.markSent(created.id, { recipient: "zakaznik@example.test", language: "cs", sentBy: "jan.novak" });
+  assert.equal(sent.id, created.id);
+  assert.ok(sent.sentAt);
+  assert.equal(sent.sentBy, "jan.novak");
+  assert.equal(sent.recipient, "zakaznik@example.test");
+  assert.equal(sent.language, "cs");
+  assert.equal(sent.fileStorageKey, "k1", "the file reference already on the record survives the later markSent update");
+
+  const relisted = await repository.list("project-1");
+  assert.equal(relisted[0]?.sentAt, sent.sentAt);
+});

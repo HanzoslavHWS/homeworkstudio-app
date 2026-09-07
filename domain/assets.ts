@@ -12,6 +12,7 @@ export const ASSET_CATEGORIES = [
   "project-floorplan",
   "project-export",
   "print-surface-image",
+  "print-surface-export",
   "temporary",
 ] as const;
 
@@ -137,6 +138,8 @@ const CATEGORY_RULES: Readonly<Record<AssetCategory, CategoryRule>> = {
   // Tiskové plochy V2: the uploaded booth photo/visualization a project's markers sit on top of.
   // JPG/PNG only (spec) — narrower than the shared IMAGE_TYPES (no gif/webp/svg needed here).
   "print-surface-image": { prefix: (id) => `print-surfaces/${id}/image`, maxBytes: 25_000_000, mimeTypes: ["image/jpeg", "image/png"] },
+  // Print Surfaces V5 (spec section 13): the real generated jsPDF export artifact — PDF only.
+  "print-surface-export": { prefix: (id) => `print-surfaces/${id}/export`, maxBytes: 25_000_000, mimeTypes: ["application/pdf"] },
   temporary: { prefix: () => "temporary", maxBytes: 5_000_000, mimeTypes: ["text/plain", ...IMAGE_TYPES] },
 };
 

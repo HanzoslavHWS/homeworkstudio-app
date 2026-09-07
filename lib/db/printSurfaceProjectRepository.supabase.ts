@@ -70,6 +70,7 @@ function rowToSummary(row: PrintSurfaceProjectRow): PrintSurfaceProjectSummary {
     createdBy: row.created_by ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    sentAt: row.sent_at ?? undefined,
   };
 }
 

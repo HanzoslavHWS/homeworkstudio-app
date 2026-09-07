@@ -17,8 +17,14 @@ export type PdfDoc = Readonly<{
   setFontSize: (size: number) => number;
   text: (text: string | string[], x: number, y: number, options?: Readonly<{ align?: "left" | "center" | "right" }>) => void;
   setDrawColor: (r: number, g: number, b: number) => void;
+  setFillColor: (r: number, g: number, b: number) => void;
+  /** Color used by subsequent text() calls — jsPDF's real API; needed for white marker labels drawn on a dark filled circle (lib/printSurfacePdf.ts). Callers must reset it back to black after use, same discipline as setFont/setFontSize. */
+  setTextColor: (r: number, g: number, b: number) => void;
   setLineWidth: (width: number) => void;
-  rect: (x: number, y: number, w: number, h: number) => void;
+  /** `style`: "S" (stroke, jsPDF's default when omitted), "F" (fill), "FD" (fill + stroke). */
+  rect: (x: number, y: number, w: number, h: number, style?: string) => void;
+  /** jsPDF's real circle primitive — same `style` semantics as rect. Used for the compact print-safe marker pin (lib/printSurfacePdf.ts), never approximated with a rect. */
+  circle: (x: number, y: number, radius: number, style?: string) => void;
   line: (x1: number, y1: number, x2: number, y2: number) => void;
   addImage: (imageData: string, format: string, x: number, y: number, w: number, h: number) => void;
   addPage: () => void;

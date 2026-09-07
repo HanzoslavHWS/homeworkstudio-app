@@ -8,6 +8,7 @@ import {
   setPrintSurfaceProjectStatus,
   summarizePrintSurfaceProject,
   type PrintSurfaceItem,
+  type PrintSurfaceProjectStatus,
 } from "../domain/printSurfaceProject.ts";
 import type { PrintSurfaceProductionDimension } from "../domain/printSurfaceProductionDimension.ts";
 import { buildPrintSurfaceExportViewModel } from "../domain/printSurfaceExport.ts";
@@ -66,6 +67,26 @@ test("summarizePrintSurfaceProject: itemCount odpovídá počtu markerů, souhrn
   assert.equal(summary.itemCount, 2);
   assert.equal("items" in summary, false);
   assert.equal("image" in summary, false);
+});
+
+test("summarizePrintSurfaceProject: carries sentAt through for the project-list 'Odesláno' column (spec section 15) — undefined until markPrintSurfaceProjectSent was actually called", () => {
+  const project = createPrintSurfaceProject({ name: "Test", companyName: "ACME" }, "project-1");
+  assert.equal(summarizePrintSurfaceProject(project).sentAt, undefined);
+  const sent = markPrintSurfaceProjectSent(project, "jan.novak", "2026-02-01T10:00:00.000Z");
+  assert.equal(summarizePrintSurfaceProject(sent).sentAt, "2026-02-01T10:00:00.000Z");
+});
+
+test("sent status pouze po explicitně potvrzeném success path: setPrintSurfaceProjectStatus je typově omezen na draft/ready, markPrintSurfaceProjectSent je JEDINÁ cesta k sent (spec section 8/10)", () => {
+  // Compile-time proof: passing "sent" to setPrintSurfaceProjectStatus (the plain status-dropdown
+  // setter) is a TYPE ERROR — `npm run typecheck` fails if this line ever stops being one, i.e.
+  // if the dropdown's setter were ever loosened to accept "sent" directly.
+  // @ts-expect-error — "sent" is not assignable to Extract<PrintSurfaceProjectStatus, "draft" | "ready">.
+  const rejectedByTypes: PrintSurfaceProjectStatus = setPrintSurfaceProjectStatus(createPrintSurfaceProject({ name: "x", companyName: "y" }, "p"), "sent").status;
+  assert.equal(rejectedByTypes, "sent"); // (runtime has no validation of its own — the guarantee is the type system, proven above)
+
+  const project = createPrintSurfaceProject({ name: "Test", companyName: "ACME" }, "project-1");
+  const readyThenSent = markPrintSurfaceProjectSent(setPrintSurfaceProjectStatus(project, "ready"), "jan.novak");
+  assert.equal(readyThenSent.status, "sent");
 });
 
 test("resolvePrintSurfaceItemDimension: katalogová plocha řeší přes resolver produkčních rozměrů (available)", () => {

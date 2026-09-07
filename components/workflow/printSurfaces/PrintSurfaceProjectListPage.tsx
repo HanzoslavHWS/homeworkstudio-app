@@ -223,6 +223,7 @@ export function PrintSurfaceProjectListPage({
             <span>Realizačka</span>
             <span>Ploch</span>
             <span>Stav</span>
+            <span>Odesláno</span>
             <span>Vytvořil</span>
             <span>Poslední změna</span>
           </div>
@@ -233,6 +234,7 @@ export function PrintSurfaceProjectListPage({
               <span>{companyName(project.realizationCompanyId)}</span>
               <span>{project.itemCount}</span>
               <span><strong className={`stageBadge ${project.status}`}>{STATUS_LABELS[project.status]}</strong></span>
+              <span>{project.sentAt ? new Date(project.sentAt).toLocaleDateString("cs-CZ") : "—"}</span>
               <span>{project.createdBy ?? "—"}</span>
               <span>{new Date(project.updatedAt).toLocaleString("cs-CZ")}</span>
             </div>

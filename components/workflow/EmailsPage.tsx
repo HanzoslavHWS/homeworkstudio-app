@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   listEmailAiLanguagesByTier,
   listEmailAiTones,
@@ -13,6 +13,7 @@ import type { EmailTemplate, EmailTemplateEditInput, EmailTemplateRepository } f
 import { nextHistorySaveAction, type EmailHistoryEntry, type EmailHistoryRepository, type EmailHistorySaveInput } from "../../domain/emailHistory";
 import { buildEmailEventContext } from "../../domain/emailEventContext";
 import type { Exhibition } from "../../domain/organizations";
+import { buildPrintSurfaceEmailFreeText, PRINT_SURFACE_EMAIL_TEMPLATE_NAME, type PrintSurfaceEmailContext } from "../../domain/printSurfaceEmailContext";
 
 type EmailResult = Readonly<{ subject: string; body: string }>;
 type EmailsView = "compose" | "history" | "templates";
@@ -46,10 +47,13 @@ export function EmailsPage({
   templateRepository,
   historyRepository,
   events,
+  initialCompose,
 }: {
   templateRepository: EmailTemplateRepository;
   historyRepository: EmailHistoryRepository;
   events: readonly Exhibition[];
+  /** A handoff from another module (currently only print-surfaces — spec section 9) prefilling the compose view. `nonce` changes on every new handoff so the same context object can be reapplied even if unchanged; consumed exactly once per nonce (see the effects below), never reapplied on a plain revisit to this tab. */
+  initialCompose?: Readonly<{ context: PrintSurfaceEmailContext; nonce: number }>;
 }) {
   const languageTiers = listEmailAiLanguagesByTier();
   const tones = listEmailAiTones();
@@ -111,6 +115,36 @@ export function EmailsPage({
       .catch((loadError) => { if (!cancelled) setHistoryError(loadError instanceof Error ? loadError.message : "Historie e-mailů se nepodařilo načíst."); });
     return () => { cancelled = true; };
   }, [historyRepository]);
+
+  const appliedComposeNonceRef = useRef<number | undefined>(undefined);
+
+  // Section 9: applies eventId/freeText/language from the print-surfaces handoff — a fresh
+  // working email, same as a manual "Vytvořit e-mail" start (never touches currentHistoryId=
+  // something stale). Gated on `nonce` (not the context object identity) so the exact same
+  // context can be reapplied for a second handoff of the same project.
+  useEffect(() => {
+    if (!initialCompose) return;
+    const { context } = initialCompose;
+    setEventId(context.eventId ?? "");
+    setFreeText(buildPrintSurfaceEmailFreeText(context));
+    if (findEmailAiLanguage(context.languageCode)) setLanguageCode(context.languageCode);
+    setResult(null);
+    setSourceInputForResult(undefined);
+    setCurrentHistoryId(undefined);
+    setView("compose");
+  }, [initialCompose?.nonce]);
+
+  // Preselects the print-surfaces system template (see the migration) once both the handoff and
+  // the template list are available — whichever resolves later. Runs at most once per nonce (the
+  // ref guard), so it never re-fires just because `templates` reloads for an unrelated reason.
+  useEffect(() => {
+    if (!initialCompose || !templates) return;
+    if (appliedComposeNonceRef.current === initialCompose.nonce) return;
+    const template = templates.find((item) => item.scope === "system" && item.name === PRINT_SURFACE_EMAIL_TEMPLATE_NAME);
+    if (!template) return;
+    appliedComposeNonceRef.current = initialCompose.nonce;
+    loadTemplate(template.id);
+  }, [initialCompose, templates]);
 
   function showConfirmation(message: string) {
     setConfirmation(message);

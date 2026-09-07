@@ -2,6 +2,7 @@
 
 import type {
   PrintSurfaceExportCreateInput,
+  PrintSurfaceExportMarkSentInput,
   PrintSurfaceExportRecord,
   PrintSurfaceExportRepository,
 } from "../../domain/printSurfaceExport.ts";
@@ -35,6 +36,18 @@ export class RemoteApiPrintSurfaceExportRepository implements PrintSurfaceExport
       body: JSON.stringify(input),
     });
     if (!response.ok) await throwForFailedResponse(response, "Vytvoření záznamu exportu selhalo.");
+    const body = (await response.json()) as { export: PrintSurfaceExportRecord };
+    return body.export;
+  }
+
+  async markSent(id: string, input: PrintSurfaceExportMarkSentInput): Promise<PrintSurfaceExportRecord> {
+    const response = await fetch("/api/print-surfaces/exports/mark-sent", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id, ...input }),
+    });
+    if (!response.ok) await throwForFailedResponse(response, "Označení e-mailu jako odeslaného selhalo.");
     const body = (await response.json()) as { export: PrintSurfaceExportRecord };
     return body.export;
   }

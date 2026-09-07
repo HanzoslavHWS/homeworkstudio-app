@@ -143,6 +143,8 @@ export type PrintSurfaceProjectSummary = Readonly<{
   createdBy?: string;
   createdAt: string;
   updatedAt: string;
+  /** Spec section 15's "Odesláno datum" project-list column — reads the SAME field markPrintSurfaceProjectSent already writes, never a second sent-tracking mechanism. */
+  sentAt?: string;
 }>;
 
 export function summarizePrintSurfaceProject(project: PrintSurfaceProject): PrintSurfaceProjectSummary {
@@ -157,6 +159,7 @@ export function summarizePrintSurfaceProject(project: PrintSurfaceProject): Prin
     createdBy: project.createdBy,
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
+    sentAt: project.sentAt,
   };
 }
 

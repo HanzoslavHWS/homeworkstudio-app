@@ -26,7 +26,7 @@ export async function handlePrintSurfaceExportCreate(
     return NextResponse.json({ error: "Neplatný typ exportu." }, { status: 400 });
   }
   try {
-    const record = await repositoryFactory().create({ projectId: body.projectId, exportType: body.exportType, createdBy: body.createdBy });
+    const record = await repositoryFactory().create({ projectId: body.projectId, exportType: body.exportType, createdBy: body.createdBy, fileStorageKey: body.fileStorageKey });
     return NextResponse.json({ export: record });
   } catch (error) {
     if (error instanceof SupabaseConfigurationError) return NextResponse.json({ error: error.message }, { status: 503 });

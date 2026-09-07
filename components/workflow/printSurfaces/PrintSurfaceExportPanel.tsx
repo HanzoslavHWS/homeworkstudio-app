@@ -5,14 +5,20 @@ import {
   buildPrintSurfaceExportViewModel,
   nextPrintSurfaceExportRevision,
   type PrintSurfaceExportImage,
+  type PrintSurfaceExportRecord,
   type PrintSurfaceExportRepository,
   type PrintSurfaceExportViewModel,
 } from "../../../domain/printSurfaceExport";
-import type { PrintSurfaceProject, PrintSurfaceView } from "../../../domain/printSurfaceProject";
+import { resolvePrintSurfaceItemDimension, type PrintSurfaceProject, type PrintSurfaceView } from "../../../domain/printSurfaceProject";
 import type { PrintSurfacePreset } from "../../../domain/printSurfacePreset";
 import type { PrintSurfaceProductionDimension } from "../../../domain/printSurfaceProductionDimension";
 import type { PrintSurfacePriceResolution } from "../../../domain/printSurfacePricing";
-import { getAssetDownloadUrl } from "../../../lib/storage/assetClient";
+import type { EventBranding } from "../../../domain/eventBranding";
+import type { RealizationCompany } from "../../../domain/realizationCompany";
+import { buildPrintSurfaceEmailContext, type PrintSurfaceEmailContext } from "../../../domain/printSurfaceEmailContext";
+import { getAssetDownloadUrl, uploadAsset } from "../../../lib/storage/assetClient";
+import { loadImageAsDataUrl, loadImageWithDimensions } from "../../../lib/pdf/loadImageDataUrl";
+import { buildPrintSurfacePdf, type PrintSurfacePdfViewImages } from "../../../lib/printSurfacePdf";
 
 function escapeHtml(value: string): string {
   return value.replace(/[&<>"']/g, (char) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[char]!);
@@ -35,6 +41,24 @@ function imageBlockHtml(image: PrintSurfaceExportImage, sizeClass: string): stri
 }
 
 /**
+ * Event branding header block for the print-preview HTML (spec sections 1-6). The `<img
+ * onerror=...>` handler is the print-safe fallback: if the event has no real logo file at that
+ * URL (a static `/events/<slug>/logo.png` that was never added, or a blocked/slow remote asset
+ * URL), the image hides itself and reveals the always-present text sibling instead — never an
+ * empty gap, and never anything that could block/delay window.print() (this preview is never
+ * auto-printed — the user triggers Ctrl+P themselves once the window is visibly ready).
+ */
+function eventBrandingHtml(branding: EventBranding): string {
+  if (!branding.logoUrl) {
+    return branding.displayName ? `<strong class="ps-event-name-fallback">${escapeHtml(branding.displayName)}</strong>` : "";
+  }
+  return `<div class="ps-event-logo-wrap">
+    <img src="${escapeHtml(branding.logoUrl)}" alt="${escapeHtml(branding.displayName)}" class="ps-event-logo" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+    <strong class="ps-event-name-fallback" style="display:none">${escapeHtml(branding.displayName)}</strong>
+  </div>`;
+}
+
+/**
  * A4 portrait "Tiskový přehled" — header/metadata/visual(s)-with-marker-overlay/summary/table/
  * footer (spec section 4). One or two images side-by-side-ish depending on how many views the
  * project has; a single image is dominant. No PDF library — the browser's own print-to-PDF
@@ -43,7 +67,6 @@ function imageBlockHtml(image: PrintSurfaceExportImage, sizeClass: string): stri
  */
 function buildPrintableHtml(viewModel: PrintSurfaceExportViewModel): string {
   const metadataCards: Array<[string, string | undefined]> = [
-    ["Veletrh", viewModel.eventName],
     ["Vystavovatel / Firma", viewModel.companyName],
     ["Projekt / stánek", viewModel.projectName],
     ["Realizační firma", viewModel.realizationCompanyName],
@@ -89,10 +112,13 @@ function buildPrintableHtml(viewModel: PrintSurfaceExportViewModel): string {
 body { font-family: system-ui, "Segoe UI", sans-serif; color: #151515; margin: 0; padding: 0; font-size: 11px; }
 .ps-page { max-width: 186mm; margin: 0 auto; }
 
-.ps-header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 3px solid #151515; padding-bottom: 10px; margin-bottom: 14px; }
-.ps-brand { font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #96999c; text-transform: uppercase; }
-.ps-title { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; margin: 2px 0 0; }
+.ps-header { display: flex; align-items: flex-end; justify-content: space-between; border-bottom: 3px solid #151515; padding-bottom: 10px; margin-bottom: 14px; gap: 12px; }
+.ps-header-brand { display: flex; align-items: flex-end; gap: 10px; }
+.ps-title { font-size: 22px; font-weight: 800; letter-spacing: -0.5px; margin: 0; }
 .ps-subtitle { font-size: 10px; color: #666a6d; margin-top: 2px; }
+.ps-event-logo-wrap { text-align: right; }
+.ps-event-logo { max-height: 40px; max-width: 130px; width: auto; height: auto; }
+.ps-event-name-fallback { font-size: 15px; font-weight: 700; }
 
 .ps-meta-strip { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 16px; }
 .ps-meta-card { border: 1px solid #e3e4e5; border-radius: 6px; padding: 7px 10px; background: #fafafa; }
@@ -133,12 +159,13 @@ th { background: #f4f5f6; font-size: 8px; text-transform: uppercase; letter-spac
 <body>
 <div class="ps-page">
   <div class="ps-header">
-    <div>
-      <div class="ps-brand">ABF · HomeworkStudio</div>
-      <div class="ps-title">EXPORT TISKOVÝCH PLOCH</div>
-      <div class="ps-subtitle">Přehled tiskových ploch z generátoru</div>
+    <div class="ps-header-brand">
+      <div>
+        <div class="ps-title">EXPORT TISKOVÝCH PLOCH</div>
+        ${viewModel.createdBy ? `<div class="ps-subtitle">Vytvořil: ${escapeHtml(viewModel.createdBy)}</div>` : ""}
+      </div>
     </div>
-    ${viewModel.createdBy ? `<div class="ps-subtitle">Vytvořil: ${escapeHtml(viewModel.createdBy)}</div>` : ""}
+    ${eventBrandingHtml(viewModel.eventBranding)}
   </div>
 
   <div class="ps-meta-strip">${metadataHtml}</div>
@@ -158,13 +185,14 @@ th { background: #f4f5f6; font-size: 8px; text-transform: uppercase; letter-spac
     <tbody>${rows}</tbody>
   </table>
 
-  <div class="ps-footer">
-    <p><strong>Pokyny pro přípravu grafiky:</strong> Uvedené rozměry jsou VÝROBNÍ rozměry tiskové plochy — grafiku připravujte přesně na tento rozměr, včetně bezpečného odstupu textů a log minimálně 20 mm od každého okraje.</p>
-    <p>Konkrétní technické podmínky (formát souboru, barevný profil, spadávka) se řídí požadavky zvolené realizační firmy${viewModel.realizationCompanyName ? ` (${escapeHtml(viewModel.realizationCompanyName)})` : ""}.</p>
-    ${footerPriceHtml}
-  </div>
+  ${footerPriceHtml ? `<div class="ps-footer">${footerPriceHtml}</div>` : ""}
 </div>
 </body></html>`;
+}
+
+function pdfFileName(project: PrintSurfaceProject, revision: number): string {
+  const slug = (project.name || "tiskove-plochy").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "").toLowerCase();
+  return `${slug || "tiskove-plochy"}-R${revision}.pdf`;
 }
 
 export function PrintSurfaceExportPanel({
@@ -172,54 +200,74 @@ export function PrintSurfaceExportPanel({
   views,
   presets,
   productionDimensions,
-  eventName,
+  eventBranding,
   realizationCompanyName,
+  realizationCompany,
   exportRepository,
   priceResolutions,
+  onEmailHandoff,
+  onMarkSent,
 }: {
   project: PrintSurfaceProject;
   views: readonly PrintSurfaceView[];
   presets: readonly PrintSurfacePreset[];
   productionDimensions: readonly PrintSurfaceProductionDimension[];
-  eventName?: string;
+  eventBranding: EventBranding;
   realizationCompanyName?: string;
+  realizationCompany?: Pick<RealizationCompany, "id" | "name">;
   exportRepository: PrintSurfaceExportRepository;
   /** Per-item price resolutions from the editor (domain/printSurfacePricing.ts) — only ever rendered into the PDF when showPrices below is checked (spec section 9.9, default false). */
   priceResolutions: ReadonlyMap<string, PrintSurfacePriceResolution>;
+  /** Switches the app to the E-maily tab with this print-surfaces context prefilled (spec section 9) — implemented at the BoothGenerator level, never a second composer here. */
+  onEmailHandoff: (context: PrintSurfaceEmailContext) => void;
+  /** Calls markPrintSurfaceProjectSent + persists — only ever invoked from the explicit "Potvrdit jako odesláno" action below, never automatically (spec section 10/14). */
+  onMarkSent: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const [showPrices, setShowPrices] = useState(false);
   const [isBuilding, setIsBuilding] = useState(false);
+  const [isBuildingFile, setIsBuildingFile] = useState(false);
   const [error, setError] = useState("");
+  const [lastPdfExport, setLastPdfExport] = useState<Readonly<{ record: PrintSurfaceExportRecord; revision: number; fileName: string }> | undefined>(undefined);
+  const [isMarkingSent, setIsMarkingSent] = useState(false);
+
+  async function resolveImageUrlsByViewId(): Promise<Record<string, string>> {
+    const entries = await Promise.all(views.map(async (view) => {
+      try {
+        return [view.id, await getAssetDownloadUrl(view.image.asset.storageKey)] as const;
+      } catch {
+        return [view.id, undefined] as const;
+      }
+    }));
+    return Object.fromEntries(entries.filter(([, url]) => Boolean(url))) as Record<string, string>;
+  }
+
+  function buildViewModel(revision: number, imageUrlsByViewId: Readonly<Record<string, string>>): PrintSurfaceExportViewModel {
+    return buildPrintSurfaceExportViewModel({
+      project,
+      presets,
+      productionDimensions,
+      revision,
+      eventName: eventBranding.displayName || undefined,
+      realizationCompanyName,
+      realizationCompany,
+      imageUrlsByViewId,
+      priceResolutions,
+      showPrices,
+      eventBranding,
+    });
+  }
 
   async function handlePdfOverview() {
     setMenuOpen(false);
     setError("");
     setIsBuilding(true);
     try {
-      const [imageUrlEntries, existingExports] = await Promise.all([
-        Promise.all(views.map(async (view) => {
-          try {
-            return [view.id, await getAssetDownloadUrl(view.image.asset.storageKey)] as const;
-          } catch {
-            return [view.id, undefined] as const;
-          }
-        })),
+      const [imageUrlsByViewId, existingExports] = await Promise.all([
+        resolveImageUrlsByViewId(),
         exportRepository.list(project.id).catch(() => []),
       ]);
-      const imageUrlsByViewId = Object.fromEntries(imageUrlEntries.filter(([, url]) => Boolean(url)));
-
-      const viewModel = buildPrintSurfaceExportViewModel({
-        project,
-        presets,
-        productionDimensions,
-        revision: nextPrintSurfaceExportRevision(existingExports.length),
-        eventName,
-        realizationCompanyName,
-        imageUrlsByViewId,
-        priceResolutions,
-        showPrices,
-      });
+      const viewModel = buildViewModel(nextPrintSurfaceExportRevision(existingExports.length), imageUrlsByViewId);
 
       const printWindow = window.open("", "_blank");
       if (!printWindow) {
@@ -241,10 +289,104 @@ export function PrintSurfaceExportPanel({
     }
   }
 
+  /**
+   * The real PDF artifact (spec section 13) — jsPDF binary, uploaded as a StoredAsset so it has a
+   * real, later-downloadable/attachable reference (export history's fileStorageKey). Branding/view
+   * images are resolved to data URLs HERE (client-side, with graceful per-image fallback — see
+   * lib/pdf/loadImageDataUrl.ts) so lib/printSurfacePdf.ts itself stays pure/offline-testable.
+   */
+  async function generateAndUploadPdfFile(): Promise<Readonly<{ record: PrintSurfaceExportRecord; revision: number; fileName: string }>> {
+    const [imageUrlsByViewId, existingExports] = await Promise.all([
+      resolveImageUrlsByViewId(),
+      exportRepository.list(project.id).catch(() => []),
+    ]);
+    const revision = nextPrintSurfaceExportRevision(existingExports.length);
+    const viewModel = buildViewModel(revision, imageUrlsByViewId);
+
+    const eventLogoDataUrl = eventBranding.logoUrl ? await loadImageAsDataUrl(eventBranding.logoUrl) : undefined;
+    const viewImageEntries = await Promise.all(
+      views
+        .filter((view) => imageUrlsByViewId[view.id])
+        .map(async (view) => [view.id, await loadImageWithDimensions(imageUrlsByViewId[view.id]!)] as const),
+    );
+    const viewImages: PrintSurfacePdfViewImages = new Map(
+      viewImageEntries.filter((entry): entry is readonly [string, NonNullable<(typeof entry)[1]>] => Boolean(entry[1])),
+    );
+
+    const bytes = await buildPrintSurfacePdf(viewModel, { eventLogoDataUrl }, viewImages);
+    const fileName = pdfFileName(project, revision);
+    const file = new File([new Uint8Array(bytes)], fileName, { type: "application/pdf" });
+    const asset = await uploadAsset(file, { category: "print-surface-export", ownerId: project.id, displayName: fileName });
+    const record = await exportRepository.create({ projectId: project.id, exportType: "pdf_overview", createdBy: project.createdBy, fileStorageKey: asset.storageKey });
+    const result = { record, revision, fileName };
+    setLastPdfExport(result);
+    return result;
+  }
+
+  async function handleDownloadPdfFile() {
+    setMenuOpen(false);
+    setError("");
+    setIsBuildingFile(true);
+    try {
+      const { record } = await generateAndUploadPdfFile();
+      if (record.fileStorageKey) {
+        const downloadUrl = await getAssetDownloadUrl(record.fileStorageKey);
+        window.open(downloadUrl, "_blank");
+      }
+    } catch {
+      setError("Vytvoření PDF souboru se nezdařilo.");
+    } finally {
+      setIsBuildingFile(false);
+    }
+  }
+
+  async function handleEmailHandoff() {
+    setMenuOpen(false);
+    setError("");
+    setIsBuildingFile(true);
+    try {
+      const { revision, fileName } = lastPdfExport ?? (await generateAndUploadPdfFile());
+      const context = buildPrintSurfaceEmailContext({
+        companyName: project.companyName,
+        eventId: project.eventId,
+        eventName: eventBranding.displayName || undefined,
+        realizationCompanyName,
+        projectName: project.name,
+        items: project.items,
+        presets,
+        resolveDimension: (item) => resolvePrintSurfaceItemDimension(item, project.realizationCompanyId, productionDimensions),
+        revision,
+        attachmentFileName: fileName,
+      });
+      onEmailHandoff(context);
+    } catch {
+      setError("Příprava e-mailového podkladu se nezdařila.");
+    } finally {
+      setIsBuildingFile(false);
+    }
+  }
+
+  async function handleMarkSent() {
+    if (!lastPdfExport) return;
+    if (!window.confirm("Potvrdit, že jste tento e-mail se soubory skutečně odeslali v Outlooku? Aplikace odeslání sama neověřuje.")) return;
+    setIsMarkingSent(true);
+    setError("");
+    try {
+      await exportRepository.markSent(lastPdfExport.record.id, { language: "cs" });
+      onMarkSent();
+    } catch {
+      setError("Označení jako odesláno se nezdařilo.");
+    } finally {
+      setIsMarkingSent(false);
+    }
+  }
+
+  const isBusy = isBuilding || isBuildingFile;
+
   return (
     <div className="printSurfaceExportPanel">
-      <button type="button" className="primaryButton" onClick={() => setMenuOpen((current) => !current)} disabled={isBuilding}>
-        {isBuilding ? "Připravuji…" : "Exportovat"}
+      <button type="button" className="primaryButton" onClick={() => setMenuOpen((current) => !current)} disabled={isBusy}>
+        {isBusy ? "Připravuji…" : "Exportovat"}
       </button>
       {menuOpen && (
         <div className="printSurfaceExportMenu">
@@ -253,7 +395,13 @@ export function PrintSurfaceExportPanel({
             <span>Zobrazit ceny</span>
           </label>
           <button type="button" onClick={() => void handlePdfOverview()}>PDF / Tiskový přehled</button>
-          <button type="button" disabled title="Připravujeme">Do Outlooku</button>
+          <button type="button" onClick={() => void handleDownloadPdfFile()}>Stáhnout PDF (soubor)</button>
+          <button type="button" onClick={() => void handleEmailHandoff()}>Do e-mailu / Outlooku</button>
+          {project.status !== "sent" && (
+            <button type="button" onClick={() => void handleMarkSent()} disabled={!lastPdfExport || isMarkingSent} title={!lastPdfExport ? "Nejdřív vytvořte PDF soubor nebo použijte 'Do e-mailu / Outlooku'" : undefined}>
+              {isMarkingSent ? "Potvrzuji…" : "Potvrdit jako odesláno"}
+            </button>
+          )}
         </div>
       )}
       {error && <p className="uploadError">{error}</p>}

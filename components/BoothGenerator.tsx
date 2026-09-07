@@ -215,6 +215,7 @@ import { EmailsPage } from "./workflow/EmailsPage";
 import { RemoteApiEmailTemplateRepository } from "../lib/db/emailTemplateRepository.remoteApi.client";
 import { RemoteApiEmailHistoryRepository } from "../lib/db/emailHistoryRepository.remoteApi.client";
 import { PrintSurfacesPage } from "./workflow/PrintSurfacesPage";
+import type { PrintSurfaceEmailContext } from "../domain/printSurfaceEmailContext";
 import { RemoteApiPrintSurfaceProjectRepository } from "../lib/db/printSurfaceProjectRepository.remoteApi.client";
 import { RemoteApiRealizationCompanyRepository } from "../lib/db/realizationCompanyRepository.remoteApi.client";
 import { RemoteApiPrintSurfacePresetRepository } from "../lib/db/printSurfacePresetRepository.remoteApi.client";
@@ -298,6 +299,11 @@ export default function BoothGenerator() {
   const printSurfacePriceListRepositoryRef = useRef(new RemoteApiPriceListRepository());
   const printSurfaceCatalogPricingRepositoryRef = useRef(new RemoteApiCatalogPricingRepository());
   const [pricingAdminPreselect, setPricingAdminPreselect] = useState<string | undefined>(undefined);
+  const [printSurfaceEmailPrefill, setPrintSurfaceEmailPrefill] = useState<Readonly<{ context: PrintSurfaceEmailContext; nonce: number }> | undefined>(undefined);
+  function handlePrintSurfaceEmailHandoff(context: PrintSurfaceEmailContext) {
+    setPrintSurfaceEmailPrefill({ context, nonce: Date.now() });
+    navigateWorkspace("emails");
+  }
   const [workspaceSection, setWorkspaceSection] = useState<
     "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces"
   >("project");
@@ -2699,6 +2705,7 @@ export default function BoothGenerator() {
             templateRepository={emailTemplateRepositoryRef.current}
             historyRepository={emailHistoryRepositoryRef.current}
             events={adminEvents}
+            initialCompose={printSurfaceEmailPrefill}
           />
         )}
 
@@ -2712,6 +2719,7 @@ export default function BoothGenerator() {
             priceListRepository={printSurfacePriceListRepositoryRef.current}
             catalogPricingRepository={printSurfaceCatalogPricingRepositoryRef.current}
             events={adminEvents}
+            onEmailHandoff={handlePrintSurfaceEmailHandoff}
           />
         )}
 

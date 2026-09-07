@@ -29,6 +29,9 @@ import {
 import { formatPrintSurfacePriceStatus, sumPrintSurfacePrices, type PrintSurfacePriceResolution } from "./printSurfacePricing.ts";
 import { printSurfaceTypeLabel, type PrintSurfaceTypeId } from "./printSurfaceTypeCatalog.ts";
 import type { PrintSurfaceProductionDimension } from "./printSurfaceProductionDimension.ts";
+import type { EventBranding } from "./eventBranding.ts";
+import { resolveGraphicsInstructions, type GraphicsInstructions } from "./graphicsInstructions.ts";
+import type { RealizationCompany } from "./realizationCompany.ts";
 
 /** A closed union, not a boolean — room to add "outlook_draft" etc. later without redesigning the table (spec section 15/16). */
 export const PRINT_SURFACE_EXPORT_TYPES = ["pdf_overview"] as const;
@@ -52,11 +55,21 @@ export type PrintSurfaceExportCreateInput = Readonly<{
   projectId: string;
   exportType: PrintSurfaceExportType;
   createdBy?: string;
+  /** Set only when a real PDF artifact (lib/printSurfacePdf.ts) was generated AND uploaded successfully — "PDF vytvořen" never implies "e-mail odeslán" (spec section 14), so this is written at create time, independent of markSent below. */
+  fileStorageKey?: string;
+}>;
+
+/** "E-mail odeslán" is a SEPARATE, later action on an EXISTING export record — never bundled into create() (spec section 14: "Nespojuj 'PDF vytvořeno' automaticky s 'email odeslán'"). Only ever called from an explicit, user-confirmed action — see PrintSurfaceExportPanel.tsx's "Potvrdit jako odesláno". */
+export type PrintSurfaceExportMarkSentInput = Readonly<{
+  recipient?: string;
+  language?: string;
+  sentBy?: string;
 }>;
 
 export interface PrintSurfaceExportRepository {
   list(projectId: string): Promise<readonly PrintSurfaceExportRecord[]>;
   create(input: PrintSurfaceExportCreateInput): Promise<PrintSurfaceExportRecord>;
+  markSent(id: string, input: PrintSurfaceExportMarkSentInput): Promise<PrintSurfaceExportRecord>;
 }
 
 /** Revision is simply "how many exports of this project already exist, plus this one" — no separate versioning model (spec section 12: keep it simple). */
@@ -134,6 +147,10 @@ export type PrintSurfaceExportViewModel = Readonly<{
   showPrices: boolean;
   /** Sum of every row's resolved price (items with includeInCalculation=false or an unresolved price contribute 0 — see sumPrintSurfacePrices). Only rendered as a footer when showPrices is true. */
   totalPrice: number;
+  /** Event branding for the header logo (spec sections 1-6) — see domain/eventBranding.ts. Never resolved here (no I/O in this module); falls back to a text-only {displayName: eventName} when the caller only passed the plain eventName string. */
+  eventBranding: EventBranding;
+  /** "Pokyny pro přípravu grafiky" block (spec section 7) — see domain/graphicsInstructions.ts. */
+  graphicsInstructions: GraphicsInstructions;
 }>;
 
 /**
@@ -157,6 +174,9 @@ export function buildPrintSurfaceExportViewModel(input: Readonly<{
   generatedAt?: string;
   priceResolutions?: ReadonlyMap<string, PrintSurfacePriceResolution>;
   showPrices?: boolean;
+  /** Pre-resolved by the caller (async asset URL resolution lives OUTSIDE this pure function — see PrintSurfaceExportPanel.tsx). When absent, falls back to a text-only branding object built from `eventName`. */
+  eventBranding?: EventBranding;
+  realizationCompany?: Pick<RealizationCompany, "id" | "name">;
 }>): PrintSurfaceExportViewModel {
   const showViewColumn = input.project.views.length > 1;
   const showPrices = input.showPrices ?? false;
@@ -215,5 +235,7 @@ export function buildPrintSurfaceExportViewModel(input: Readonly<{
     showViewColumn,
     showPrices,
     totalPrice: input.priceResolutions ? sumPrintSurfacePrices([...input.priceResolutions.values()]) : 0,
+    eventBranding: input.eventBranding ?? { displayName: input.eventName ?? "", hasCuratedLogo: false },
+    graphicsInstructions: resolveGraphicsInstructions(input.realizationCompany),
   };
 }

@@ -9,6 +9,7 @@ import type { PrintSurfaceExportRepository } from "../../domain/printSurfaceExpo
 import type { Exhibition } from "../../domain/organizations";
 import type { PriceListRepository } from "../../domain/priceListRepository";
 import type { RemoteApiCatalogPricingRepository } from "../../lib/db/catalogPricing.remoteApi.client";
+import type { PrintSurfaceEmailContext } from "../../domain/printSurfaceEmailContext";
 import { PrintSurfaceProjectListPage } from "./printSurfaces/PrintSurfaceProjectListPage";
 import { PrintSurfaceEditorPage } from "./printSurfaces/PrintSurfaceEditorPage";
 
@@ -28,6 +29,7 @@ export function PrintSurfacesPage({
   priceListRepository,
   catalogPricingRepository,
   events,
+  onEmailHandoff,
 }: {
   projectRepository: PrintSurfaceProjectRepository;
   companyRepository: RealizationCompanyRepository;
@@ -37,6 +39,7 @@ export function PrintSurfacesPage({
   priceListRepository: PriceListRepository;
   catalogPricingRepository: RemoteApiCatalogPricingRepository;
   events: readonly Exhibition[];
+  onEmailHandoff: (context: PrintSurfaceEmailContext) => void;
 }) {
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
 
@@ -53,6 +56,7 @@ export function PrintSurfacesPage({
         catalogPricingRepository={catalogPricingRepository}
         events={events}
         onBackToList={() => setOpenProjectId(null)}
+        onEmailHandoff={onEmailHandoff}
       />
     );
   }
