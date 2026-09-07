@@ -210,7 +210,8 @@ export function PrintSurfaceExportPanel({
     try {
       await exportRepository.markSent(lastExportId, { language: "cs" });
       onMarkSent();
-    } catch {
+    } catch (error) {
+      console.error("Print surface export mark-sent failed", error);
       setError("Označení jako odesláno se nezdařilo.");
     } finally {
       setIsMarkingSent(false);

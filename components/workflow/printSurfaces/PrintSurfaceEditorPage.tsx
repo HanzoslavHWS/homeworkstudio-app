@@ -183,7 +183,8 @@ export function PrintSurfaceEditorPage({
     try {
       await projectRepository.save(target);
       setSaveStatus("saved");
-    } catch {
+    } catch (error) {
+      console.error("Print surface project save failed", error);
       setSaveStatus("error");
     }
   }
@@ -201,7 +202,10 @@ export function PrintSurfaceEditorPage({
     setSaveStatus("saving");
     const timeout = window.setTimeout(() => {
       pendingSaveTimeoutRef.current = undefined;
-      projectRepository.save(project).then(() => setSaveStatus("saved")).catch(() => setSaveStatus("error"));
+      projectRepository.save(project).then(() => setSaveStatus("saved")).catch((error) => {
+        console.error("Print surface project autosave failed", error);
+        setSaveStatus("error");
+      });
     }, 600);
     pendingSaveTimeoutRef.current = timeout;
     return () => window.clearTimeout(timeout);

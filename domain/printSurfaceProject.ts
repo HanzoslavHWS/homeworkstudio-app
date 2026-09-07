@@ -626,9 +626,14 @@ export function setPrintSurfaceProjectStatus(
 }
 
 /**
- * The ONLY way a project may become "sent" — always records who/when. Never call this just
- * because an Outlook draft or a PDF preview was opened (spec section 14) — only once a real send
- * action actually completes.
+ * The ONLY way a project may become "sent" — always records when, and who if a real per-user
+ * identity is known. This app has no per-user login yet (one shared login — see
+ * lib/auth/session.ts), so `sentBy` stays undefined/null in real usage today — never a fabricated
+ * stand-in identity. The DB's print_surface_projects_sent_pair CHECK
+ * constraint reflects exactly this: sent_by without sent_at is invalid, but sent_at without
+ * sent_by is allowed (see the migration comment on that constraint). Never call this just because
+ * an Outlook draft or a PDF preview was opened (spec section 14) — only once a real send action
+ * actually completes.
  */
 export function markPrintSurfaceProjectSent(
   project: PrintSurfaceProject,
