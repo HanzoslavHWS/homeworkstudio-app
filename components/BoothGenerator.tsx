@@ -2637,6 +2637,7 @@ export default function BoothGenerator() {
           onSave={workspaceSection === "project" ? saveProject : undefined}
           saveStatus={saveStatus}
           saveError={saveError}
+          showStepper={workspaceSection === "project"}
         />
 
         {persistenceMode === "local-fallback" && (

@@ -5,6 +5,8 @@ import {
   addMarkerPlacementForExistingItem,
   addPrintSurfaceItemWithPlacement,
   addPrintSurfaceView,
+  buildPrintSurfaceProjectFingerprint,
+  diffPrintSurfaceProjectFingerprints,
   findMarkerPlacement,
   findPrintSurfaceView,
   itemForPlacement,
@@ -13,6 +15,7 @@ import {
   placementsForItem,
   placementsForView,
   markPrintSurfaceProjectSent,
+  printSurfaceProjectFingerprintsEqual,
   removeMarkerPlacement,
   renamePrintSurfaceView,
   replacePrintSurfaceViewImage,
@@ -174,7 +177,8 @@ export function PrintSurfaceEditorPage({
     return () => { cancelled = true; };
   }, [catalogPricingRepository, resolvedPriceListId]);
 
-  async function persistNow(target: PrintSurfaceProject) {
+  /** Returns whether the save actually succeeded — most callers (autosave, handleMarkSent) fire-and-forget and don't care, but handlePdfGenerated below needs to know before it can safely commit a new latestPdf into editor state (real-usage follow-up spec section 3/7). */
+  async function persistNow(target: PrintSurfaceProject): Promise<boolean> {
     if (pendingSaveTimeoutRef.current !== undefined) {
       window.clearTimeout(pendingSaveTimeoutRef.current);
       pendingSaveTimeoutRef.current = undefined;
@@ -183,9 +187,11 @@ export function PrintSurfaceEditorPage({
     try {
       await projectRepository.save(target);
       setSaveStatus("saved");
+      return true;
     } catch (error) {
       console.error("Print surface project save failed", error);
       setSaveStatus("error");
+      return false;
     }
   }
 
@@ -421,14 +427,47 @@ export function PrintSurfaceEditorPage({
     });
   }
 
-  /** Attaches the freshly (re)generated "current PDF" reference to the project and persists it immediately (bypassing the autosave debounce) — same discipline as handleMarkSent above. withLatestPdf deliberately never bumps updatedAt (see its own doc), so this save cannot self-invalidate the freshness fingerprint it just captured. */
-  function handlePdfGenerated(latestPdf: PrintSurfaceLatestPdf) {
-    setProject((current) => {
-      if (!current) return current;
-      const next = withLatestPdf(current, latestPdf);
-      void persistNow(next);
-      return next;
-    });
+  /**
+   * Attaches the freshly (re)generated "current PDF" reference to the project — awaited end to end
+   * by the caller (PrintSurfaceExportPanel's generateAndUploadCurrentPdf), so isBusy/Download stay
+   * disabled until this actually resolves (real-usage follow-up spec section 3). Real change from
+   * before: `setProject` (which commits the new latestPdf into editor state — the value Download
+   * reads) now happens ONLY AFTER persistNow confirms the save succeeded, not optimistically before
+   * it. If the save fails, this throws instead of committing — the PREVIOUS project/latestPdf stays
+   * in effect (spec section 7: "zachovej předchozí latestPdf... nevytvářej falešně PDF připraveno"),
+   * and PrintSurfaceExportPanel surfaces the thrown message as its error banner. Uses projectRef
+   * (not the setProject-updater pattern) because persistNow must be awaited BEFORE deciding whether
+   * to commit at all — the same "read the freshest state via the ref" precedent handleManualSave
+   * already uses.
+   *
+   * Immediate self-check (dev only): `latestPdf.projectFingerprint` was built from the `project`
+   * PrintSurfaceExportPanel had at click time; `next` here is built from the actual freshest state
+   * at the moment this callback runs. They SHOULD always describe the same content — if they don't,
+   * the PDF would show "not current" the instant it's generated, which is exactly the bug this
+   * guards against.
+   */
+  async function handlePdfGenerated(latestPdf: PrintSurfaceLatestPdf): Promise<void> {
+    const current = projectRef.current;
+    if (!current) throw new Error("Projekt není načten.");
+    const next = withLatestPdf(current, latestPdf);
+    if (process.env.NODE_ENV !== "production") {
+      const recomputed = buildPrintSurfaceProjectFingerprint(next);
+      if (!printSurfaceProjectFingerprintsEqual(latestPdf.projectFingerprint, recomputed)) {
+        const diff = diffPrintSurfaceProjectFingerprints(latestPdf.projectFingerprint, recomputed);
+        console.warn(
+          "[print-surfaces] self-check failed: PDF just generated but its stored fingerprint already disagrees with the current project state",
+          { changedFields: diff.changedFields, stored: latestPdf.projectFingerprint, recomputed },
+        );
+      }
+    }
+    const saved = await persistNow(next);
+    if (!saved) throw new Error("Nový PDF byl vytvořen, ale uložení projektu se nezdařilo. Zkuste to prosím znovu.");
+    // Updater form, not `setProject(next)`: persistNow was a real network round trip — if the user
+    // changed something else (e.g. moved a marker) WHILE it was in flight, committing the stale
+    // `next` snapshot directly would silently discard that edit. Re-attaching latestPdf onto
+    // whatever is actually current now preserves it (that edit's own autosave still fires
+    // separately) — and correctly leaves the PDF reading as stale if it truly is relative to it.
+    setProject((latest) => (latest ? withLatestPdf(latest, latestPdf) : latest));
   }
 
   return (

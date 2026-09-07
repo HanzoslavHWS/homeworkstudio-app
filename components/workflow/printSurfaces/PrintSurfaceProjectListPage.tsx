@@ -81,7 +81,14 @@ export function PrintSurfaceProjectListPage({
     });
   }, [projects, searchText, eventFilter, statusFilter]);
 
-  /** Quick download without opening the editor (spec: "Stáhnout PDF pokud current PDF existuje") — just resolves the already-uploaded storageKey, never regenerates anything from the list screen. Passes the logical fileName through so the browser saves it under the human-readable name, not the (often UUID) storageKey. */
+  /**
+   * Quick download without opening the editor — just resolves the already-uploaded latestPdf
+   * storageKey and downloads it, never regenerates anything and never makes a freshness decision
+   * (the list is not an authoritative source of truth for PDF freshness — see
+   * PrintSurfaceProjectSummary.latestPdf's own doc; only an open PrintSurfaceEditorPage is).
+   * Passes the logical fileName through so the browser saves it under the human-readable name, not
+   * the (often UUID) storageKey.
+   */
   async function handleDownloadPdf(storageKey: string, fileName: string) {
     try {
       const url = await getAssetDownloadUrl(storageKey, fileName);
@@ -251,12 +258,12 @@ export function PrintSurfaceProjectListPage({
               <span className="printSurfaceProjectPdfCell">
                 {project.latestPdf ? (
                   <>
+                    <span className="printSurfacePdfBadge neutral">PDF připraveno</span>
                     <button type="button" className="textButton" onClick={(event) => { event.stopPropagation(); void handleDownloadPdf(project.latestPdf!.storageKey, project.latestPdf!.fileName); }}>Stáhnout PDF</button>
-                    <span className={project.latestPdf.isCurrent ? "printSurfacePdfBadge current" : "printSurfacePdfBadge stale"}>
-                      {project.latestPdf.isCurrent ? "PDF aktuální" : "PDF není aktuální"}
-                    </span>
                   </>
-                ) : "—"}
+                ) : (
+                  <span className="printSurfacePdfBadge neutral">PDF nevygenerováno</span>
+                )}
               </span>
             </div>
           ))}

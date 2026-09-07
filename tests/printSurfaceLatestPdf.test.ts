@@ -124,17 +124,20 @@ test("fingerprint is order-independent: rebuilding items/placements in a differe
   assert.ok(printSurfaceProjectFingerprintsEqual(fingerprintA, fingerprintB));
 });
 
-test("PrintSurfaceProjectSummary pre-computes isCurrent (never ships raw views/items/placements) — summarizePrintSurfaceProject reflects the same freshness isPrintSurfacePdfCurrent would report", () => {
+test("PrintSurfaceProjectSummary carries ONLY the PDF artifact identity (storageKey/fileName), never a freshness/current-vs-stale signal — the list is not an authoritative source of truth for that (real-usage follow-up)", () => {
   const project = buildFixtureProject();
   const withPdf = withLatestPdf(project, fakeLatestPdfFor(project));
-  const currentSummary = summarizePrintSurfaceProject(withPdf);
-  assert.equal(currentSummary.latestPdf?.isCurrent, true);
-  assert.equal(currentSummary.latestPdf?.storageKey, withPdf.latestPdf?.storageKey);
-  assert.equal(currentSummary.latestPdf?.fileName, withPdf.latestPdf?.fileName);
+  const summary = summarizePrintSurfaceProject(withPdf);
+  assert.equal(summary.latestPdf?.storageKey, withPdf.latestPdf?.storageKey);
+  assert.equal(summary.latestPdf?.fileName, withPdf.latestPdf?.fileName);
+  assert.equal("isCurrent" in (summary.latestPdf ?? {}), false);
 
+  // even after a real content edit (which WOULD flip isPrintSurfacePdfCurrent inside an open
+  // editor), the summary's latestPdf shape is unchanged — it never recomputes or exposes freshness.
   const edited = withItems(withPdf, updatePrintSurfaceItem(withPdf.items, "item-a", { label: "Z" }));
-  const staleSummary = summarizePrintSurfaceProject(edited);
-  assert.equal(staleSummary.latestPdf?.isCurrent, false);
+  const editedSummary = summarizePrintSurfaceProject(edited);
+  assert.equal("isCurrent" in (editedSummary.latestPdf ?? {}), false);
+  assert.equal(editedSummary.latestPdf?.storageKey, withPdf.latestPdf?.storageKey);
 });
 
 test("summarizePrintSurfaceProject with no PDF ever generated -> latestPdf is undefined, not a false-current placeholder", () => {

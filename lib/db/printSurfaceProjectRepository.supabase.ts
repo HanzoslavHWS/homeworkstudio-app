@@ -1,6 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
-  isPrintSurfacePdfCurrent,
   migrateLegacyPrintSurfaceDocument,
   type MarkerPlacement,
   type PrintSurfaceItem,
@@ -60,10 +59,10 @@ function rowToProject(row: PrintSurfaceProjectRow): PrintSurfaceProject {
   };
 }
 
+/** Deliberately does NOT compute PDF freshness (see PrintSurfaceProjectSummary.latestPdf's own doc) — the list is not an authoritative source of truth for that, only the open editor is. */
 function rowToSummary(row: PrintSurfaceProjectRow): PrintSurfaceProjectSummary {
   const document = (row.document ?? {}) as PrintSurfaceProjectDocument;
-  const { views, items, placements } = migrateLegacyPrintSurfaceDocument(document);
-  const projectLike = { name: row.name, companyName: row.company_name, eventId: row.event_id ?? undefined, realizationCompanyId: row.realization_company_id ?? undefined, views, items, placements };
+  const { items } = migrateLegacyPrintSurfaceDocument(document);
   return {
     id: row.id,
     name: row.name,
@@ -76,9 +75,7 @@ function rowToSummary(row: PrintSurfaceProjectRow): PrintSurfaceProjectSummary {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     sentAt: row.sent_at ?? undefined,
-    latestPdf: document.latestPdf
-      ? { storageKey: document.latestPdf.storageKey, fileName: document.latestPdf.fileName, isCurrent: isPrintSurfacePdfCurrent(projectLike, document.latestPdf) }
-      : undefined,
+    latestPdf: document.latestPdf ? { storageKey: document.latestPdf.storageKey, fileName: document.latestPdf.fileName } : undefined,
   };
 }
 

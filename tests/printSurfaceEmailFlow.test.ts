@@ -26,6 +26,11 @@ test("Prepare email reuses the current PDF when fresh, and regenerates first (ge
   assert.match(handleEmailHandoff, /buildPrintSurfaceEmailContext\(/u);
 });
 
+test("Připravit e-mail NEVER triggers a browser download — no getAssetDownloadUrl/window.open anywhere in handleEmailHandoff, whether the PDF was reused or regenerated", () => {
+  const handleEmailHandoff = extractFunction(exportPanelSource, "handleEmailHandoff");
+  assert.doesNotMatch(handleEmailHandoff, /getAssetDownloadUrl|window\.open/u);
+});
+
 test("StoredAsset filename matches the download/email filename: both come from the SAME `fileName` variable, never a second naming call", () => {
   const generate = extractFunction(exportPanelSource, "generateAndUploadCurrentPdf");
   assert.match(generate, /const fileName = buildPrintSurfaceExportFileName\(/u);
@@ -57,18 +62,28 @@ test("one current PDF per project: latestPdf reported via onPdfGenerated carries
   assert.match(generate, /projectFingerprint: buildPrintSurfaceProjectFingerprint\(project\)/u);
 });
 
-test("export button label reflects PDF state: none -> Vygenerovat, current -> Stáhnout, stale -> Aktualizovat", () => {
-  assert.match(exportPanelSource, /const exportButtonLabel = !project\.latestPdf \? "Vygenerovat PDF" : pdfIsCurrent \? "Stáhnout PDF" : "Aktualizovat PDF";/u);
+test("PDF status/action label reflects PDF state: none -> Vygenerovat, current -> Stáhnout, stale -> Aktualizovat, with a matching status badge (Nevygenerováno/✓ připraveno/⚠ není aktuální)", () => {
+  assert.match(exportPanelSource, /const pdfState: "none" \| "current" \| "stale" = !project\.latestPdf \? "none" : pdfIsCurrent \? "current" : "stale";/u);
+  assert.match(exportPanelSource, /const pdfStatusLabel = pdfState === "none" \? "PDF: Nevygenerováno" : pdfState === "current" \? "✓ PDF připraveno" : "⚠ PDF není aktuální";/u);
+  assert.match(exportPanelSource, /const pdfActionLabel = pdfState === "none" \? "Vygenerovat PDF" : pdfState === "current" \? "Stáhnout PDF" : "Aktualizovat PDF";/u);
 });
 
-test("Stáhnout PDF (current) skips regeneration entirely — only a stale/missing PDF triggers generateAndUploadCurrentPdf", () => {
-  const handleExportButtonClick = extractFunction(exportPanelSource, "handleExportButtonClick");
-  assert.match(handleExportButtonClick, /pdfIsCurrent && project\.latestPdf\s*\n\s*\? \{ storageKey: project\.latestPdf\.storageKey, fileName: project\.latestPdf\.fileName \}\s*\n\s*: await generateAndUploadCurrentPdf\(\)/u);
+test("generate/update NEVER downloads: handleGenerateOrUpdatePdf only calls generateAndUploadCurrentPdf, no getAssetDownloadUrl/window.open anywhere in it", () => {
+  const handleGenerateOrUpdatePdf = extractFunction(exportPanelSource, "handleGenerateOrUpdatePdf");
+  assert.match(handleGenerateOrUpdatePdf, /await generateAndUploadCurrentPdf\(\);/u);
+  assert.doesNotMatch(handleGenerateOrUpdatePdf, /getAssetDownloadUrl|window\.open/u);
 });
 
-test("downloaded filename always matches the logical PDF name: handleExportButtonClick passes pdf.fileName to getAssetDownloadUrl, never just the raw storageKey", () => {
-  const handleExportButtonClick = extractFunction(exportPanelSource, "handleExportButtonClick");
-  assert.match(handleExportButtonClick, /getAssetDownloadUrl\(pdf\.storageKey, pdf\.fileName\)/u);
+test("download is a SEPARATE, explicit action: handleDownloadCurrentPdf only opens the EXISTING current PDF (project.latestPdf), never calls generateAndUploadCurrentPdf itself", () => {
+  const handleDownloadCurrentPdf = extractFunction(exportPanelSource, "handleDownloadCurrentPdf");
+  assert.doesNotMatch(handleDownloadCurrentPdf, /generateAndUploadCurrentPdf/u);
+  assert.match(handleDownloadCurrentPdf, /getAssetDownloadUrl\(project\.latestPdf\.storageKey, project\.latestPdf\.fileName\)/u);
+  assert.match(handleDownloadCurrentPdf, /window\.open\(downloadUrl, "_blank"\)/u);
+});
+
+test("the single PDF action button dispatches download only when current, generate/update otherwise — never both, never unconditionally", () => {
+  const dispatch = extractFunction(exportPanelSource, "handlePdfActionClick");
+  assert.match(dispatch, /if \(pdfState === "current"\) \{\s*\n\s*void handleDownloadCurrentPdf\(\);\s*\n\s*\} else \{\s*\n\s*void handleGenerateOrUpdatePdf\(\);\s*\n\s*\}/u);
 });
 
 test("mailto receives subject and body: openInOutlook builds a mailto: URL from the current AI result", () => {
@@ -118,6 +133,16 @@ test("BoothGenerator wires the return-to-project id through navigateWorkspace's 
   assert.match(boothGeneratorSource, /setPrintSurfaceProjectPreselect\(section === "printSurfaces" \? payload\?\.printSurfaceProjectId : undefined\);/u);
 });
 
+test("Booth Generator's 1-5 stepper (Projekt/Konfigurátor/Vizualizace/Souhrn/Export) is wired to render ONLY for workspaceSection 'project' — Tiskové plochy and E-maily share the same header (logout etc.) but never this wizard-specific stepper", () => {
+  assert.match(boothGeneratorSource, /showStepper=\{workspaceSection === "project"\}/u);
+  const stepHeaderSource = readFileSync(new URL("../components/StepHeader.tsx", import.meta.url), "utf8");
+  assert.match(stepHeaderSource, /showStepper = true/u, "defaults to visible so no other caller silently loses the stepper");
+  assert.match(stepHeaderSource, /\{showStepper && \(\s*\n\s*<div className="steps">/u);
+  // the header itself (and therefore the logout button/global chrome inside it) is NEVER conditionally rendered — only the stepper block is.
+  assert.doesNotMatch(stepHeaderSource, /\{showStepper && \(\s*\n\s*<header/u);
+  assert.match(stepHeaderSource, /logoutButton/u);
+});
+
 test("pricing UI is hidden: no 'Zahrnout do kalkulace' checkbox or price summary/toggle remain in the print-surfaces editor or export menu", () => {
   const inspectorSource = readFileSync(new URL("../components/workflow/printSurfaces/PrintSurfaceInspector.tsx", import.meta.url), "utf8");
   const editorSource = readFileSync(new URL("../components/workflow/printSurfaces/PrintSurfaceEditorPage.tsx", import.meta.url), "utf8");
@@ -128,16 +153,25 @@ test("pricing UI is hidden: no 'Zahrnout do kalkulace' checkbox or price summary
   assert.match(exportPanelSource, /showPrices: false/u);
 });
 
-test("project list exposes a current-PDF quick action (Stáhnout PDF) plus a freshness badge, without opening the editor or regenerating anything", () => {
+test("project list exposes a neutral 'PDF připraveno' + Stáhnout PDF quick action when a latestPdf exists, and 'PDF nevygenerováno' (no download) when it doesn't — NEVER a current/stale freshness signal (real-usage follow-up: the list is not authoritative for PDF freshness)", () => {
   const listPageSource = readFileSync(new URL("../components/workflow/printSurfaces/PrintSurfaceProjectListPage.tsx", import.meta.url), "utf8");
   assert.match(listPageSource, /project\.latestPdf/u);
   assert.match(listPageSource, />Stáhnout PDF<\/button>/u);
-  assert.match(listPageSource, /PDF aktuální/u);
-  assert.match(listPageSource, /PDF není aktuální/u);
-  // quick download only resolves the existing storageKey — it must never call buildPrintSurfacePdf/generate anything itself.
+  assert.match(listPageSource, /PDF připraveno/u);
+  assert.match(listPageSource, /PDF nevygenerováno/u);
+  assert.doesNotMatch(listPageSource, /PDF aktuální|PDF není aktuální|isCurrent/u);
+  // quick download only resolves the existing storageKey — it must never call buildPrintSurfacePdf/generate anything itself, and must never make its own freshness decision.
   const handleDownloadPdf = extractFunction(listPageSource, "handleDownloadPdf");
-  assert.doesNotMatch(handleDownloadPdf, /buildPrintSurfacePdf|generateAndUpload/u);
+  assert.doesNotMatch(handleDownloadPdf, /buildPrintSurfacePdf|generateAndUpload|isPrintSurfacePdfCurrent/u);
   assert.match(handleDownloadPdf, /getAssetDownloadUrl\(storageKey, fileName\)/u);
+});
+
+test("project list: a project WITHOUT latestPdf offers no download action at all", () => {
+  const listPageSource = readFileSync(new URL("../components/workflow/printSurfaces/PrintSurfaceProjectListPage.tsx", import.meta.url), "utf8");
+  const cellMatch = listPageSource.match(/<span className="printSurfaceProjectPdfCell">[\s\S]*?<\/span>\s*\n\s*<\/div>/u);
+  assert.ok(cellMatch, "expected to find the PDF cell JSX block");
+  assert.match(cellMatch![0], /project\.latestPdf \? \(/u);
+  assert.match(cellMatch![0], /PDF nevygenerováno/u);
 });
 
 test("AI prompt does not invent a missing deadline: the print-surfaces aiInstruction never mentions one itself, and it's steered through the SAME generic prompt builder whose NO_FABRICATION_RULE already forbids inventing dates/deadlines (see tests/emailAiPrompt.test.ts)", () => {
@@ -152,8 +186,9 @@ test("subject receives event/company context: the aiInstruction nudges a subject
   assert.doesNotMatch(migrationSource, /Beauty Brand s\.r\.o\.|FOR BEAUTY 2026/u);
 });
 
-test("export menu is exactly the two documented actions (dynamic PDF-state label + Připravit e-mail) plus the separate confirm-sent action — no leftover browser print-preview action", () => {
-  assert.match(exportPanelSource, /onClick=\{\(\) => void handleExportButtonClick\(\)\}>\{exportButtonLabel\}<\/button>/u);
+test("export panel is exactly the documented actions (dynamic PDF-state status+button, Připravit e-mail) plus the separate confirm-sent action — no leftover browser print-preview action, no hidden dropdown menu required to reach them", () => {
+  assert.match(exportPanelSource, /onClick=\{handlePdfActionClick\}/u);
+  assert.match(exportPanelSource, /\{isBusy \? "Připravuji…" : pdfActionLabel\}/u);
   assert.match(exportPanelSource, />Připravit e-mail<\/button>/u);
   assert.doesNotMatch(exportPanelSource, /Tiskový přehled/u);
   assert.doesNotMatch(exportPanelSource, /window\.open\("", "_blank"\)/u);

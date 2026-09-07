@@ -140,19 +140,45 @@ export type PrintSurfaceProject = Readonly<{
 
 /**
  * The subset of project content that actually affects what the PDF shows — everything a real
- * content edit could change (name/companyName/event/realizační firma, every view's image, every
- * item's editable fields, every placement's position). Deliberately excludes status/sentAt/sentBy/
- * createdAt/updatedAt/latestPdf itself/id — none of those change what the exported PDF would
- * contain. Every array is sorted by id so two fingerprints built from the same logical state
- * always compare equal regardless of array insertion order — same discipline as
+ * content edit could change (name/companyName/event/realizační firma, every view's image/label/
+ * order, every item's editable fields, every placement's position). Deliberately excludes status/
+ * sentAt/sentBy/createdAt/updatedAt/latestPdf itself/id — none of those change what the exported
+ * PDF would contain, and none of them may ever be added here (see isPrintSurfacePdfCurrent's own
+ * doc for the concrete bug that would reintroduce: the DB's blind set_updated_at trigger).
+ * Deliberately NOT a plain `JSON.stringify(project)` of the whole domain object either — this is
+ * an explicit, canonical ALLOWLIST of exactly the fields above, built fresh from the live project
+ * on every call, so a field that doesn't affect the PDF (e.g. a future non-visual field) never
+ * silently starts invalidating it just by existing on PrintSurfaceProject.
+ *
+ * Two projects with identical PDF-relevant content must produce byte-identical fingerprints
+ * regardless of: array insertion order (every array is sorted by id, using a plain ordinal `<`/`>`
+ * comparison — never `localeCompare`, which is locale-/ICU-dependent and could theoretically order
+ * the same two ids differently between the browser and a Node.js serverless runtime), or
+ * sub-visual floating-point noise in xNormalized/yNormalized (rounded to
+ * PRINT_SURFACE_FINGERPRINT_COORDINATE_PRECISION decimal places — far finer than any pixel a user
+ * could actually perceive a marker moving by, but enough to absorb float-representation drift from
+ * a JSON/DB round trip without ever visibly relocating a marker). Same discipline as
  * domain/visualizationRender.ts's buildVisualizationRenderFingerprint.
+ *
+ * CANONICALIZATION (real-usage follow-up — see resolvePrintSurfaceItemQuantity's own doc): every
+ * optional field that the EXPORT treats as having an effective default is normalized to that SAME
+ * effective value here, not stored raw. Two items that render identically in the PDF — one with
+ * `quantity: undefined`, one with `quantity: 1` (e.g. after a round trip through some future code
+ * path that materializes the default) — MUST produce the same fingerprint, because
+ * buildPrintSurfaceExportViewModel's row builder already treats them as identical
+ * (`item.quantity ?? 1`). Likewise `note`/`presetId`/`customWidthMm`/`customHeightMm` normalize
+ * `null` the same as `undefined` (a legacy/DB round trip could plausibly produce either for the
+ * same "not set" meaning, even though this app's own write paths only ever produce `undefined`),
+ * and a view's `order` defaults to its array position for pre-V3 documents that never had this
+ * field at all (see migrateLegacyPrintSurfaceDocument, which passes very old `views` through
+ * unchanged — a genuinely legacy project can have a view object with no `order` key whatsoever).
  */
 export type PrintSurfaceProjectFingerprint = Readonly<{
   name: string;
   companyName: string;
   eventId?: string;
   realizationCompanyId?: string;
-  views: readonly Readonly<{ id: string; label: string; storageKey: string }>[];
+  views: readonly Readonly<{ id: string; label: string; order: number; storageKey: string }>[];
   items: readonly Readonly<{
     id: string;
     label: string;
@@ -161,10 +187,41 @@ export type PrintSurfaceProjectFingerprint = Readonly<{
     presetId?: string;
     customWidthMm?: number;
     customHeightMm?: number;
-    quantity?: number;
+    quantity: number;
   }>[];
   placements: readonly Readonly<{ id: string; itemId: string; imageId: string; xNormalized: number; yNormalized: number }>[];
 }>;
+
+/** Decimal places kept for xNormalized/yNormalized in the fingerprint — see the type doc above. */
+const PRINT_SURFACE_FINGERPRINT_COORDINATE_PRECISION = 6;
+
+function roundFingerprintCoordinate(value: number): number {
+  const factor = 10 ** PRINT_SURFACE_FINGERPRINT_COORDINATE_PRECISION;
+  return Math.round(value * factor) / factor;
+}
+
+/** Plain ordinal comparison — deliberately NOT `localeCompare` (locale-/ICU-dependent; see the fingerprint type's own doc), so sort order is 100% deterministic across every JS runtime this app runs in (browser and server). */
+function compareIds(a: string, b: string): number {
+  if (a < b) return -1;
+  if (a > b) return 1;
+  return 0;
+}
+
+/** `null` and `undefined` both mean "not set" for every optional string/number field this domain writes — a legacy or DB round trip should never be able to distinguish them. Never used for `quantity`, which has its own explicit default (see resolvePrintSurfaceItemQuantity) rather than staying optional. */
+function canonicalOptional<T>(value: T | null | undefined): T | undefined {
+  return value === null || value === undefined ? undefined : value;
+}
+
+/**
+ * The export's own effective quantity for one item — "how many prints" always has a concrete
+ * value in the rendered PDF (buildPrintSurfaceExportViewModel's row builder), even when the item's
+ * own `quantity` field was never explicitly set. This is the SINGLE place that default lives, so
+ * the fingerprint (below) and the actual PDF content can never disagree about what "no quantity
+ * set" resolves to.
+ */
+export function resolvePrintSurfaceItemQuantity(item: Pick<PrintSurfaceItem, "quantity">): number {
+  return item.quantity ?? 1;
+}
 
 export function buildPrintSurfaceProjectFingerprint(
   project: Pick<PrintSurfaceProject, "name" | "companyName" | "eventId" | "realizationCompanyId" | "views" | "items" | "placements">,
@@ -172,25 +229,55 @@ export function buildPrintSurfaceProjectFingerprint(
   return {
     name: project.name,
     companyName: project.companyName,
-    eventId: project.eventId,
-    realizationCompanyId: project.realizationCompanyId,
+    eventId: canonicalOptional(project.eventId),
+    realizationCompanyId: canonicalOptional(project.realizationCompanyId),
     views: [...project.views]
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .map((view) => ({ id: view.id, label: view.label, storageKey: view.image.asset.storageKey })),
+      .sort((a, b) => compareIds(a.id, b.id))
+      .map((view, index) => ({ id: view.id, label: view.label, order: view.order ?? index, storageKey: view.image.asset.storageKey })),
     items: [...project.items]
-      .sort((a, b) => a.id.localeCompare(b.id))
+      .sort((a, b) => compareIds(a.id, b.id))
       .map((item) => ({
-        id: item.id, label: item.label, typeId: item.typeId, note: item.note,
-        presetId: item.presetId, customWidthMm: item.customWidthMm, customHeightMm: item.customHeightMm, quantity: item.quantity,
+        id: item.id, label: item.label, typeId: item.typeId, note: canonicalOptional(item.note) ?? "",
+        presetId: canonicalOptional(item.presetId), customWidthMm: canonicalOptional(item.customWidthMm), customHeightMm: canonicalOptional(item.customHeightMm),
+        quantity: resolvePrintSurfaceItemQuantity(item),
       })),
     placements: [...project.placements]
-      .sort((a, b) => a.id.localeCompare(b.id))
-      .map((placement) => ({ id: placement.id, itemId: placement.itemId, imageId: placement.imageId, xNormalized: placement.xNormalized, yNormalized: placement.yNormalized })),
+      .sort((a, b) => compareIds(a.id, b.id))
+      .map((placement) => ({
+        id: placement.id, itemId: placement.itemId, imageId: placement.imageId,
+        xNormalized: roundFingerprintCoordinate(placement.xNormalized),
+        yNormalized: roundFingerprintCoordinate(placement.yNormalized),
+      })),
   };
 }
 
 export function printSurfaceProjectFingerprintsEqual(a: PrintSurfaceProjectFingerprint, b: PrintSurfaceProjectFingerprint): boolean {
   return JSON.stringify(a) === JSON.stringify(b);
+}
+
+/**
+ * Dev/test diagnostic ONLY — never called from production render/save paths (no permanent noisy
+ * logging; see isPrintSurfacePdfCurrent's own doc for why this fingerprint must stay silent at
+ * runtime). Reports exactly which top-level fingerprint section(s) differ between a stored
+ * (latestPdf.projectFingerprint) and a freshly-built snapshot, so a "why did this go stale"
+ * question can be answered without re-deriving the whole diff by hand — see
+ * tests/printSurfaceFingerprintStability.test.ts for how this is used.
+ */
+export type PrintSurfaceProjectFingerprintDiff = Readonly<{ equal: boolean; changedFields: readonly string[] }>;
+
+export function diffPrintSurfaceProjectFingerprints(
+  stored: PrintSurfaceProjectFingerprint,
+  current: PrintSurfaceProjectFingerprint,
+): PrintSurfaceProjectFingerprintDiff {
+  const changedFields: string[] = [];
+  if (stored.name !== current.name) changedFields.push("name");
+  if (stored.companyName !== current.companyName) changedFields.push("companyName");
+  if (stored.eventId !== current.eventId) changedFields.push("eventId");
+  if (stored.realizationCompanyId !== current.realizationCompanyId) changedFields.push("realizationCompanyId");
+  if (JSON.stringify(stored.views) !== JSON.stringify(current.views)) changedFields.push("views");
+  if (JSON.stringify(stored.items) !== JSON.stringify(current.items)) changedFields.push("items");
+  if (JSON.stringify(stored.placements) !== JSON.stringify(current.placements)) changedFields.push("placements");
+  return { equal: changedFields.length === 0, changedFields };
 }
 
 export type PrintSurfaceLatestPdf = Readonly<{
@@ -246,13 +333,17 @@ export type PrintSurfaceProjectSummary = Readonly<{
   /** Spec section 15's "Odesláno datum" project-list column — reads the SAME field markPrintSurfaceProjectSent already writes, never a second sent-tracking mechanism. */
   sentAt?: string;
   /**
-   * Quick-PDF projection for the project list (real-usage follow-up) — `isCurrent` is PRE-COMPUTED
-   * (via isPrintSurfacePdfCurrent) rather than shipped as a raw fingerprint: the summary
-   * deliberately never carries views/items/placements, so the client couldn't recompute freshness
-   * itself even if it wanted to, and there's no reason to leak the fingerprint's internal shape to
-   * the list UI for a single boolean.
+   * Quick-PDF projection for the project list (real-usage follow-up) — deliberately just the
+   * artifact identity, NEVER a freshness/current-vs-stale signal. The list is not, and must not
+   * become, an authoritative source of truth for PDF freshness: that computation only means
+   * anything against the FULL live project (views/items/placements), which this lightweight
+   * summary deliberately never carries — see isPrintSurfacePdfCurrent, whose only correct callers
+   * are inside an actually-open PrintSurfaceEditorPage. A previous version of this summary shipped
+   * a pre-computed `isCurrent` boolean here; it was removed because a summary-only approximation of
+   * freshness is not reliable enough to present as "aktuální"/"neaktuální" outside the editor (spec:
+   * "Project List nemá být autoritativní source of truth pro PDF freshness").
    */
-  latestPdf?: Readonly<{ storageKey: string; fileName: string; isCurrent: boolean }>;
+  latestPdf?: Readonly<{ storageKey: string; fileName: string }>;
 }>;
 
 export function summarizePrintSurfaceProject(project: PrintSurfaceProject): PrintSurfaceProjectSummary {
@@ -268,9 +359,7 @@ export function summarizePrintSurfaceProject(project: PrintSurfaceProject): Prin
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
     sentAt: project.sentAt,
-    latestPdf: project.latestPdf
-      ? { storageKey: project.latestPdf.storageKey, fileName: project.latestPdf.fileName, isCurrent: isPrintSurfacePdfCurrent(project, project.latestPdf) }
-      : undefined,
+    latestPdf: project.latestPdf ? { storageKey: project.latestPdf.storageKey, fileName: project.latestPdf.fileName } : undefined,
   };
 }
 

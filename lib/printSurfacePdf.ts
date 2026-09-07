@@ -20,13 +20,19 @@
  * mapNormalizedPointToRect, kept jsPDF-independent and unit-testable on purpose). Marker data comes
  * straight from the export view model's own PrintSurfaceExportImage.markers (already item-label-
  * resolved by domain/printSurfaceExport.ts) — this module never re-derives item/placement data
- * itself. All logo/image resolution (loadImageAsDataUrl) happens OUTSIDE this function, same
+ * itself. All logo/image resolution (lib/pdf/prepareImageForPdf.ts) happens OUTSIDE this function, same
  * externalization principle as graphicsProductionPdf.ts's `thumbnails` map — this stays pure
  * layout code, testable without network access.
  */
 import { FONT_FAMILY, registerCzechFont, type PdfDoc } from "./pdf/czechFont.ts";
 import type { LoadedImageDataUrl } from "./pdf/loadImageDataUrl.ts";
 import { mapNormalizedPointToRect, resolveContainRect, type Rect } from "./pdf/imageRect.ts";
+import {
+  PRINT_SURFACE_PDF_EVENT_LOGO_HEIGHT_MM,
+  PRINT_SURFACE_PDF_EVENT_LOGO_WIDTH_MM,
+  PRINT_SURFACE_PDF_TWO_VIEW_GAP_MM,
+  resolvePrintSurfaceViewRenderBox,
+} from "./pdf/printSurfaceViewLayout.ts";
 import type { PrintSurfaceExportImage, PrintSurfaceExportRow, PrintSurfaceExportViewModel } from "../domain/printSurfaceExport.ts";
 
 const PAGE_MARGIN_MM = 14;
@@ -52,8 +58,8 @@ function drawHeader(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, brandin
   doc.setFontSize(19);
   doc.text("EXPORT TISKOVÝCH PLOCH", PAGE_MARGIN_MM, y + 7);
 
-  const eventLogoW = 34;
-  const eventLogoH = 20;
+  const eventLogoW = PRINT_SURFACE_PDF_EVENT_LOGO_WIDTH_MM;
+  const eventLogoH = PRINT_SURFACE_PDF_EVENT_LOGO_HEIGHT_MM;
   const eventLogoX = pageWidth - PAGE_MARGIN_MM - eventLogoW;
   if (hasEventLogo) {
     try {
@@ -83,17 +89,22 @@ function drawHeader(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, brandin
  * "VYSTAVOVATEL / Beauty Brand s.r.o." example. A value too wide for its column is ellipsis-
  * truncated (metadata values are short business facts, not free-form text — the table below is
  * where real wrapping matters).
+ *
+ * Deliberately never shows "Realizační firma" or "Revize" (real-usage follow-up: internal-only
+ * facts the customer doesn't need in their copy) — `fields` is a plain array laid out purely by
+ * its own index (`row = index / columns`), so leaving those two out simply reflows the remaining
+ * fields with no gap, never a blank cell where they used to be. viewModel.realizationCompanyName/
+ * revision are UNCHANGED elsewhere (export-history revision tracking, email context, etc.) — only
+ * this grid stopped rendering them.
  */
 function drawMetadataGrid(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, x: number, y: number, pageWidth: number): number {
   const fields: Readonly<{ label: string; value: string }>[] = [
     { label: "VYSTAVOVATEL", value: viewModel.companyName || "—" },
     { label: "PROJEKT / STÁNEK", value: viewModel.projectName || "—" },
   ];
-  if (viewModel.realizationCompanyName) fields.push({ label: "REALIZAČNÍ FIRMA", value: viewModel.realizationCompanyName });
   const eventMeta = [viewModel.eventBranding.venue, viewModel.eventBranding.dateRange].filter(Boolean).join(" · ");
   if (eventMeta) fields.push({ label: "VELETRH", value: eventMeta });
   fields.push({ label: "DATUM EXPORTU", value: new Date(viewModel.generatedAt).toLocaleDateString("cs-CZ") });
-  fields.push({ label: "REVIZE", value: `R${viewModel.revision}` });
 
   const columns = 3;
   const colWidth = (pageWidth - PAGE_MARGIN_MM * 2) / columns;
@@ -148,7 +159,7 @@ function drawViewImage(doc: PdfDoc, x: number, y: number, boxWidth: number, boxH
   if (image) {
     rect = resolveContainRect({ x, y, width: boxWidth, height: boxHeight }, image.widthPx, image.heightPx);
     try {
-      doc.addImage(image.dataUrl, "PNG", rect.x, rect.y, rect.width, rect.height);
+      doc.addImage(image.dataUrl, image.format ?? "PNG", rect.x, rect.y, rect.width, rect.height);
     } catch {
       doc.rect(x, y, boxWidth, boxHeight);
       rect = undefined;
@@ -197,38 +208,36 @@ function drawViewMarkers(doc: PdfDoc, image: PrintSurfaceExportImage, rect: Rect
  * actual rendered rect always comes from resolveContainRect, so an image is NEVER distorted/
  * stretched regardless of which layout branch is chosen.
  */
-function drawViews(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, viewImages: PrintSurfacePdfViewImages, x: number, y: number, pageWidth: number): number {
+function drawViews(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, viewImages: PrintSurfacePdfViewImages, x: number, y: number): number {
   const images = viewModel.images;
   if (images.length === 0) return y;
 
-  const usableWidth = pageWidth - PAGE_MARGIN_MM * 2;
-
   if (images.length === 1) {
     const image = images[0]!;
-    const { bottom, rect } = drawViewImage(doc, x, y, usableWidth, 108, image.viewLabel, viewImages.get(image.viewId));
+    const box = resolvePrintSurfaceViewRenderBox(1, false);
+    const { bottom, rect } = drawViewImage(doc, x, y, box.widthMm, box.heightMm, image.viewLabel, viewImages.get(image.viewId));
     drawViewMarkers(doc, image, rect);
     return bottom;
   }
 
   const isPortrait = (img: LoadedImageDataUrl | undefined) => Boolean(img) && img!.heightPx > img!.widthPx;
   const bothPortrait = images.every((image) => isPortrait(viewImages.get(image.viewId)));
+  const box = resolvePrintSurfaceViewRenderBox(2, bothPortrait);
 
   if (bothPortrait) {
     let rowY = y;
     for (const image of images) {
-      const { bottom, rect } = drawViewImage(doc, x, rowY, usableWidth, 78, image.viewLabel, viewImages.get(image.viewId));
+      const { bottom, rect } = drawViewImage(doc, x, rowY, box.widthMm, box.heightMm, image.viewLabel, viewImages.get(image.viewId));
       drawViewMarkers(doc, image, rect);
       rowY = bottom;
     }
     return rowY;
   }
 
-  const gap = 8;
-  const colWidth = (usableWidth - gap) / 2;
   let bottom = y;
   images.forEach((image, index) => {
-    const colX = x + index * (colWidth + gap);
-    const drawn = drawViewImage(doc, colX, y, colWidth, 82, image.viewLabel, viewImages.get(image.viewId));
+    const colX = x + index * (box.widthMm + PRINT_SURFACE_PDF_TWO_VIEW_GAP_MM);
+    const drawn = drawViewImage(doc, colX, y, box.widthMm, box.heightMm, image.viewLabel, viewImages.get(image.viewId));
     drawViewMarkers(doc, image, drawn.rect);
     bottom = Math.max(bottom, drawn.bottom);
   });
@@ -359,6 +368,17 @@ export async function buildPrintSurfacePdf(
   viewImages: PrintSurfacePdfViewImages = new Map(),
 ): Promise<Uint8Array> {
   const { jsPDF } = await import("jspdf");
+  // compress: true (jsPDF's content-stream Deflate compression) was investigated and NOT enabled
+  // — confirmed it was not previously set anywhere in this app, and prototyping it confirmed the
+  // user's own expectation (spec: "nečekej od toho hlavní úsporu JPEG dat") — the saving is small
+  // (only affects text/vector drawing commands and the embedded font, not the already-compressed
+  // JPEG/PNG image data, which dominates this document's size). The real cost outweighs that small
+  // gain: it makes every content stream binary/Deflate-compressed, which broke all 11 of this
+  // module's existing structural regression tests (tests/printSurfacePdf.test.ts) that verify
+  // marker-overlay position/count and table pagination by reading the RAW PDF content-stream
+  // operators as plain text — this repo has no PDF parser/decompression test infrastructure, and
+  // building one just to keep a marginal, non-image optimization was not a good trade for the
+  // correctness coverage lost (a wrong marker position is a real production defect).
   const doc = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" }) as unknown as PdfDoc;
   registerCzechFont(doc);
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -367,7 +387,7 @@ export async function buildPrintSurfacePdf(
   let y = drawHeader(doc, viewModel, branding, pageWidth);
   y = drawMetadataGrid(doc, viewModel, PAGE_MARGIN_MM, y, pageWidth);
   y = drawSummary(doc, viewModel, PAGE_MARGIN_MM, y, pageWidth);
-  y = drawViews(doc, viewModel, viewImages, PAGE_MARGIN_MM, y, pageWidth) + 3;
+  y = drawViews(doc, viewModel, viewImages, PAGE_MARGIN_MM, y) + 3;
 
   if (y > pageHeight - PAGE_MARGIN_MM - 40) {
     doc.addPage();

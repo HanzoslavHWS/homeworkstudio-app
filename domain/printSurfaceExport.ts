@@ -24,6 +24,7 @@ import {
   placementsForItem,
   placementsForView,
   resolvePrintSurfaceItemDimension,
+  resolvePrintSurfaceItemQuantity,
   type PrintSurfaceProject,
 } from "./printSurfaceProject.ts";
 import { formatPrintSurfacePriceStatus, sumPrintSurfacePrices, type PrintSurfacePriceResolution } from "./printSurfacePricing.ts";
@@ -89,9 +90,10 @@ export function nextPrintSurfaceExportRevision(existingExportCount: number): num
  * PrintSurfaceProject, ne companyName") and deliberately carries NO revision — every regeneration
  * of the SAME project produces the exact same filename, which is what makes "one current PDF
  * artifact per project" (see PrintSurfaceLatestPdf in domain/printSurfaceProject.ts) a stable,
- * recognizable file rather than a new name each time. The PDF DOCUMENT's own internal "Revize"
- * metadata field (lib/printSurfacePdf.ts) is unrelated and unchanged by this — revision only left
- * the FILENAME/UI, not the document content.
+ * recognizable file rather than a new name each time. `revision`/`realizationCompanyName` still
+ * exist on PrintSurfaceExportViewModel for export-history/internal tracking purposes, but
+ * lib/printSurfacePdf.ts's drawMetadataGrid no longer renders either one — a real-usage follow-up
+ * removed both "Realizační firma" and "Revize" from the customer-facing document entirely.
  */
 export function buildPrintSurfaceExportFileName(input: Readonly<{ eventName?: string; projectName?: string }>): string {
   const segments = [
@@ -237,7 +239,7 @@ export function buildPrintSurfaceExportViewModel(input: Readonly<{
       typeLabel: printSurfaceTypeLabel(item.typeId),
       surfaceName: preset ? printSurfacePresetDisplayName(preset) : printSurfaceTypeLabel(item.typeId),
       dimensionLabel: formatPrintSurfaceItemDimension(resolution),
-      quantity: item.quantity ?? 1,
+      quantity: resolvePrintSurfaceItemQuantity(item),
       note: item.note,
       viewLabel,
       priceQuantityLabel: hasQuantityDetail ? `${priceResolution!.quantityUnit} ${priceResolution!.unitLabel}` : undefined,

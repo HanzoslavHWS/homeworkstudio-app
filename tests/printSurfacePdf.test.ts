@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { buildPrintSurfacePdf } from "../lib/printSurfacePdf.ts";
 import { buildPrintSurfaceExportViewModel } from "../domain/printSurfaceExport.ts";
 import {
@@ -354,6 +355,43 @@ test("PDF: 50+ ploch (60) paginate across multiple pages, and the table header r
   const pageCount = countPages(bytes);
   assert.ok(pageCount >= 2, "60 rows must overflow onto more than one page");
   assert.equal(countHeaderRowFills(bytes), pageCount);
+});
+
+// =========================================================================================
+// Metadata cleanup (real-usage follow-up): "Realizační firma" and "Revize" are internal-only
+// facts the customer's copy must never show. No DOM/component test runner and no reliable literal-
+// text search exist for this custom-font PDF (see this file's own countMarkerDrawOperations doc
+// note on why), so this is verified as a SOURCE CONTRACT against drawMetadataGrid — the same
+// established pattern used across this repo's UI/PDF test files.
+// =========================================================================================
+test("drawMetadataGrid never renders 'Realizační firma' or 'Revize' — the fields array has no REALIZAČNÍ FIRMA/REVIZE entry, and never reads viewModel.realizationCompanyName/viewModel.revision", () => {
+  const printSurfacePdfSource = readFileSync(new URL("../lib/printSurfacePdf.ts", import.meta.url), "utf8");
+  const fn = printSurfacePdfSource.match(/function drawMetadataGrid\([\s\S]*?\n\}\n/u);
+  assert.ok(fn, "expected to find function drawMetadataGrid");
+  const body = fn![0];
+  assert.doesNotMatch(body, /REALIZAČNÍ FIRMA|REVIZE/u);
+  assert.doesNotMatch(body, /viewModel\.realizationCompanyName|viewModel\.revision/u);
+});
+
+test("drawMetadataGrid's fields array is built purely by conditional .push() calls (index-based row/col layout) — removing an entry can never leave a fixed empty slot/gap", () => {
+  const printSurfacePdfSource = readFileSync(new URL("../lib/printSurfacePdf.ts", import.meta.url), "utf8");
+  const fn = printSurfacePdfSource.match(/function drawMetadataGrid\([\s\S]*?\n\}\n/u);
+  const body = fn![0];
+  assert.match(body, /const row = Math\.floor\(index \/ columns\);/u);
+  // every field entry after the first two is a conditional/unconditional push — never a fixed-index array literal with holes.
+  assert.doesNotMatch(body, /fields\[\d+\]\s*=/u);
+});
+
+test("PDF still builds cleanly (one page, valid %PDF- output) when realizationCompanyName AND a real revision number ARE present in the view model — proves they're accepted as data but simply not drawn, never a crash/gap", async () => {
+  const project = buildFixtureProject();
+  const viewModel = buildPrintSurfaceExportViewModel({
+    project, presets: PRESETS, productionDimensions: [], revision: 7, realizationCompanyName: "Creativ Expo",
+  });
+  assert.equal(viewModel.realizationCompanyName, "Creativ Expo");
+  assert.equal(viewModel.revision, 7);
+  const bytes = await buildPrintSurfacePdf(viewModel);
+  assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), "%PDF-");
+  assert.equal(countPages(bytes), 1);
 });
 
 test("PDF: a long 'Název plochy'/'Poznámka' value wraps onto extra lines instead of being cut off early", async () => {
