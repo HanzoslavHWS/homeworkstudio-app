@@ -120,3 +120,30 @@ test("GENERATION PROMPT: event/recipient context never leaks into the user messa
   });
   assert.equal(prompt.user, freeText);
 });
+
+// =========================================================================================
+// Real-usage follow-up: additionalContext — structured facts (e.g. print-surfaces' A/B/C list)
+// the model may reference for accuracy, but must not proactively dump into the email body.
+// =========================================================================================
+
+test("GENERATION PROMPT: additionalContext facts appear in the system prompt with an explicit 'do not list unless asked' instruction, never in the user message", () => {
+  const freeText = "posilam podklady";
+  const prompt = buildEmailGenerationPrompt({
+    freeText, promptLanguage: "English", tone: NATURAL_TONE,
+    additionalContext: ["A — Panel — 950 × 2340 mm", "B — Límec — 3000 × 300 mm"],
+  });
+  assert.match(prompt.system, /A — Panel — 950 × 2340 mm/u);
+  assert.match(prompt.system, /B — Límec — 3000 × 300 mm/u);
+  assert.match(prompt.system, /do NOT list them out item-by-item/iu);
+  assert.equal(prompt.user, freeText);
+});
+
+test("GENERATION PROMPT: no additionalContext given -> no grounding block at all (never an empty/confusing section)", () => {
+  const prompt = buildEmailGenerationPrompt({ freeText: "x", promptLanguage: "English", tone: NATURAL_TONE });
+  assert.doesNotMatch(prompt.system, /ADDITIONAL AVAILABLE FACTS/u);
+});
+
+test("GENERATION PROMPT: an empty additionalContext array behaves the same as omitting it entirely", () => {
+  const prompt = buildEmailGenerationPrompt({ freeText: "x", promptLanguage: "English", tone: NATURAL_TONE, additionalContext: [] });
+  assert.doesNotMatch(prompt.system, /ADDITIONAL AVAILABLE FACTS/u);
+});

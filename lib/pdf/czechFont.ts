@@ -16,6 +16,8 @@ export type PdfDoc = Readonly<{
   setFont: (name: string, style?: string) => void;
   setFontSize: (size: number) => number;
   text: (text: string | string[], x: number, y: number, options?: Readonly<{ align?: "left" | "center" | "right" }>) => void;
+  /** Wraps `text` to lines no wider than `maxWidth` (mm, at the currently-set font/size) — jsPDF's real implementation; used for the print-surfaces table's wrapping "Název plochy"/"Poznámka" cells (lib/printSurfacePdf.ts), so a long value is never cut off mid-word (spec: "dlouhý název musí být zalomený"). */
+  splitTextToSize: (text: string, maxWidth: number) => string[];
   setDrawColor: (r: number, g: number, b: number) => void;
   setFillColor: (r: number, g: number, b: number) => void;
   /** Color used by subsequent text() calls — jsPDF's real API; needed for white marker labels drawn on a dark filled circle (lib/printSurfacePdf.ts). Callers must reset it back to black after use, same discipline as setFont/setFontSize. */

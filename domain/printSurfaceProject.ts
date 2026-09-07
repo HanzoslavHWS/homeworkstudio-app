@@ -129,7 +129,107 @@ export type PrintSurfaceProject = Readonly<{
   sentBy?: string;
   createdAt: string;
   updatedAt: string;
+  /** The ONE current PDF artifact for this project (real-usage follow-up) — see PrintSurfaceLatestPdf/withLatestPdf/isPrintSurfacePdfCurrent below. Absent until the first PDF is generated. */
+  latestPdf?: PrintSurfaceLatestPdf;
 }>;
+
+// ============================================================================
+// Current/latest PDF — one artifact per project, staleness by content fingerprint
+// (real-usage follow-up: "nechci vytvářet novou fyzickou PDF variantu při každém exportu")
+// ============================================================================
+
+/**
+ * The subset of project content that actually affects what the PDF shows — everything a real
+ * content edit could change (name/companyName/event/realizační firma, every view's image, every
+ * item's editable fields, every placement's position). Deliberately excludes status/sentAt/sentBy/
+ * createdAt/updatedAt/latestPdf itself/id — none of those change what the exported PDF would
+ * contain. Every array is sorted by id so two fingerprints built from the same logical state
+ * always compare equal regardless of array insertion order — same discipline as
+ * domain/visualizationRender.ts's buildVisualizationRenderFingerprint.
+ */
+export type PrintSurfaceProjectFingerprint = Readonly<{
+  name: string;
+  companyName: string;
+  eventId?: string;
+  realizationCompanyId?: string;
+  views: readonly Readonly<{ id: string; label: string; storageKey: string }>[];
+  items: readonly Readonly<{
+    id: string;
+    label: string;
+    typeId: PrintSurfaceTypeId;
+    note: string;
+    presetId?: string;
+    customWidthMm?: number;
+    customHeightMm?: number;
+    quantity?: number;
+  }>[];
+  placements: readonly Readonly<{ id: string; itemId: string; imageId: string; xNormalized: number; yNormalized: number }>[];
+}>;
+
+export function buildPrintSurfaceProjectFingerprint(
+  project: Pick<PrintSurfaceProject, "name" | "companyName" | "eventId" | "realizationCompanyId" | "views" | "items" | "placements">,
+): PrintSurfaceProjectFingerprint {
+  return {
+    name: project.name,
+    companyName: project.companyName,
+    eventId: project.eventId,
+    realizationCompanyId: project.realizationCompanyId,
+    views: [...project.views]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((view) => ({ id: view.id, label: view.label, storageKey: view.image.asset.storageKey })),
+    items: [...project.items]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((item) => ({
+        id: item.id, label: item.label, typeId: item.typeId, note: item.note,
+        presetId: item.presetId, customWidthMm: item.customWidthMm, customHeightMm: item.customHeightMm, quantity: item.quantity,
+      })),
+    placements: [...project.placements]
+      .sort((a, b) => a.id.localeCompare(b.id))
+      .map((placement) => ({ id: placement.id, itemId: placement.itemId, imageId: placement.imageId, xNormalized: placement.xNormalized, yNormalized: placement.yNormalized })),
+  };
+}
+
+export function printSurfaceProjectFingerprintsEqual(a: PrintSurfaceProjectFingerprint, b: PrintSurfaceProjectFingerprint): boolean {
+  return JSON.stringify(a) === JSON.stringify(b);
+}
+
+export type PrintSurfaceLatestPdf = Readonly<{
+  storageKey: string;
+  fileName: string;
+  generatedAt: string;
+  /** Content fingerprint of the project at the moment this PDF was generated — see isPrintSurfacePdfCurrent. */
+  projectFingerprint: PrintSurfaceProjectFingerprint;
+}>;
+
+/**
+ * Attaches the "current PDF" reference. Deliberately does NOT bump `updatedAt`, unlike every other
+ * with-/add-/remove- helper in this module — attaching a generated-PDF reference is metadata about
+ * a side artifact, not a content edit. This matters concretely: print_surface_projects has a blind
+ * `set_updated_at` trigger (supabase/migrations/20260906150000_print_surfaces.sql) that bumps
+ * updated_at on EVERY row UPDATE regardless of which columns changed, including the very save that
+ * persists this latestPdf reference — so a timestamp-based freshness check would make a just-
+ * generated PDF register as stale the instant it's saved. Freshness is judged by a content
+ * FINGERPRINT instead (embedded inside latestPdf itself), which is completely decoupled from
+ * updatedAt/DB triggers — same reasoning already established by
+ * domain/visualizationRender.ts's render-staleness fingerprint ("project.modifiedAt... cannot
+ * reliably distinguish edited-before from edited-after a given capture moment").
+ */
+export function withLatestPdf(project: PrintSurfaceProject, latestPdf: PrintSurfaceLatestPdf): PrintSurfaceProject {
+  return { ...project, latestPdf };
+}
+
+/**
+ * True only when a PDF was generated AND the project's fingerprinted content hasn't changed since
+ * (see withLatestPdf's doc for why this is fingerprint-based, not updatedAt-based). No latestPdf
+ * at all -> always false (the UI shows "Vygenerovat PDF", never "Aktualizovat"/"Stáhnout").
+ */
+export function isPrintSurfacePdfCurrent(
+  project: Pick<PrintSurfaceProject, "name" | "companyName" | "eventId" | "realizationCompanyId" | "views" | "items" | "placements">,
+  latestPdf: PrintSurfaceLatestPdf | undefined,
+): boolean {
+  if (!latestPdf) return false;
+  return printSurfaceProjectFingerprintsEqual(latestPdf.projectFingerprint, buildPrintSurfaceProjectFingerprint(project));
+}
 
 /** Lightweight projection for the project list/home screen — never ships the full items/placements/views. */
 export type PrintSurfaceProjectSummary = Readonly<{
@@ -145,6 +245,14 @@ export type PrintSurfaceProjectSummary = Readonly<{
   updatedAt: string;
   /** Spec section 15's "Odesláno datum" project-list column — reads the SAME field markPrintSurfaceProjectSent already writes, never a second sent-tracking mechanism. */
   sentAt?: string;
+  /**
+   * Quick-PDF projection for the project list (real-usage follow-up) — `isCurrent` is PRE-COMPUTED
+   * (via isPrintSurfacePdfCurrent) rather than shipped as a raw fingerprint: the summary
+   * deliberately never carries views/items/placements, so the client couldn't recompute freshness
+   * itself even if it wanted to, and there's no reason to leak the fingerprint's internal shape to
+   * the list UI for a single boolean.
+   */
+  latestPdf?: Readonly<{ storageKey: string; fileName: string; isCurrent: boolean }>;
 }>;
 
 export function summarizePrintSurfaceProject(project: PrintSurfaceProject): PrintSurfaceProjectSummary {
@@ -160,6 +268,9 @@ export function summarizePrintSurfaceProject(project: PrintSurfaceProject): Prin
     createdAt: project.createdAt,
     updatedAt: project.updatedAt,
     sentAt: project.sentAt,
+    latestPdf: project.latestPdf
+      ? { storageKey: project.latestPdf.storageKey, fileName: project.latestPdf.fileName, isCurrent: isPrintSurfacePdfCurrent(project, project.latestPdf) }
+      : undefined,
   };
 }
 

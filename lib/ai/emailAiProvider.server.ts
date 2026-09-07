@@ -21,6 +21,8 @@ export type EmailAiGenerateInput = Readonly<{
   templateInstruction?: string;
   eventContext?: EmailEventContext;
   recipientName?: string;
+  /** See domain/emailAiPrompt.ts's EmailAiGenerationPromptInput.additionalContext — grounding facts the model may reference but must not proactively list out. */
+  additionalContext?: readonly string[];
 }>;
 
 export type EmailAiRewriteInput = Readonly<{

@@ -304,6 +304,15 @@ export default function BoothGenerator() {
     setPrintSurfaceEmailPrefill({ context, nonce: Date.now() });
     navigateWorkspace("emails");
   }
+  // "Zpět na Tiskové plochy" (spec section 22) — the project id to reopen, read once at mount by
+  // PrintSurfacesPage (it fully unmounts/remounts on every workspaceSection change away and back,
+  // so a plain string prop is enough — no nonce needed, same convention as pricingAdminPreselect
+  // above). navigateWorkspace clears it on every OTHER navigation so a plain sidebar click into
+  // "Tiskové plochy" always opens the project LIST, never silently reopens a stale project.
+  const [printSurfaceProjectPreselect, setPrintSurfaceProjectPreselect] = useState<string | undefined>(undefined);
+  function handleReturnToPrintSurfaces(projectId: string) {
+    navigateWorkspace("printSurfaces", { printSurfaceProjectId: projectId });
+  }
   const [workspaceSection, setWorkspaceSection] = useState<
     "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces"
   >("project");
@@ -632,7 +641,7 @@ export default function BoothGenerator() {
     return !eventDirty || window.confirm("Máte neuložené změny. Opravdu chcete pokračovat?");
   }
 
-  function navigateWorkspace(section: typeof workspaceSection, payload?: { catalogItemId?: string }) {
+  function navigateWorkspace(section: typeof workspaceSection, payload?: { catalogItemId?: string; printSurfaceProjectId?: string }) {
     if (workspaceSection === "events" && section !== "events" && !confirmLeaveEvent()) return;
     if (workspaceSection === "events" && section !== "events" && eventDirty) {
       eventRepositoryRef.current?.list().then((events) => setAdminEvents([...events]));
@@ -640,6 +649,7 @@ export default function BoothGenerator() {
     }
     setWorkspaceSection(section);
     setPricingAdminPreselect(section === "pricingAdmin" ? payload?.catalogItemId : undefined);
+    setPrintSurfaceProjectPreselect(section === "printSurfaces" ? payload?.printSurfaceProjectId : undefined);
     if (section === "projects") {
       repositoryRef.current?.list().then((projects) => setSavedProjects([...projects]));
     }
@@ -2706,6 +2716,7 @@ export default function BoothGenerator() {
             historyRepository={emailHistoryRepositoryRef.current}
             events={adminEvents}
             initialCompose={printSurfaceEmailPrefill}
+            onReturnToPrintSurfaces={handleReturnToPrintSurfaces}
           />
         )}
 
@@ -2720,6 +2731,7 @@ export default function BoothGenerator() {
             catalogPricingRepository={printSurfaceCatalogPricingRepositoryRef.current}
             events={adminEvents}
             onEmailHandoff={handlePrintSurfaceEmailHandoff}
+            initialProjectId={printSurfaceProjectPreselect}
           />
         )}
 

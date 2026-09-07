@@ -30,6 +30,15 @@ export type EmailAiGenerationPromptInput = Readonly<{
   eventContext?: EmailEventContext;
   /** Optional free-text form of address, e.g. "Anna" / "paní Nováková" / "Mr Smith" — used verbatim, never expanded. */
   recipientName?: string;
+  /**
+   * Additional structured facts the model MAY reference for grounding (e.g. print-surfaces' own
+   * per-surface list — label/type/dimension/quantity, see domain/printSurfaceEmailContext.ts) but
+   * must NOT proactively dump into the email body — a short summary referencing the attachment is
+   * preferred by default; the itemized list only belongs in the body if the user's own freeText
+   * explicitly asks for one. Kept generic (plain strings) so any future caller can reuse this same
+   * mechanism without this module knowing their domain shape.
+   */
+  additionalContext?: readonly string[];
 }>;
 
 export type EmailAiPrompt = Readonly<{ system: string; user: string }>;
@@ -54,6 +63,15 @@ const NO_RECIPIENT_LINE =
   "RECIPIENT CONTEXT: No recipient name was given — use a neutral, professional greeting with no name (e.g. " +
   '"Dobrý den," / "Hello,"), never invent one.';
 
+function additionalContextLines(facts: readonly string[]): string {
+  return [
+    "ADDITIONAL AVAILABLE FACTS (for grounding only): the following facts are accurate and available to you, " +
+      "but do NOT list them out item-by-item in the email body by default — refer to them briefly/collectively " +
+      "(e.g. \"the attached overview\") unless the user's own text explicitly asks for an itemized list:",
+    ...facts.map((fact) => `- ${fact}`),
+  ].join("\n");
+}
+
 /**
  * Handles both same-language rewriting AND cross-language "translation" in one instruction set:
  * when the source text isn't already in promptLanguage, the result must read as a natural,
@@ -71,6 +89,7 @@ export function buildEmailGenerationPrompt(input: EmailAiGenerationPromptInput):
     input.templateInstruction ? `Additional instruction for this type of email: ${input.templateInstruction}` : undefined,
     input.eventContext ? eventContextLine(input.eventContext) : undefined,
     input.recipientName ? recipientContextLine(input.recipientName, input.promptLanguage) : NO_RECIPIENT_LINE,
+    input.additionalContext && input.additionalContext.length > 0 ? additionalContextLines(input.additionalContext) : undefined,
     NO_FABRICATION_RULE,
     "Produce a complete, ready-to-send email: a concise, relevant subject line, and a body with an appropriate greeting and sign-off matching the requested tone.",
     JSON_OUTPUT_RULE,

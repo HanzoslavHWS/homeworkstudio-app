@@ -13,7 +13,8 @@ import type { EmailTemplate, EmailTemplateEditInput, EmailTemplateRepository } f
 import { nextHistorySaveAction, type EmailHistoryEntry, type EmailHistoryRepository, type EmailHistorySaveInput } from "../../domain/emailHistory";
 import { buildEmailEventContext } from "../../domain/emailEventContext";
 import type { Exhibition } from "../../domain/organizations";
-import { buildPrintSurfaceEmailFreeText, PRINT_SURFACE_EMAIL_TEMPLATE_NAME, type PrintSurfaceEmailContext } from "../../domain/printSurfaceEmailContext";
+import { buildPrintSurfaceEmailAdditionalContext, buildPrintSurfaceEmailFreeText, PRINT_SURFACE_EMAIL_TEMPLATE_NAME, type PrintSurfaceEmailContext } from "../../domain/printSurfaceEmailContext";
+import { getAssetDownloadUrl } from "../../lib/storage/assetClient";
 
 type EmailResult = Readonly<{ subject: string; body: string }>;
 type EmailsView = "compose" | "history" | "templates";
@@ -48,12 +49,15 @@ export function EmailsPage({
   historyRepository,
   events,
   initialCompose,
+  onReturnToPrintSurfaces,
 }: {
   templateRepository: EmailTemplateRepository;
   historyRepository: EmailHistoryRepository;
   events: readonly Exhibition[];
-  /** A handoff from another module (currently only print-surfaces — spec section 9) prefilling the compose view. `nonce` changes on every new handoff so the same context object can be reapplied even if unchanged; consumed exactly once per nonce (see the effects below), never reapplied on a plain revisit to this tab. */
+  /** A handoff from another module (currently only print-surfaces) prefilling the compose view. `nonce` changes on every new handoff so the same context object can be reapplied even if unchanged; consumed exactly once per nonce (see the effects below), never reapplied on a plain revisit to this tab. */
   initialCompose?: Readonly<{ context: PrintSurfaceEmailContext; nonce: number }>;
+  /** Switches back to the Tiskové plochy tab and reopens the project this handoff came from (spec section 22's "sourceProjectId" — PrintSurfaceEmailContext.projectId doubles as that reference). Implemented at the BoothGenerator level; absent when this page is used outside that wiring. */
+  onReturnToPrintSurfaces?: (projectId: string) => void;
 }) {
   const languageTiers = listEmailAiLanguagesByTier();
   const tones = listEmailAiTones();
@@ -69,6 +73,11 @@ export function EmailsPage({
   const [recipientName, setRecipientName] = useState("");
   const [templateInstruction, setTemplateInstruction] = useState<string | undefined>(undefined);
   const [activeTemplateId, setActiveTemplateId] = useState<string | undefined>(undefined);
+  // The print-surfaces handoff context, kept visible for the whole compose session (context
+  // banner + attachment card below) — NOT cleared by generate()/rewrite(), only when the user
+  // moves on to an unrelated email (reuseFromHistory) or a fresh handoff nonce arrives.
+  const [printSurfaceContext, setPrintSurfaceContext] = useState<PrintSurfaceEmailContext | undefined>(undefined);
+  const [pdfDownloadError, setPdfDownloadError] = useState("");
 
   const selectedEvent = useMemo(() => events.find((event) => event.id === eventId), [events, eventId]);
 
@@ -131,6 +140,8 @@ export function EmailsPage({
     setResult(null);
     setSourceInputForResult(undefined);
     setCurrentHistoryId(undefined);
+    setPrintSurfaceContext(context);
+    setPdfDownloadError("");
     setView("compose");
   }, [initialCompose?.nonce]);
 
@@ -167,6 +178,7 @@ export function EmailsPage({
           templateInstruction,
           eventContext: selectedEvent ? buildEmailEventContext(selectedEvent) : undefined,
           recipientName: recipientName.trim() || undefined,
+          additionalContext: printSurfaceContext ? buildPrintSurfaceEmailAdditionalContext(printSurfaceContext) : undefined,
         }),
       });
       if (!response.ok) {
@@ -328,9 +340,39 @@ export function EmailsPage({
     showConfirmation(saved ? "Zkopírováno a uloženo do historie" : "Zkopírováno");
   }
 
+  /**
+   * Target workflow (spec section 13): create a real Outlook draft (current PDF auto-attached)
+   * and open it via its webLink — never marking anything as sent, that stays a separate explicit
+   * action. Until a real EmailOutlookDraftProvider is connected (see
+   * lib/mail/outlookDraftProvider.server.ts — always 503 today), this transparently falls back to
+   * the existing mailto: behavior (spec section 14) — same button, no UI change needed once a
+   * real provider exists.
+   */
   async function openInOutlook() {
     if (!result) return;
     await saveOrUpdateHistory();
+    try {
+      const response = await fetch("/api/emails/outlook-draft", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          subject: result.subject,
+          body: result.body,
+          recipient: recipientName.trim() || undefined,
+          attachments: printSurfaceContext?.pdfAssetStorageKey && printSurfaceContext.pdfFileName
+            ? [{ fileName: printSurfaceContext.pdfFileName, contentType: "application/pdf", storageKey: printSurfaceContext.pdfAssetStorageKey }]
+            : undefined,
+        }),
+      });
+      if (response.ok) {
+        const draft = (await response.json()) as { draftId: string; webLink: string };
+        window.open(draft.webLink, "_blank");
+        return;
+      }
+    } catch {
+      // falls through to mailto: below
+    }
     window.location.href = `mailto:?subject=${encodeURIComponent(result.subject)}&body=${encodeURIComponent(result.body)}`;
   }
 
@@ -349,7 +391,19 @@ export function EmailsPage({
     setSourceInputForResult(entry.sourceInput);
     setActiveTemplateId(entry.templateId);
     setCurrentHistoryId(undefined); // a reused email becomes a new working copy (section 16)
+    setPrintSurfaceContext(undefined); // an unrelated email from history is no longer the print-surfaces handoff
     setView("compose");
+  }
+
+  async function downloadPreparedPdf() {
+    if (!printSurfaceContext?.pdfAssetStorageKey) return;
+    setPdfDownloadError("");
+    try {
+      const downloadUrl = await getAssetDownloadUrl(printSurfaceContext.pdfAssetStorageKey);
+      window.open(downloadUrl, "_blank");
+    } catch {
+      setPdfDownloadError("Stažení PDF se nezdařilo.");
+    }
   }
 
   function openHistoryEntryInOutlook(entry: EmailHistoryEntry) {
@@ -400,6 +454,30 @@ export function EmailsPage({
 
       {view === "compose" && (
         <>
+          {printSurfaceContext && (
+            <div className="emailsPrintSurfaceContext">
+              <div className="emailsPrintSurfaceContextHeader">
+                <span>KONTEXT</span>
+                <strong>
+                  Tiskové plochy
+                  {printSurfaceContext.companyName ? ` – ${printSurfaceContext.companyName}` : ""}
+                  {printSurfaceContext.eventName ? ` – ${printSurfaceContext.eventName}` : ""}
+                </strong>
+                {onReturnToPrintSurfaces && (
+                  <button type="button" className="textButton" onClick={() => onReturnToPrintSurfaces(printSurfaceContext.projectId)}>← Zpět na Tiskové plochy</button>
+                )}
+              </div>
+              {printSurfaceContext.pdfFileName && (
+                <div className="emailsAttachmentCard">
+                  <span>PDF připraveno:</span>
+                  <strong>{printSurfaceContext.pdfFileName}</strong>
+                  <button type="button" onClick={() => void downloadPreparedPdf()} disabled={!printSurfaceContext.pdfAssetStorageKey}>Stáhnout PDF</button>
+                </div>
+              )}
+              {pdfDownloadError && <p className="uploadError">{pdfDownloadError}</p>}
+            </div>
+          )}
+
           <div className="emailsTopRow">
             <label>
               <span>Event / veletrh</span>
@@ -509,6 +587,9 @@ export function EmailsPage({
                     <button type="button" className="primaryButton" onClick={openInOutlook} disabled={isSavingHistory}>Otevřít v Outlooku</button>
                     <button type="button" className="textButton" onClick={manualSaveToHistory} disabled={isSavingHistory}>Uložit do historie</button>
                   </div>
+                  {printSurfaceContext?.pdfFileName && (
+                    <p className="fieldHint">PDF je připravené. Po otevření Outlooku jej přiložte k e-mailu.</p>
+                  )}
                 </>
               )}
             </section>

@@ -21,9 +21,11 @@ import {
   updatePrintSurfaceItem,
   updatePrintSurfaceItemType,
   withItems,
+  withLatestPdf,
   withPlacements,
   withProjectFields,
   type PrintSurfaceItemDimensionResolution,
+  type PrintSurfaceLatestPdf,
   type PrintSurfaceProject,
   type PrintSurfaceProjectImage,
   type PrintSurfaceProjectRepository,
@@ -44,7 +46,7 @@ import { resolveEventPriceListForCurrency, type Exhibition, type PriceList } fro
 import type { Currency } from "../../../domain/models";
 import type { PriceListRepository } from "../../../domain/priceListRepository";
 import type { RemoteApiCatalogPricingRepository } from "../../../lib/db/catalogPricing.remoteApi.client";
-import { resolvePrintSurfacePrice, sumPrintSurfacePrices, type PrintSurfacePriceResolution } from "../../../domain/printSurfacePricing";
+import { resolvePrintSurfacePrice, type PrintSurfacePriceResolution } from "../../../domain/printSurfacePricing";
 import { resolveEventBranding } from "../../../domain/eventBranding";
 import type { PrintSurfaceEmailContext } from "../../../domain/printSurfaceEmailContext";
 import { useAssetUrl } from "../../../hooks/useAssetUrl";
@@ -267,12 +269,14 @@ export function PrintSurfaceEditorPage({
     priceListId: resolvedPriceListId,
     currency: pricingCurrency,
   };
+  // Kept computed (feeds PrintSurfaceList's price column and PrintSurfaceExportPanel's plumbing)
+  // but never surfaced as a total in this phase's UI — pricing is deliberately hidden until the
+  // full catalog/pricing rework (see PrintSurfaceInspector.tsx's own doc note).
   const itemPriceResolutions = new Map<string, PrintSurfacePriceResolution>();
   for (const item of project.items) {
     const dimensionResolution = resolvePrintSurfaceItemDimension(item, project.realizationCompanyId, productionDimensions);
     itemPriceResolutions.set(item.id, resolvePrintSurfacePrice(item, dimensionResolution, dbCatalogItems, dbPricingEntries, pricingContext));
   }
-  const totalPrice = sumPrintSurfacePrices([...itemPriceResolutions.values()]);
 
   function updateProjectFields(fields: Parameters<typeof withProjectFields>[1]) {
     setProject((current) => (current ? withProjectFields(current, fields) : current));
@@ -393,11 +397,6 @@ export function PrintSurfaceEditorPage({
     setProject((current) => (current ? withItems(current, updatePrintSurfaceItem(current.items, selectedItem.id, { quantity })) : current));
   }
 
-  function handleChangeSelectedIncludeInCalculation(includeInCalculation: boolean) {
-    if (!selectedItem) return;
-    setProject((current) => (current ? withItems(current, updatePrintSurfaceItem(current.items, selectedItem.id, { includeInCalculation })) : current));
-  }
-
   function handleChangeSelectedNote(note: string) {
     if (!selectedItem) return;
     setProject((current) => (current ? withItems(current, updatePrintSurfaceItem(current.items, selectedItem.id, { note })) : current));
@@ -413,6 +412,16 @@ export function PrintSurfaceEditorPage({
     setProject((current) => {
       if (!current) return current;
       const next = markPrintSurfaceProjectSent(current, current.createdBy);
+      void persistNow(next);
+      return next;
+    });
+  }
+
+  /** Attaches the freshly (re)generated "current PDF" reference to the project and persists it immediately (bypassing the autosave debounce) — same discipline as handleMarkSent above. withLatestPdf deliberately never bumps updatedAt (see its own doc), so this save cannot self-invalidate the freshness fingerprint it just captured. */
+  function handlePdfGenerated(latestPdf: PrintSurfaceLatestPdf) {
+    setProject((current) => {
+      if (!current) return current;
+      const next = withLatestPdf(current, latestPdf);
       void persistNow(next);
       return next;
     });
@@ -444,6 +453,7 @@ export function PrintSurfaceEditorPage({
             exportRepository={exportRepository}
             priceResolutions={itemPriceResolutions}
             onEmailHandoff={onEmailHandoff}
+            onPdfGenerated={handlePdfGenerated}
             onMarkSent={handleMarkSent}
           />
         </div>
@@ -485,9 +495,6 @@ export function PrintSurfaceEditorPage({
           <option value="ready">Připraveno</option>
           {project.status === "sent" && <option value="sent">Odesláno</option>}
         </select>
-        {totalPrice > 0 && (
-          <span className="printSurfacePriceSummary">Cena tiskových ploch: {totalPrice.toLocaleString("cs-CZ")} {pricingCurrency}</span>
-        )}
       </div>
 
       <PrintSurfaceViewTabs
@@ -529,14 +536,12 @@ export function PrintSurfaceEditorPage({
           otherViewLabels={otherViewLabels}
           presets={presets}
           dimensionResolution={selectedItemResolution}
-          priceResolution={selectedItem ? itemPriceResolutions.get(selectedItem.id) : undefined}
           onChangeLabel={handleChangeSelectedLabel}
           onChangeType={handleChangeSelectedType}
           onChangePreset={handleChangeSelectedPreset}
           onChangeCustomWidth={handleChangeSelectedCustomWidth}
           onChangeCustomHeight={handleChangeSelectedCustomHeight}
           onChangeQuantity={handleChangeSelectedQuantity}
-          onChangeIncludeInCalculation={handleChangeSelectedIncludeInCalculation}
           onChangeNote={handleChangeSelectedNote}
           onDelete={() => selectedPlacement && handleDeletePlacement(selectedPlacement.id)}
         />

@@ -11,7 +11,7 @@ import type { PrintSurfacePreset, PrintSurfacePresetRepository } from "../../../
 import type { PrintSurfaceProductionDimension, PrintSurfaceProductionDimensionRepository } from "../../../domain/printSurfaceProductionDimension";
 import type { Exhibition } from "../../../domain/organizations";
 import { addPrintSurfaceView } from "../../../domain/printSurfaceProject";
-import { uploadAsset, readRasterImageDimensions } from "../../../lib/storage/assetClient";
+import { getAssetDownloadUrl, uploadAsset, readRasterImageDimensions } from "../../../lib/storage/assetClient";
 import { PrintSurfaceCatalogImportPanel } from "./PrintSurfaceCatalogImportPanel";
 
 const STATUS_LABELS: Record<PrintSurfaceProjectStatus, string> = {
@@ -80,6 +80,16 @@ export function PrintSurfaceProjectListPage({
       return true;
     });
   }, [projects, searchText, eventFilter, statusFilter]);
+
+  /** Quick download without opening the editor (spec: "Stáhnout PDF pokud current PDF existuje") — just resolves the already-uploaded storageKey, never regenerates anything from the list screen. */
+  async function handleDownloadPdf(storageKey: string) {
+    try {
+      const url = await getAssetDownloadUrl(storageKey);
+      window.open(url, "_blank");
+    } catch {
+      setListError("Stažení PDF se nezdařilo.");
+    }
+  }
 
   function eventName(id: string | undefined): string {
     return events.find((event) => event.id === id)?.name ?? "—";
@@ -226,6 +236,7 @@ export function PrintSurfaceProjectListPage({
             <span>Odesláno</span>
             <span>Vytvořil</span>
             <span>Poslední změna</span>
+            <span>PDF</span>
           </div>
           {filteredProjects.map((project) => (
             <div key={project.id} className="printSurfaceProjectRow" onClick={() => onOpenProject(project.id)}>
@@ -237,6 +248,16 @@ export function PrintSurfaceProjectListPage({
               <span>{project.sentAt ? new Date(project.sentAt).toLocaleDateString("cs-CZ") : "—"}</span>
               <span>{project.createdBy ?? "—"}</span>
               <span>{new Date(project.updatedAt).toLocaleString("cs-CZ")}</span>
+              <span className="printSurfaceProjectPdfCell">
+                {project.latestPdf ? (
+                  <>
+                    <button type="button" className="textButton" onClick={(event) => { event.stopPropagation(); void handleDownloadPdf(project.latestPdf!.storageKey); }}>Stáhnout PDF</button>
+                    <span className={project.latestPdf.isCurrent ? "printSurfacePdfBadge current" : "printSurfacePdfBadge stale"}>
+                      {project.latestPdf.isCurrent ? "PDF aktuální" : "PDF není aktuální"}
+                    </span>
+                  </>
+                ) : "—"}
+              </span>
             </div>
           ))}
         </div>

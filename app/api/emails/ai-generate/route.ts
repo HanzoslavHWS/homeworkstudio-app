@@ -54,6 +54,7 @@ export async function handleEmailAiGenerate(
       templateInstruction: typedBody.templateInstruction,
       eventContext: typedBody.eventContext,
       recipientName: typedBody.recipientName,
+      additionalContext: typedBody.additionalContext,
     });
 
     if (result.ok !== true) {

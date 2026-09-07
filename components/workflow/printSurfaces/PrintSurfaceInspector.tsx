@@ -5,7 +5,6 @@ import { formatPrintSurfaceItemDimension } from "../../../domain/printSurfacePro
 import { PRINT_SURFACE_TYPES, type PrintSurfaceTypeId } from "../../../domain/printSurfaceTypeCatalog";
 import { presetsForType, printSurfacePresetDisplayName, type PrintSurfacePreset } from "../../../domain/printSurfacePreset";
 import { FASCIA_HEIGHT_MM } from "../../../domain/printSurfaceActiveTool";
-import { formatPrintSurfacePriceStatus, type PrintSurfacePriceResolution } from "../../../domain/printSurfacePricing";
 
 export function PrintSurfaceInspector({
   item,
@@ -13,14 +12,12 @@ export function PrintSurfaceInspector({
   otherViewLabels,
   presets,
   dimensionResolution,
-  priceResolution,
   onChangeLabel,
   onChangeType,
   onChangePreset,
   onChangeCustomWidth,
   onChangeCustomHeight,
   onChangeQuantity,
-  onChangeIncludeInCalculation,
   onChangeNote,
   onDelete,
 }: {
@@ -30,21 +27,18 @@ export function PrintSurfaceInspector({
   otherViewLabels: readonly string[];
   presets: readonly PrintSurfacePreset[];
   dimensionResolution: PrintSurfaceItemDimensionResolution;
-  priceResolution: PrintSurfacePriceResolution | undefined;
   onChangeLabel: (label: string) => void;
   onChangeType: (typeId: PrintSurfaceTypeId) => void;
   onChangePreset: (presetId: string | undefined) => void;
   onChangeCustomWidth: (widthMm: number) => void;
   onChangeCustomHeight: (heightMm: number) => void;
   onChangeQuantity: (quantity: number) => void;
-  onChangeIncludeInCalculation: (include: boolean) => void;
   onChangeNote: (note: string) => void;
   onDelete: () => void;
 }) {
   const isFascia = item?.typeId === "fascia";
   const isCustom = item?.typeId === "custom";
   const isManual = isFascia || isCustom;
-  const showPricingDetails = priceResolution?.status === "priced" || priceResolution?.status === "price_not_defined";
 
   return (
     <aside className="workflowCard printSurfaceMarkerInspector">
@@ -146,40 +140,6 @@ export function PrintSurfaceInspector({
               onChange={(event) => onChangeQuantity(Math.max(1, Number(event.target.value) || 1))}
             />
           </label>
-
-          <label className="printSurfaceIncludeCheckbox">
-            <input
-              type="checkbox"
-              checked={item.includeInCalculation}
-              onChange={(event) => onChangeIncludeInCalculation(event.target.checked)}
-            />
-            <span>Zahrnout do kalkulace</span>
-          </label>
-
-          {item.includeInCalculation && priceResolution && (
-            <div className="printSurfacePricingBlock">
-              {showPricingDetails && (
-                <>
-                  <div className="printSurfaceDimensionField">
-                    <span>Jednotka</span>
-                    <strong>{priceResolution.quantityUnit} {priceResolution.unitLabel}</strong>
-                  </div>
-                  <div className="printSurfaceDimensionField">
-                    <span>Jednotková sazba</span>
-                    <strong>{priceResolution.status === "priced" ? `${priceResolution.unitPrice} ${priceResolution.currency} / ${priceResolution.unitLabel}` : "—"}</strong>
-                  </div>
-                  <div className="printSurfaceDimensionField">
-                    <span>Počet</span>
-                    <strong>{priceResolution.count}</strong>
-                  </div>
-                </>
-              )}
-              <div className={`printSurfaceDimensionField status-${priceResolution.status}`}>
-                <span>Cena</span>
-                <strong>{formatPrintSurfacePriceStatus(priceResolution)}</strong>
-              </div>
-            </div>
-          )}
 
           <label>
             <span>Poznámka</span>

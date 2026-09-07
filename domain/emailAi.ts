@@ -18,6 +18,8 @@ const MAX_SUBJECT_LENGTH = 500;
 const MAX_BODY_LENGTH = 20000;
 const MAX_RECIPIENT_NAME_LENGTH = 120;
 const MAX_EVENT_FIELD_LENGTH = 200;
+const MAX_ADDITIONAL_CONTEXT_ITEMS = 200;
+const MAX_ADDITIONAL_CONTEXT_ITEM_LENGTH = 300;
 
 export type EmailAiGenerateRequestBody = Readonly<{
   freeText: string;
@@ -26,6 +28,7 @@ export type EmailAiGenerateRequestBody = Readonly<{
   templateInstruction?: string;
   eventContext?: EmailEventContext;
   recipientName?: string;
+  additionalContext?: readonly string[];
 }>;
 
 function assertValidEventContext(value: unknown): asserts value is EmailEventContext {
@@ -53,6 +56,14 @@ export function assertValidEmailAiGenerateRequestBody(body: unknown): asserts bo
   if (record.eventContext !== undefined) assertValidEventContext(record.eventContext);
   if (record.recipientName !== undefined && (typeof record.recipientName !== "string" || record.recipientName.length > MAX_RECIPIENT_NAME_LENGTH)) {
     throw new EmailAiRequestError("Neplatné jméno / oslovení.");
+  }
+  if (record.additionalContext !== undefined) {
+    if (!Array.isArray(record.additionalContext) || record.additionalContext.length > MAX_ADDITIONAL_CONTEXT_ITEMS) {
+      throw new EmailAiRequestError("Neplatný doplňkový kontext.");
+    }
+    for (const item of record.additionalContext) {
+      if (typeof item !== "string" || item.length > MAX_ADDITIONAL_CONTEXT_ITEM_LENGTH) throw new EmailAiRequestError("Neplatný doplňkový kontext.");
+    }
   }
 }
 

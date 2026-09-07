@@ -32,6 +32,7 @@ import type { PrintSurfaceProductionDimension } from "./printSurfaceProductionDi
 import type { EventBranding } from "./eventBranding.ts";
 import { resolveGraphicsInstructions, type GraphicsInstructions } from "./graphicsInstructions.ts";
 import type { RealizationCompany } from "./realizationCompany.ts";
+import { sanitizeFileNameSegment } from "./graphicsFileNaming.ts";
 
 /** A closed union, not a boolean — room to add "outlook_draft" etc. later without redesigning the table (spec section 15/16). */
 export const PRINT_SURFACE_EXPORT_TYPES = ["pdf_overview"] as const;
@@ -75,6 +76,30 @@ export interface PrintSurfaceExportRepository {
 /** Revision is simply "how many exports of this project already exist, plus this one" — no separate versioning model (spec section 12: keep it simple). */
 export function nextPrintSurfaceExportRevision(existingExportCount: number): number {
   return existingExportCount + 1;
+}
+
+/**
+ * One current/latest PDF per project (real-usage follow-up) — one human-readable, STABLE filename
+ * shared by every place a print-surfaces PDF is referenced: the download, the StoredAsset
+ * (fileStorageKey's display name), and the email handoff's attachment filename. Reuses the SAME
+ * diacritics/invalid-char/whitespace sanitizer Graphics Export already established
+ * (domain/graphicsFileNaming.ts) rather than a second ad-hoc sanitizer.
+ *
+ * Deliberately based on the project's own NAME, not companyName (spec: "Použij název uloženého
+ * PrintSurfaceProject, ne companyName") and deliberately carries NO revision — every regeneration
+ * of the SAME project produces the exact same filename, which is what makes "one current PDF
+ * artifact per project" (see PrintSurfaceLatestPdf in domain/printSurfaceProject.ts) a stable,
+ * recognizable file rather than a new name each time. The PDF DOCUMENT's own internal "Revize"
+ * metadata field (lib/printSurfacePdf.ts) is unrelated and unchanged by this — revision only left
+ * the FILENAME/UI, not the document content.
+ */
+export function buildPrintSurfaceExportFileName(input: Readonly<{ eventName?: string; projectName?: string }>): string {
+  const segments = [
+    "Tiskove_plochy",
+    input.eventName ? sanitizeFileNameSegment(input.eventName) : undefined,
+    input.projectName ? sanitizeFileNameSegment(input.projectName) : undefined,
+  ].filter((segment): segment is string => Boolean(segment));
+  return `${segments.join("_")}.pdf`;
 }
 
 export type PrintSurfaceExportMarker = Readonly<{

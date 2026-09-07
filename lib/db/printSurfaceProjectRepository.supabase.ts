@@ -1,8 +1,10 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import {
+  isPrintSurfacePdfCurrent,
   migrateLegacyPrintSurfaceDocument,
   type MarkerPlacement,
   type PrintSurfaceItem,
+  type PrintSurfaceLatestPdf,
   type PrintSurfaceProject,
   type PrintSurfaceProjectCreateInput,
   type PrintSurfaceProjectImage,
@@ -27,12 +29,13 @@ type PrintSurfaceProjectRow = Readonly<{
   updated_at: string;
 }>;
 
-/** Everything NOT already an indexed column above — see the migration's own comment on print_surface_projects.document. `image` is the pre-V3 shape; pre-V4 `items` may still embed position/imageId — both are readable via migrateLegacyPrintSurfaceDocument. */
+/** Everything NOT already an indexed column above — see the migration's own comment on print_surface_projects.document. `image` is the pre-V3 shape; pre-V4 `items` may still embed position/imageId — both are readable via migrateLegacyPrintSurfaceDocument. `latestPdf` (real-usage follow-up) is simply absent on older rows — no migration function needed, it's read as `undefined`. */
 type PrintSurfaceProjectDocument = Readonly<{
   views?: readonly PrintSurfaceView[];
   image?: PrintSurfaceProjectImage;
   items?: readonly unknown[];
   placements?: readonly MarkerPlacement[];
+  latestPdf?: PrintSurfaceLatestPdf;
 }>;
 
 function rowToProject(row: PrintSurfaceProjectRow): PrintSurfaceProject {
@@ -53,12 +56,14 @@ function rowToProject(row: PrintSurfaceProjectRow): PrintSurfaceProject {
     sentBy: row.sent_by ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+    latestPdf: document.latestPdf,
   };
 }
 
 function rowToSummary(row: PrintSurfaceProjectRow): PrintSurfaceProjectSummary {
   const document = (row.document ?? {}) as PrintSurfaceProjectDocument;
-  const itemCount = migrateLegacyPrintSurfaceDocument(document).items.length;
+  const { views, items, placements } = migrateLegacyPrintSurfaceDocument(document);
+  const projectLike = { name: row.name, companyName: row.company_name, eventId: row.event_id ?? undefined, realizationCompanyId: row.realization_company_id ?? undefined, views, items, placements };
   return {
     id: row.id,
     name: row.name,
@@ -66,16 +71,24 @@ function rowToSummary(row: PrintSurfaceProjectRow): PrintSurfaceProjectSummary {
     eventId: row.event_id ?? undefined,
     realizationCompanyId: row.realization_company_id ?? undefined,
     status: row.status as PrintSurfaceProjectStatus,
-    itemCount,
+    itemCount: items.length,
     createdBy: row.created_by ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     sentAt: row.sent_at ?? undefined,
+    latestPdf: document.latestPdf
+      ? { storageKey: document.latestPdf.storageKey, fileName: document.latestPdf.fileName, isCurrent: isPrintSurfacePdfCurrent(projectLike, document.latestPdf) }
+      : undefined,
   };
 }
 
 function projectToRow(project: PrintSurfaceProject) {
-  const document: PrintSurfaceProjectDocument = { views: project.views, items: project.items as readonly PrintSurfaceItem[], placements: project.placements };
+  const document: PrintSurfaceProjectDocument = {
+    views: project.views,
+    items: project.items as readonly PrintSurfaceItem[],
+    placements: project.placements,
+    latestPdf: project.latestPdf,
+  };
   return {
     name: project.name,
     company_name: project.companyName,

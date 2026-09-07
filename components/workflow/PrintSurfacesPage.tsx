@@ -30,6 +30,7 @@ export function PrintSurfacesPage({
   catalogPricingRepository,
   events,
   onEmailHandoff,
+  initialProjectId,
 }: {
   projectRepository: PrintSurfaceProjectRepository;
   companyRepository: RealizationCompanyRepository;
@@ -40,8 +41,10 @@ export function PrintSurfacesPage({
   catalogPricingRepository: RemoteApiCatalogPricingRepository;
   events: readonly Exhibition[];
   onEmailHandoff: (context: PrintSurfaceEmailContext) => void;
+  /** "Zpět na Tiskové plochy" (spec section 22) — reopens this project instead of showing the list, read once as this component's initial state since BoothGenerator fully unmounts/remounts it on every workspaceSection change away and back. */
+  initialProjectId?: string;
 }) {
-  const [openProjectId, setOpenProjectId] = useState<string | null>(null);
+  const [openProjectId, setOpenProjectId] = useState<string | null>(initialProjectId ?? null);
 
   if (openProjectId) {
     return (

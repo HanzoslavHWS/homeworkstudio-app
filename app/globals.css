@@ -5978,6 +5978,16 @@ select:focus {
 .emailsResultActions button:disabled { cursor: not-allowed; opacity: .5; }
 .emailsConfirmation { margin: 0 0 12px; padding: 9px 14px; border: 1px solid #cfe3d2; border-radius: 7px; background: #f1f8f2; color: #3d6b45; font-size: 9px; }
 
+.emailsPrintSurfaceContext { display: grid; gap: 8px; margin-bottom: 14px; padding: 12px 14px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fafafa; }
+.emailsPrintSurfaceContextHeader { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.emailsPrintSurfaceContextHeader span { font-size: 7.5px; letter-spacing: .4px; text-transform: uppercase; color: #96999c; }
+.emailsPrintSurfaceContextHeader strong { font-size: 10px; }
+.emailsPrintSurfaceContextHeader .textButton { margin-left: auto; }
+.emailsAttachmentCard { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 8px 10px; border: 1px solid #dcdedf; border-radius: 6px; background: #fff; font-size: 9px; }
+.emailsAttachmentCard span { color: #666a6d; }
+.emailsAttachmentCard strong { font-size: 9px; }
+.emailsAttachmentCard button { min-height: 28px; padding: 0 10px; border: 1px solid #dfe0e1; border-radius: 5px; background: #fafafa; font-size: 8px; cursor: pointer; }
+
 .emailsHistoryLayout { display: grid; grid-template-columns: 340px minmax(0, 1fr); align-items: start; gap: 16px; }
 .emailsHistoryList { display: grid; gap: 6px; align-content: start; }
 .emailsHistoryRow { display: grid; gap: 3px; padding: 10px 12px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fff; text-align: left; cursor: pointer; }
@@ -6285,7 +6295,7 @@ select:focus {
 .printSurfaceProjectTable { margin-bottom: 16px; }
 .printSurfaceProjectRow {
   display: grid;
-  grid-template-columns: minmax(200px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) 70px 110px 90px 110px 150px;
+  grid-template-columns: minmax(200px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) 70px 110px 90px 110px 150px 150px;
   align-items: center;
   gap: 12px;
   min-height: 52px;
@@ -6296,6 +6306,12 @@ select:focus {
 }
 .printSurfaceProjectRow:last-child { border-bottom: 0; }
 .printSurfaceProjectRow:hover:not(.printSurfaceTableHeader) { background: #fafafa; }
+
+.printSurfaceProjectPdfCell { display: grid; gap: 4px; justify-items: start; }
+.printSurfaceProjectPdfCell .textButton { padding: 0; font-size: 8px; }
+.printSurfacePdfBadge { width: fit-content; padding: 3px 7px; border-radius: 20px; font-size: 7px; }
+.printSurfacePdfBadge.current { background: #edf5ef; color: #45634f; }
+.printSurfacePdfBadge.stale { background: #fbeeea; color: #93472b; }
 
 /* ===== Toolbar V2 (product groups + sticky tool) ===== */
 

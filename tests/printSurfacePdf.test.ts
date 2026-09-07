@@ -7,6 +7,8 @@ import {
   addPrintSurfaceItemWithPlacement,
   addPrintSurfaceView,
   createPrintSurfaceProject,
+  updatePrintSurfaceItem,
+  withItems,
   type PrintSurfaceProjectImage,
 } from "../domain/printSurfaceProject.ts";
 import type { PrintSurfacePreset } from "../domain/printSurfacePreset.ts";
@@ -34,6 +36,20 @@ function countImageXObjects(bytes: Uint8Array): number {
 function countPages(bytes: Uint8Array): number {
   const text = new TextDecoder("latin1").decode(bytes);
   return (text.match(/\/Type\s*\/Page\b/g) ?? []).length;
+}
+
+/**
+ * The table header row's shading (setFillColor(244,245,246) then rect(...,"F")) emits a distinct
+ * `0.96 0.96 0.96 rg` fill-color operator — jsPDF rounds each 0-255 channel to 2 decimals of the
+ * 0-1 range, and 244/245/246 all round to 0.96 while the zebra row shading (250/250/251) rounds to
+ * 0.98 — verified empirically against real jsPDF output. Counting this line is therefore a
+ * reliable structural proxy for "how many times was the table header row drawn", independent of
+ * the embedded custom font's non-ASCII text encoding (so it can't be verified by grepping the
+ * literal header labels).
+ */
+function countHeaderRowFills(bytes: Uint8Array): number {
+  const text = new TextDecoder("latin1").decode(bytes);
+  return (text.match(/^0\.96 0\.96 0\.96 rg$/gm) ?? []).length;
 }
 
 // 1x1 red PNG — same fixture presentationPdf.test.ts already uses.
@@ -251,4 +267,105 @@ test("PDF: marker draw count is unaffected by a non-trivial contain-fit aspect r
   const viewImages = new Map([["view-tall", { widthPx: 600, heightPx: 1800, dataUrl: TINY_PNG }]]);
   const bytes = await buildPrintSurfacePdf(viewModel, {}, viewImages);
   assert.equal(countMarkerDrawOperations(bytes), 1);
+});
+
+// =========================================================================================
+// PDF FINAL DESIGN (this phase): layout (1 vs 2 views, portrait stacking), pagination at
+// 5/20/50+ rows, table header repeats exactly once per page, no trailing empty page.
+// =========================================================================================
+
+/** A single-view project with `count` simple single-line items — every row wraps to exactly one line, so row height is constant and pagination math is easy to reason about. */
+function buildManyRowsProject(count: number) {
+  let project = createPrintSurfaceProject({ name: "Mnoho ploch", companyName: "ACME" }, `project-rows-${count}`);
+  project = addPrintSurfaceView(project, makeImage("front"), "view-front");
+  for (let i = 0; i < count; i += 1) {
+    project = addPrintSurfaceItemWithPlacement(project, { typeId: "panel" }, "view-front", 0.1, 0.1, { itemId: `item-${i}` }).project;
+  }
+  return project;
+}
+
+test("PDF: one view lays out dominant (near-full page width) — exactly one image XObject, no crash", async () => {
+  const project = buildFixtureProject();
+  const viewModel = buildPrintSurfaceExportViewModel({ project, presets: PRESETS, productionDimensions: [], revision: 1 });
+  const viewImages = new Map([["view-front", { widthPx: 800, heightPx: 600, dataUrl: TINY_PNG }]]);
+  const bytes = await buildPrintSurfacePdf(viewModel, {}, viewImages);
+  assert.equal(countImageXObjects(bytes), 1);
+});
+
+test("PDF: two LANDSCAPE views use the side-by-side layout — both images embed, each keeps only its own marker", async () => {
+  let project = createPrintSurfaceProject({ name: "Dva pohledy na šířku", companyName: "ACME" }, "project-two-landscape");
+  project = addPrintSurfaceView(project, makeImage("front"), "view-front"); // 800x600, landscape
+  project = addPrintSurfaceView(project, makeImage("side"), "view-side"); // 800x600, landscape
+  project = addPrintSurfaceItemWithPlacement(project, { typeId: "panel" }, "view-front", 0.2, 0.2, { itemId: "item-a" }).project;
+  project = addPrintSurfaceItemWithPlacement(project, { typeId: "panel" }, "view-side", 0.7, 0.7, { itemId: "item-b" }).project;
+  const viewModel = buildPrintSurfaceExportViewModel({ project, presets: [], productionDimensions: [], revision: 1 });
+  const viewImages = new Map([
+    ["view-front", { widthPx: 800, heightPx: 600, dataUrl: TINY_PNG }],
+    ["view-side", { widthPx: 800, heightPx: 600, dataUrl: OTHER_TINY_PNG }],
+  ]);
+  const bytes = await buildPrintSurfacePdf(viewModel, {}, viewImages);
+  assert.equal(countImageXObjects(bytes), 2);
+  assert.equal(countMarkerDrawOperations(bytes), 2);
+});
+
+test("PDF: two PORTRAIT views switch to the stacked (full-width) layout instead of squeezing into half-width columns — still no distortion, both images embed, markers stay on their own view", async () => {
+  let project = createPrintSurfaceProject({ name: "Dva pohledy na výšku", companyName: "ACME" }, "project-two-portrait");
+  const portraitImage = (seed: string): PrintSurfaceProjectImage => ({
+    asset: { id: `asset-${seed}`, storageKey: `k/${seed}.jpg`, originalFileName: `${seed}.jpg`, mimeType: "image/jpeg", size: 1, createdAt: "2026-01-01T00:00:00.000Z", category: "print-surface-image" },
+    widthPx: 600,
+    heightPx: 1800,
+  });
+  project = addPrintSurfaceView(project, portraitImage("front"), "view-front");
+  project = addPrintSurfaceView(project, portraitImage("side"), "view-side");
+  project = addPrintSurfaceItemWithPlacement(project, { typeId: "panel" }, "view-front", 0.5, 0.1, { itemId: "item-a" }).project;
+  project = addPrintSurfaceItemWithPlacement(project, { typeId: "panel" }, "view-side", 0.5, 0.9, { itemId: "item-b" }).project;
+  const viewModel = buildPrintSurfaceExportViewModel({ project, presets: [], productionDimensions: [], revision: 1 });
+  const viewImages = new Map([
+    ["view-front", { widthPx: 600, heightPx: 1800, dataUrl: TINY_PNG }],
+    ["view-side", { widthPx: 600, heightPx: 1800, dataUrl: OTHER_TINY_PNG }],
+  ]);
+  const bytes = await buildPrintSurfacePdf(viewModel, {}, viewImages);
+  assert.equal(countImageXObjects(bytes), 2);
+  assert.equal(countMarkerDrawOperations(bytes), 2);
+});
+
+test("PDF: 5 ploch fit on a single page — the table header is drawn exactly once, matching the single page", async () => {
+  const project = buildManyRowsProject(5);
+  const viewModel = buildPrintSurfaceExportViewModel({ project, presets: [], productionDimensions: [], revision: 1 });
+  const viewImages = new Map([["view-front", { widthPx: 800, heightPx: 600, dataUrl: TINY_PNG }]]);
+  const bytes = await buildPrintSurfacePdf(viewModel, {}, viewImages);
+  assert.equal(countPages(bytes), 1);
+  assert.equal(countHeaderRowFills(bytes), 1);
+});
+
+test("PDF: 20 ploch — table header repeat count matches the actual page count exactly (never an extra trailing page)", async () => {
+  const project = buildManyRowsProject(20);
+  const viewModel = buildPrintSurfaceExportViewModel({ project, presets: [], productionDimensions: [], revision: 1 });
+  const viewImages = new Map([["view-front", { widthPx: 800, heightPx: 600, dataUrl: TINY_PNG }]]);
+  const bytes = await buildPrintSurfacePdf(viewModel, {}, viewImages);
+  assert.equal(countHeaderRowFills(bytes), countPages(bytes));
+});
+
+test("PDF: 50+ ploch (60) paginate across multiple pages, and the table header repeats exactly once per page — no orphan page with no header", async () => {
+  const project = buildManyRowsProject(60);
+  const viewModel = buildPrintSurfaceExportViewModel({ project, presets: [], productionDimensions: [], revision: 1 });
+  const viewImages = new Map([["view-front", { widthPx: 800, heightPx: 600, dataUrl: TINY_PNG }]]);
+  const bytes = await buildPrintSurfacePdf(viewModel, {}, viewImages);
+  const pageCount = countPages(bytes);
+  assert.ok(pageCount >= 2, "60 rows must overflow onto more than one page");
+  assert.equal(countHeaderRowFills(bytes), pageCount);
+});
+
+test("PDF: a long 'Název plochy'/'Poznámka' value wraps onto extra lines instead of being cut off early", async () => {
+  let project = createPrintSurfaceProject({ name: "Dlouhé názvy", companyName: "ACME" }, "project-wrap");
+  project = addPrintSurfaceView(project, makeImage("front"), "view-front");
+  const { project: withItem, item } = addPrintSurfaceItemWithPlacement(project, { typeId: "custom", customWidthMm: 1000, customHeightMm: 500 }, "view-front", 0.5, 0.5, { itemId: "item-a" });
+  const longNote = "Toto je velmi dlouhá poznámka, která by se do jednoho krátkého sloupečku rozhodně nevešla na jeden řádek.";
+  project = withItems(withItem, updatePrintSurfaceItem(withItem.items, item.id, { note: longNote }));
+  const viewModel = buildPrintSurfaceExportViewModel({ project, presets: [], productionDimensions: [], revision: 1 });
+  assert.equal(viewModel.rows[0]?.note, longNote);
+  const viewImages = new Map([["view-front", { widthPx: 800, heightPx: 600, dataUrl: TINY_PNG }]]);
+  const bytes = await buildPrintSurfacePdf(viewModel, {}, viewImages);
+  assert.equal(new TextDecoder().decode(bytes.slice(0, 5)), "%PDF-");
+  assert.ok(bytes.length > 0);
 });

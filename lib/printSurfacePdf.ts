@@ -1,71 +1,59 @@
 /**
- * Print Surfaces V5 (spec section 13) — a REAL PDF artifact (Uint8Array, `%PDF-` magic bytes),
- * not the browser's print-to-PDF dialog. Reuses this app's ONE existing PDF mechanism end to end:
- * jsPDF + the shared embedded Czech font (lib/pdf/czechFont.ts), the exact same dependency
- * lib/presentationPdf.ts and lib/graphicsProductionPdf.ts already use — never a second PDF
- * library, never a hand-rolled binary format.
+ * Print Surfaces — PDF FINAL DESIGN (this phase). A REAL PDF artifact (Uint8Array, `%PDF-` magic
+ * bytes), not the browser's print-to-PDF dialog — the ONLY PDF/preview path this module's caller
+ * (PrintSurfaceExportPanel.tsx) offers now; the earlier browser-print HTML preview was retired in
+ * this phase in favor of this single, consistent, professional A4 document (spec section 2/11).
+ * Reuses this app's ONE existing PDF mechanism end to end: jsPDF + the shared embedded Czech font
+ * (lib/pdf/czechFont.ts), the exact same dependency lib/presentationPdf.ts and
+ * lib/graphicsProductionPdf.ts already use — never a second PDF library.
  *
- * This exists ALONGSIDE the existing browser print-preview HTML (PrintSurfaceExportPanel.tsx's
- * "PDF / Tiskový přehled" action, untouched by this module) rather than replacing it — that flow
- * is already verified working with full marker-overlay images and must not regress (spec section
- * 18). This module's job is narrower and specific: produce a real, uploadable, attachable FILE —
- * needed because a `mailto:` link (this app's only "Outlook" integration — see EmailsPage.tsx)
- * cannot carry attachments, so an email handoff needs a real downloadable artifact to point at.
+ * Visual direction (spec section 2): a clean technical document, generous white space, bold-but-
+ * simple typography, the event's own logo (never ABF/HomeworkStudio branding), large
+ * visualizations, compact technical markers, and a well-structured table. Pricing is entirely
+ * absent from this document in this phase (spec section 1) — the underlying view model still
+ * carries showPrices/totalPrice (domain/printSurfaceExport.ts, untouched) for a future phase, this
+ * module simply never reads them.
  *
- * Each view's photo carries the SAME A/B/C marker pins the editor and the browser print-preview
- * HTML show — computed from MarkerPlacement's xNormalized/yNormalized against the image
- * rectangle actually drawn by jsPDF (never the outer layout box — see lib/pdf/imageRect.ts's
- * resolveContainRect/mapNormalizedPointToRect, kept jsPDF-independent and unit-testable on
- * purpose). Marker data comes straight from the export view model's own
- * PrintSurfaceExportImage.markers (already item-label-resolved by
- * domain/printSurfaceExport.ts) — this module never re-derives item/placement data itself. All
- * logo/image resolution (loadImageAsDataUrl) happens OUTSIDE this function, same externalization
- * principle as graphicsProductionPdf.ts's `thumbnails` map — this stays pure layout code, testable
- * without network access.
- *
- * Deliberately carries NO internal ABF/HomeworkStudio branding and NO "Pokyny pro přípravu
- * grafiky" block — this is a cleanup pass; the event's own branding (viewModel.eventBranding) is
- * the only branding this document shows. The instructions text still exists as a data model
- * (domain/graphicsInstructions.ts) for a future phase, it's just not rendered here.
+ * Each view's photo carries the SAME A/B/C marker pins the editor shows — computed from
+ * MarkerPlacement's xNormalized/yNormalized against the image rectangle actually drawn by jsPDF
+ * (never the outer layout box — see lib/pdf/imageRect.ts's resolveContainRect/
+ * mapNormalizedPointToRect, kept jsPDF-independent and unit-testable on purpose). Marker data comes
+ * straight from the export view model's own PrintSurfaceExportImage.markers (already item-label-
+ * resolved by domain/printSurfaceExport.ts) — this module never re-derives item/placement data
+ * itself. All logo/image resolution (loadImageAsDataUrl) happens OUTSIDE this function, same
+ * externalization principle as graphicsProductionPdf.ts's `thumbnails` map — this stays pure
+ * layout code, testable without network access.
  */
 import { FONT_FAMILY, registerCzechFont, type PdfDoc } from "./pdf/czechFont.ts";
 import type { LoadedImageDataUrl } from "./pdf/loadImageDataUrl.ts";
 import { mapNormalizedPointToRect, resolveContainRect, type Rect } from "./pdf/imageRect.ts";
-import type { PrintSurfaceExportImage, PrintSurfaceExportViewModel } from "../domain/printSurfaceExport.ts";
+import type { PrintSurfaceExportImage, PrintSurfaceExportRow, PrintSurfaceExportViewModel } from "../domain/printSurfaceExport.ts";
 
 const PAGE_MARGIN_MM = 14;
-const LINE_HEIGHT_MM = 5;
-/** Constant PDF-unit (mm) marker radius — deliberately independent of the source image's pixel size, so a marker stays a consistent, readable size on A4 regardless of how large/small the uploaded photo was (spec section 3). */
-const MARKER_RADIUS_MM = 2.6;
-/** Matches the print-preview HTML's `.ps-marker` styling (app/globals.css) — same dark fill/white text/white border, so the PDF and the HTML preview look like the same document. */
+const GRAY_TEXT_RGB: readonly [number, number, number] = [140, 142, 145];
+const RULE_RGB: readonly [number, number, number] = [20, 20, 20];
+/** Constant PDF-unit (mm) marker radius — deliberately independent of the source image's pixel size, so a marker stays a consistent, readable size on A4 regardless of how large/small the uploaded photo was. A technical pin, never a big UI button (spec section 7). */
+const MARKER_RADIUS_MM = 2.5;
 const MARKER_FILL_RGB: readonly [number, number, number] = [21, 21, 21];
 
 export type PrintSurfacePdfBranding = Readonly<{
-  /** The specific exhibition's logo — spec section 1/2, top-right when present; falls back to plain text (viewModel.eventBranding.displayName) when absent, never blocking the document (spec section 3). */
+  /** The specific exhibition's logo — top-right when present; falls back to plain text (viewModel.eventBranding.displayName) when absent, never blocking the document. */
   eventLogoDataUrl?: string;
 }>;
 
 /** Keyed by PrintSurfaceExportImage.viewId — resolved outside this function, exactly like graphicsProductionPdf.ts's thumbnails map. A view with no entry here (image failed to load, or has none) renders as a bordered placeholder, never a hole in the layout. */
 export type PrintSurfacePdfViewImages = ReadonlyMap<string, LoadedImageDataUrl>;
 
-function headerLine(doc: PdfDoc, label: string, value: string, x: number, y: number, labelWidth = 30): void {
-  doc.setFont(FONT_FAMILY, "bold");
-  doc.text(`${label}:`, x, y);
-  doc.setFont(FONT_FAMILY, "normal");
-  doc.text(value, x + labelWidth, y);
-}
-
 function drawHeader(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, branding: PrintSurfacePdfBranding, pageWidth: number): number {
   let y = PAGE_MARGIN_MM;
   const hasEventLogo = Boolean(branding.eventLogoDataUrl);
-  const titleX = PAGE_MARGIN_MM;
 
   doc.setFont(FONT_FAMILY, "bold");
-  doc.setFontSize(15);
-  doc.text("EXPORT TISKOVÝCH PLOCH", titleX, y + 6);
+  doc.setFontSize(19);
+  doc.text("EXPORT TISKOVÝCH PLOCH", PAGE_MARGIN_MM, y + 7);
 
-  const eventLogoW = 30;
-  const eventLogoH = 18;
+  const eventLogoW = 34;
+  const eventLogoH = 20;
   const eventLogoX = pageWidth - PAGE_MARGIN_MM - eventLogoW;
   if (hasEventLogo) {
     try {
@@ -76,49 +64,82 @@ function drawHeader(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, brandin
   }
   if (!hasEventLogo && viewModel.eventBranding.displayName) {
     doc.setFont(FONT_FAMILY, "bold");
-    doc.setFontSize(12);
-    doc.text(viewModel.eventBranding.displayName, pageWidth - PAGE_MARGIN_MM, y + 7, { align: "right" });
+    doc.setFontSize(13);
+    doc.text(viewModel.eventBranding.displayName, pageWidth - PAGE_MARGIN_MM, y + 9, { align: "right" });
   }
 
-  y += Math.max(12, hasEventLogo ? eventLogoH : 0) + 4;
-  doc.setDrawColor(20, 20, 20);
-  doc.setLineWidth(0.5);
+  y += Math.max(14, hasEventLogo ? eventLogoH : 0) + 5;
+  doc.setDrawColor(...RULE_RGB);
+  doc.setLineWidth(0.6);
   doc.line(PAGE_MARGIN_MM, y, pageWidth - PAGE_MARGIN_MM, y);
-  y += 6;
-  return y;
+  return y + 9;
 }
 
-function drawMetadata(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, x: number, y: number): number {
-  doc.setFontSize(9);
-  headerLine(doc, "Vystavovatel", viewModel.companyName || "—", x, y, 32); y += LINE_HEIGHT_MM;
-  headerLine(doc, "Projekt / stánek", viewModel.projectName || "—", x, y, 32); y += LINE_HEIGHT_MM;
-  if (viewModel.realizationCompanyName) { headerLine(doc, "Realizační firma", viewModel.realizationCompanyName, x, y, 32); y += LINE_HEIGHT_MM; }
+/**
+ * Compact metadata GRID (spec section 3/4) — up to 3 columns of label/value pairs, never a long
+ * vertical list, so the header block stays a small fraction of the A4 page and leaves the rest to
+ * the visualizations/table (spec's stated priority: 1. images, 2. labels, 3. dimensions). Each
+ * value is bold and visually dominant over its small uppercase gray label, matching the spec's own
+ * "VYSTAVOVATEL / Beauty Brand s.r.o." example. A value too wide for its column is ellipsis-
+ * truncated (metadata values are short business facts, not free-form text — the table below is
+ * where real wrapping matters).
+ */
+function drawMetadataGrid(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, x: number, y: number, pageWidth: number): number {
+  const fields: Readonly<{ label: string; value: string }>[] = [
+    { label: "VYSTAVOVATEL", value: viewModel.companyName || "—" },
+    { label: "PROJEKT / STÁNEK", value: viewModel.projectName || "—" },
+  ];
+  if (viewModel.realizationCompanyName) fields.push({ label: "REALIZAČNÍ FIRMA", value: viewModel.realizationCompanyName });
   const eventMeta = [viewModel.eventBranding.venue, viewModel.eventBranding.dateRange].filter(Boolean).join(" · ");
-  if (eventMeta) { headerLine(doc, "Veletrh", eventMeta, x, y, 32); y += LINE_HEIGHT_MM; }
-  headerLine(doc, "Datum exportu", new Date(viewModel.generatedAt).toLocaleDateString("cs-CZ"), x, y, 32); y += LINE_HEIGHT_MM;
-  headerLine(doc, "Revize", `R${viewModel.revision}`, x, y, 32); y += LINE_HEIGHT_MM;
-  return y + 3;
+  if (eventMeta) fields.push({ label: "VELETRH", value: eventMeta });
+  fields.push({ label: "DATUM EXPORTU", value: new Date(viewModel.generatedAt).toLocaleDateString("cs-CZ") });
+  fields.push({ label: "REVIZE", value: `R${viewModel.revision}` });
+
+  const columns = 3;
+  const colWidth = (pageWidth - PAGE_MARGIN_MM * 2) / columns;
+  const rowHeight = 13;
+  const maxChars = Math.floor((colWidth - 2) / 1.9);
+
+  fields.forEach((field, index) => {
+    const col = index % columns;
+    const row = Math.floor(index / columns);
+    const fx = x + col * colWidth;
+    const fy = y + row * rowHeight;
+    doc.setFont(FONT_FAMILY, "normal");
+    doc.setFontSize(7);
+    doc.setTextColor(...GRAY_TEXT_RGB);
+    doc.text(field.label, fx, fy);
+    doc.setFont(FONT_FAMILY, "bold");
+    doc.setFontSize(11);
+    doc.setTextColor(0, 0, 0);
+    const value = field.value.length > maxChars ? `${field.value.slice(0, Math.max(0, maxChars - 1))}…` : field.value;
+    doc.text(value, fx, fy + 5.5);
+  });
+
+  const rowCount = Math.ceil(fields.length / columns);
+  return y + rowCount * rowHeight + 3;
 }
 
+/** One compact summary line — never a sidebar (spec section 5: it must not shrink the visualizations). */
 function drawSummary(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, x: number, y: number, pageWidth: number): number {
   const parts = [`Celkem ploch: ${viewModel.summary.total}`, ...viewModel.summary.groups.map((group) => `${group.labelCz}: ${group.count}`)];
   doc.setFont(FONT_FAMILY, "normal");
-  doc.setFontSize(8.5);
-  doc.setDrawColor(120, 120, 120);
+  doc.setFontSize(9);
+  doc.setTextColor(60, 60, 60);
   doc.text(parts.join("   ·   "), x, y);
-  y += 5;
-  doc.setDrawColor(200, 200, 200);
+  doc.setTextColor(0, 0, 0);
+  y += 4;
+  doc.setDrawColor(215, 216, 218);
   doc.setLineWidth(0.2);
   doc.line(x, y, pageWidth - PAGE_MARGIN_MM, y);
-  return y + 6;
+  return y + 7;
 }
 
 /**
  * Draws the view's photo (or a bordered placeholder) and returns BOTH the bottom-y for layout
  * continuation AND the exact rendered image rect — the latter is what markers must be mapped
- * against (spec section 6: never the outer box). `rect` is undefined whenever no image was
- * actually drawn (missing/broken), in which case the caller draws no markers for that view either
- * (a marker pinned to a photo that isn't there has nowhere meaningful to sit).
+ * against (never the outer box). `rect` is undefined whenever no image was actually drawn
+ * (missing/broken), in which case the caller draws no markers for that view either.
  */
 function drawViewImage(doc: PdfDoc, x: number, y: number, boxWidth: number, boxHeight: number, label: string, image: LoadedImageDataUrl | undefined): Readonly<{ bottom: number; rect: Rect | undefined }> {
   doc.setDrawColor(220, 220, 220);
@@ -139,12 +160,14 @@ function drawViewImage(doc: PdfDoc, x: number, y: number, boxWidth: number, boxH
     doc.text("Obrázek není k dispozici", x + boxWidth / 2, y + boxHeight / 2, { align: "center" });
   }
   doc.setFont(FONT_FAMILY, "normal");
-  doc.setFontSize(8);
-  doc.text(label, x, y + boxHeight + 4);
-  return { bottom: y + boxHeight + 8, rect };
+  doc.setFontSize(8.5);
+  doc.setTextColor(90, 92, 95);
+  doc.text(label, x, y + boxHeight + 5);
+  doc.setTextColor(0, 0, 0);
+  return { bottom: y + boxHeight + 9, rect };
 }
 
-/** A compact, print-safe marker pin — constant radius regardless of source image size (spec section 3), dark fill + white bordered edge + white label, matching the print-preview HTML's `.ps-marker` look exactly. */
+/** A compact, print-safe marker pin — constant radius regardless of source image size, dark fill + white bordered edge + white label. Deliberately small/technical, never a large UI button (spec section 7). */
 function drawMarker(doc: PdfDoc, x: number, y: number, label: string): void {
   doc.setFillColor(...MARKER_FILL_RGB);
   doc.setDrawColor(255, 255, 255);
@@ -157,7 +180,7 @@ function drawMarker(doc: PdfDoc, x: number, y: number, label: string): void {
   doc.setTextColor(0, 0, 0);
 }
 
-/** Draws every marker for one view's already-resolved image rect — a marker whose view has no drawn image (missing/broken photo) is simply skipped, never placed at a meaningless (0,0). */
+/** Draws every marker for one view's already-resolved image rect — a marker whose view has no drawn image (missing/broken photo) is simply skipped, never placed at a meaningless (0,0). Never draws a Pohled-1 marker onto Pohled 2 — each PrintSurfaceExportImage only ever carries its OWN placements' markers (domain/printSurfaceExport.ts). */
 function drawViewMarkers(doc: PdfDoc, image: PrintSurfaceExportImage, rect: Rect | undefined): void {
   if (!rect) return;
   for (const marker of image.markers) {
@@ -166,46 +189,128 @@ function drawViewMarkers(doc: PdfDoc, image: PrintSurfaceExportImage, rect: Rect
   }
 }
 
-const BASE_COLUMNS_WIDTH_MM = 12 + 24 + 38 + 26 + 10; // Označ. + Typ + Název plochy + Rozměr + Ks
+/**
+ * Lays out 1 or 2 views (spec section 6). One view: dominant, near-full page width. Two views:
+ * side-by-side columns by default; switches to a full-width STACKED layout only when both
+ * resolved images are portrait-oriented (taller than wide) — a side-by-side half-width column
+ * would otherwise waste most of a portrait photo's height budget for no reason. Either way, the
+ * actual rendered rect always comes from resolveContainRect, so an image is NEVER distorted/
+ * stretched regardless of which layout branch is chosen.
+ */
+function drawViews(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, viewImages: PrintSurfacePdfViewImages, x: number, y: number, pageWidth: number): number {
+  const images = viewModel.images;
+  if (images.length === 0) return y;
 
-function drawTable(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, x: number, startY: number, pageWidth: number, pageHeight: number): void {
-  const viewColWidth = viewModel.showViewColumn ? 18 : 0;
-  const priceColWidth = viewModel.showPrices ? 22 : 0;
-  const usedWidth = BASE_COLUMNS_WIDTH_MM + viewColWidth + priceColWidth;
-  const noteWidth = Math.max(20, pageWidth - PAGE_MARGIN_MM * 2 - usedWidth);
+  const usableWidth = pageWidth - PAGE_MARGIN_MM * 2;
 
-  const columns: readonly Readonly<{ header: string; width: number; value: (row: PrintSurfaceExportViewModel["rows"][number]) => string }>[] = [
-    { header: "Označ.", width: 12, value: (row) => row.label },
-    { header: "Typ", width: 24, value: (row) => row.typeLabel },
-    { header: "Název plochy", width: 38, value: (row) => row.surfaceName },
-    { header: "Rozměr", width: 26, value: (row) => row.dimensionLabel },
-    { header: "Ks", width: 10, value: (row) => String(row.quantity) },
-    ...(viewModel.showViewColumn ? [{ header: "Pohled", width: viewColWidth, value: (row: PrintSurfaceExportViewModel["rows"][number]) => row.viewLabel }] : []),
-    { header: "Poznámka", width: noteWidth, value: (row) => row.note },
-    ...(viewModel.showPrices ? [{ header: "Cena", width: priceColWidth, value: (row: PrintSurfaceExportViewModel["rows"][number]) => row.priceLabel ?? "—" }] : []),
+  if (images.length === 1) {
+    const image = images[0]!;
+    const { bottom, rect } = drawViewImage(doc, x, y, usableWidth, 108, image.viewLabel, viewImages.get(image.viewId));
+    drawViewMarkers(doc, image, rect);
+    return bottom;
+  }
+
+  const isPortrait = (img: LoadedImageDataUrl | undefined) => Boolean(img) && img!.heightPx > img!.widthPx;
+  const bothPortrait = images.every((image) => isPortrait(viewImages.get(image.viewId)));
+
+  if (bothPortrait) {
+    let rowY = y;
+    for (const image of images) {
+      const { bottom, rect } = drawViewImage(doc, x, rowY, usableWidth, 78, image.viewLabel, viewImages.get(image.viewId));
+      drawViewMarkers(doc, image, rect);
+      rowY = bottom;
+    }
+    return rowY;
+  }
+
+  const gap = 8;
+  const colWidth = (usableWidth - gap) / 2;
+  let bottom = y;
+  images.forEach((image, index) => {
+    const colX = x + index * (colWidth + gap);
+    const drawn = drawViewImage(doc, colX, y, colWidth, 82, image.viewLabel, viewImages.get(image.viewId));
+    drawViewMarkers(doc, image, drawn.rect);
+    bottom = Math.max(bottom, drawn.bottom);
+  });
+  return bottom;
+}
+
+const TABLE_LINE_HEIGHT_MM = 3.7;
+const TABLE_ROW_TOP_PAD_MM = 4.6;
+const TABLE_ROW_BOTTOM_PAD_MM = 2;
+const TABLE_HEADER_HEIGHT_MM = 8;
+
+type TableColumn = Readonly<{
+  header: string;
+  width: number;
+  wrap: boolean;
+  value: (row: PrintSurfaceExportRow) => string;
+}>;
+
+function buildTableColumns(viewModel: PrintSurfaceExportViewModel, pageWidth: number): readonly TableColumn[] {
+  const usableWidth = pageWidth - PAGE_MARGIN_MM * 2;
+  const labelW = 13;
+  const typeW = 27;
+  const dimensionW = 28;
+  const qtyW = 9;
+  const viewW = viewModel.showViewColumn ? 20 : 0;
+  const nameW = 46;
+  const noteW = Math.max(24, usableWidth - labelW - typeW - dimensionW - qtyW - viewW - nameW);
+
+  const columns: TableColumn[] = [
+    { header: "Označ.", width: labelW, wrap: false, value: (row) => row.label },
+    { header: "Typ", width: typeW, wrap: false, value: (row) => row.typeLabel },
+    { header: "Název plochy", width: nameW, wrap: true, value: (row) => row.surfaceName },
+    { header: "Rozměr", width: dimensionW, wrap: false, value: (row) => row.dimensionLabel },
+    { header: "Ks", width: qtyW, wrap: false, value: (row) => String(row.quantity) },
   ];
+  if (viewModel.showViewColumn) columns.push({ header: "Pohled", width: viewW, wrap: false, value: (row) => row.viewLabel });
+  columns.push({ header: "Poznámka", width: noteW, wrap: true, value: (row) => row.note || "—" });
+  return columns;
+}
+
+/**
+ * Professional, wrapping-aware table (spec section 8). "Název plochy"/"Poznámka" wrap onto extra
+ * lines (doc.splitTextToSize) rather than ever being cut off early; every other column keeps a
+ * generous fixed width so it stays on one line in practice, with a last-resort ellipsis only if a
+ * value is truly wider than its column. Row height is computed PER ROW from the tallest wrapped
+ * cell, so pagination never splits a row's text across a page boundary. The header row is
+ * redrawn on every new page (spec: "header tabulky opakovat na nové stránce").
+ */
+function drawTable(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, x: number, startY: number, pageWidth: number, pageHeight: number): void {
+  const columns = buildTableColumns(viewModel, pageWidth);
+  const tableWidth = columns.reduce((sum, col) => sum + col.width, 0);
 
   let y = startY;
-  const rowHeight = 6.5;
 
   function drawHeaderRow() {
     doc.setFillColor(244, 245, 246);
-    doc.rect(x, y - 4.2, columns.reduce((sum, col) => sum + col.width, 0), rowHeight, "F");
+    doc.rect(x, y, tableWidth, TABLE_HEADER_HEIGHT_MM, "F");
     doc.setFont(FONT_FAMILY, "bold");
     doc.setFontSize(7.5);
+    doc.setTextColor(70, 72, 75);
     let colX = x;
     for (const column of columns) {
-      doc.text(column.header, colX + 1, y);
+      doc.text(column.header, colX + 1.5, y + 5.4);
       colX += column.width;
     }
-    y += rowHeight;
+    doc.setTextColor(0, 0, 0);
+    y += TABLE_HEADER_HEIGHT_MM;
   }
 
   drawHeaderRow();
 
-  doc.setFont(FONT_FAMILY, "normal");
-  doc.setFontSize(8);
   viewModel.rows.forEach((row, index) => {
+    doc.setFont(FONT_FAMILY, "normal");
+    doc.setFontSize(8);
+    const cellLines = columns.map((column) => {
+      const text = column.value(row);
+      if (!column.wrap) return [text];
+      return doc.splitTextToSize(text, column.width - 3);
+    });
+    const lineCount = Math.max(1, ...cellLines.map((lines) => lines.length));
+    const rowHeight = TABLE_ROW_TOP_PAD_MM + (lineCount - 1) * TABLE_LINE_HEIGHT_MM + TABLE_ROW_BOTTOM_PAD_MM;
+
     if (y + rowHeight > pageHeight - PAGE_MARGIN_MM) {
       doc.addPage();
       y = PAGE_MARGIN_MM;
@@ -213,33 +318,39 @@ function drawTable(doc: PdfDoc, viewModel: PrintSurfaceExportViewModel, x: numbe
       doc.setFont(FONT_FAMILY, "normal");
       doc.setFontSize(8);
     }
+
     if (index % 2 === 1) {
-      doc.setFillColor(250, 250, 250);
-      doc.rect(x, y - 4.2, columns.reduce((sum, col) => sum + col.width, 0), rowHeight, "F");
+      doc.setFillColor(250, 250, 251);
+      doc.rect(x, y, tableWidth, rowHeight, "F");
     }
+
     let colX = x;
-    for (const column of columns) {
-      const text = column.value(row);
-      const maxChars = Math.floor(column.width / 1.7);
-      doc.text(text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 1))}…` : text, colX + 1, y);
+    columns.forEach((column, colIndex) => {
+      const lines = cellLines[colIndex]!;
+      if (column.wrap) {
+        lines.forEach((line, lineIndex) => {
+          doc.text(line, colX + 1.5, y + TABLE_ROW_TOP_PAD_MM + lineIndex * TABLE_LINE_HEIGHT_MM);
+        });
+      } else {
+        const maxChars = Math.floor((column.width - 2) / 1.7);
+        const text = lines[0]!;
+        const truncated = text.length > maxChars ? `${text.slice(0, Math.max(0, maxChars - 1))}…` : text;
+        doc.text(truncated, colX + 1.5, y + TABLE_ROW_TOP_PAD_MM);
+      }
       colX += column.width;
-    }
+    });
+
+    doc.setDrawColor(226, 227, 229);
+    doc.setLineWidth(0.15);
+    doc.line(x, y + rowHeight, x + tableWidth, y + rowHeight);
+
     y += rowHeight;
   });
-
-  if (viewModel.showPrices) {
-    y += 3;
-    doc.setFont(FONT_FAMILY, "bold");
-    doc.setFontSize(9);
-    doc.text(`Cena tiskových ploch celkem: ${viewModel.totalPrice.toLocaleString("cs-CZ")} Kč`, x, y);
-  }
 }
 
 /**
- * Header → metadata → summary → view images WITH marker pins (see module doc) → data table
- * (with a page break per overflowing row block, header re-drawn on each new page) → optional
- * price footer. A4 portrait, matching the existing print-preview HTML's orientation (this is
- * meant to look like the same document, just a real binary artifact). Never appends a page beyond
+ * Header → compact metadata grid → summary line → view images WITH marker pins → data table (no
+ * price columns/footer in this phase — see module doc). A4 portrait. Never appends a page beyond
  * what the table itself needed — no trailing blank/instructions page.
  */
 export async function buildPrintSurfacePdf(
@@ -254,31 +365,16 @@ export async function buildPrintSurfacePdf(
   const pageHeight = doc.internal.pageSize.getHeight();
 
   let y = drawHeader(doc, viewModel, branding, pageWidth);
-  y = drawMetadata(doc, viewModel, PAGE_MARGIN_MM, y);
+  y = drawMetadataGrid(doc, viewModel, PAGE_MARGIN_MM, y, pageWidth);
   y = drawSummary(doc, viewModel, PAGE_MARGIN_MM, y, pageWidth);
-
-  const imageBoxWidth = viewModel.images.length > 1 ? (pageWidth - PAGE_MARGIN_MM * 2 - 8) / 2 : pageWidth - PAGE_MARGIN_MM * 2;
-  const imageBoxHeight = 55;
-  let imageX = PAGE_MARGIN_MM;
-  let rowBottom = y;
-  viewModel.images.forEach((image, index) => {
-    const { bottom, rect } = drawViewImage(doc, imageX, y, imageBoxWidth, imageBoxHeight, image.viewLabel, viewImages.get(image.viewId));
-    drawViewMarkers(doc, image, rect);
-    rowBottom = Math.max(rowBottom, bottom);
-    imageX += imageBoxWidth + 8;
-    if (viewModel.images.length > 1 && index % 2 === 1) {
-      y = rowBottom;
-      imageX = PAGE_MARGIN_MM;
-    }
-  });
-  y = rowBottom + 2;
+  y = drawViews(doc, viewModel, viewImages, PAGE_MARGIN_MM, y, pageWidth) + 3;
 
   if (y > pageHeight - PAGE_MARGIN_MM - 40) {
     doc.addPage();
     y = PAGE_MARGIN_MM;
   }
 
-  drawTable(doc, viewModel, PAGE_MARGIN_MM, y + 5, pageWidth, pageHeight - 30);
+  drawTable(doc, viewModel, PAGE_MARGIN_MM, y + 4, pageWidth, pageHeight);
 
   return new Uint8Array(doc.output("arraybuffer"));
 }
