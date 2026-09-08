@@ -78,11 +78,27 @@ export type RasterSettings = Readonly<{
   /** Layer ids forced OFF whenever viewMode === "work" — user-configured per project, never a hardcoded layer name. Independent of the stand-fill whitening above (spec section 28: "White mode je jiná funkce než layer visibility"). */
   workModeHiddenLayerIds: readonly string[];
   viewMode: "original" | "work";
+  /**
+   * "Krytí bílé" (spec batch 6, UI section 17-23) — how opaque the work-mode stand-fill whitening
+   * is, 0 (fully transparent fill, original stroke/edges still fully visible) to 1 (today's
+   * original fully-opaque white). Optional so a project saved BEFORE this field existed never
+   * crashes reading it back — see effectiveWhiteFillOpacity below, always applied at read time,
+   * no data migration needed (spec section 22/23). "original" viewMode ignores this entirely
+   * (spec section 31) — it's only ever consulted when actually rendering work mode.
+   */
+  whiteFillOpacity?: number;
 }>;
 
-/** viewMode defaults to "work" (spec section 19: "Default pro technický workflow: Pracovní – bílé") — the technical department's own daily tool, not a general PDF viewer. */
+/** Applied wherever whiteFillOpacity is read — never a raw `settings.whiteFillOpacity` access elsewhere, so a project saved before this field existed reads as the SAME default new projects get (spec section 19/23). */
+export const DEFAULT_WHITE_FILL_OPACITY = 0.6;
+
+export function effectiveWhiteFillOpacity(settings: RasterSettings): number {
+  return settings.whiteFillOpacity ?? DEFAULT_WHITE_FILL_OPACITY;
+}
+
+/** viewMode defaults to "work" (spec section 19: "Default pro technický workflow: Pracovní – bílé") — the technical department's own daily tool, not a general PDF viewer. whiteFillOpacity defaults to DEFAULT_WHITE_FILL_OPACITY (60%) for every NEW project going forward — existing/older projects rely on effectiveWhiteFillOpacity's own fallback instead, never a migration. */
 export function createDefaultRasterSettings(): RasterSettings {
-  return { layerVisibility: {}, workModeHiddenLayerIds: [], viewMode: "work" };
+  return { layerVisibility: {}, workModeHiddenLayerIds: [], viewMode: "work", whiteFillOpacity: DEFAULT_WHITE_FILL_OPACITY };
 }
 
 // ============================================================================
@@ -163,6 +179,8 @@ export type StandPlacement = Readonly<{
   anchorYNormalized?: number;
   matchedLabelId?: string;
   matchMethod?: StandMatchMethod;
+  /** Set only when status === "ambiguous": how many raster labels this stand number matched (spec batch 3 UI section 9) — purely informational, never used to auto-pick a candidate. */
+  candidateCount?: number;
 }>;
 
 export const UNASSIGNED_PLACEMENT: StandPlacement = { status: "unassigned" };
@@ -241,6 +259,11 @@ export type TechnicalRasterProjectSummary = Readonly<{
   updatedAt: string;
 }>;
 
+/** Removes one project from an already-loaded summary list by id — pure list projection behind the project list page's optimistic "delete succeeded" update (spec batch 4 UI section 19). Never makes a network call itself; the caller only applies this AFTER the repository's own delete() has resolved without throwing. */
+export function withoutTechnicalRasterProject(projects: readonly TechnicalRasterProjectSummary[], projectId: string): readonly TechnicalRasterProjectSummary[] {
+  return projects.filter((project) => project.id !== projectId);
+}
+
 export function summarizeTechnicalRasterProject(project: TechnicalRasterProject): TechnicalRasterProjectSummary {
   return {
     id: project.id,
@@ -296,6 +319,12 @@ export function withRasterViewMode(project: TechnicalRasterProject, viewMode: Ra
   return { ...project, rasterSettings: { ...project.rasterSettings, viewMode }, updatedAt: new Date().toISOString() };
 }
 
+/** Sets "Krytí bílé" (spec batch 6). `opacity` is clamped to [0,1] defensively — a slider UI shouldn't ever produce an out-of-range value, but this is the one place that guarantee is actually enforced. */
+export function withWhiteFillOpacity(project: TechnicalRasterProject, opacity: number): TechnicalRasterProject {
+  const clamped = Math.min(1, Math.max(0, opacity));
+  return { ...project, rasterSettings: { ...project.rasterSettings, whiteFillOpacity: clamped }, updatedAt: new Date().toISOString() };
+}
+
 /** The layer ids actually hidden right now, given the current viewMode — the single place any raster-rendering UI should ask "what should I skip drawing". */
 export function effectiveHiddenLayerIds(project: TechnicalRasterProject): ReadonlySet<string> {
   const hidden = new Set<string>();
@@ -334,7 +363,7 @@ function placementFromMatch(standNumber: string, labels: readonly RasterStandLab
       matchMethod: "exact_auto",
     };
   }
-  if (result.status === "ambiguous") return { status: "ambiguous" };
+  if (result.status === "ambiguous") return { status: "ambiguous", candidateCount: result.candidateLabels.length };
   return UNASSIGNED_PLACEMENT;
 }
 

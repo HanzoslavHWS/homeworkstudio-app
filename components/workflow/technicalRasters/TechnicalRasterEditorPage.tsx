@@ -12,7 +12,9 @@ import {
   withRasterViewMode,
   withSourceRasterAsset,
   withWorkModeHiddenLayers,
+  withWhiteFillOpacity,
   effectiveHiddenLayerIds,
+  effectiveWhiteFillOpacity,
   type RasterSettings,
   type TechnicalRasterImport,
   type TechnicalRasterProject,
@@ -20,10 +22,13 @@ import {
 } from "../../../domain/technicalRaster";
 import { resolveTechnicalServiceProduct } from "../../../domain/technicalServiceProductMapping";
 import { technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
+import { groupImportedStandsByImport, groupParsedReportByStand, summarizeParsedReport } from "../../../domain/technicalRasterImportPreview";
+import { TechnicalImportParsedDataList } from "./TechnicalImportParsedDataList";
 import type { CatalogItemSummary } from "../../../domain/catalogPricing";
 import type { RemoteApiCatalogPricingRepository } from "../../../lib/db/catalogPricing.remoteApi.client";
 import { getAssetDownloadUrl, uploadAsset } from "../../../lib/storage/assetClient";
 import { loadPdfDocument } from "../../../lib/pdf/pdfDocumentLoader";
+import { logPdfLoadFailure } from "../../../lib/pdf/pdfLoadDiagnostics";
 import { extractPdfTextItems, getPdfPageSizes } from "../../../lib/pdf/pdfTextExtraction";
 import { listPdfLayers } from "../../../lib/pdf/pdfLayers";
 import { detectRasterStandLabels } from "../../../lib/pdf/rasterStandLabelDetection";
@@ -74,11 +79,17 @@ export function TechnicalRasterEditorPage({
   const [rasterError, setRasterError] = useState("");
   const [renderKey, setRenderKey] = useState(0);
   const [whiteModeUnsupportedReason, setWhiteModeUnsupportedReason] = useState("");
+  const [rasterUrlError, setRasterUrlError] = useState("");
 
   const skipNextAutosaveRef = useRef(true);
   const pendingSaveTimeoutRef = useRef<number | undefined>(undefined);
   const projectRef = useRef<TechnicalRasterProject | null>(null);
   projectRef.current = project;
+  // Guards the ONE controlled retry a failed canvas load gets (spec batch 5, UI section 22: "Ne
+  // nekonečný retry loop") — reset to false every time the URL-resolving effect below runs again
+  // for a (possibly new) sourceRasterAsset, so a genuinely NEW raster always gets its own fresh
+  // retry budget, but repeated failures against the SAME resolved URL never loop.
+  const rasterLoadRetriedRef = useRef(false);
 
   useEffect(() => {
     skipNextAutosaveRef.current = true;
@@ -99,10 +110,50 @@ export function TechnicalRasterEditorPage({
 
   useEffect(() => {
     let cancelled = false;
+    rasterLoadRetriedRef.current = false;
+    setRasterUrlError("");
     if (!project?.sourceRasterAsset) { setRasterUrl(undefined); return; }
-    getAssetDownloadUrl(project.sourceRasterAsset.storageKey).then((url) => { if (!cancelled) setRasterUrl(url); }).catch(() => { if (!cancelled) setRasterUrl(undefined); });
+    const asset = project.sourceRasterAsset;
+    getAssetDownloadUrl(asset.storageKey)
+      .then((url) => { if (!cancelled) setRasterUrl(url); })
+      .catch((error) => {
+        if (cancelled) return;
+        logPdfLoadFailure({ phase: "asset_url_resolve", assetReference: asset.id, error });
+        setRasterUrl(undefined);
+        setRasterUrlError("Rastr se nepodařilo načíst.");
+      });
     return () => { cancelled = true; };
   }, [project?.sourceRasterAsset]);
+
+  /**
+   * Root cause of a bare "Failed to fetch" reaching the canvas (spec batch 5, UI section 17-22):
+   * getAssetDownloadUrl() returns a PRESIGNED R2 URL that expires after 900s (see
+   * lib/storage/cloudflareR2.server.ts's own default) and is resolved exactly ONCE per
+   * project.sourceRasterAsset (the effect above) — but the "Rastr" and "Přiřazení" steps each
+   * mount their OWN separate <TechnicalRasterCanvas>, and switching between them (or simply
+   * leaving the project open past the 15-minute mark) makes a FRESH mount call loadPdfDocument()
+   * again against that same, by-then-possibly-expired URL, with nothing to ever refresh it. This
+   * is the ONE controlled retry spec section 22 asks for: resolve a BRAND NEW download URL and let
+   * it flow back down as a new `pdfUrl` prop (which the canvas's own loading effect is already
+   * keyed on, so it retries on its own) — never a second retry, never touches project/stand data.
+   */
+  function handleRasterCanvasLoadFailed() {
+    // The low-level failure itself is already logged by the canvas (logPdfLoadFailure, phase
+    // "canvas_load") — this handler only needs to know THAT it failed, to drive the retry.
+    const asset = projectRef.current?.sourceRasterAsset;
+    if (!asset) return;
+    if (rasterLoadRetriedRef.current) {
+      setRasterUrlError("Rastr se nepodařilo načíst.");
+      return;
+    }
+    rasterLoadRetriedRef.current = true;
+    getAssetDownloadUrl(asset.storageKey)
+      .then((url) => setRasterUrl(url))
+      .catch((error) => {
+        logPdfLoadFailure({ phase: "retry_after_url_refresh", assetReference: asset.id, error });
+        setRasterUrlError("Rastr se nepodařilo načíst.");
+      });
+  }
 
   async function persistNow(target: TechnicalRasterProject): Promise<boolean> {
     if (pendingSaveTimeoutRef.current !== undefined) {
@@ -208,6 +259,17 @@ export function TechnicalRasterEditorPage({
     setProject((current) => (current ? withWorkModeHiddenLayers(current, layerIds) : current));
     setRenderKey((key) => key + 1);
   }
+  /**
+   * "Krytí bílé" (spec batch 6, UI section 17-30). No renderKey bump needed here — unlike the
+   * other layer/view-mode setters above, TechnicalRasterCanvas.tsx lists whiteFillOpacity directly
+   * in its own render effect's dependency array, so passing the new value down (via the prop below)
+   * is enough to trigger exactly one redraw. TechnicalRasterLayerPanel.tsx already debounces how
+   * often this is actually called while the slider is being dragged (spec section 30) — this
+   * handler itself fires at most once per settled drag, never per pixel.
+   */
+  function handleSetWhiteFillOpacity(opacity: number) {
+    setProject((current) => (current ? withWhiteFillOpacity(current, opacity) : current));
+  }
 
   // ============================================================================
   // Step 2: Technical services import
@@ -216,6 +278,11 @@ export function TechnicalRasterEditorPage({
   const existingImportsByCategory = new Map<string, TechnicalRasterImport>();
   for (const importRecord of project.imports) {
     if (!importRecord.supersededByImportId) existingImportsByCategory.set(importRecord.category, importRecord);
+  }
+
+  /** Shared by the pre-import preview (below) and mergeTechnicalRasterImport's own resolver in handleConfirmImport — same underlying resolution, never a second/different parsing of the same data (spec batch 3, UI section 19: "žádná změna dat"). */
+  function resolveProductStatus(category: string, externalLabel: string) {
+    return resolveTechnicalServiceProduct(category, externalLabel, catalogItems).status;
   }
 
   async function handleConfirmImport() {
@@ -342,7 +409,10 @@ export function TechnicalRasterEditorPage({
             assignMode={false}
             renderKey={`${renderKey}-${hiddenLayerIdsKey}`}
             whiteModeStandLayerId={whiteModeStandLayerId}
+            whiteFillOpacity={effectiveWhiteFillOpacity(project.rasterSettings)}
             onWhiteModeUnsupported={setWhiteModeUnsupportedReason}
+            assetReference={project.sourceRasterAsset?.id}
+            onLoadFailed={handleRasterCanvasLoadFailed}
           />
           <div className="technicalRasterSidebar">
             {!project.sourceRasterAsset && (
@@ -364,6 +434,7 @@ export function TechnicalRasterEditorPage({
                 <div className="workflowCard">
                   <p className="fieldHint">Zdrojový soubor: {project.sourceRasterAsset.originalFileName}</p>
                   <p className="fieldHint">Stran: {pageCount} · Rozpoznaných čísel stánků: {project.rasterStandLabels.length}</p>
+                  {rasterUrlError && <p className="uploadError">{rasterUrlError}</p>}
                   <label className="filePicker compact">
                     <span>{isProcessingRaster ? "Zpracovávám…" : "Nahradit rastr"}</span>
                     <input type="file" accept="application/pdf" disabled={isProcessingRaster} onChange={(event) => {
@@ -388,6 +459,7 @@ export function TechnicalRasterEditorPage({
                   onToggleLayer={handleToggleLayer}
                   onSetViewMode={handleSetViewMode}
                   onSetWorkModeHiddenLayers={handleSetWorkModeHiddenLayers}
+                  onSetWhiteFillOpacity={handleSetWhiteFillOpacity}
                 />
                 {whiteModeUnsupportedReason && (
                   <p className="uploadError">U tohoto PDF nelze bezpečně změnit pouze výplně stánků — {whiteModeUnsupportedReason}</p>
@@ -402,28 +474,39 @@ export function TechnicalRasterEditorPage({
         <div className="technicalRasterServicesStep">
           <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={setPendingImport} />
 
-          {pendingImport && (
-            <div className="workflowCard technicalImportPreview">
-              <div className="workflowCardHeader"><div><span>NÁHLED IMPORTU</span><strong>{technicalServiceCategoryLabel(pendingImport.category)} — {pendingImport.file.name}</strong></div></div>
-              <p>Nalezeno stánků: <strong>{new Set(pendingImport.report.rows.map((row) => row.standNumber)).size}</strong></p>
-              <p>Načteno služeb: <strong>{pendingImport.report.rows.reduce((sum, row) => sum + row.services.length, 0)}</strong></p>
-              {pendingImport.report.warnings.length > 0 && (
-                <div className="technicalImportWarnings">
-                  <strong>Upozornění ({pendingImport.report.warnings.length}):</strong>
-                  <ul>
-                    {pendingImport.report.warnings.map((warning, index) => (
-                      <li key={index}>{warning.message}{warning.page ? ` (strana ${warning.page})` : ""}{warning.rawText ? ` — „${warning.rawText}“` : ""}</li>
-                    ))}
-                  </ul>
+          {pendingImport && (() => {
+            const summary = summarizeParsedReport(pendingImport.report, resolveProductStatus);
+            return (
+              <div className="workflowCard technicalImportPreview">
+                <div className="workflowCardHeader"><div><span>NÁHLED IMPORTU</span><strong>{technicalServiceCategoryLabel(pendingImport.category)} — {pendingImport.file.name}</strong></div></div>
+                <div className="technicalImportPreviewSummary">
+                  <span>Nalezeno stánků <strong>{summary.standCount}</strong></span>
+                  <span>Načteno služeb <strong>{summary.serviceCount}</strong></span>
+                  <span className={summary.warningCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Warningy <strong>{summary.warningCount}</strong></span>
+                  <span className={summary.unknownProductCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Neznámé produkty <strong>{summary.unknownProductCount}</strong></span>
                 </div>
-              )}
-              {pendingImport.replaceImportId && <p className="uploadError">Pro tuto kategorii už existuje import — potvrzením nahradíte jeho data (původní záznam zůstane v historii).</p>}
-              <div className="printSurfaceCreateFormActions">
-                <button type="button" className="primaryButton" onClick={() => void handleConfirmImport()}>{pendingImport.replaceImportId ? "Nahradit předchozí data" : "Potvrdit import"}</button>
-                <button type="button" onClick={() => setPendingImport(undefined)}>Zrušit</button>
+                {pendingImport.report.warnings.length > 0 && (
+                  <div className="technicalImportWarnings">
+                    <strong>Upozornění ({pendingImport.report.warnings.length}):</strong>
+                    <ul>
+                      {pendingImport.report.warnings.map((warning, index) => (
+                        <li key={index}>{warning.message}{warning.page ? ` (strana ${warning.page})` : ""}{warning.rawText ? ` — „${warning.rawText}“` : ""}</li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                <details className="technicalImportPreviewDetails">
+                  <summary>Zobrazit nalezená data</summary>
+                  <TechnicalImportParsedDataList groups={groupParsedReportByStand(pendingImport.report, resolveProductStatus)} />
+                </details>
+                {pendingImport.replaceImportId && <p className="uploadError">Pro tuto kategorii už existuje import — potvrzením nahradíte jeho data (původní záznam zůstane v historii).</p>}
+                <div className="printSurfaceCreateFormActions">
+                  <button type="button" className="primaryButton" onClick={() => void handleConfirmImport()}>{pendingImport.replaceImportId ? "Nahradit předchozí data" : "Potvrdit import"}</button>
+                  <button type="button" onClick={() => setPendingImport(undefined)}>Zrušit</button>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
 
           <div className="workflowCard">
             <div className="workflowCardHeader"><div><span>HISTORIE IMPORTŮ</span></div></div>
@@ -431,14 +514,19 @@ export function TechnicalRasterEditorPage({
             {project.imports.length > 0 && (
               <div className="technicalRasterImportHistory">
                 {[...project.imports].reverse().map((importRecord) => (
-                  <div key={importRecord.id} className={importRecord.supersededByImportId ? "technicalRasterImportRow superseded" : "technicalRasterImportRow"}>
-                    <strong>{technicalServiceCategoryLabel(importRecord.category)}</strong>
-                    <span>{importRecord.filename}</span>
-                    <span className="fieldHint">{new Date(importRecord.importedAt).toLocaleString("cs-CZ")}</span>
-                    <span>{importRecord.standsFound} stánků · {importRecord.servicesFound} služeb</span>
-                    {importRecord.warnings.length > 0 && <span className="uploadError">{importRecord.warnings.length} upozornění</span>}
-                    {importRecord.supersededByImportId && <span className="fieldHint">nahrazeno novějším importem</span>}
-                  </div>
+                  <details key={importRecord.id} className={importRecord.supersededByImportId ? "technicalRasterImportHistoryItem superseded" : "technicalRasterImportHistoryItem"}>
+                    <summary className="technicalRasterImportRow">
+                      <strong>{technicalServiceCategoryLabel(importRecord.category)}</strong>
+                      <span>{importRecord.filename}</span>
+                      <span className="fieldHint">{new Date(importRecord.importedAt).toLocaleString("cs-CZ")}</span>
+                      <span>{importRecord.standsFound} stánků · {importRecord.servicesFound} služeb</span>
+                      {importRecord.warnings.length > 0 && <span className="uploadError">{importRecord.warnings.length} upozornění</span>}
+                      {importRecord.supersededByImportId && <span className="fieldHint">nahrazeno novějším importem</span>}
+                    </summary>
+                    <div className="technicalRasterImportHistoryDetail">
+                      <TechnicalImportParsedDataList groups={groupImportedStandsByImport(project.stands, importRecord.id)} />
+                    </div>
+                  </details>
                 ))}
               </div>
             )}
@@ -458,12 +546,16 @@ export function TechnicalRasterEditorPage({
             onCanvasClick={handleCanvasClick}
             renderKey={`${renderKey}-${hiddenLayerIdsKey}`}
             whiteModeStandLayerId={whiteModeStandLayerId}
+            whiteFillOpacity={effectiveWhiteFillOpacity(project.rasterSettings)}
             onWhiteModeUnsupported={setWhiteModeUnsupportedReason}
+            assetReference={project.sourceRasterAsset?.id}
+            onLoadFailed={handleRasterCanvasLoadFailed}
           />
           <div className="technicalRasterSidebar">
             {assignmentActiveStandId && activeAssignmentStand && (
-              <p className="technicalRasterAssignHint">Přiřaďte stánek <strong>{activeAssignmentStand.standNumber}</strong> kliknutím do rastru.</p>
+              <p className="technicalRasterAssignHint">Spárujte stánek <strong>{activeAssignmentStand.standNumber}</strong> kliknutím do rastru.</p>
             )}
+            {rasterUrlError && <p className="uploadError">{rasterUrlError}</p>}
             <TechnicalStandBuffer stands={project.stands} selectedStandId={selectedStandId} activeAssignmentStandId={assignmentActiveStandId} onSelectStand={setSelectedStandId} />
             <TechnicalStandDetailPanel stand={selectedStand} imports={project.imports} onAssign={handleStartAssignment} onClearAssignment={handleClearAssignment} />
           </div>

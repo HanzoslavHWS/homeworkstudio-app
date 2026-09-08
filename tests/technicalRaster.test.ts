@@ -6,6 +6,7 @@ import {
   createDefaultRasterSettings,
   createTechnicalRasterProject,
   effectiveHiddenLayerIds,
+  effectiveWhiteFillOpacity,
   mergeTechnicalRasterImport,
   nextUnassignedStand,
   rematchStands,
@@ -16,10 +17,15 @@ import {
   withRasterViewMode,
   withSourceRasterAsset,
   withWorkModeHiddenLayers,
+  withWhiteFillOpacity,
+  withoutTechnicalRasterProject,
+  DEFAULT_WHITE_FILL_OPACITY,
   type ParsedTechnicalReport,
+  type RasterSettings,
   type RasterStandLabel,
   type TechnicalRasterImport,
   type TechnicalRasterProject,
+  type TechnicalRasterProjectSummary,
 } from "../domain/technicalRaster.ts";
 import type { StoredAsset } from "../domain/assets.ts";
 
@@ -218,6 +224,17 @@ test("multi-page: the SAME stand number on two DIFFERENT pages is ambiguous — 
   assert.equal(project.stands[0]?.placement.status, "ambiguous");
 });
 
+test("ambiguous placement carries candidateCount (spec batch 3 UI section 9: 'Nejednoznačné — nalezeno Nx') — purely informational, never used to auto-pick a candidate", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const report: ParsedTechnicalReport = { category: "electricity", rows: [{ standNumber: "1A01", services: [], notes: [] }], warnings: [] };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, alwaysResolved);
+  project = withRasterStandLabels(project, [makeLabel("1A01", "l1"), makeLabel("1A01", "l2"), makeLabel("1A01", "l3")]);
+  const stand = project.stands[0]!;
+  assert.equal(stand.placement.status, "ambiguous");
+  assert.equal(stand.placement.candidateCount, 3, "3 raster labels matched this stand number");
+  assert.equal(stand.placement.matchedLabelId, undefined, "still never auto-picks one of the candidates");
+});
+
 // =========================================================================================
 // Zoom invariance (spec batch 2.5 section 11) — assignStandManually stores EXACTLY the
 // normalized coordinates it's given; it must never apply any zoom/scale-dependent transform of
@@ -407,3 +424,94 @@ test("white OFF / a DIFFERENT layer OFF: identical hidden-layer result whether w
 });
 
 void ({} as TechnicalRasterProject);
+
+// =========================================================================================
+// withoutTechnicalRasterProject (spec batch 4, UI section 14-22, 29) — pure list projection behind
+// the project list page's "delete project" flow. Only the SUCCESS path calls this at all
+// (TechnicalRasterProjectListPage.tsx's handleDeleteProject calls it inside the try block, only
+// after `await projectRepository.delete(project.id)` resolves without throwing) — the failure
+// path's catch block never calls it (the project stays), and cancelling the confirm() dialog
+// returns before even calling projectRepository.delete(), let alone this. Those two guarantees are
+// structural (an early return / a catch block that never reaches this call), not something this
+// pure function itself needs to encode — this test file only pins the function's own behavior.
+// =========================================================================================
+
+function makeSummary(id: string, name = id): TechnicalRasterProjectSummary {
+  return { id, name, hasRaster: false, standCount: 0, unassignedCount: 0, ambiguousCount: 0, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+}
+
+test("withoutTechnicalRasterProject: removes exactly the matching project, leaves every other project untouched", () => {
+  const projects = [makeSummary("p1"), makeSummary("p2"), makeSummary("p3")];
+  const result = withoutTechnicalRasterProject(projects, "p2");
+  assert.deepEqual(result.map((p) => p.id), ["p1", "p3"]);
+  assert.deepEqual(projects.map((p) => p.id), ["p1", "p2", "p3"], "never mutates the input array");
+});
+
+test("withoutTechnicalRasterProject: an id not present in the list is a no-op (same members, unchanged)", () => {
+  const projects = [makeSummary("p1"), makeSummary("p2")];
+  const result = withoutTechnicalRasterProject(projects, "does-not-exist");
+  assert.deepEqual(result.map((p) => p.id), ["p1", "p2"]);
+});
+
+test("withoutTechnicalRasterProject: an empty list stays empty", () => {
+  assert.deepEqual(withoutTechnicalRasterProject([], "p1"), []);
+});
+
+// =========================================================================================
+// "Krytí bílé" project settings (spec batch 6, UI section 17-23, 33 I/J) — persistence and
+// backward compatibility. The render-time proxy/color-string logic itself is tested in
+// tests/technicalRasterWhiteRender.test.ts; this is purely about where the number lives in the
+// project's own settings and what happens when it's missing.
+// =========================================================================================
+
+test("createDefaultRasterSettings sets whiteFillOpacity to DEFAULT_WHITE_FILL_OPACITY (0.6) for every NEW project", () => {
+  const settings = createDefaultRasterSettings();
+  assert.equal(settings.whiteFillOpacity, DEFAULT_WHITE_FILL_OPACITY);
+  assert.equal(DEFAULT_WHITE_FILL_OPACITY, 0.6);
+});
+
+test("I) effectiveWhiteFillOpacity: a project settings object saved BEFORE this field existed (no whiteFillOpacity key at all) reads as the default, never crashes", () => {
+  const legacySettings = { layerVisibility: {}, workModeHiddenLayerIds: [], viewMode: "work" } as RasterSettings;
+  assert.doesNotThrow(() => effectiveWhiteFillOpacity(legacySettings));
+  assert.equal(effectiveWhiteFillOpacity(legacySettings), 0.6);
+});
+
+test("effectiveWhiteFillOpacity: an explicitly-set value is always honored over the default", () => {
+  const settings: RasterSettings = { layerVisibility: {}, workModeHiddenLayerIds: [], viewMode: "work", whiteFillOpacity: 0.25 };
+  assert.equal(effectiveWhiteFillOpacity(settings), 0.25);
+});
+
+test("withWhiteFillOpacity: clamps to [0,1] defensively", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withWhiteFillOpacity(project, 1.4);
+  assert.equal(project.rasterSettings.whiteFillOpacity, 1);
+  project = withWhiteFillOpacity(project, -0.3);
+  assert.equal(project.rasterSettings.whiteFillOpacity, 0);
+});
+
+test("withWhiteFillOpacity: never touches any other project field (stands, imports, layers, viewMode)", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withRasterViewMode(project, "work");
+  project = withRasterLayers(project, [{ id: "STANDS", name: "STÁNKY", defaultVisible: true }]);
+  const before = { ...project };
+  const after = withWhiteFillOpacity(project, 0.35);
+  assert.equal(after.rasterSettings.viewMode, before.rasterSettings.viewMode);
+  assert.deepEqual(after.rasterLayers, before.rasterLayers);
+  assert.deepEqual(after.stands, before.stands);
+  assert.deepEqual(after.imports, before.imports);
+});
+
+test("J) save/load round trip: 0.60 (or any other explicit value) survives a plain JSON serialize/deserialize cycle, exactly as project persistence would do it", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withWhiteFillOpacity(project, 0.6);
+  const roundTripped = JSON.parse(JSON.stringify(project)) as TechnicalRasterProject;
+  assert.equal(roundTripped.rasterSettings.whiteFillOpacity, 0.6);
+  assert.equal(effectiveWhiteFillOpacity(roundTripped.rasterSettings), 0.6);
+});
+
+test("original mode ignores whiteFillOpacity at the DATA level too: withRasterViewMode('original') leaves whiteFillOpacity completely untouched (the render-time ignoring is TechnicalRasterCanvas.tsx's job, not a data concern)", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withWhiteFillOpacity(project, 0.25);
+  project = withRasterViewMode(project, "original");
+  assert.equal(project.rasterSettings.whiteFillOpacity, 0.25, "switching to original mode never resets/clears the stored work-mode opacity — it's preserved for when the user switches back");
+});

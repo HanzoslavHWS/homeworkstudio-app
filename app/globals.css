@@ -6383,6 +6383,24 @@ select:focus {
 
 /* ===== Technické rastry (new module) ===== */
 
+/* Batch 4/6 — project list row delete action: a small unobtrusive "⋯" menu (spec section 39: never
+   a big red button over the row). ROOT CAUSE of it being invisible in batch 4/5 (re-verified this
+   batch, spec section 37): this table reuses .printSurfaceTable, which has `overflow: hidden`
+   (shared with PrintSurfaceProjectListPage.tsx/PrintSurfaceList.tsx, needed there to clip row
+   backgrounds to the table's own rounded corners) — a `position: absolute` popup inside that
+   container was ALWAYS visually clipped away, even though the "⋯" trigger itself rendered fine.
+   Fixed in TechnicalRasterProjectListPage.tsx by rendering the popup through a React portal into
+   document.body as `position: fixed` (set inline, from the trigger's own
+   getBoundingClientRect()) — entirely outside the clipped ancestor. onClick stopPropagation on the
+   trigger's wrapping <span> keeps clicking the button/menu from also opening the project (spec
+   section 38). */
+.technicalRasterProjectRowMenuTrigger { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 11px; line-height: 1; cursor: pointer; justify-self: end; }
+.technicalRasterProjectRowMenuTrigger:hover { background: #eef0f1; }
+.technicalRasterProjectRowMenuList { z-index: 50; display: grid; gap: 2px; width: max-content; min-width: 140px; padding: 6px; border: 1px solid #e2e3e4; border-radius: 6px; background: white; box-shadow: 0 6px 18px rgba(20, 22, 23, .14); }
+.technicalRasterProjectRowMenuList button { justify-content: flex-start; padding: 5px 6px; border: 0; border-radius: 4px; background: none; font-size: 8px; text-align: left; }
+.technicalRasterProjectRowMenuList button:hover { background: #f2f3f3; }
+.technicalRasterProjectRowMenuList button:disabled { opacity: .55; cursor: default; }
+
 .technicalRasterEditorPage { display: flex; flex-direction: column; gap: 12px; }
 
 .technicalRasterStepTabs { display: flex; gap: 4px; border-bottom: 1px solid #e3e4e5; margin-bottom: 4px; }
@@ -6414,13 +6432,27 @@ select:focus {
 .technicalRasterMarker { position: absolute; pointer-events: none; transform: translate(-50%, -50%); }
 .technicalRasterMarker.label { width: 6px; height: 6px; border-radius: 50%; background: rgba(21, 21, 21, 0.35); }
 .technicalRasterMarker.anchor { width: 10px; height: 10px; border-radius: 50%; border: 2px solid #b3261e; background: rgba(179, 38, 30, 0.15); }
-.technicalRasterMarker.selected {
-  min-width: 14px;
-  min-height: 14px;
-  border: 2px solid #b3261e;
-  background: rgba(179, 38, 30, 0.12);
-  border-radius: 3px;
-  transform: none;
+
+/* Batch 5/6 — the ONE selected-stand indicator: a small technical anchor-style CIRCLE, solid
+   ABF-red ring, near-transparent interior — the raster stays fully visible/readable underneath.
+   Used identically for AUTO (center offset diagonally outside the label bbox, class
+   ".top-left"/".bottom-right" set for reference only — positioning itself is inline) and MANUAL
+   (".manual", center = the real clicked anchor point, zero offset). The class's own `left`/`top`
+   is the marker's ANCHOR (a page-space point); `transform` (set inline, per-render) composes a
+   center OFFSET step (zero for manual) with an always-identical `translate(-50%, -50%)`
+   size-centering step — kept as two separate transform functions specifically so a diameter change
+   can never shift the anchor (spec batch 6, UI section 2/4). diameter/border are set INLINE
+   per-render (computeSelectedMarkerScreenStyle, domain/technicalRasterSelectedMarker.ts), so the
+   on-screen size AND the anchor-to-center delta both stay constant at any zoom (100% through
+   4000%+, spec batch 6 UI section 12). */
+.technicalRasterSelectedMarker {
+  position: absolute;
+  box-sizing: border-box;
+  pointer-events: none;
+  border-radius: 50%;
+  border-style: solid;
+  border-color: #b3261e;
+  background: rgba(179, 38, 30, 0.08);
 }
 
 .technicalRasterPageSwitcher { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
@@ -6431,6 +6463,11 @@ select:focus {
 .technicalRasterViewModeToggle input[type="radio"]:disabled + label,
 .technicalRasterViewModeToggle label:has(input:disabled) { color: #9a9a9a; }
 
+/* "Krytí bílé" (spec batch 6, UI section 20) — nenápadné, jen v pracovním režimu: mírně odsazené pod přepínačem, menší/šedší text, žádný vlastní box/border. */
+.technicalRasterWhiteOpacityRow { margin-left: 22px; gap: 8px; font-size: 8.5px; color: #85898c; }
+.technicalRasterWhiteOpacityRow input[type="range"] { width: 90px; height: auto; }
+.technicalRasterWhiteOpacityRow span { font-variant-numeric: tabular-nums; min-width: 28px; }
+
 .technicalRasterLayerList { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
 .technicalRasterLayerList li { display: flex; flex-direction: column; gap: 2px; }
 .technicalRasterLayerList label { display: flex; align-items: center; gap: 6px; font-size: 9px; color: #151515; }
@@ -6439,12 +6476,38 @@ select:focus {
 
 .technicalRasterServicesStep { display: grid; gap: 12px; max-width: 900px; }
 .technicalImportPreview { background: #fafafa; }
+.technicalImportPreviewSummary { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0; font-size: 9px; color: #55595c; }
+.technicalImportPreviewSummary strong { color: #151515; font-size: 10px; }
+.technicalImportPreviewSummaryWarn, .technicalImportPreviewSummaryWarn strong { color: #93472b; }
 .technicalImportWarnings { margin-top: 8px; padding: 8px 10px; border: 1px solid #f0d9d3; border-radius: 8px; background: #fbeeea; font-size: 9px; color: #93472b; }
 .technicalImportWarnings ul { margin: 4px 0 0; padding-left: 16px; }
 
+.technicalImportPreviewDetails { margin-top: 8px; font-size: 9px; }
+.technicalImportPreviewDetails > summary { cursor: pointer; list-style: none; color: #55595c; }
+.technicalImportPreviewDetails > summary::-webkit-details-marker { display: none; }
+.technicalImportPreviewDetails > summary::before { content: "▸ "; }
+.technicalImportPreviewDetails[open] > summary::before { content: "▾ "; }
+.technicalImportPreviewDetails > div { margin-top: 8px; }
+
+.technicalImportParsedDataList { display: grid; gap: 8px; }
+.technicalImportParsedDataSearch { margin-bottom: 2px; }
+.technicalImportParsedDataGroup { padding: 6px 8px; border: 1px solid #ededee; border-radius: 6px; background: #fff; font-size: 9px; }
+.technicalImportParsedDataGroupHeader { display: flex; align-items: baseline; gap: 8px; margin-bottom: 3px; }
+.technicalImportParsedDataGroupHeader strong { font-size: 10px; }
+.technicalImportParsedDataServiceRow { display: flex; justify-content: space-between; gap: 8px; padding: 1px 0; color: #55595c; }
+.technicalImportParsedDataServiceQty { font-variant-numeric: tabular-nums; }
+.technicalImportParsedDataNote { margin: 3px 0 0; font-style: italic; }
+
 .technicalRasterImportHistory { display: grid; gap: 6px; }
-.technicalRasterImportRow { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #ededee; font-size: 8.5px; }
-.technicalRasterImportRow.superseded { opacity: 0.55; }
+.technicalRasterImportHistoryItem { border: 1px solid #ededee; border-radius: 8px; overflow: hidden; }
+.technicalRasterImportHistoryItem.superseded { opacity: 0.55; }
+.technicalRasterImportHistoryItem > summary { cursor: pointer; list-style: none; }
+.technicalRasterImportHistoryItem > summary::-webkit-details-marker { display: none; }
+.technicalRasterImportHistoryItem[open] > summary { border-bottom: 1px solid #ededee; }
+.technicalRasterImportHistoryDetail { padding: 10px; background: #fafafa; }
+.technicalRasterImportRow { display: grid; grid-template-columns: 16px minmax(120px, 1fr) minmax(160px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 10px; font-size: 8.5px; }
+.technicalRasterImportRow::before { content: "▸"; color: #96999c; }
+.technicalRasterImportHistoryItem[open] .technicalRasterImportRow::before { content: "▾"; }
 
 .technicalStandBuffer { max-height: 780px; overflow-y: auto; }
 .technicalStandBufferCounts { display: flex; gap: 14px; margin-bottom: 10px; font-size: 8.5px; color: #55595c; }
@@ -6467,10 +6530,12 @@ select:focus {
   cursor: pointer;
 }
 .technicalStandBufferItem:hover { background: #f4f5f6; }
-.technicalStandBufferItem.selected { background: #eef0f1; }
+/* Decent "I'm working with this one" cue (spec batch 3, UI section 8): a subtle background shift plus a thin inset accent stroke — never a large red area. box-shadow (not border) so it never shifts the row's own layout/padding. */
+.technicalStandBufferItem.selected { background: #eef0f1; box-shadow: inset 3px 0 0 #b3261e; }
 .technicalStandBufferItem.activeAssignment { background: #fbeeea; border: 1px solid #e6b6ab; }
 .technicalStandBufferOrdinal { font-variant-numeric: tabular-nums; color: #b7bABC; font-size: 8px; }
 .technicalStandBufferNumber { font-weight: 600; }
+.technicalStandBufferAmbiguousHint { color: #93472b; }
 
 .technicalStandDetailPanel { display: grid; gap: 8px; align-content: start; }
 .technicalStandPlacementBadge { width: fit-content; }
@@ -6479,8 +6544,10 @@ select:focus {
 .technicalStandPlacementBadge.unassigned { background: #f0f1f2; color: #6b6f72; }
 .technicalStandDetailSection { display: grid; gap: 3px; padding-top: 8px; border-top: 1px solid #ededee; }
 .technicalStandDetailSection h4 { margin: 0; font-size: 7.5px; letter-spacing: 0.04em; color: #85898c; }
-.technicalStandServiceRow { display: flex; justify-content: space-between; gap: 8px; font-size: 9px; }
-.technicalStandUnresolvedBadge { color: #93472b; }
+.technicalStandServiceRow { display: grid; gap: 1px; padding: 3px 0; font-size: 9px; }
+.technicalStandServiceRowMain { display: flex; justify-content: space-between; gap: 8px; }
+.technicalStandServicePlacementStatus { margin: 0; }
+.technicalStandUnresolvedBadge { color: #93472b; margin: 0; }
 .technicalStandDetailActions { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; }
 
 .technicalRasterAssignHint { padding: 8px 10px; border-radius: 8px; background: #fbeeea; color: #93472b; font-size: 9px; }

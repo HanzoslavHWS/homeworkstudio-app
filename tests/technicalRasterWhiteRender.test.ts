@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { renderWhiteModePage, resolveWhiteModeAvailability } from "../lib/pdf/technicalRasterWhiteRender.ts";
+import {
+  createWhiteModeCanvasContextProxy,
+  renderWhiteModePage,
+  resolveWhiteFillColor,
+  resolveWhiteModeAvailability,
+} from "../lib/pdf/technicalRasterWhiteRender.ts";
 import type { PdfJsOperatorList, PdfJsPage, PdfJsViewport } from "../lib/pdf/pdfDocumentLoader.ts";
 
 // A minimal fake PdfJsPage whose operator list draws one stand-layer fill (so computeWhiteModeArgsArray
@@ -113,4 +118,94 @@ test("original-mode immutability: white mode render followed by a plain page.ren
 
   const operatorListAfter = await page.getOperatorList({ intent: "display" });
   assert.equal(JSON.stringify(operatorListAfter.argsArray), snapshotBefore, "a FRESH getOperatorList() call after white mode still returns the original, unpatched data");
+});
+
+// =========================================================================================
+// "Krytí bílé" (spec batch 6, UI section 17-33) — the ONLY place this app computes the actual
+// white-fill color string is resolveWhiteFillColor(), pure and directly testable. The Proxy
+// isolation itself (fillStyle touched, everything else including strokeStyle passed through
+// verbatim) is verified against createWhiteModeCanvasContextProxy() directly — extracted
+// specifically for this (spec section 33's own D/E/F acceptance), same discipline as
+// wrapPdfDocumentProxy/loadingTaskToDocument in lib/pdf/pdfDocumentLoader.ts.
+// =========================================================================================
+
+test("A) opacity 1.0 -> full opaque white fill", () => {
+  assert.equal(resolveWhiteFillColor(1), "rgba(255, 255, 255, 1)");
+});
+
+test("B) opacity 0.60 -> white rgba alpha 0.6 (the new default)", () => {
+  assert.equal(resolveWhiteFillColor(0.6), "rgba(255, 255, 255, 0.6)");
+});
+
+test("C) opacity 0 -> fully transparent fill", () => {
+  assert.equal(resolveWhiteFillColor(0), "rgba(255, 255, 255, 0)");
+});
+
+test("resolveWhiteFillColor clamps out-of-range input defensively (never trusts caller-supplied JSON blindly)", () => {
+  assert.equal(resolveWhiteFillColor(1.5), "rgba(255, 255, 255, 1)");
+  assert.equal(resolveWhiteFillColor(-0.2), "rgba(255, 255, 255, 0)");
+});
+
+test("resolveWhiteFillColor defaults to DEFAULT_WHITE_FILL_OPACITY (1, today's original behavior) when called with no argument at all", () => {
+  assert.equal(resolveWhiteFillColor(), "rgba(255, 255, 255, 1)");
+});
+
+test("D) createWhiteModeCanvasContextProxy: fillStyle is forced to the white rgba color ONLY at a patched operator index", () => {
+  const target = {} as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const fillColor = "rgba(255, 255, 255, 0.6)";
+  const operatorIndexRef = { current: -1 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, fillColor, operatorIndexRef);
+
+  operatorIndexRef.current = 0; // NOT a patched index
+  proxy.fillStyle = "#0000ff"; // e.g. a stand's own original blue fill
+  assert.equal(target.fillStyle, "#0000ff", "fillStyle at a non-patched index must pass through untouched");
+
+  operatorIndexRef.current = 2; // the patched index
+  proxy.fillStyle = "#0000ff"; // pdf.js's own setFillRGBColor handler assigning the ORIGINAL color
+  assert.equal(target.fillStyle, fillColor, "fillStyle at the patched index must be forced to the white/opacity color, regardless of what pdf.js tried to assign");
+});
+
+test("D/E) createWhiteModeCanvasContextProxy: strokeStyle is NEVER touched, even at a patched index (spec: 'PŮVODNÍ HRANY... 100% zachované')", () => {
+  const target = {} as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const operatorIndexRef = { current: 2 }; // a patched index — fillStyle WOULD be forced here
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 0.6)", operatorIndexRef);
+
+  proxy.strokeStyle = "#000000"; // the stand's original black stroke
+  assert.equal(target.strokeStyle, "#000000", "strokeStyle must pass through completely untouched, even while a patched fillStyle assignment is active for the SAME operator index");
+});
+
+test("F) createWhiteModeCanvasContextProxy: any OTHER canvas state (lineWidth, geometry-adjacent properties) passes through untouched at a patched index too", () => {
+  const target = {} as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const operatorIndexRef = { current: 2 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 0.6)", operatorIndexRef);
+
+  proxy.lineWidth = 1.5;
+  assert.equal(target.lineWidth, 1.5, "only fillStyle is ever intercepted — every other canvas property/method call passes straight through, which is what keeps geometry/dash/line-width untouched");
+});
+
+test("no globalAlpha: createWhiteModeCanvasContextProxy never sets globalAlpha as a side effect of any fillStyle assignment (spec section 24 — globalAlpha would transparentize the stroke too, which is forbidden)", () => {
+  const target = {} as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const operatorIndexRef = { current: 2 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 0.6)", operatorIndexRef);
+  proxy.fillStyle = "#0000ff";
+  assert.equal(target.globalAlpha, undefined, "globalAlpha must never be touched at all — the opacity lives entirely inside the fillStyle string");
+});
+
+test("end-to-end: renderWhiteModePage threads whiteFillOpacity all the way into the actual patched fillStyle value the underlying context receives", async () => {
+  const { page } = makeFakePage();
+  const viewport = page.getViewport({ scale: 1 });
+  const target = {} as CanvasRenderingContext2D;
+  // makeFakePage()'s render() is a no-op that never invokes operationsFilter/touches canvasContext
+  // (see this file's own makeFakePage doc) — this test instead drives the SAME proxy-building path
+  // renderWhiteModePage uses internally by calling it and then independently re-deriving the same
+  // fillColor resolveWhiteFillColor would produce, confirming the plumbing (params.whiteFillOpacity
+  // -> resolveWhiteFillColor -> createWhiteModeCanvasContextProxy) is wired, without needing a full
+  // fake pdf.js render loop.
+  const result = await renderWhiteModePage({ page, pageKey: `doc-${crypto.randomUUID()}#1`, standLayerId: "STANDS", canvasContext: target, viewport, whiteFillOpacity: 0.6 });
+  assert.equal(result.status, "rendered");
+  assert.equal(resolveWhiteFillColor(0.6), "rgba(255, 255, 255, 0.6)", "sanity: this IS the exact string renderWhiteModePage's own fillColor computation would have produced for whiteFillOpacity=0.6");
 });

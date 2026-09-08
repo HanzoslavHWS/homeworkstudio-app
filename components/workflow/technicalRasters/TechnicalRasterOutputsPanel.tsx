@@ -32,7 +32,7 @@ export function TechnicalRasterOutputsPanel({ stands }: { stands: readonly Techn
       <div className="workflowCardHeader"><div><span>VÝSTUPY</span><strong>Základ pro další fázi</strong></div></div>
       <p className="fieldHint">
         Kompletní exportní PDF systém (ikony služeb, vrstvy, kombinace vrstev, tiskové výstupy pro jednotlivé profese) je předmětem další iterace.
-        Zde je jen náhled, že přiřazené stánky mají dostupná filtrovaná data.
+        Zde je jen náhled, že spárované stánky mají dostupná filtrovaná data.
       </p>
 
       <div className="technicalRasterOutputsFilters">
@@ -50,7 +50,7 @@ export function TechnicalRasterOutputsPanel({ stands }: { stands: readonly Techn
           <span>Firma</span>
           <span>Služby (filtrováno)</span>
         </div>
-        {assignedStands.length === 0 && <p className="workspaceEmpty">Zatím nejsou přiřazené žádné stánky.</p>}
+        {assignedStands.length === 0 && <p className="workspaceEmpty">Zatím nejsou spárované žádné stánky.</p>}
         {assignedStands.map((stand) => {
           const filteredServices = stand.services.filter((service) => activeCategories.has(service.category));
           return (

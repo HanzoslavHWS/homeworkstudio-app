@@ -11,7 +11,20 @@ export type PdfJsDocument = Readonly<{
   numPages: number;
   getPage(pageNumber: number): Promise<PdfJsPage>;
   getOptionalContentConfig(): Promise<PdfJsOptionalContentConfig>;
-  /** Public, documented pdf.js API (`PDFDocumentProxy.destroy()`) — releases the document's worker/WASM resources. Callers that keep a document around across renders (see components/workflow/technicalRasters/TechnicalRasterCanvas.tsx) must call this before dropping their reference (a new upload, or unmount) so a replaced raster doesn't leak its previous document's worker. */
+  /**
+   * Releases the document's worker/WASM resources. Callers that keep a document around across
+   * renders (see components/workflow/technicalRasters/TechnicalRasterCanvas.tsx) must call this
+   * before dropping their reference (a new upload, or unmount) so a replaced raster doesn't leak
+   * its previous document's worker.
+   *
+   * NOT literally `PDFDocumentProxy.destroy()` — that method doesn't exist (verified directly
+   * against pdfjs-dist 6.3.289's source: `PDFDocumentProxy` only has `cleanup()`, which merely
+   * clears cached page data, not the worker). The real resource owner is the `PDFDocumentLoadingTask`
+   * that `pdfjs.getDocument()` returns — `loadPdfDocument()` below resolves that task's own
+   * `.promise` to get the `PDFDocumentProxy` callers actually use, but keeps the task itself in a
+   * closure and routes `destroy()` there. This field exists so every call site has exactly ONE
+   * thing to call, without needing to know pdf.js's two-object loading-task/document-proxy split.
+   */
   destroy(): Promise<void>;
 }>;
 
@@ -58,6 +71,71 @@ export type PdfJsOptionalContentConfig = Readonly<{
 let workerConfigured = false;
 
 /**
+ * `pdfjs.getDocument()` returns a `PDFDocumentLoadingTask`, whose OWN `.promise` resolves to the
+ * `PDFDocumentProxy` every other pdf/*.ts module in this feature actually calls `getPage()`/
+ * `getOptionalContentConfig()` on. The loading task — not the proxy — is what owns `.destroy()`
+ * (confirmed directly against pdfjs-dist 6.3.289's source: `PDFDocumentProxy` only has
+ * `cleanup()`, which merely clears cached page data, never the worker). This pure function is the
+ * ONE place that wiring happens: it keeps `loadingTask` alive only inside its own closure and
+ * returns a thin wrapper around the resolved proxy whose `destroy()` calls back into the task, so
+ * every caller still has exactly one object with exactly one lifecycle method to call — never a
+ * raw, undestroyable `PDFDocumentProxy` leaking out of this module.
+ *
+ * Exported (and kept pdfjs-dist-import-free, taking already-resolved objects) specifically so
+ * tests/pdfDocumentLoader.test.ts can exercise this EXACT wiring against pdfjs-dist's own real
+ * `getDocument()` result (a synthetic in-memory PDF, not a hand-typed mock) — this is what
+ * regression-tested the original "document.destroy is not a function" bug, which no earlier test
+ * caught because every mock/fake `PdfJsDocument` used in this feature's other tests was
+ * hand-typed to already include a working `destroy`, matching the TYPE contract but not pdf.js's
+ * actual runtime shape.
+ */
+export function wrapPdfDocumentProxy(
+  loadingTask: Readonly<{ destroy(): Promise<void> }>,
+  proxy: Omit<PdfJsDocument, "destroy">,
+): PdfJsDocument {
+  let destroyed = false;
+  return {
+    get numPages() { return proxy.numPages; },
+    getPage: (pageNumber: number) => proxy.getPage(pageNumber),
+    getOptionalContentConfig: () => proxy.getOptionalContentConfig(),
+    destroy: async () => {
+      if (destroyed) return;
+      destroyed = true;
+      await loadingTask.destroy();
+    },
+  };
+}
+
+/**
+ * Resolves a `PDFDocumentLoadingTask` into the plain resolved proxy `loadPdfDocument` wraps —
+ * split out from `loadPdfDocument` itself (spec batch 5, UI section 25) specifically so
+ * tests/pdfDocumentLoader.test.ts can exercise this EXACT failure-path wiring against pdfjs-dist's
+ * own real `getDocument()` result (a genuinely invalid PDF, not a hand-typed mock).
+ *
+ * ROOT CAUSE fixed here: `pdfjs.getDocument()` returns a task that owns worker/network resources
+ * from the moment it's created — but reading pdf.js's own source (PDFDocumentLoadingTask, this
+ * pinned 6.3.289) shows that when `loadingTask.promise` REJECTS (a network failure, an invalid
+ * PDF, an expired signed URL returning a non-2xx status, ...), pdf.js only rejects that promise —
+ * it never calls the task's own `destroy()`, so the task's worker is silently ORPHANED unless the
+ * caller explicitly destroys it. The previous implementation here just `await`ed the promise with
+ * no catch, so every failed load (and, once a retry-on-failure was added elsewhere in this batch,
+ * every retry too) leaked one worker. This wraps the await in try/catch and destroys the task
+ * before rethrowing, so a failed load leaves nothing behind — the exact same discipline
+ * `TechnicalRasterCanvas.tsx`'s own loading effect already applies on ITS cleanup path, just
+ * closing the gap for the "never even got a PdfJsDocument to call destroy() on" case.
+ */
+export async function loadingTaskToDocument(
+  loadingTask: Readonly<{ promise: Promise<unknown>; destroy(): Promise<void> }>,
+): Promise<Omit<PdfJsDocument, "destroy">> {
+  try {
+    return (await loadingTask.promise) as unknown as Omit<PdfJsDocument, "destroy">;
+  } catch (error) {
+    await loadingTask.destroy();
+    throw error;
+  }
+}
+
+/**
  * Loads a PDF document either from a URL (a presigned R2 download URL in practice — see
  * lib/storage/assetClient.ts, used for the raster preview) or from raw bytes (used to parse a
  * just-picked technical-report File client-side BEFORE it's uploaded — spec section 25 wants
@@ -70,6 +148,7 @@ export async function loadPdfDocument(source: string | Readonly<{ data: ArrayBuf
     pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
     workerConfigured = true;
   }
-  const task = typeof source === "string" ? pdfjs.getDocument({ url: source }) : pdfjs.getDocument({ data: source.data });
-  return (await task.promise) as unknown as PdfJsDocument;
+  const loadingTask = typeof source === "string" ? pdfjs.getDocument({ url: source }) : pdfjs.getDocument({ data: source.data });
+  const proxy = await loadingTaskToDocument(loadingTask);
+  return wrapPdfDocumentProxy(loadingTask, proxy);
 }

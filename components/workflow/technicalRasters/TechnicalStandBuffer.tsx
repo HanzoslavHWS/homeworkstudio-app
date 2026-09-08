@@ -4,12 +4,18 @@ import { sortStandNumbersNatural } from "../../../domain/technicalStandNumber";
 import type { TechnicalStand } from "../../../domain/technicalRaster";
 
 /**
- * ZÁSOBNÍK (spec section 17/18/20): three groups — Nepřiřazené (+ Problematické/ambiguous shown
- * together as "needs attention", since both need the SAME manual-assignment action) and
- * Přiřazené — each natural-sorted by stand number (never plain string sort — spec section 17).
- * Unassigned/ambiguous entries get a throwaway "pracovní pořadové číslo" (spec section 18) that
- * is ONLY ever a UI display convenience recomputed from the current sorted position — never
- * persisted, never used as a real identifier (standNumber stays the only real key).
+ * ZÁSOBNÍK (spec section 17/18/20): three groups — Nespárované (+ Problémové/ambiguous shown
+ * separately, since both need the SAME manual-assignment action but "ambiguous" means "matched
+ * to >1 raster label", never "matched to 0") and Spárované — each natural-sorted by stand number
+ * (never plain string sort — spec section 17). Unassigned/ambiguous entries get a throwaway
+ * "pracovní pořadové číslo" (spec section 18) that is ONLY ever a UI display convenience
+ * recomputed from the current sorted position — never persisted, never used as a real identifier
+ * (standNumber stays the only real key).
+ *
+ * Terminology (spec batch 3, UI section 1/2): "spárováno/nespárováno" always means the STAND is
+ * matched to a raster position — a completely different concept from a technical SERVICE's own
+ * "umístění" (physical placement point), which this component never shows. See
+ * TechnicalStandDetailPanel.tsx for where that second concept is surfaced, worded distinctly.
  */
 export function TechnicalStandBuffer({
   stands,
@@ -31,16 +37,16 @@ export function TechnicalStandBuffer({
     <div className="workflowCard technicalStandBuffer">
       <div className="workflowCardHeader"><div><span>ZÁSOBNÍK</span></div></div>
       <div className="technicalStandBufferCounts">
-        <span>Nepřiřazené <strong>{unassigned.length}</strong></span>
-        <span>Přiřazené <strong>{assigned.length}</strong></span>
-        <span className={ambiguous.length > 0 ? "technicalStandBufferAmbiguousCount" : undefined}>Problematické <strong>{ambiguous.length}</strong></span>
+        <span>Nespárované <strong>{unassigned.length}</strong></span>
+        <span>Spárované <strong>{assigned.length}</strong></span>
+        <span className={ambiguous.length > 0 ? "technicalStandBufferAmbiguousCount" : undefined}>Problémové <strong>{ambiguous.length}</strong></span>
       </div>
 
       {ambiguous.length > 0 && (
-        <TechnicalStandGroup title="PROBLÉMOVÉ / AMBIGUOUS" stands={ambiguous} numbered={false} selectedStandId={selectedStandId} activeAssignmentStandId={activeAssignmentStandId} onSelectStand={onSelectStand} />
+        <TechnicalStandGroup title="PROBLÉMOVÉ" stands={ambiguous} numbered={false} showCandidateHint selectedStandId={selectedStandId} activeAssignmentStandId={activeAssignmentStandId} onSelectStand={onSelectStand} />
       )}
-      <TechnicalStandGroup title="NEPŘIŘAZENÉ" stands={unassigned} numbered selectedStandId={selectedStandId} activeAssignmentStandId={activeAssignmentStandId} onSelectStand={onSelectStand} />
-      <TechnicalStandGroup title="PŘIŘAZENÉ" stands={assigned} numbered={false} selectedStandId={selectedStandId} activeAssignmentStandId={activeAssignmentStandId} onSelectStand={onSelectStand} />
+      <TechnicalStandGroup title="NESPÁROVANÉ" stands={unassigned} numbered selectedStandId={selectedStandId} activeAssignmentStandId={activeAssignmentStandId} onSelectStand={onSelectStand} />
+      <TechnicalStandGroup title="SPÁROVANÉ" stands={assigned} numbered={false} selectedStandId={selectedStandId} activeAssignmentStandId={activeAssignmentStandId} onSelectStand={onSelectStand} />
     </div>
   );
 }
@@ -49,6 +55,7 @@ function TechnicalStandGroup({
   title,
   stands,
   numbered,
+  showCandidateHint,
   selectedStandId,
   activeAssignmentStandId,
   onSelectStand,
@@ -56,6 +63,8 @@ function TechnicalStandGroup({
   title: string;
   stands: readonly TechnicalStand[];
   numbered: boolean;
+  /** Ambiguous group only: shows "nalezeno Nx" instead of the company name — spec batch 3 UI section 9, "1A01: Nejednoznačné — nalezeno 2×". */
+  showCandidateHint?: boolean;
   selectedStandId: string | undefined;
   activeAssignmentStandId?: string;
   onSelectStand: (standId: string) => void;
@@ -78,7 +87,9 @@ function TechnicalStandGroup({
             >
               {numbered && <span className="technicalStandBufferOrdinal">{String(index + 1).padStart(3, "0")}</span>}
               <span className="technicalStandBufferNumber">{stand.standNumber}</span>
-              {stand.companyName && <span className="fieldHint">{stand.companyName}</span>}
+              {showCandidateHint && stand.placement.candidateCount !== undefined
+                ? <span className="fieldHint technicalStandBufferAmbiguousHint">nalezeno {stand.placement.candidateCount}×</span>
+                : stand.companyName && <span className="fieldHint">{stand.companyName}</span>}
             </button>
           </li>
         ))}

@@ -118,27 +118,40 @@ async function getOrComputePatchPlan(page: PdfJsPage, pageKey: string, standLaye
 
 export type WhiteModeRenderResult = Readonly<{ status: "rendered" }> | Readonly<{ status: "unsupported"; reason: string }>;
 
-/**
- * Renders `page` into `canvasContext` with the target stand layer's fill whitened and its stroke/
- * geometry/dash/line-width completely untouched (spec section 11/17/26). `pageKey` must uniquely
- * identify this page for caching purposes (e.g. `${rasterUrl}#${pageNumber}`) — see module doc for
- * the mechanism and its one stated assumption.
- */
-export async function renderWhiteModePage(params: Readonly<{
-  page: PdfJsPage;
-  pageKey: string;
-  standLayerId: string;
-  canvasContext: CanvasRenderingContext2D;
-  viewport: PdfJsViewport;
-  /** Threaded straight through to pdf.js's render() — lets the layer-visibility panel (an unrelated feature, spec section 28) keep hiding/showing OTHER layers while white mode handles the stand layer's own fill. */
-  optionalContentConfigPromise?: Promise<PdfJsOptionalContentConfig>;
-}>): Promise<WhiteModeRenderResult> {
-  const { page, pageKey, standLayerId, canvasContext, viewport, optionalContentConfigPromise } = params;
-  const plan = await getOrComputePatchPlan(page, pageKey, standLayerId);
-  if (plan.status === "unsupported") return plan;
+/** "Pracovní – bílé" defaults to fully-opaque white for any project whose settings predate this field (spec batch 6, UI section 19/23: "Necrashnout... nemusí se dělat datová migrace"). */
+export const DEFAULT_WHITE_FILL_OPACITY = 1;
 
-  let currentOperatorIndex = -1;
-  const proxiedContext = new Proxy(canvasContext, {
+/**
+ * The ONLY place white-mode's fill color string is computed (spec batch 6, UI section 17-28) —
+ * pure and framework-free specifically so it's directly unit-testable without pdf.js/canvas at
+ * all. `opacity` is "Krytí bílé" as a 0-1 fraction (1 = today's original fully-opaque white, 0 =
+ * fully transparent fill); clamped defensively since it ultimately comes from project-settings
+ * JSON that could in principle hold an out-of-range or missing value. This is used ONLY for the
+ * fill color the Proxy below assigns to `ctx.fillStyle` — `ctx.strokeStyle` is never touched by
+ * this function or anything derived from it (see the module doc's own "stroke stays original,
+ * spec 11/17/26" guarantee, which this deliberately does not change).
+ */
+export function resolveWhiteFillColor(opacity: number = DEFAULT_WHITE_FILL_OPACITY): string {
+  const clamped = Math.min(1, Math.max(0, opacity));
+  return `rgba(255, 255, 255, ${clamped})`;
+}
+
+/**
+ * Builds the Proxy that forces `ctx.fillStyle` to `fillColor` for exactly the patched operator
+ * indices — extracted from renderWhiteModePage below (spec batch 6, UI section 33) specifically so
+ * tests/technicalRasterWhiteRender.test.ts can exercise the fill/stroke isolation directly, without
+ * needing a full fake pdf.js render loop: `operatorIndexRef` is a plain mutable box a caller
+ * (production code's own `operationsFilter`, or a test driving the proxy by hand) updates to say
+ * "this is the operator about to run" — mirrors the exact real wiring, just given a name instead of
+ * being a closure-private variable.
+ */
+export function createWhiteModeCanvasContextProxy(
+  canvasContext: CanvasRenderingContext2D,
+  patchedIndices: ReadonlySet<number>,
+  fillColor: string,
+  operatorIndexRef: Readonly<{ current: number }>,
+): CanvasRenderingContext2D {
+  return new Proxy(canvasContext, {
     // Both traps force `target` as the receiver (never the default, which would be the proxy
     // itself) — the real CanvasRenderingContext2D's accessors are native-backed and throw if
     // invoked with `this` bound to anything other than the real context (verified against
@@ -148,12 +161,42 @@ export async function renderWhiteModePage(params: Readonly<{
       return typeof value === "function" ? value.bind(target) : value;
     },
     set(target, property, value) {
-      if (property === "fillStyle" && plan.patchedIndices.has(currentOperatorIndex)) {
-        return Reflect.set(target, property, "#ffffff", target);
+      // Deliberately checks property === "fillStyle" ONLY — never touches strokeStyle, never sets
+      // ctx.globalAlpha (spec batch 6, UI section 24/25: a real closeEOFillStroke paint call uses
+      // ONE combined fill+stroke operator, so globalAlpha would transparentize the stroke too,
+      // which is forbidden). The opacity lives entirely inside this one rgba() fill string.
+      if (property === "fillStyle" && patchedIndices.has(operatorIndexRef.current)) {
+        return Reflect.set(target, property, fillColor, target);
       }
       return Reflect.set(target, property, value, target);
     },
   });
+}
+
+/**
+ * Renders `page` into `canvasContext` with the target stand layer's fill whitened (at
+ * `whiteFillOpacity`, spec batch 6) and its stroke/geometry/dash/line-width completely untouched
+ * (spec section 11/17/26). `pageKey` must uniquely identify this page for caching purposes (e.g.
+ * `${rasterUrl}#${pageNumber}`) — see module doc for the mechanism and its one stated assumption.
+ */
+export async function renderWhiteModePage(params: Readonly<{
+  page: PdfJsPage;
+  pageKey: string;
+  standLayerId: string;
+  canvasContext: CanvasRenderingContext2D;
+  viewport: PdfJsViewport;
+  /** Threaded straight through to pdf.js's render() — lets the layer-visibility panel (an unrelated feature, spec section 28) keep hiding/showing OTHER layers while white mode handles the stand layer's own fill. */
+  optionalContentConfigPromise?: Promise<PdfJsOptionalContentConfig>;
+  /** "Krytí bílé" 0-1 (spec batch 6). Defaults to DEFAULT_WHITE_FILL_OPACITY (1 = today's fully-opaque white) when omitted — never required, so no existing caller/test needs to change. */
+  whiteFillOpacity?: number;
+}>): Promise<WhiteModeRenderResult> {
+  const { page, pageKey, standLayerId, canvasContext, viewport, optionalContentConfigPromise, whiteFillOpacity } = params;
+  const plan = await getOrComputePatchPlan(page, pageKey, standLayerId);
+  if (plan.status === "unsupported") return plan;
+
+  const fillColor = resolveWhiteFillColor(whiteFillOpacity);
+  const operatorIndexRef = { current: -1 };
+  const proxiedContext = createWhiteModeCanvasContextProxy(canvasContext, plan.patchedIndices, fillColor, operatorIndexRef);
 
   await page.render({
     canvasContext: proxiedContext,
@@ -167,7 +210,7 @@ export async function renderWhiteModePage(params: Readonly<{
     intent: "display",
     optionalContentConfigPromise,
     operationsFilter: (index) => {
-      currentOperatorIndex = index;
+      operatorIndexRef.current = index;
       return true;
     },
   }).promise;
