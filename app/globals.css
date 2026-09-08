@@ -6380,3 +6380,115 @@ select:focus {
 
 .printSurfaceExportPricesToggle { display: flex; align-items: center; gap: 6px; padding: 6px 10px; font-size: 9px; color: #55595c; }
 .printSurfaceExportPricesToggle input { width: auto; height: auto; }
+
+/* ===== Technické rastry (new module) ===== */
+
+.technicalRasterEditorPage { display: flex; flex-direction: column; gap: 12px; }
+
+.technicalRasterStepTabs { display: flex; gap: 4px; border-bottom: 1px solid #e3e4e5; margin-bottom: 4px; }
+.technicalRasterStepTab { min-height: 34px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #74787b; font-size: 9px; cursor: pointer; }
+.technicalRasterStepTab:hover { color: #151515; }
+.technicalRasterStepTab.active { color: #151515; border-bottom-color: #242628; font-weight: 600; }
+
+.technicalRasterWorkspace { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
+@media (max-width: 1100px) { .technicalRasterWorkspace { grid-template-columns: 1fr; } }
+
+.technicalRasterSidebar { display: grid; gap: 12px; }
+
+.technicalRasterCanvasPanel { padding: 8px; }
+.technicalRasterCanvasToolbar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.technicalRasterViewport {
+  position: relative;
+  overflow: hidden;
+  height: 640px;
+  border: 1px solid #e3e4e5;
+  border-radius: 8px;
+  background: #f4f5f6;
+  cursor: default;
+  touch-action: none;
+}
+.technicalRasterViewport.assignMode { cursor: crosshair; }
+.technicalRasterStage { position: relative; transform-origin: top left; }
+.technicalRasterCanvasElement { display: block; width: 100%; height: 100%; background: #fff; }
+
+.technicalRasterMarker { position: absolute; pointer-events: none; transform: translate(-50%, -50%); }
+.technicalRasterMarker.label { width: 6px; height: 6px; border-radius: 50%; background: rgba(21, 21, 21, 0.35); }
+.technicalRasterMarker.anchor { width: 10px; height: 10px; border-radius: 50%; border: 2px solid #b3261e; background: rgba(179, 38, 30, 0.15); }
+.technicalRasterMarker.selected {
+  min-width: 14px;
+  min-height: 14px;
+  border: 2px solid #b3261e;
+  background: rgba(179, 38, 30, 0.12);
+  border-radius: 3px;
+  transform: none;
+}
+
+.technicalRasterPageSwitcher { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; }
+
+.technicalRasterViewModeToggle { display: flex; flex-direction: column; gap: 4px; margin-bottom: 10px; }
+.technicalRasterViewModeToggle label { display: flex; align-items: center; gap: 6px; font-size: 10px; color: #151515; }
+.technicalRasterViewModeToggle input[type="radio"] { width: auto; height: auto; }
+.technicalRasterViewModeToggle input[type="radio"]:disabled + label,
+.technicalRasterViewModeToggle label:has(input:disabled) { color: #9a9a9a; }
+
+.technicalRasterLayerList { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.technicalRasterLayerList li { display: flex; flex-direction: column; gap: 2px; }
+.technicalRasterLayerList label { display: flex; align-items: center; gap: 6px; font-size: 9px; color: #151515; }
+.technicalRasterLayerList input { width: auto; height: auto; }
+.technicalRasterWorkModeHideOption { margin-left: 22px; }
+
+.technicalRasterServicesStep { display: grid; gap: 12px; max-width: 900px; }
+.technicalImportPreview { background: #fafafa; }
+.technicalImportWarnings { margin-top: 8px; padding: 8px 10px; border: 1px solid #f0d9d3; border-radius: 8px; background: #fbeeea; font-size: 9px; color: #93472b; }
+.technicalImportWarnings ul { margin: 4px 0 0; padding-left: 16px; }
+
+.technicalRasterImportHistory { display: grid; gap: 6px; }
+.technicalRasterImportRow { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(160px, 1.4fr) minmax(120px, 1fr) minmax(120px, 1fr) auto auto; align-items: center; gap: 10px; padding: 8px 10px; border-bottom: 1px solid #ededee; font-size: 8.5px; }
+.technicalRasterImportRow.superseded { opacity: 0.55; }
+
+.technicalStandBuffer { max-height: 780px; overflow-y: auto; }
+.technicalStandBufferCounts { display: flex; gap: 14px; margin-bottom: 10px; font-size: 8.5px; color: #55595c; }
+.technicalStandBufferCounts strong { color: #151515; font-size: 10px; }
+.technicalStandBufferAmbiguousCount, .technicalStandBufferCounts .technicalStandBufferAmbiguousCount strong { color: #93472b; }
+.technicalStandBufferGroup h4 { margin: 12px 0 4px; font-size: 8px; letter-spacing: 0.04em; color: #85898c; text-transform: uppercase; }
+.technicalStandBufferGroup ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.technicalStandBufferItem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  font-size: 9px;
+  cursor: pointer;
+}
+.technicalStandBufferItem:hover { background: #f4f5f6; }
+.technicalStandBufferItem.selected { background: #eef0f1; }
+.technicalStandBufferItem.activeAssignment { background: #fbeeea; border: 1px solid #e6b6ab; }
+.technicalStandBufferOrdinal { font-variant-numeric: tabular-nums; color: #b7bABC; font-size: 8px; }
+.technicalStandBufferNumber { font-weight: 600; }
+
+.technicalStandDetailPanel { display: grid; gap: 8px; align-content: start; }
+.technicalStandPlacementBadge { width: fit-content; }
+.technicalStandPlacementBadge.matched_auto, .technicalStandPlacementBadge.matched_manual { background: #edf5ef; color: #45634f; }
+.technicalStandPlacementBadge.ambiguous { background: #fbeeea; color: #93472b; }
+.technicalStandPlacementBadge.unassigned { background: #f0f1f2; color: #6b6f72; }
+.technicalStandDetailSection { display: grid; gap: 3px; padding-top: 8px; border-top: 1px solid #ededee; }
+.technicalStandDetailSection h4 { margin: 0; font-size: 7.5px; letter-spacing: 0.04em; color: #85898c; }
+.technicalStandServiceRow { display: flex; justify-content: space-between; gap: 8px; font-size: 9px; }
+.technicalStandUnresolvedBadge { color: #93472b; }
+.technicalStandDetailActions { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; }
+
+.technicalRasterAssignHint { padding: 8px 10px; border-radius: 8px; background: #fbeeea; color: #93472b; font-size: 9px; }
+
+.technicalRasterOutputsPanel { max-width: 900px; }
+.technicalRasterOutputsFilters { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
+.technicalRasterOutputsFilters label { display: flex; align-items: center; gap: 6px; font-size: 9px; }
+.technicalRasterOutputsFilters input { width: auto; height: auto; }
+.technicalRasterOutputsPreviewTable { display: grid; gap: 2px; }
+.technicalRasterOutputsPreviewRow { display: grid; grid-template-columns: 100px 1fr 1fr; gap: 10px; padding: 6px 8px; border-bottom: 1px solid #ededee; font-size: 9px; }
+.technicalRasterOutputsPreviewHeader { color: #85898c; font-size: 8px; text-transform: uppercase; letter-spacing: 0.04em; }

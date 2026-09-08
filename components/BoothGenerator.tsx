@@ -221,6 +221,8 @@ import { RemoteApiRealizationCompanyRepository } from "../lib/db/realizationComp
 import { RemoteApiPrintSurfacePresetRepository } from "../lib/db/printSurfacePresetRepository.remoteApi.client";
 import { RemoteApiPrintSurfaceProductionDimensionRepository } from "../lib/db/printSurfaceProductionDimensionRepository.remoteApi.client";
 import { RemoteApiPrintSurfaceExportRepository } from "../lib/db/printSurfaceExportRepository.remoteApi.client";
+import { TechnicalRastersPage } from "./workflow/TechnicalRastersPage";
+import { RemoteApiTechnicalRasterProjectRepository } from "../lib/db/technicalRasterProjectRepository.remoteApi.client";
 
 /** Individual-booth plot size defaults (mode=individualni, before the user has entered anything) — a neutral starting point on the 250 mm layout grid, never a fabricated real-world footprint. */
 const INDIVIDUAL_DEFAULT_WIDTH_MM = 3000;
@@ -298,6 +300,11 @@ export default function BoothGenerator() {
   // project's own event/realizačka (see domain/printSurfacePricing.ts's pricing-reuse doc).
   const printSurfacePriceListRepositoryRef = useRef(new RemoteApiPriceListRepository());
   const printSurfaceCatalogPricingRepositoryRef = useRef(new RemoteApiCatalogPricingRepository());
+  // Technické rastry — a NEW, standalone module (own project repository, no shared state with
+  // print surfaces or the main booth generator). Reuses the SAME general-purpose catalog-pricing
+  // repository instance as print surfaces above (catalog items are global, not scoped to either
+  // module) rather than instantiating a second, redundant client.
+  const technicalRasterProjectRepositoryRef = useRef(new RemoteApiTechnicalRasterProjectRepository());
   const [pricingAdminPreselect, setPricingAdminPreselect] = useState<string | undefined>(undefined);
   const [printSurfaceEmailPrefill, setPrintSurfaceEmailPrefill] = useState<Readonly<{ context: PrintSurfaceEmailContext; nonce: number }> | undefined>(undefined);
   function handlePrintSurfaceEmailHandoff(context: PrintSurfaceEmailContext) {
@@ -314,7 +321,7 @@ export default function BoothGenerator() {
     navigateWorkspace("printSurfaces", { printSurfaceProjectId: projectId });
   }
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces"
+    "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters"
   >("project");
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
@@ -2733,6 +2740,14 @@ export default function BoothGenerator() {
             events={adminEvents}
             onEmailHandoff={handlePrintSurfaceEmailHandoff}
             initialProjectId={printSurfaceProjectPreselect}
+          />
+        )}
+
+        {workspaceSection === "technicalRasters" && (
+          <TechnicalRastersPage
+            projectRepository={technicalRasterProjectRepositoryRef.current}
+            catalogPricingRepository={printSurfaceCatalogPricingRepositoryRef.current}
+            events={adminEvents}
           />
         )}
 

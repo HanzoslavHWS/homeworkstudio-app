@@ -13,6 +13,8 @@ export const ASSET_CATEGORIES = [
   "project-export",
   "print-surface-image",
   "print-surface-export",
+  "technical-raster-source",
+  "technical-raster-import",
   "temporary",
 ] as const;
 
@@ -141,6 +143,13 @@ const CATEGORY_RULES: Readonly<Record<AssetCategory, CategoryRule>> = {
   "print-surface-image": { prefix: (id) => `print-surfaces/${id}/image`, maxBytes: 25_000_000, mimeTypes: ["image/jpeg", "image/png"] },
   // Print Surfaces V5 (spec section 13): the real generated jsPDF export artifact — PDF only.
   "print-surface-export": { prefix: (id) => `print-surfaces/${id}/export`, maxBytes: 25_000_000, mimeTypes: ["application/pdf"] },
+  // Technické rastry: the AUTHORITATIVE source raster PDF (spec section 3/4 — "ZDROJOVÉ PDF JE
+  // AUTORITA", never rasterized/converted, kept exactly as uploaded) and each separately-uploaded
+  // technical-service report PDF (spec section 8/9). Both PDF-only; 150MB matches the existing
+  // large-binary precedent (catalog-source/project-export) — a real vector hall floor plan can be
+  // sizeable.
+  "technical-raster-source": { prefix: (id) => `technical-rasters/${id}/source`, maxBytes: 150_000_000, mimeTypes: ["application/pdf"] },
+  "technical-raster-import": { prefix: (id) => `technical-rasters/${id}/imports`, maxBytes: 150_000_000, mimeTypes: ["application/pdf"] },
   temporary: { prefix: () => "temporary", maxBytes: 5_000_000, mimeTypes: ["text/plain", ...IMAGE_TYPES] },
 };
 
@@ -197,7 +206,7 @@ export function createStorageKey(input: Readonly<{ category: AssetCategory; owne
 }
 
 export function isValidStorageKey(value: string): boolean {
-  return value.length <= 512 && /^(events|catalog|projects|print-surfaces|temporary)\/[A-Za-z0-9_./-]+$/u.test(value) && !value.includes("..") && !value.includes("//");
+  return value.length <= 512 && /^(events|catalog|projects|print-surfaces|technical-rasters|temporary)\/[A-Za-z0-9_./-]+$/u.test(value) && !value.includes("..") && !value.includes("//");
 }
 
 export function assertValidStorageKey(value: string): void {

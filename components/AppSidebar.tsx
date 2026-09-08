@@ -2,8 +2,8 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onStartNewProject: () => void;
-  activeSection?: "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces";
-  onNavigate?: (section: "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces") => void;
+  activeSection?: "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters";
+  onNavigate?: (section: "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters") => void;
 };
 
 export function AppSidebar({
@@ -67,6 +67,10 @@ export function AppSidebar({
         <button type="button" className={activeSection === "printSurfaces" ? "navItem active" : "navItem"} title="Tiskové plochy" onClick={() => onNavigate?.("printSurfaces")}>
           <span className="navIcon">▧</span>
           <span className="navLabel">Tiskové plochy</span>
+        </button>
+        <button type="button" className={activeSection === "technicalRasters" ? "navItem active" : "navItem"} title="Technické rastry" onClick={() => onNavigate?.("technicalRasters")}>
+          <span className="navIcon">▥</span>
+          <span className="navLabel">Technické rastry</span>
         </button>
       </nav>
 
