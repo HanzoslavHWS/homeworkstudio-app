@@ -19,6 +19,7 @@ import type { PersistedProjectRecord, PersistedExhibition, RemoteProjectReposito
 import type { PriceListRepository } from "../domain/priceListRepository.ts";
 import { resolvePersistenceProbe } from "../lib/db/persistenceMode.client.ts";
 import { RemoteApiUnavailableError } from "../lib/db/projectRepository.remoteApi.client.ts";
+import { resolveCanonicalEventId } from "../domain/eventIdentity.ts";
 
 const SECRET = "api-route-test-session-secret-32ch";
 
@@ -90,6 +91,25 @@ function fakePriceListRepository(seed: readonly PriceList[] = []): PriceListRepo
   };
 }
 
+/**
+ * Corrective batch — event-ID consistency audit: handleProjectsSave/handleTechnicalRasterProjectSave
+ * now resolve/validate `eventId`/`fairId` via a real, DB-backed resolver by default (see
+ * lib/db/eventIdValidation.server.ts) — tests that don't care about event-id resolution (these CRUD
+ * round-trip tests use an empty fairId) must inject a fake one instead, exactly like they already
+ * inject a fake repository, so they never accidentally hit the real `createSupabaseServerClient()`.
+ */
+function fakeEventIdResolverFactory(knownIds: readonly string[] = []) {
+  return () => async (eventId: string | null | undefined) => {
+    const trimmed = eventId?.trim();
+    if (!trimmed) return { ok: true as const, eventId: undefined };
+    // Reuses the REAL domain/eventIdentity.ts resolver (never a second, parallel alias table) so
+    // this fake stays faithful to production behavior for a legacy id like "for-beauty-autumn-2026".
+    const canonical = resolveCanonicalEventId(trimmed, knownIds);
+    if (canonical !== undefined) return { ok: true as const, eventId: canonical };
+    return { ok: false as const, message: "Vybraný veletrh není v databázi." };
+  };
+}
+
 function throwingRepositoryFactory(error: Error): () => PriceListRepository {
   return () => ({
     list() { return Promise.reject(error); },
@@ -131,9 +151,10 @@ test("DB project create/read/update/delete přes API route (mockované repositor
   const token = await createSessionToken(SECRET);
   const repository = fakeProjectRepository();
   const factory = () => repository;
+  const resolveEventIdFactory = fakeEventIdResolverFactory();
   const project = createProjectRecord({ id: "p-crud", company: "Test s.r.o." });
 
-  const created = await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: null } }), factory);
+  const created = await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: null } }), factory, resolveEventIdFactory);
   assert.equal(created.status, 200);
   const createdBody = await created.json() as { project: PersistedProjectRecord };
   assert.equal(createdBody.project.revision, 1);
@@ -142,7 +163,7 @@ test("DB project create/read/update/delete přes API route (mockované repositor
   const listedBody = await listed.json() as { projects: ProjectRecord[] };
   assert.equal(listedBody.projects.length, 1);
 
-  const updated = await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project: { ...project, company: "Změna" }, expectedRevision: 1 } }), factory);
+  const updated = await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project: { ...project, company: "Změna" }, expectedRevision: 1 } }), factory, resolveEventIdFactory);
   const updatedBody = await updated.json() as { project: PersistedProjectRecord };
   assert.equal(updatedBody.project.revision, 2);
   assert.equal(updatedBody.project.company, "Změna");
@@ -174,14 +195,50 @@ test("zastaralá revision při /api/projects/save vrátí 409 se srozumitelnou z
   const token = await createSessionToken(SECRET);
   const repository = fakeProjectRepository();
   const factory = () => repository;
+  const resolveEventIdFactory = fakeEventIdResolverFactory();
   const project = createProjectRecord({ id: "p-conflict" });
-  await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: null } }), factory);
-  await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: 1 } }), factory);
+  await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: null } }), factory, resolveEventIdFactory);
+  await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: 1 } }), factory, resolveEventIdFactory);
 
-  const stale = await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: 1 } }), factory);
+  const stale = await handleProjectsSave(authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: 1 } }), factory, resolveEventIdFactory);
   assert.equal(stale.status, 409);
   const body = await stale.json() as { error: string };
   assert.match(body.error, /Data byla mezitím změněna jinde/u);
+});
+
+// ============================================================================
+// Corrective batch — event-ID consistency audit, sections 5/11: the SAME event-id resolver/
+// validator every save path shares (lib/db/eventIdValidation.server.ts) — the booth-generator's own
+// /api/projects/save route must behave identically to the technical-raster one (see
+// tests/technicalRasterProjectsApi.test.ts for that route's own equivalent coverage).
+// ============================================================================
+
+test("booth-project save: a legacy fairId ('for-beauty-autumn-2026') is canonicalized to 'beauty' before persistence — the same fix as the technical-raster path", async () => {
+  const token = await createSessionToken(SECRET);
+  const repository = fakeProjectRepository();
+  const factory = () => repository;
+  const project = createProjectRecord({ id: "p-legacy-fair", fairId: "for-beauty-autumn-2026" });
+  const response = await handleProjectsSave(
+    authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: null } }),
+    factory,
+    fakeEventIdResolverFactory(["beauty"]),
+  );
+  assert.equal(response.status, 200);
+  const body = await response.json() as { project: PersistedProjectRecord };
+  assert.equal(body.project.fairId, "beauty");
+});
+
+test("booth-project save: an unresolvable fairId fails fast with the clear Czech event message, never a raw FK violation", async () => {
+  const token = await createSessionToken(SECRET);
+  const repository = fakeProjectRepository();
+  const project = createProjectRecord({ id: "p-bad-fair", fairId: "totally-unknown-fair" });
+  const response = await handleProjectsSave(
+    authenticatedRequest(token, "http://localhost/api/projects/save", { method: "POST", body: { project, expectedRevision: null } }),
+    () => repository,
+    fakeEventIdResolverFactory(["beauty"]),
+  );
+  assert.equal(response.status, 400);
+  assert.equal(((await response.json()) as { error: string }).error, "Vybraný veletrh není v databázi.");
 });
 
 test("zastaralá revision při /api/events/save vrátí 409 se srozumitelnou zprávou", async () => {

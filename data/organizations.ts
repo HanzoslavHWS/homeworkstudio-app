@@ -5,9 +5,14 @@ import type {
 } from "../domain/organizations.ts";
 import { eventCoverImageUrl, eventLogoUrl } from "../domain/organizations.ts";
 
+// CORRECTIVE BATCH — event-ID consistency audit. `id` below is the CANONICAL PERSISTENCE identity
+// (mirrors the real production Supabase `events.id` — a stable per-BRAND slug, never a per-edition
+// one: see domain/eventIdentity.ts's own doc for the full audit). `slug`/`name`/`edition`/`year`
+// remain purely descriptive/display metadata (asset paths, UI labels) and are deliberately left
+// UNCHANGED — this is an identity fix, never a UI rename (spec section 7).
 export const exhibitions: readonly Exhibition[] = [
   {
-    id: "for-beauty-autumn-2026",
+    id: "beauty",
     slug: "for-beauty-podzim-2026",
     name: "FOR BEAUTY podzim 2026",
     edition: "Podzim 2026",
@@ -28,7 +33,7 @@ export const exhibitions: readonly Exhibition[] = [
     active: true,
   },
   {
-    id: "for-decor-2026",
+    id: "decor",
     slug: "for-decor-2026",
     name: "FOR DECOR 2026",
     edition: "2026",
@@ -47,6 +52,11 @@ export const exhibitions: readonly Exhibition[] = [
     active: true,
   },
   {
+    // No confirmed production counterpart exists for this one (audit found no "international"-style
+    // brand in the real events table) — deliberately left as a local-only, non-DB-backed id rather
+    // than guessing a mapping (spec: "Do not silently invent mappings where uncertain"). Selecting
+    // this fair in a DB-backed session will correctly fail the new event-id validation until a real
+    // admin decision creates (or points to) an actual production event for it.
     id: "international-2026",
     slug: "international-2026",
     name: "Zahraniční veletrh 2026",
