@@ -5,7 +5,12 @@ import {
   assignStandManually,
   clearStandAssignment,
   mergeTechnicalRasterImport,
+  moveTechnicalServicePlacement,
   nextUnassignedStand,
+  placeTechnicalService,
+  removeTechnicalServicePlacement,
+  effectiveServicePlacements,
+  withHiddenServiceCategories,
   withLayerVisibility,
   withRasterLayers,
   withRasterStandLabels,
@@ -14,15 +19,25 @@ import {
   withWorkModeHiddenLayers,
   withWhiteFillOpacity,
   effectiveHiddenLayerIds,
+  effectiveHiddenServiceCategories,
+  effectiveShowRealizations,
   effectiveWhiteFillOpacity,
+  setStandRealizationCompany,
+  mergeSupplementalCatalogImport,
+  withShowRealizations,
   type RasterSettings,
   type TechnicalRasterImport,
   type TechnicalRasterProject,
   type TechnicalRasterProjectRepository,
 } from "../../../domain/technicalRaster";
 import { resolveTechnicalServiceProduct } from "../../../domain/technicalServiceProductMapping";
+import { resolveTechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
+import { resolveRealizationDisplayState, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
+import { computeRealizationUnderlineGeometry } from "../../../domain/technicalRasterRealizationUnderline";
+import { groupStandsByPlacementWorkQueue, resolveNextPlacementTarget } from "../../../domain/technicalRasterWorkQueue";
+import { sortStandNumbersNatural } from "../../../domain/technicalStandNumber";
 import { technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
-import { groupImportedStandsByImport, groupParsedReportByStand, summarizeParsedReport } from "../../../domain/technicalRasterImportPreview";
+import { groupImportedStandsByImport, groupParsedReportByStand, summarizeParsedReport, summarizeParsedReportScope } from "../../../domain/technicalRasterImportPreview";
 import { TechnicalImportParsedDataList } from "./TechnicalImportParsedDataList";
 import type { CatalogItemSummary } from "../../../domain/catalogPricing";
 import type { RemoteApiCatalogPricingRepository } from "../../../lib/db/catalogPricing.remoteApi.client";
@@ -33,11 +48,14 @@ import { extractPdfTextItems, getPdfPageSizes } from "../../../lib/pdf/pdfTextEx
 import { listPdfLayers } from "../../../lib/pdf/pdfLayers";
 import { detectRasterStandLabels } from "../../../lib/pdf/rasterStandLabelDetection";
 import { resolveWhiteModeAvailability } from "../../../lib/pdf/technicalRasterWhiteRender";
-import { TechnicalRasterCanvas, type RasterCanvasMarker } from "./TechnicalRasterCanvas";
+import { TechnicalRasterCanvas, type RasterCanvasMarker, type TechnicalRasterRealizationUnderlineMarker, type TechnicalRasterServiceSymbolMarker } from "./TechnicalRasterCanvas";
 import { TechnicalRasterLayerPanel } from "./TechnicalRasterLayerPanel";
+import { TechnicalRasterSymbolLayerPanel } from "./TechnicalRasterSymbolLayerPanel";
 import { TechnicalServiceImportPanel, type PendingTechnicalImport } from "./TechnicalServiceImportPanel";
+import { TechnicalCatalogImportPanel } from "./TechnicalCatalogImportPanel";
 import { TechnicalStandBuffer } from "./TechnicalStandBuffer";
 import { TechnicalStandDetailPanel } from "./TechnicalStandDetailPanel";
+import { TechnicalRasterPlacementContextPanel } from "./TechnicalRasterPlacementContextPanel";
 import { TechnicalRasterOutputsPanel } from "./TechnicalRasterOutputsPanel";
 
 type TechnicalRasterStep = "raster" | "services" | "assignment" | "outputs";
@@ -47,6 +65,18 @@ const STEPS: readonly Readonly<{ id: TechnicalRasterStep; label: string }>[] = [
   { id: "assignment", label: "Přiřazení" },
   { id: "outputs", label: "Výstupy" },
 ];
+
+/**
+ * The one active "placing/moving a technical service point" interaction (spec batch 7 section
+ * 6-10) — mutually exclusive with the stand-matching assignMode below (starting either one clears
+ * the other, TechnicalStandDetailPanel's own buttons are disabled while this is set). "place"
+ * creates the NEXT empty point for a service (spec section 4: quantity-aware, never more than
+ * `quantity`); "move" repositions one EXISTING placement, keeping its own id (spec section 9:
+ * "Přemístit" — never a delete+recreate).
+ */
+type PlacementMode =
+  | Readonly<{ standId: string; serviceId: string; mode: "place" }>
+  | Readonly<{ standId: string; serviceId: string; mode: "move"; placementId: string }>;
 
 /**
  * A single opened Technické rastry project — loaded by id, autosaved (debounced) + an explicit
@@ -80,6 +110,7 @@ export function TechnicalRasterEditorPage({
   const [renderKey, setRenderKey] = useState(0);
   const [whiteModeUnsupportedReason, setWhiteModeUnsupportedReason] = useState("");
   const [rasterUrlError, setRasterUrlError] = useState("");
+  const [placementMode, setPlacementMode] = useState<PlacementMode | undefined>(undefined);
 
   const skipNextAutosaveRef = useRef(true);
   const pendingSaveTimeoutRef = useRef<number | undefined>(undefined);
@@ -90,6 +121,19 @@ export function TechnicalRasterEditorPage({
   // for a (possibly new) sourceRasterAsset, so a genuinely NEW raster always gets its own fresh
   // retry budget, but repeated failures against the SAME resolved URL never loop.
   const rasterLoadRetriedRef = useRef(false);
+
+  // ESC cancels an in-progress placement/move WITHOUT creating/changing a point (spec section 7:
+  // "ESC zruší bez vytvoření bodu") — kept as a plain top-level effect (not gated behind the
+  // `!project` early return further down) since every hook in this component must run
+  // unconditionally on every render, same discipline the other effects here already follow.
+  useEffect(() => {
+    if (!placementMode) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") setPlacementMode(undefined);
+    }
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [placementMode]);
 
   useEffect(() => {
     skipNextAutosaveRef.current = true;
@@ -329,6 +373,7 @@ export function TechnicalRasterEditorPage({
   // ============================================================================
 
   function handleStartAssignment(standId: string) {
+    setPlacementMode(undefined);
     setAssignmentActiveStandId(standId);
     setSelectedStandId(standId);
     setStep("assignment");
@@ -336,7 +381,26 @@ export function TechnicalRasterEditorPage({
 
   function handleCanvasClick(page: number, xNormalized: number, yNormalized: number) {
     const current = projectRef.current;
-    if (!current || !assignmentActiveStandId) return;
+    if (!current) return;
+
+    if (placementMode) {
+      if (placementMode.mode === "move") {
+        // A move is a single, self-contained correction — never part of the "fill in missing
+        // points" auto-advance flow (spec batch 8 section 7 only talks about placement, and
+        // section 9 keeps individual actions working exactly as before).
+        const next = moveTechnicalServicePlacement(current, placementMode.standId, placementMode.serviceId, placementMode.placementId, { page, xNormalized, yNormalized });
+        updateProject(next);
+        setPlacementMode(undefined);
+        return;
+      }
+
+      const next = placeTechnicalService(current, placementMode.standId, placementMode.serviceId, { page, xNormalized, yNormalized });
+      updateProject(next);
+      advancePlacementAfterCommit(next, placementMode.standId, placementMode.serviceId);
+      return;
+    }
+
+    if (!assignmentActiveStandId) return;
     const assigned = assignStandManually(current, assignmentActiveStandId, { page, anchorXNormalized: xNormalized, anchorYNormalized: yNormalized });
     updateProject(assigned);
     const next = nextUnassignedStand(assigned, assignmentActiveStandId);
@@ -348,8 +412,80 @@ export function TechnicalRasterEditorPage({
     setProject((current) => (current ? clearStandAssignment(current, standId) : current));
   }
 
+  // ============================================================================
+  // Service placement (spec batch 7 section 6-10) — mutually exclusive with the assignment
+  // (spárování) flow above: starting either one clears the other's own active state.
+  // ============================================================================
+
+  function handlePlaceService(standId: string, serviceId: string) {
+    setAssignmentActiveStandId(undefined);
+    setPlacementMode({ standId, serviceId, mode: "place" });
+  }
+
+  function handleMovePlacement(standId: string, serviceId: string, placementId: string) {
+    setAssignmentActiveStandId(undefined);
+    setPlacementMode({ standId, serviceId, mode: "move", placementId });
+  }
+
+  /** "Umístit chybějící postupně" (spec batch 8 section 8) — starts the SAME auto-advancing flow advancePlacementAfterCommit continues, just with no current service yet, so it lands on the stand's FIRST still-missing point service. A no-op if the stand has nothing left to place. */
+  function handlePlaceMissingSequentially(standId: string) {
+    const stand = projectRef.current?.stands.find((candidate) => candidate.id === standId);
+    if (!stand) return;
+    const target = resolveNextPlacementTarget(stand);
+    if (!target) return;
+    setAssignmentActiveStandId(undefined);
+    setPlacementMode({ standId, serviceId: target.serviceId, mode: "place" });
+  }
+
+  /**
+   * Auto-advance (spec batch 8 section 7/9) — a pure UX convenience layered on TOP of the existing
+   * manual placement flow, never a new data model: after a successful "place" (never "move", see
+   * handleCanvasClick), if the just-placed service still needs another point, stays targeting it
+   * (qty>1 never requires re-opening the panel); else jumps to the stand's next missing point
+   * service; else marks the stand done and, if another K UMÍSTĚNÍ stand exists, selects it (spec:
+   * "ideálně automaticky vyber další stánek") — selecting only, never auto-starting ITS placement,
+   * so the user always has a clear next click ("Umístit" or "Umístit chybějící postupně").
+   */
+  function advancePlacementAfterCommit(updatedProject: TechnicalRasterProject, standId: string, serviceId: string) {
+    const stand = updatedProject.stands.find((candidate) => candidate.id === standId);
+    if (!stand) { setPlacementMode(undefined); return; }
+    const next = resolveNextPlacementTarget(stand, serviceId);
+    if (next) {
+      setPlacementMode({ standId, serviceId: next.serviceId, mode: "place" });
+      return;
+    }
+    setPlacementMode(undefined);
+    const matchedStands = updatedProject.stands.filter((candidate) => candidate.placement.status === "matched_auto" || candidate.placement.status === "matched_manual");
+    const queue = groupStandsByPlacementWorkQueue(matchedStands);
+    const nextStand = sortStandNumbersNatural(queue.toPlace, (candidate) => candidate.standNumber)[0];
+    if (nextStand) setSelectedStandId(nextStand.id);
+  }
+
+  function handleRemovePlacement(standId: string, serviceId: string, placementId: string) {
+    setProject((current) => (current ? removeTechnicalServicePlacement(current, standId, serviceId, placementId) : current));
+  }
+
+  function handleCancelPlacement() {
+    setPlacementMode(undefined);
+  }
+
+  function handleServiceSymbolClick(marker: TechnicalRasterServiceSymbolMarker) {
+    handleMovePlacement(marker.standId, marker.serviceId, marker.id);
+  }
+
+  function handleToggleServiceCategory(categoryId: string, hidden: boolean) {
+    setProject((current) => {
+      if (!current) return current;
+      const hiddenCategories = new Set(effectiveHiddenServiceCategories(current.rasterSettings));
+      if (hidden) hiddenCategories.add(categoryId); else hiddenCategories.delete(categoryId);
+      return withHiddenServiceCategories(current, [...hiddenCategories]);
+    });
+  }
+
   const selectedStand = project.stands.find((stand) => stand.id === selectedStandId);
   const activeAssignmentStand = project.stands.find((stand) => stand.id === assignmentActiveStandId);
+  const placementModeStand = placementMode ? project.stands.find((stand) => stand.id === placementMode.standId) : undefined;
+  const placementModeService = placementModeStand?.services.find((service) => service.id === placementMode?.serviceId);
 
   const markers: RasterCanvasMarker[] = [];
   if (selectedStand?.placement.anchorXNormalized !== undefined && selectedStand.placement.anchorYNormalized !== undefined && selectedStand.placement.rasterPage !== undefined) {
@@ -371,6 +507,73 @@ export function TechnicalRasterEditorPage({
   const whiteModeAvailability = resolveWhiteModeAvailability(project.rasterLayers);
   const whiteModeStandLayerId =
     project.rasterSettings.viewMode === "work" && whiteModeAvailability.status === "available" ? whiteModeAvailability.standLayerId : undefined;
+
+  // ============================================================================
+  // Technical service symbols (spec batch 7 section 22-37) — every MATCHED stand's own placed
+  // "point" services, for whichever categories "TECHNICKÉ ZNAČKY" hasn't hidden. Independent of
+  // markers[] above (the plain label/selected/anchor markers) — see TechnicalRasterServiceSymbolMarker's own doc.
+  // ============================================================================
+  const hiddenServiceCategories = effectiveHiddenServiceCategories(project.rasterSettings);
+  const servicePlacementMarkers: TechnicalRasterServiceSymbolMarker[] = [];
+  for (const stand of project.stands) {
+    if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
+    for (const service of stand.services) {
+      if (hiddenServiceCategories.has(service.category)) continue;
+      const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+      if (presentation.placementBehavior !== "point") continue;
+      for (const placement of effectiveServicePlacements(service)) {
+        servicePlacementMarkers.push({
+          id: placement.id,
+          standId: stand.id,
+          serviceId: service.id,
+          page: placement.page,
+          xNormalized: placement.xNormalized,
+          yNormalized: placement.yNormalized,
+          presentation,
+          isSelected: placementMode?.mode === "move" && placementMode.placementId === placement.id,
+        });
+      }
+    }
+  }
+
+  // ============================================================================
+  // Realizace underlines (corrective batch, post real-file acceptance test, section 4/5 — REPLACES
+  // the earlier "badge" design). Every MATCHED stand, anchored to its OWN number position (the same
+  // known label bbox the "selected" marker above anchors to — bbox when the stand was AUTO-matched,
+  // the manual anchor point otherwise), never a service-placement point. Only built at all when
+  // "Zobrazit realizačky" is on (spec: no data yet must never show a wall of misleading
+  // OSTATNÍ/red underlines) AND `resolveRealizationDisplayState` says so — CORRECTIVE BATCH (3rd)
+  // section 2/4: a stand with no confirmed catalog build record (`hasCatalogBuildRecord` falsy, e.g.
+  // one that only ever appeared in a primary technical-service report) gets NO underline at all,
+  // even if `realizationCompany` happens to hold some stray text — see
+  // domain/technicalRasterRealization.ts's own doc for the full three-state rationale this gates.
+  // ============================================================================
+  const showRealizations = effectiveShowRealizations(project.rasterSettings);
+  const realizationUnderlineMarkers: TechnicalRasterRealizationUnderlineMarker[] = [];
+  if (showRealizations) {
+    for (const stand of project.stands) {
+      if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
+      if (stand.placement.rasterPage === undefined) continue;
+      const displayState = resolveRealizationDisplayState(stand.hasCatalogBuildRecord, stand.realizationCompany);
+      if (!displayState.shouldShow) continue;
+      const label = project.rasterStandLabels.find((candidate) => candidate.id === stand.placement.matchedLabelId);
+      const anchorXNormalized = label?.xNormalized ?? stand.placement.anchorXNormalized;
+      const anchorYNormalized = label?.yNormalized ?? stand.placement.anchorYNormalized;
+      if (anchorXNormalized === undefined || anchorYNormalized === undefined) continue;
+      const geometry = computeRealizationUnderlineGeometry(
+        { xNormalized: anchorXNormalized, yNormalized: anchorYNormalized },
+        label ? { widthNormalized: label.widthNormalized, heightNormalized: label.heightNormalized } : undefined,
+      );
+      realizationUnderlineMarkers.push({
+        id: stand.id,
+        page: stand.placement.rasterPage,
+        xNormalized: geometry.xNormalized,
+        yNormalized: geometry.yNormalized,
+        widthNormalized: geometry.widthNormalized,
+        color: technicalRealizationGroupInfo(displayState.group).color,
+      });
+    }
+  }
 
   return (
     <div className="workspacePage technicalRasterEditorPage">
@@ -474,13 +677,30 @@ export function TechnicalRasterEditorPage({
         <div className="technicalRasterServicesStep">
           <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={setPendingImport} />
 
+          <TechnicalCatalogImportPanel
+            project={project}
+            onImport={(parsed, filename) => setProject((current) => (current ? mergeSupplementalCatalogImport(current, parsed, filename) : current))}
+          />
+
           {pendingImport && (() => {
             const summary = summarizeParsedReport(pendingImport.report, resolveProductStatus);
+            // CORRECTIVE BATCH (multi-hall imports) section 9 — a combined report (e.g. Hala 3 +
+            // Hala 4 rows in ONE electricity export) previewed BEFORE commit, using the exact same
+            // classification `mergeTechnicalRasterImport` will apply, so this can never disagree
+            // with the real result. "Mimo aktuální rastr" is informational, never styled like the
+            // actionable Nespárováno/Nejednoznačné counts next to it.
+            const scope = summarizeParsedReportScope(pendingImport.report, project.rasterStandLabels);
             return (
               <div className="workflowCard technicalImportPreview">
                 <div className="workflowCardHeader"><div><span>NÁHLED IMPORTU</span><strong>{technicalServiceCategoryLabel(pendingImport.category)} — {pendingImport.file.name}</strong></div></div>
                 <div className="technicalImportPreviewSummary">
-                  <span>Nalezeno stánků <strong>{summary.standCount}</strong></span>
+                  <span>Importováno <strong>{scope.importedStandCount}</strong></span>
+                  <span>Spárováno s rastrem <strong>{scope.matchedCurrentRasterCount}</strong></span>
+                  {scope.outsideCurrentRasterCount > 0 && (
+                    <span className="technicalImportPreviewSummaryInfo">Mimo aktuální rastr <strong>{scope.outsideCurrentRasterCount}</strong></span>
+                  )}
+                  <span className={scope.unmatchedCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Nespárováno <strong>{scope.unmatchedCount}</strong></span>
+                  <span className={scope.ambiguousCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Nejednoznačné <strong>{scope.ambiguousCount}</strong></span>
                   <span>Načteno služeb <strong>{summary.serviceCount}</strong></span>
                   <span className={summary.warningCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Warningy <strong>{summary.warningCount}</strong></span>
                   <span className={summary.unknownProductCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Neznámé produkty <strong>{summary.unknownProductCount}</strong></span>
@@ -535,34 +755,81 @@ export function TechnicalRasterEditorPage({
       )}
 
       {step === "assignment" && (
-        <div className="technicalRasterWorkspace">
-          <TechnicalRasterCanvas
-            pdfUrl={rasterUrl}
-            hiddenLayerIds={hiddenLayerIds}
-            activePage={activePage}
-            onPageCountChange={setPageCount}
-            markers={markers}
-            assignMode={Boolean(assignmentActiveStandId)}
-            onCanvasClick={handleCanvasClick}
-            renderKey={`${renderKey}-${hiddenLayerIdsKey}`}
-            whiteModeStandLayerId={whiteModeStandLayerId}
-            whiteFillOpacity={effectiveWhiteFillOpacity(project.rasterSettings)}
-            onWhiteModeUnsupported={setWhiteModeUnsupportedReason}
-            assetReference={project.sourceRasterAsset?.id}
-            onLoadFailed={handleRasterCanvasLoadFailed}
+        <div className="technicalRasterAssignmentStep">
+          {/* TECHNICKÉ ZNAČKY (manual acceptance batch, section 2-4): a compact HORIZONTAL filter
+              bar above the workspace — these are VIEW FILTERS, never the dominant right-panel
+              content they used to be, freeing that panel for the placement/work-queue priorities
+              below (spec section 5). */}
+          <TechnicalRasterSymbolLayerPanel
+            hiddenCategories={hiddenServiceCategories}
+            onToggleCategory={handleToggleServiceCategory}
+            showRealizations={showRealizations}
+            onToggleShowRealizations={(show) => setProject((current) => (current ? withShowRealizations(current, show) : current))}
           />
-          <div className="technicalRasterSidebar">
-            {assignmentActiveStandId && activeAssignmentStand && (
-              <p className="technicalRasterAssignHint">Spárujte stánek <strong>{activeAssignmentStand.standNumber}</strong> kliknutím do rastru.</p>
-            )}
-            {rasterUrlError && <p className="uploadError">{rasterUrlError}</p>}
-            <TechnicalStandBuffer stands={project.stands} selectedStandId={selectedStandId} activeAssignmentStandId={assignmentActiveStandId} onSelectStand={setSelectedStandId} />
-            <TechnicalStandDetailPanel stand={selectedStand} imports={project.imports} onAssign={handleStartAssignment} onClearAssignment={handleClearAssignment} />
+          <div className="technicalRasterWorkspace">
+            <TechnicalRasterCanvas
+              pdfUrl={rasterUrl}
+              hiddenLayerIds={hiddenLayerIds}
+              activePage={activePage}
+              onPageCountChange={setPageCount}
+              markers={markers}
+              assignMode={Boolean(assignmentActiveStandId)}
+              onCanvasClick={handleCanvasClick}
+              renderKey={`${renderKey}-${hiddenLayerIdsKey}`}
+              whiteModeStandLayerId={whiteModeStandLayerId}
+              whiteFillOpacity={effectiveWhiteFillOpacity(project.rasterSettings)}
+              onWhiteModeUnsupported={setWhiteModeUnsupportedReason}
+              assetReference={project.sourceRasterAsset?.id}
+              onLoadFailed={handleRasterCanvasLoadFailed}
+              servicePlacementMarkers={servicePlacementMarkers}
+              placementModeActive={Boolean(placementMode)}
+              onServiceSymbolClick={handleServiceSymbolClick}
+              realizationUnderlineMarkers={realizationUnderlineMarkers}
+            />
+            {/* Right panel priority (manual acceptance batch, section 5): 1) PRÁVĚ UMISŤUJI,
+                2) vybraný stánek + jeho služby, 3-5) K UMÍSTĚNÍ / HOTOVO / BEZ BODOVÝCH SLUŽEB
+                (inside TechnicalStandBuffer). Technické značky are no longer here at all — see
+                the horizontal bar above. */}
+            <div className="technicalRasterSidebar">
+              {placementMode && placementModeStand && placementModeService && (
+                <TechnicalRasterPlacementContextPanel
+                  mode={placementMode.mode}
+                  stand={placementModeStand}
+                  service={placementModeService}
+                  placementId={placementMode.mode === "move" ? placementMode.placementId : undefined}
+                  onCancel={handleCancelPlacement}
+                />
+              )}
+              {!placementMode && assignmentActiveStandId && activeAssignmentStand && (
+                <p className="technicalRasterAssignHint">Spárujte stánek <strong>{activeAssignmentStand.standNumber}</strong> kliknutím do rastru.</p>
+              )}
+              {rasterUrlError && <p className="uploadError">{rasterUrlError}</p>}
+              <TechnicalStandDetailPanel
+                stand={selectedStand}
+                imports={project.imports}
+                onAssign={handleStartAssignment}
+                onClearAssignment={handleClearAssignment}
+                onPlaceService={handlePlaceService}
+                onMovePlacement={handleMovePlacement}
+                onRemovePlacement={handleRemovePlacement}
+                onPlaceMissingSequentially={handlePlaceMissingSequentially}
+                placementModeActive={Boolean(placementMode)}
+                onSetRealizationCompany={(standId, value) => setProject((current) => (current ? setStandRealizationCompany(current, standId, value) : current))}
+              />
+              <TechnicalStandBuffer stands={project.stands} selectedStandId={selectedStandId} activeAssignmentStandId={assignmentActiveStandId} onSelectStand={setSelectedStandId} />
+            </div>
           </div>
         </div>
       )}
 
-      {step === "outputs" && <TechnicalRasterOutputsPanel stands={project.stands} />}
+      {step === "outputs" && (
+        <TechnicalRasterOutputsPanel
+          project={project}
+          rasterUrl={rasterUrl}
+          pageCount={pageCount}
+          hiddenServiceCategories={hiddenServiceCategories}
+        />
+      )}
     </div>
   );
 }

@@ -7,6 +7,7 @@
  * server bundle. Every other pdf/*.ts module in this feature (text extraction, layers, rendering)
  * calls loadPdfDocument() rather than importing pdfjs-dist itself.
  */
+import { ensurePdfJsWorkerConfigured } from "./pdfJsWorkerConfig.ts";
 export type PdfJsDocument = Readonly<{
   numPages: number;
   getPage(pageNumber: number): Promise<PdfJsPage>;
@@ -67,8 +68,6 @@ export type PdfJsOptionalContentConfig = Readonly<{
   isVisible(id: string): boolean;
   setVisibility(id: string, visible: boolean): void;
 }>;
-
-let workerConfigured = false;
 
 /**
  * `pdfjs.getDocument()` returns a `PDFDocumentLoadingTask`, whose OWN `.promise` resolves to the
@@ -144,10 +143,7 @@ export async function loadingTaskToDocument(
  */
 export async function loadPdfDocument(source: string | Readonly<{ data: ArrayBuffer }>): Promise<PdfJsDocument> {
   const pdfjs = await import("pdfjs-dist");
-  if (!workerConfigured) {
-    pdfjs.GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url).toString();
-    workerConfigured = true;
-  }
+  ensurePdfJsWorkerConfigured(pdfjs, new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url));
   const loadingTask = typeof source === "string" ? pdfjs.getDocument({ url: source }) : pdfjs.getDocument({ data: source.data });
   const proxy = await loadingTaskToDocument(loadingTask);
   return wrapPdfDocumentProxy(loadingTask, proxy);

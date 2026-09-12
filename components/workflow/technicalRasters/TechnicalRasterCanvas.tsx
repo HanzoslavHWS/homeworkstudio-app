@@ -14,6 +14,9 @@ import {
   projectMarkerCenterToScreen,
   type SelectedMarkerAnchorKind,
 } from "../../../domain/technicalRasterSelectedMarker";
+import { computeSymbolScreenStyle } from "../../../domain/technicalRasterSymbolMarker";
+import { computeRealizationUnderlineScreenStyle } from "../../../domain/technicalRasterRealizationUnderline";
+import type { TechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
 import { ViewportToolbar } from "../../configurator/ViewportToolbar";
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -52,6 +55,48 @@ export type RasterCanvasMarker = Readonly<{
 }>;
 
 /**
+ * One placed technical service symbol (spec batch 7 section 6-10/22-26) — deliberately a SEPARATE
+ * prop/type from RasterCanvasMarker above rather than a new "kind": a service symbol's own visual
+ * (colored dot + presentation-driven label/icon, click-to-move, selection ring) is meaningfully
+ * different from the plain label/selected/anchor markers, and keeping it separate means this
+ * addition never risks the existing marker-rendering code path. `id` is the placement's own id
+ * (TechnicalServicePlacement.id) — stable across a move, never regenerated.
+ */
+export type TechnicalRasterServiceSymbolMarker = Readonly<{
+  id: string;
+  standId: string;
+  serviceId: string;
+  page: number;
+  xNormalized: number;
+  yNormalized: number;
+  presentation: TechnicalServicePresentation;
+  /** True for the ONE placement currently in "move" mode (spec section 9: "Přemístit") — draws the subtle selection ring, never a big red block. */
+  isSelected?: boolean;
+}>;
+
+/**
+ * One "realizace" underline (corrective batch, post real-file acceptance test, section 4/5 —
+ * REPLACES the earlier "badge" design, which FAILED manual acceptance: a dominant black pill that
+ * duplicated the stand number the source PDF already prints). Deliberately separate from BOTH
+ * RasterCanvasMarker and TechnicalRasterServiceSymbolMarker above: this highlights WHO is building
+ * a matched stand, never WHAT technical service sits where, and is anchored to the stand's OWN
+ * number position (never a service placement's point), so it structurally cannot collide with a
+ * technical symbol. `id` is the stand's own id — stable, never regenerated. Geometry
+ * (x/y/width, all normalized page-space) is fully pre-computed by
+ * domain/technicalRasterRealizationUnderline.ts's own `computeRealizationUnderlineGeometry` — this
+ * component only ever converts it to CSS left/top/width percentages, no anchor/translate math.
+ */
+export type TechnicalRasterRealizationUnderlineMarker = Readonly<{
+  id: string;
+  page: number;
+  xNormalized: number;
+  yNormalized: number;
+  widthNormalized: number;
+  /** The resolved realization group's own central color (domain/technicalRasterRealization.ts) — this component draws whatever color it's given, it never resolves the group itself. */
+  color: string;
+}>;
+
+/**
  * Renders one page of the raster PDF via pdf.js (spec section 4: PDF.js for preview/zoom/pan —
  * the source PDF itself is never rasterized as ITS OWN storage format, only this ONE visible
  * canvas is a raster preview of it). Zoom/pan reuse useBoothViewport exactly like
@@ -73,6 +118,10 @@ export function TechnicalRasterCanvas({
   onWhiteModeUnsupported,
   assetReference,
   onLoadFailed,
+  servicePlacementMarkers,
+  placementModeActive,
+  onServiceSymbolClick,
+  realizationUnderlineMarkers,
 }: {
   pdfUrl: string | undefined;
   hiddenLayerIds: ReadonlySet<string>;
@@ -82,6 +131,14 @@ export function TechnicalRasterCanvas({
   assignMode: boolean;
   onCanvasClick?: (page: number, xNormalized: number, yNormalized: number) => void;
   renderKey?: string | number;
+  /** Placed technical service symbols to draw on top of the raster (spec batch 7) — independent of `markers` above, see TechnicalRasterServiceSymbolMarker's own doc. Defaults to an empty list when omitted, so every existing caller (the "raster" step, which never passes this prop) is unaffected. */
+  servicePlacementMarkers?: readonly TechnicalRasterServiceSymbolMarker[];
+  /** True while the user is actively placing/moving ONE technical service point (spec section 7: crosshair cursor + click-to-place, mutually exclusive with `assignMode` in practice but composed the same way here — a click is routed to `onCanvasClick` whenever EITHER this or `assignMode` is true). Existing service symbols stop being individually clickable while this is true, so a placement click can never be misread as "start moving a different symbol". */
+  placementModeActive?: boolean;
+  /** Fired when the user clicks an EXISTING service symbol while not already placing/moving one (spec section 9: click a symbol to start "Přemístit"). Never fired while placementModeActive is true. */
+  onServiceSymbolClick?: (marker: TechnicalRasterServiceSymbolMarker) => void;
+  /** "Realizačky" underlines (corrective batch, post real-file acceptance test, section 4/5) — independent of every other marker prop, defaults to an empty list when omitted so every existing caller is unaffected. */
+  realizationUnderlineMarkers?: readonly TechnicalRasterRealizationUnderlineMarker[];
   /** Set only when the caller wants "pracovní bílý režim" AND a stand layer was unambiguously detected (see resolveWhiteModeAvailability) — undefined always renders the page normally (spec section 16: never guess). */
   whiteModeStandLayerId?: string;
   /** "Krytí bílé" 0-1 (spec batch 6) — only meaningful together with whiteModeStandLayerId; ignored entirely for a plain/original render. The caller is expected to already have applied effectiveWhiteFillOpacity's own default (domain/technicalRaster.ts), so this component never needs its own fallback. */
@@ -238,7 +295,7 @@ export function TechnicalRasterCanvas({
   }, [activePage, renderKey, whiteModeStandLayerId, whiteFillOpacity, documentVersion, renderScaleTrigger]);
 
   function handleStageClick(event: React.MouseEvent<HTMLDivElement>) {
-    if (!assignMode || !onCanvasClick || !pageSizePt) return;
+    if (!(assignMode || placementModeActive) || !onCanvasClick || !pageSizePt) return;
     const world = viewport.clientToWorld(event.clientX, event.clientY);
     if (!world) return;
     if (world.x < 0 || world.y < 0 || world.x > pageSizePt.width || world.y > pageSizePt.height) return;
@@ -356,6 +413,98 @@ export function TechnicalRasterCanvas({
     );
   }
 
+  /**
+   * A placed technical service symbol (corrective batch section 2, redesigned): the placement
+   * point IS the symbol's CENTER (zero offset, unlike the diagonally-offset AUTO selected-stand
+   * marker above) — a single `translate(-50%, -50%)` against `left/top` is the whole positioning
+   * story. The OUTER element is sized to the (larger) CLICK target and centers its children via
+   * flex; the INNER glyph/text is the actual visible mark — kept as separate elements specifically
+   * so the invisible click target can never affect the visual size. Only clickable when NOT
+   * currently placing/moving another point.
+   *
+   * NO circular badge for ANY renderer (spec: "NEpoužívej jako default velké plné kruhové badge"):
+   * `powerLabel`/`textLabel`/`fallback` draw plain colored bold TEXT directly in the presentation's
+   * own color; `refrigeratedStar`/`waterDrop`/`wifiIcon` draw a small colored vector glyph — both
+   * get a subtle white text-shadow halo (never a filled shape) purely for legibility over a busy
+   * raster. Every size is set INLINE from computeSymbolScreenStyle so it stays zoom-invariant.
+   */
+  function renderServicePlacementMarker(marker: TechnicalRasterServiceSymbolMarker) {
+    const style = computeSymbolScreenStyle(viewport.transform.zoom);
+    const clickable = Boolean(onServiceSymbolClick) && !placementModeActive;
+    const { renderer, displayLabel, color } = marker.presentation;
+    const halo = `0 0 ${style.haloBlurPx}px #fff, 0 0 ${style.haloBlurPx}px #fff, 0 0 ${style.haloBlurPx}px #fff`;
+    return (
+      <div
+        key={marker.id}
+        className={marker.isSelected ? "technicalRasterServiceSymbol selected" : "technicalRasterServiceSymbol"}
+        title={marker.presentation.legendLabel}
+        style={{
+          left: `${marker.xNormalized * 100}%`,
+          top: `${marker.yNormalized * 100}%`,
+          width: `${style.clickDiameterPx}px`,
+          height: `${style.clickDiameterPx}px`,
+          transform: "translate(-50%, -50%)",
+          pointerEvents: clickable ? "auto" : "none",
+          cursor: clickable ? "pointer" : "default",
+        }}
+        onClick={clickable ? (event) => { event.stopPropagation(); onServiceSymbolClick!(marker); } : undefined}
+      >
+        {marker.isSelected && (
+          <span
+            className="technicalRasterServiceSymbolRing"
+            style={{ width: `${style.selectionRingDiameterPx}px`, height: `${style.selectionRingDiameterPx}px`, borderWidth: `${style.selectionRingBorderPx}px` }}
+          />
+        )}
+        {renderer === "refrigeratedStar" && (
+          <span className="technicalRasterServiceSymbolStar" aria-hidden="true" style={{ fontSize: `${style.glyphSizePx}px`, color, textShadow: halo }}>✱</span>
+        )}
+        {renderer === "waterDrop" && (
+          <span className="technicalRasterServiceSymbolGlyph" style={{ width: `${style.glyphSizePx}px`, height: `${style.glyphSizePx}px`, filter: `drop-shadow(${halo.split(",")[0]})` }}>
+            <svg viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true">
+              <path d="M12 2C12 2 5 11 5 15.5A7 7 0 0019 15.5C19 11 12 2 12 2Z" fill={color} stroke="#fff" strokeWidth="1" />
+            </svg>
+          </span>
+        )}
+        {renderer === "wifiIcon" && (
+          <span className="technicalRasterServiceSymbolGlyph" style={{ width: `${style.glyphSizePx}px`, height: `${style.glyphSizePx}px` }}>
+            <svg viewBox="0 0 24 24" width="100%" height="100%" aria-hidden="true">
+              <path d="M2 8.5C7.5 3.5 16.5 3.5 22 8.5M5.5 12.5C9.5 9 14.5 9 18.5 12.5M9 16.5C10.5 15 13.5 15 15 16.5M12 20.2v.1" stroke={color} strokeWidth="2.5" fill="none" strokeLinecap="round" style={{ filter: `drop-shadow(${halo.split(",")[0]})` }} />
+            </svg>
+          </span>
+        )}
+        {(renderer === "powerLabel" || renderer === "textLabel" || renderer === "fallback") && (
+          <span className="technicalRasterServiceSymbolLabel" style={{ fontSize: `${style.fontSizePx}px`, color, textShadow: halo }}>{displayLabel ?? "?"}</span>
+        )}
+      </div>
+    );
+  }
+
+  /**
+   * A "realizace" underline (corrective batch, post real-file acceptance test, section 4/5): a
+   * single colored horizontal line, positioned via plain `left/top/width` percentages from
+   * ALREADY-COMPUTED normalized page-space geometry (domain/technicalRasterRealizationUnderline.ts)
+   * — no anchor/translate math here, unlike the point-shaped markers above, since this marker's own
+   * geometry already IS a rectangle in the same page-space every other bbox-based marker in this
+   * file uses (compare `.technicalRasterMarker` with `hasBox` above). The source PDF's own stand
+   * number is NEVER redrawn/covered — this draws ONLY the line, strictly below it.
+   */
+  function renderRealizationUnderline(marker: TechnicalRasterRealizationUnderlineMarker) {
+    const style = computeRealizationUnderlineScreenStyle(viewport.transform.zoom);
+    return (
+      <div
+        key={`realization-${marker.id}`}
+        className="technicalRasterRealizationUnderline"
+        style={{
+          left: `${marker.xNormalized * 100}%`,
+          top: `${marker.yNormalized * 100}%`,
+          width: `${marker.widthNormalized * 100}%`,
+          height: `${style.thicknessPx}px`,
+          background: marker.color,
+        }}
+      />
+    );
+  }
+
   if (!pdfUrl) {
     return (
       <div className="workflowCard technicalRasterCanvasPanel">
@@ -370,13 +519,31 @@ export function TechnicalRasterCanvas({
   return (
     <div className="workflowCard technicalRasterCanvasPanel">
       <div className="technicalRasterCanvasToolbar">
-        <ViewportToolbar zoomPercent={viewport.zoomPercent} onZoomOut={viewport.zoomOut} onZoomIn={viewport.zoomIn} onFit={viewport.fitToBooth} onReset={viewport.resetZoom} />
+        {/*
+          Manual acceptance batch, section 14-17: real testing found "100 %" (viewport.resetZoom,
+          a literal mathematical 1:1 scale) leaving most of a real large-format raster page
+          scrolled off-screen — confusingly different from "Fit", which already shows the whole
+          page. This module's own "100 %" is redefined to mean "standard full-page view" (spec
+          section 16: "100% = baseline odpovídající full-page view v tomto modulu"), i.e. the SAME
+          fit-to-viewport calculation as Fit — never the shared useBoothViewport hook's own
+          generic 1:1 resetZoom, which stays completely unchanged for every OTHER caller of this
+          hook/ViewportToolbar (BoothGenerator/PrintSurfaceCanvas/PlotPolygonEditor). The
+          on-screen "%" readout (viewport.zoomPercent) still reports the REAL internal scale this
+          produces (e.g. "43 %" for a page that needs shrinking to fit) — only the BUTTON's own
+          fixed "100 %" label is the redefined, module-local semantic, exactly as spec section 16
+          allows ("můžeš oddělit displayed percentage a internal PDF scale").
+        */}
+        <ViewportToolbar zoomPercent={viewport.zoomPercent} onZoomOut={viewport.zoomOut} onZoomIn={viewport.zoomIn} onFit={viewport.fitToBooth} onReset={viewport.fitToBooth} />
         {isRendering && <span className="fieldHint">Vykresluji…</span>}
       </div>
       {error && <p className="uploadError">{error}</p>}
       <div
         ref={viewport.viewportRef}
-        className={assignMode ? "technicalRasterViewport assignMode" : "technicalRasterViewport"}
+        className={[
+          "technicalRasterViewport",
+          assignMode ? "assignMode" : "",
+          placementModeActive ? "placementMode" : "",
+        ].filter(Boolean).join(" ")}
         onPointerDown={(event) => { if (viewport.startPan(event)) return; }}
         onPointerMove={viewport.movePan}
         onPointerUp={viewport.endPan}
@@ -393,6 +560,8 @@ export function TechnicalRasterCanvas({
         >
           <canvas ref={canvasRef} className="technicalRasterCanvasElement" style={{ width: `${stageWidth}px`, height: `${stageHeight}px` }} />
           {markers.filter((marker) => marker.page === activePage).map((marker) => renderMarker(marker))}
+          {(servicePlacementMarkers ?? []).filter((marker) => marker.page === activePage).map((marker) => renderServicePlacementMarker(marker))}
+          {(realizationUnderlineMarkers ?? []).filter((marker) => marker.page === activePage).map((marker) => renderRealizationUnderline(marker))}
         </div>
       </div>
     </div>

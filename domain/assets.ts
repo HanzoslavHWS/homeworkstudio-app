@@ -15,6 +15,7 @@ export const ASSET_CATEGORIES = [
   "print-surface-export",
   "technical-raster-source",
   "technical-raster-import",
+  "catalog-technical-icon",
   "temporary",
 ] as const;
 
@@ -150,6 +151,14 @@ const CATEGORY_RULES: Readonly<Record<AssetCategory, CategoryRule>> = {
   // sizeable.
   "technical-raster-source": { prefix: (id) => `technical-rasters/${id}/source`, maxBytes: 150_000_000, mimeTypes: ["application/pdf"] },
   "technical-raster-import": { prefix: (id) => `technical-rasters/${id}/imports`, maxBytes: 150_000_000, mimeTypes: ["application/pdf"] },
+  // Technické rastry — component/catalog-card-driven technical marker icon (spec batch 11 section
+  // 11/12): SVG preferred (kept as real vector all the way to export where possible), PNG allowed
+  // as a fallback (embeddable as a small image XObject in the vector PDF export — never the whole
+  // page). Deliberately NOT the broader IMAGE_TYPES set — no jpg/webp/gif, and never PDF (spec
+  // section 12: "Nepovoluj PDF/JPG/GIF/WEBP... pokud pro ně nemáme jasný důvod" — a technical
+  // marker icon is a small flat symbol, not a photo). Small size ceiling matches that intent (an
+  // icon is never a multi-MB asset) — same order of magnitude as catalog-thumbnail.
+  "catalog-technical-icon": { prefix: (id) => `catalog/technical-icons/${id}`, maxBytes: 2_000_000, mimeTypes: ["image/svg+xml", "image/png"] },
   temporary: { prefix: () => "temporary", maxBytes: 5_000_000, mimeTypes: ["text/plain", ...IMAGE_TYPES] },
 };
 

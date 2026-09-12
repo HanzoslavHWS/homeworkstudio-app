@@ -6080,6 +6080,44 @@ select:focus {
 .assetUploadState.error { border-color: #e3c7c3; color: #8a4c45; }
 .assetUploadState button { min-height: 24px; padding: 0 7px; border: 1px solid currentColor; border-radius: 4px; background: white; color: inherit; font-size: 7px; }
 .uploadError { display: block; margin-top: 3px; color: #9a4d45; font-size: 7px; }
+
+/* Batch 11 — TECHNICKÉ RASTRY component card section: collapsible (spec section 27), spans both
+   admin-detail columns since it carries more content than a typical narrow field group. */
+.technicalRasterConfigSection { grid-column: 1 / -1; }
+.technicalRasterConfigSection > summary { display: flex; align-items: baseline; gap: 10px; cursor: pointer; list-style: none; }
+.technicalRasterConfigSection > summary::-webkit-details-marker { display: none; }
+.technicalRasterConfigSection > summary::before { content: "▸ "; color: #989b9e; }
+.technicalRasterConfigSection[open] > summary::before { content: "▾ "; }
+.technicalRasterConfigSection > summary h3 { margin: 0; }
+.technicalRasterConfigSection > p.fieldHint:first-of-type { margin-top: 10px; }
+.technicalRasterConfigSection dl { margin-top: 10px; }
+
+.technicalRasterColorInput { display: flex; align-items: center; gap: 6px; }
+.technicalRasterColorInput input[type="color"] { width: 26px; height: 22px; padding: 0; border: 1px solid #dcdedf; border-radius: 4px; cursor: pointer; }
+.technicalRasterColorInput input:not([type="color"]) { flex: 1; }
+
+.technicalRasterIconRow { display: flex; align-items: center; gap: 12px; margin-top: 11px; padding-top: 11px; border-top: 1px solid #eceeef; }
+.technicalRasterIconRow > div:first-child { flex: 1; min-width: 0; }
+.technicalRasterIconPreview { width: 34px; height: 34px; object-fit: contain; border: 1px solid #eceeef; border-radius: 6px; background: #fff; padding: 3px; }
+
+.technicalRasterConfigPreview { display: flex; align-items: center; gap: 9px; margin-top: 12px; padding: 9px; border: 1px solid #eceeef; border-radius: 7px; background: #fff; }
+.technicalRasterConfigPreviewDot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.9);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
+  color: #fff;
+  font-size: 8px;
+  font-weight: 700;
+}
+.technicalRasterConfigPreviewDot.hidden { color: #7a7d80; }
+.technicalRasterConfigPreviewIcon { width: 60%; height: 60%; object-fit: contain; }
+.technicalRasterConfigPreviewCaption { color: #55595c; font-size: 8px; }
 .eventDocumentActions { display: flex; gap: 5px; }
 .summaryVisuals figure { display: grid; gap: 3px; }
 .summaryVisuals figcaption { color: #999ca0; font-size: 7px; }
@@ -6425,7 +6463,7 @@ select:focus {
   cursor: default;
   touch-action: none;
 }
-.technicalRasterViewport.assignMode { cursor: crosshair; }
+.technicalRasterViewport.assignMode, .technicalRasterViewport.placementMode { cursor: crosshair; }
 .technicalRasterStage { position: relative; transform-origin: top left; }
 .technicalRasterCanvasElement { display: block; width: 100%; height: 100%; background: #fff; }
 
@@ -6478,7 +6516,18 @@ select:focus {
 .technicalImportPreview { background: #fafafa; }
 .technicalImportPreviewSummary { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0; font-size: 9px; color: #55595c; }
 .technicalImportPreviewSummary strong { color: #151515; font-size: 10px; }
+
+/* Corrective batch (post real-file acceptance test) section 11 — supplemental "Stavby - tisk vše
+   katalog" import panel: its own upload button/summary, deliberately visually distinct from the
+   primary "Technický report" import above it (never folded into that same category picker). */
+.technicalCatalogImportPanel { background: #fafafa; }
+.technicalCatalogImportSummary { margin-top: 8px; display: grid; gap: 4px; }
+.technicalRasterReconciliationSummary { display: flex; flex-wrap: wrap; gap: 14px; margin: 6px 0; font-size: 9px; color: #55595c; }
+.technicalRasterReconciliationSummary strong { color: #151515; font-size: 10px; }
+.technicalRasterReconciliationConflict, .technicalRasterReconciliationConflict strong { color: #93472b; }
 .technicalImportPreviewSummaryWarn, .technicalImportPreviewSummaryWarn strong { color: #93472b; }
+/* CORRECTIVE BATCH (multi-hall imports) — "Mimo aktuální rastr" is informational, never the same red/error tone as Nespárováno/Nejednoznačné above. */
+.technicalImportPreviewSummaryInfo, .technicalImportPreviewSummaryInfo strong { color: #5a6b85; }
 .technicalImportWarnings { margin-top: 8px; padding: 8px 10px; border: 1px solid #f0d9d3; border-radius: 8px; background: #fbeeea; font-size: 9px; color: #93472b; }
 .technicalImportWarnings ul { margin: 4px 0 0; padding-left: 16px; }
 
@@ -6536,26 +6585,158 @@ select:focus {
 .technicalStandBufferOrdinal { font-variant-numeric: tabular-nums; color: #b7bABC; font-size: 8px; }
 .technicalStandBufferNumber { font-weight: 600; }
 .technicalStandBufferAmbiguousHint { color: #93472b; }
+.technicalStandBufferGroupCount { color: #b7babc; font-weight: 400; }
+
+/* Batch 8 — K UMÍSTĚNÍ/HOTOVO stacked rows (spec section 6): number+company on one line, a
+   second compact status line below it, still a single compact button — never a large progress card. */
+.technicalStandBufferItem.stacked { flex-direction: column; align-items: flex-start; gap: 1px; min-height: 36px; }
+.technicalStandBufferSubtitle { font-size: 8px; color: #85898c; }
+.technicalStandBufferDoneSubtitle { font-size: 8px; color: #45634f; font-weight: 600; }
+
+.technicalRasterPlacementSummary { display: flex; flex-wrap: wrap; gap: 14px; margin: 2px 0 10px; font-size: 9px; color: #55595c; }
+.technicalRasterPlacementSummary strong { color: #151515; font-size: 10px; }
+
+.technicalStandBufferGroup.collapsible > summary { cursor: pointer; list-style: none; margin-bottom: 6px; }
+.technicalStandBufferGroup.collapsible > summary::-webkit-details-marker { display: none; }
+.technicalStandBufferGroup.collapsible > summary h4 { display: inline; }
+
+/* CORRECTIVE BATCH (multi-hall imports) — MIMO AKTUÁLNÍ RASTR: deliberately a neutral/informational
+   tone, never the ambiguous group's red/error treatment above — these are valid records, not
+   problems. */
+.technicalStandBufferOutsideRasterCount, .technicalStandBufferCounts .technicalStandBufferOutsideRasterCount strong { color: #5a6b85; }
+.technicalStandBufferGroup.informational h4 { color: #5a6b85; }
 
 .technicalStandDetailPanel { display: grid; gap: 8px; align-content: start; }
 .technicalStandPlacementBadge { width: fit-content; }
 .technicalStandPlacementBadge.matched_auto, .technicalStandPlacementBadge.matched_manual { background: #edf5ef; color: #45634f; }
 .technicalStandPlacementBadge.ambiguous { background: #fbeeea; color: #93472b; }
 .technicalStandPlacementBadge.unassigned { background: #f0f1f2; color: #6b6f72; }
+.technicalStandPlacementBadge.outside_current_raster { background: #eaeef4; color: #5a6b85; }
 .technicalStandDetailSection { display: grid; gap: 3px; padding-top: 8px; border-top: 1px solid #ededee; }
 .technicalStandDetailSection h4 { margin: 0; font-size: 7.5px; letter-spacing: 0.04em; color: #85898c; }
 .technicalStandServiceRow { display: grid; gap: 1px; padding: 3px 0; font-size: 9px; }
 .technicalStandServiceRowMain { display: flex; justify-content: space-between; gap: 8px; }
 .technicalStandServicePlacementStatus { margin: 0; }
+.technicalStandServicePlacementStatus.placed { color: #45634f; }
+.technicalStandServicePlacementStatus.unplaced { color: #93472b; }
 .technicalStandUnresolvedBadge { color: #93472b; margin: 0; }
 .technicalStandDetailActions { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; }
+.technicalStandRealizationInput { width: 100%; box-sizing: border-box; font-size: 9px; padding: 4px 6px; }
 
 .technicalRasterAssignHint { padding: 8px 10px; border-radius: 8px; background: #fbeeea; color: #93472b; font-size: 9px; }
 
 .technicalRasterOutputsPanel { max-width: 900px; }
-.technicalRasterOutputsFilters { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; }
-.technicalRasterOutputsFilters label { display: flex; align-items: center; gap: 6px; font-size: 9px; }
-.technicalRasterOutputsFilters input { width: auto; height: auto; }
-.technicalRasterOutputsPreviewTable { display: grid; gap: 2px; }
-.technicalRasterOutputsPreviewRow { display: grid; grid-template-columns: 100px 1fr 1fr; gap: 10px; padding: 6px 8px; border-bottom: 1px solid #ededee; font-size: 9px; }
-.technicalRasterOutputsPreviewHeader { color: #85898c; font-size: 8px; text-transform: uppercase; letter-spacing: 0.04em; }
+
+/* Corrective batch section 2 — placed technical service symbols, REDESIGNED. Outer element is the
+   (larger) invisible CLICK target, centered via flex so the inner visible glyph/text can be a
+   smaller, independently-sized child — a size change to either can never move the other's own
+   center, same "anchor=center" discipline as .technicalRasterSelectedMarker but with ZERO offset
+   (the placement point itself IS the center). NO circular badge of any kind — every real bug this
+   batch found (see domain/technicalRasterSymbolMarker.ts's own doc) came from a literal,
+   un-compensated px value on one of these elements; every size here is now set INLINE per-render
+   from computeSymbolScreenStyle, and this stylesheet itself carries no fixed font-size/box-shadow/
+   border-width that could silently regress the same way again. */
+.technicalRasterServiceSymbol { position: absolute; display: flex; align-items: center; justify-content: center; }
+.technicalRasterServiceSymbolLabel { font-weight: 700; line-height: 1; letter-spacing: -0.02em; white-space: nowrap; pointer-events: none; }
+.technicalRasterServiceSymbolGlyph { display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.technicalRasterServiceSymbolStar { font-weight: 700; line-height: 1; pointer-events: none; }
+/* A subtle outline, never a big red block — sits just outside the glyph/text's own footprint, never touches it. */
+.technicalRasterServiceSymbolRing {
+  position: absolute;
+  box-sizing: border-box;
+  border-radius: 50%;
+  border-style: solid;
+  border-color: #151515;
+  pointer-events: none;
+}
+
+/* Corrective batch (post real-file acceptance test) section 4/5 — "realizace" underline. REPLACES
+   the earlier "badge" design (white box + dark outline + redrawn stand number), which FAILED
+   manual acceptance: a dominant black pill that duplicated a number the source PDF already prints.
+   Now just a single colored horizontal line, positioned/sized entirely via inline left/top/width/
+   height from domain/technicalRasterRealizationUnderline.ts's own geometry — no fill/box/outline of
+   any kind, never covering or redrawing the source number. Lightly rounded caps only (spec: "lehce
+   rounded caps jsou OK"), no shadow. */
+.technicalRasterRealizationUnderline { position: absolute; pointer-events: none; border-radius: 999px; }
+
+/* Manual acceptance batch, section 6/7 — "PRÁVĚ UMISŤUJI" context block, replacing the old
+   single-line ".technicalRasterPlacementBanner" (removed): priority #1 in the right panel while a
+   placement/move is active, so it's never ambiguous what the next raster click will do. */
+.technicalRasterPlacementContext {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fbeeea;
+  border: 1px solid #e6b6ab;
+}
+.technicalRasterPlacementContextHeader { font-size: 8px; letter-spacing: 0.05em; color: #93472b; font-weight: 600; text-transform: uppercase; }
+.technicalRasterPlacementContextLabel { font-size: 16px; font-weight: 700; color: #151515; margin-top: 2px; }
+.technicalRasterPlacementContextCategory { font-size: 9px; color: #55595c; margin-bottom: 4px; }
+.technicalRasterPlacementContextRow { display: flex; justify-content: space-between; gap: 8px; font-size: 9px; color: #55595c; }
+.technicalRasterPlacementContextRow strong { color: #151515; }
+.technicalRasterPlacementContextHint { font-size: 9px; color: #93472b; margin: 4px 0 2px; }
+.technicalRasterPlacementContext > button { align-self: flex-start; }
+
+.technicalStandServicePlacementActions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 2px; }
+.technicalStandServicePlacementActions button { min-height: 22px; padding: 0 8px; font-size: 8px; }
+.technicalStandServicePointRow { display: flex; align-items: center; justify-content: space-between; gap: 6px; padding: 1px 0; font-size: 8.5px; color: #55595c; }
+.technicalStandServiceInformationalHint { color: #85898c; font-style: italic; margin: 0; }
+
+/* Manual acceptance batch, section 2-4 — "TECHNICKÉ ZNAČKY" moved ABOVE the workspace as a
+   compact horizontal filter bar (never the tall vertical sidebar box it used to be): the layer
+   list wraps on one row of small pill checkboxes instead of TechnicalRasterLayerPanel.tsx's own
+   vertical per-item layout (that OTHER panel's shared `.technicalRasterLayerList` class is
+   untouched outside this `.technicalRasterSymbolLayerPanel`-scoped override). */
+.technicalRasterAssignmentStep { display: flex; flex-direction: column; gap: 10px; }
+.technicalRasterSymbolLayerPanel { padding: 8px 12px; }
+.technicalRasterSymbolLayerPanel .technicalRasterLayerList { display: flex; flex-wrap: wrap; gap: 6px 10px; margin-top: 4px; }
+.technicalRasterSymbolLayerPanel .technicalRasterLayerList li { flex-direction: row; }
+.technicalRasterSymbolLayerPanel .technicalRasterLayerList label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px 3px 8px;
+  border: 1px solid #e3e4e5;
+  border-radius: 999px;
+  background: #fafafa;
+  font-size: 9px;
+  color: #151515;
+  white-space: nowrap;
+}
+.technicalRasterSymbolLayerSwatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
+/* Corrective batch section 10 — the "Realizačky" filter's own swatch is a small 4-color square (one quadrant per canonical group) rather than a single dot, since this toggle represents ALL FOUR realization colors at once, never just one. */
+.technicalRasterSymbolLayerSwatchRealizace {
+  border-radius: 2px;
+  background:
+    linear-gradient(135deg, #2f8f4e 50%, transparent 50%),
+    linear-gradient(-45deg, #d97a1f 50%, transparent 50%),
+    linear-gradient(45deg, #2361c2 50%, transparent 50%),
+    #b3261e;
+}
+
+.technicalRasterOutputsStatusSummary { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0 12px; font-size: 9px; color: #55595c; }
+.technicalRasterOutputsStatusSummary strong { color: #151515; font-size: 11px; }
+.technicalRasterOutputsWarning {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #fbeeea;
+  color: #93472b;
+  font-size: 9px;
+  margin-bottom: 10px;
+}
+.technicalRasterOutputsWarningActions { display: flex; gap: 8px; }
+.technicalRasterOutputsForm { display: grid; gap: 10px; max-width: 420px; margin-top: 10px; }
+.technicalRasterOutputsFormRow { display: flex; flex-direction: column; gap: 3px; font-size: 9px; }
+.technicalRasterOutputsFormRow label { color: #55595c; }
+.technicalRasterOutputsFormRow > span:first-child { color: #55595c; }
+/* Manual acceptance batch, section 27-29 — "Rastr" is now a plain informational value, never a
+   <select> offering a "Pracovní – bílé" option that could never actually be picked in V1. */
+.technicalRasterOutputsRasterModeValue { font-weight: 600; color: #151515; }
+.technicalRasterOutputsIncludeRow { display: flex; flex-wrap: wrap; gap: 12px; }
+.technicalRasterOutputsIncludeRow label { display: flex; align-items: center; gap: 6px; font-size: 9px; }
+.technicalRasterOutputsIncludeRow input { width: auto; height: auto; }

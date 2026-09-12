@@ -5,8 +5,9 @@ import {
   groupParsedReportByStand,
   matchesTechnicalImportPreviewSearch,
   summarizeParsedReport,
+  summarizeParsedReportScope,
 } from "../domain/technicalRasterImportPreview.ts";
-import type { ParsedTechnicalReport, TechnicalStand } from "../domain/technicalRaster.ts";
+import type { ParsedTechnicalReport, RasterStandLabel, TechnicalStand } from "../domain/technicalRaster.ts";
 
 // =========================================================================================
 // Technické rastry — pure view-model helpers behind "Zobrazit nalezená data" (pre-import preview)
@@ -93,6 +94,59 @@ test("summarizeParsedReport: unknownProductCount counts every service resolvePro
   };
   const summary = summarizeParsedReport(report, alwaysUnknown);
   assert.equal(summary.unknownProductCount, 2);
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (multi-hall imports) section 9 — pre-commit scope preview: a combined report
+// mixing rows from several halls must read as "Importováno: N / Spárováno s rastrem: X / Mimo
+// aktuální rastr: Y / Nespárováno: Z / Nejednoznačné: W" BEFORE the user ever confirms the import.
+// Reuses the exact same matchStandNumberToRasterLabels + classifyStandScope logic
+// mergeTechnicalRasterImport applies at merge time, so preview and real result can never disagree.
+// ============================================================================
+
+function makeRasterLabel(standNumber: string, id: string): RasterStandLabel {
+  return { id, rawText: standNumber, normalizedStandNumber: standNumber, page: 1, xNormalized: 0.2, yNormalized: 0.3, widthNormalized: 0.03, heightNormalized: 0.015 };
+}
+
+function electricityRow(standNumber: string) {
+  return { standNumber, services: [{ category: "electricity", externalLabel: "Do 2 kW", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] };
+}
+
+test("summarizeParsedReportScope: BASIC MULTI-HALL PREVIEW — raster 3A01 only, report rows 3A01 (matched) + 4A01/4B02 (outside current raster)", () => {
+  const raster = [makeRasterLabel("3A01", "l1")];
+  const report: ParsedTechnicalReport = { category: "electricity", rows: [electricityRow("3A01"), electricityRow("4A01"), electricityRow("4B02")], warnings: [] };
+  const scope = summarizeParsedReportScope(report, raster);
+  assert.equal(scope.importedStandCount, 3);
+  assert.equal(scope.matchedCurrentRasterCount, 1);
+  assert.equal(scope.outsideCurrentRasterCount, 2);
+  assert.equal(scope.unmatchedCount, 0);
+  assert.equal(scope.ambiguousCount, 0);
+});
+
+test("summarizeParsedReportScope: a current-hall typo (3A99 against a 3A01/3A02 raster) counts as unmatched, never outsideCurrentRaster", () => {
+  const raster = [makeRasterLabel("3A01", "l1"), makeRasterLabel("3A02", "l2")];
+  const report: ParsedTechnicalReport = { category: "electricity", rows: [electricityRow("3A99")], warnings: [] };
+  const scope = summarizeParsedReportScope(report, raster);
+  assert.equal(scope.unmatchedCount, 1);
+  assert.equal(scope.outsideCurrentRasterCount, 0);
+});
+
+test("summarizeParsedReportScope: an ambiguous raster match is counted separately, never folded into matched/unmatched/outside", () => {
+  const raster = [makeRasterLabel("3A01", "l1"), makeRasterLabel("3A01", "l2")];
+  const report: ParsedTechnicalReport = { category: "electricity", rows: [electricityRow("3A01")], warnings: [] };
+  const scope = summarizeParsedReportScope(report, raster);
+  assert.equal(scope.ambiguousCount, 1);
+  assert.equal(scope.matchedCurrentRasterCount, 0);
+  assert.equal(scope.outsideCurrentRasterCount, 0);
+  assert.equal(scope.unmatchedCount, 0);
+});
+
+test("summarizeParsedReportScope: no reliable hall prefix (raster A01/A02) never assumes a foreign hall, everything unmatched falls into unmatchedCount", () => {
+  const raster = [makeRasterLabel("A01", "l1"), makeRasterLabel("A02", "l2")];
+  const report: ParsedTechnicalReport = { category: "electricity", rows: [electricityRow("B99")], warnings: [] };
+  const scope = summarizeParsedReportScope(report, raster);
+  assert.equal(scope.unmatchedCount, 1);
+  assert.equal(scope.outsideCurrentRasterCount, 0);
 });
 
 function makeStand(overrides: Partial<TechnicalStand> & { id: string; standNumber: string }): TechnicalStand {

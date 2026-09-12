@@ -16,6 +16,7 @@ import {
   documentReviewedAt,
   documentSourceAssets,
   documentSourceTraceability,
+  documentTechnicalRaster,
   documentVariants,
   variantHas3DAsset,
   variantHasSketchupSource,
@@ -31,6 +32,8 @@ import {
 import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../domain/catalogReadiness";
 import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus } from "../../domain/models";
 import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "../../domain/assets";
+import type { TechnicalRasterComponentConfig } from "../../domain/technicalRasterComponentPresentation";
+import type { TechnicalServicePlacementBehavior } from "../../domain/technicalRasterServicePresentation";
 import { ConcurrencyConflictError } from "../../lib/db/concurrency";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
 import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
@@ -39,6 +42,8 @@ import { useAssetUrl } from "../../hooks/useAssetUrl";
 const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp";
 const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
 const MODEL_EXTENSIONS = ["glb"];
+const TECHNICAL_ICON_ACCEPT = "image/svg+xml,image/png";
+const TECHNICAL_ICON_EXTENSIONS = ["svg", "png"];
 
 const FOOTPRINT_SHAPE_LABELS_CS: Readonly<Record<"rectangle" | "circle" | "symbol", string>> = {
   rectangle: "Obdélník",
@@ -809,8 +814,264 @@ export function ComponentAdminDetail({
           </dl>
           <button type="button" className="secondaryButton" onClick={onOpenPricing}>Upravit ceny</button>
         </section>
+
+        <TechnicalRasterSection item={item} ownerId={ownerId} onSave={onSave} />
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// TECHNICKÉ RASTRY (spec batch 11) — per-component override of
+// domain/technicalRasterServicePresentation.ts's central defaults, via the
+// domain/technicalRasterComponentPresentation.ts adapter (spec batch 10). A completely
+// self-contained, independently-saved section (own local state, own "Uložit" action — same
+// discipline as the Fotografie/3D model sections above, never mixed into the parent form's own
+// dirty/buildEdit()) so it can never accidentally touch anything else. NOT wired into the real
+// Technické rastry placement/render/export pipeline (see this module's own doc) — this section
+// only reads/writes domain/catalogItemsAdmin.ts's `document.technicalRaster` and previews it.
+// ============================================================================
+
+const TECHNICAL_RASTER_PLACEMENT_OPTIONS: readonly Readonly<{ value: "" | TechnicalServicePlacementBehavior; label: string }>[] = [
+  { value: "", label: "Automaticky (podle výchozích pravidel)" },
+  { value: "point", label: "Bod v rastru" },
+  { value: "informational", label: "Informační" },
+  { value: "none", label: "Bez umístění" },
+];
+
+/** Simplified UI concept (spec batch 11 section 6: "běžný uživatel nemusí rozumět názvům rendererů") — maps onto the real, closed TechnicalServiceSymbolRenderer union only for the ONE case this V1 exposes ("Text" -> "textLabel"). Automatická/undefined leaves the central resolver's own renderer choice (powerLabel/refrigeratedStar/wifiIcon/waterDrop/fallback) untouched. "Ikona" is deliberately NOT offered as a renderer choice yet — see the section's own fieldHint for why. */
+type TechnicalRasterRendererChoice = "" | "text";
+
+function summarizeTechnicalRasterConfig(config: TechnicalRasterComponentConfig | undefined): string {
+  if (!config || Object.keys(config).length === 0) return "Nenastaveno — používá výchozí pravidla";
+  if (config.enabled === false) return "Skryto v rastru";
+  const parts: string[] = [];
+  const placementLabel = TECHNICAL_RASTER_PLACEMENT_OPTIONS.find((option) => option.value === config.placementBehavior)?.label;
+  if (config.placementBehavior) parts.push(placementLabel ?? config.placementBehavior);
+  if (config.displayLabel) parts.push(config.displayLabel);
+  if (config.color) parts.push(config.color);
+  if (config.iconAsset) parts.push("vlastní ikona");
+  return parts.length > 0 ? parts.join(" • ") : "Nastaveno (bez konkrétních hodnot)";
+}
+
+/** A small, self-contained live preview — deliberately its OWN minimal renderer, not an import from components/workflow/technicalRasters/* (that whole module is explicitly protected this batch). Shows exactly what's been explicitly configured; unset fields render as an honest neutral placeholder rather than a fabricated "resolved" central value (a catalog component has no single real report category/label to resolve central defaults against). */
+function TechnicalRasterPreview({ config, iconUrl }: { config: TechnicalRasterComponentConfig | undefined; iconUrl: string | undefined }) {
+  const hidden = config?.enabled === false;
+  const color = config?.color ?? "#6b6f72";
+  return (
+    <div className="technicalRasterConfigPreview">
+      <div className={hidden ? "technicalRasterConfigPreviewDot hidden" : "technicalRasterConfigPreviewDot"} style={{ background: hidden ? "#c7c9cb" : color }}>
+        {!hidden && iconUrl ? (
+          <img src={iconUrl} alt="" className="technicalRasterConfigPreviewIcon" />
+        ) : (
+          <span>{hidden ? "—" : (config?.displayLabel ?? "?")}</span>
+        )}
+      </div>
+      <div className="technicalRasterConfigPreviewCaption">
+        {hidden ? "Skryto v rastru" : (config?.legendLabel ?? "Bez textu legendy")}
+      </div>
+    </div>
+  );
+}
+
+function TechnicalRasterSection({
+  item,
+  ownerId,
+  onSave,
+}: {
+  item: CatalogItemAdmin;
+  ownerId: string;
+  onSave: (edit: CatalogItemAdminEdit) => Promise<void>;
+}) {
+  const existingConfig = documentTechnicalRaster(item.document);
+
+  const [enabledChoice, setEnabledChoice] = useState<"" | "true" | "false">(existingConfig?.enabled === true ? "true" : existingConfig?.enabled === false ? "false" : "");
+  const [placementBehaviorChoice, setPlacementBehaviorChoice] = useState<"" | TechnicalServicePlacementBehavior>(existingConfig?.placementBehavior ?? "");
+  const [rendererChoice, setRendererChoice] = useState<TechnicalRasterRendererChoice>(existingConfig?.renderer === "textLabel" ? "text" : "");
+  const [displayLabel, setDisplayLabel] = useState(existingConfig?.displayLabel ?? "");
+  const [color, setColor] = useState(existingConfig?.color ?? "");
+  const [legendLabel, setLegendLabel] = useState(existingConfig?.legendLabel ?? "");
+  const [iconAsset, setIconAsset] = useState<StoredAsset | undefined>(existingConfig?.iconAsset);
+
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [iconProgress, setIconProgress] = useState<UploadProgress | undefined>(undefined);
+  const [iconError, setIconError] = useState("");
+
+  const iconResolved = useAssetUrl(iconAsset, undefined);
+
+  function buildConfig(): TechnicalRasterComponentConfig | undefined {
+    const config: { -readonly [K in keyof TechnicalRasterComponentConfig]?: TechnicalRasterComponentConfig[K] } = {};
+    if (enabledChoice === "true") config.enabled = true;
+    else if (enabledChoice === "false") config.enabled = false;
+    if (placementBehaviorChoice) config.placementBehavior = placementBehaviorChoice;
+    if (rendererChoice === "text") config.renderer = "textLabel";
+    if (displayLabel.trim()) config.displayLabel = displayLabel.trim();
+    if (color.trim()) config.color = color.trim();
+    if (legendLabel.trim()) config.legendLabel = legendLabel.trim();
+    if (iconAsset) config.iconAsset = iconAsset;
+    return Object.keys(config).length > 0 ? config : undefined;
+  }
+
+  const draftConfig = buildConfig();
+  // Section 19: comparing the DRAFT against what's actually persisted — opening the card and
+  // saving without touching anything must never create/change an override. A plain JSON compare
+  // is sufficient here (both sides are small, flat-ish, whitelisted objects).
+  const dirty = JSON.stringify(draftConfig ?? null) !== JSON.stringify(existingConfig ?? null);
+
+  async function handleSaveClick() {
+    setBusy(true);
+    setError("");
+    try {
+      await onSave({ technicalRaster: draftConfig ?? null });
+    } catch (saveError) {
+      setError(
+        saveError instanceof ConcurrencyConflictError
+          ? "Data byla mezitím změněna jinde. Obnovte stránku před uložením."
+          : saveError instanceof Error ? saveError.message : "Uložení se nezdařilo.",
+      );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleResetClick() {
+    setBusy(true);
+    setError("");
+    try {
+      await onSave({ technicalRaster: null });
+      setEnabledChoice("");
+      setPlacementBehaviorChoice("");
+      setRendererChoice("");
+      setDisplayLabel("");
+      setColor("");
+      setLegendLabel("");
+      setIconAsset(undefined);
+    } catch (resetError) {
+      setError(resetError instanceof Error ? resetError.message : "Obnovení výchozích hodnot se nezdařilo.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Icon upload/remove is immediate (mirrors Fotografie/3D model above) — always saved against the
+  // LAST PERSISTED config, never the user's currently-unsaved draft of the other fields, so
+  // uploading an icon can never accidentally commit an in-progress, not-yet-reviewed text/color edit.
+  async function handleIconUpload(file: File) {
+    setIconError("");
+    if (file.size === 0) { setIconError("Soubor je prázdný."); return; }
+    if (!hasAllowedExtension(file.name, TECHNICAL_ICON_EXTENSIONS)) { setIconError("Podporované formáty: SVG, PNG."); return; }
+    try {
+      const asset = await uploadAsset(file, { category: "catalog-technical-icon", ownerId }, setIconProgress);
+      await onSave({ technicalRaster: { ...existingConfig, iconAsset: asset } });
+      setIconAsset(asset);
+    } catch (uploadError) {
+      setIconError(uploadError instanceof Error ? uploadError.message : "Nahrání ikony selhalo.");
+    }
+  }
+
+  async function handleIconRemove() {
+    setIconError("");
+    try {
+      // Metadata-only reference removal — the underlying R2 object is never deleted here (no
+      // reference-count lifecycle exists yet, spec section 15 — same discipline as photoAsset/
+      // modelAsset removal elsewhere in this file).
+      const { iconAsset: _unused, ...rest } = existingConfig ?? {};
+      await onSave({ technicalRaster: Object.keys(rest).length > 0 ? rest : null });
+      setIconAsset(undefined);
+    } catch (removeError) {
+      setIconError(removeError instanceof Error ? removeError.message : "Odebrání ikony selhalo.");
+    }
+  }
+
+  return (
+    <details className="catalogDetailSection technicalRasterConfigSection">
+      <summary>
+        <h3>Technické rastry</h3>
+        <span className="fieldHint">{summarizeTechnicalRasterConfig(existingConfig)}</span>
+      </summary>
+
+      <p className="fieldHint">
+        Tato sekce jen PŘIPRAVUJE prezentaci pro technické rastry (barva/text/ikona/legenda) — technický resolver, který o barvě/typu značky rozhoduje jako výchozí, zůstává
+        {" "}<code>domain/technicalRasterServicePresentation.ts</code>. Bez jakéhokoli nastavení zde se aplikace chová přesně jako dnes.
+      </p>
+
+      <dl>
+        <EditRow label="Zobrazovat v technickém rastru">
+          <select value={enabledChoice} onChange={(event) => setEnabledChoice(event.target.value as "" | "true" | "false")}>
+            <option value="">Automaticky</option>
+            <option value="true">Ano</option>
+            <option value="false">Ne</option>
+          </select>
+        </EditRow>
+        <EditRow label="Způsob umístění">
+          <select value={placementBehaviorChoice} onChange={(event) => setPlacementBehaviorChoice(event.target.value as "" | TechnicalServicePlacementBehavior)}>
+            {TECHNICAL_RASTER_PLACEMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+          </select>
+        </EditRow>
+        <EditRow label="Typ značky">
+          <select value={rendererChoice} onChange={(event) => setRendererChoice(event.target.value as TechnicalRasterRendererChoice)}>
+            <option value="">Automatická</option>
+            <option value="text">Text</option>
+          </select>
+        </EditRow>
+        <EditRow label="Krátký text">
+          <input value={displayLabel} onChange={(event) => setDisplayLabel(event.target.value)} placeholder="Automaticky" maxLength={16} />
+        </EditRow>
+        <EditRow label="Barva">
+          <span className="technicalRasterColorInput">
+            <input
+              type="color"
+              value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#6b6f72"}
+              onChange={(event) => setColor(event.target.value)}
+            />
+            <input value={color} onChange={(event) => setColor(event.target.value)} placeholder="Automaticky (#RRGGBB)" />
+          </span>
+        </EditRow>
+        <EditRow label="Legenda">
+          <input value={legendLabel} onChange={(event) => setLegendLabel(event.target.value)} placeholder="Automaticky" maxLength={80} />
+        </EditRow>
+      </dl>
+
+      <div className="technicalRasterIconRow">
+        <div>
+          <strong>Ikona</strong>
+          {iconAsset && <p className="fieldHint">{iconAsset.originalFileName}</p>}
+          {!iconAsset && <p className="fieldHint">Není nahrána — použije se text/automatická značka.</p>}
+        </div>
+        {iconResolved.url && <img src={iconResolved.url} alt="" className="technicalRasterIconPreview" />}
+        <div className="assetActions">
+          <label className="smallUploadButton">
+            {iconAsset ? "Nahradit" : "Nahrát"}
+            <input type="file" accept={TECHNICAL_ICON_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void handleIconUpload(file); }} />
+          </label>
+          {iconAsset && <button type="button" className="dangerText" onClick={() => void handleIconRemove()} disabled={iconProgress?.state === "uploading"}>Odebrat referenci</button>}
+        </div>
+      </div>
+      {iconProgress && (
+        <div className={`assetUploadState ${iconProgress.state}`}>
+          <progress max="100" value={iconProgress.percent} />
+          <span>{iconProgress.state === "uploading" ? `Nahrávám ${iconProgress.percent} %` : iconProgress.state === "success" ? "Nahráno do R2" : iconProgress.message}</span>
+        </div>
+      )}
+      {iconError && <small className="uploadError">{iconError}</small>}
+      <p className="fieldHint">
+        SVG je preferováno (zůstává vektorové i ve vektorovém PDF exportu tam, kde to lze). PNG je povolený fallback — ve výstupním PDF se vloží jako samostatný malý obrázek (vlastní rastr haly zůstává vektorový beze změny), takže může ztratit část ostrosti při extrémním přiblížení.
+        {" "}Vykreslení vlastní ikony v samotném rastru/exportu zatím není zapojeno — tato sekce ji zatím pouze ukládá a zobrazuje v náhledu.
+      </p>
+
+      <TechnicalRasterPreview config={draftConfig} iconUrl={iconResolved.url} />
+
+      <div className="assetActions">
+        <button type="button" className="primaryButton" onClick={() => void handleSaveClick()} disabled={!dirty || busy}>
+          {busy ? "Ukládám…" : "Uložit technické rastry"}
+        </button>
+        <button type="button" className="secondaryButton" onClick={() => void handleResetClick()} disabled={busy || !existingConfig}>
+          Obnovit výchozí nastavení
+        </button>
+      </div>
+      {error && <small className="uploadError">{error}</small>}
+    </details>
   );
 }
 

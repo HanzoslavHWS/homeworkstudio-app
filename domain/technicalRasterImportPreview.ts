@@ -12,8 +12,10 @@
  *    project's own stands[] by provenance (sourceImportId) — the raw ParsedTechnicalReport isn't
  *    persisted, only its effect on stands[] is.
  */
-import { sortStandNumbersNatural } from "./technicalStandNumber.ts";
-import type { ParsedTechnicalReport, TechnicalServiceStatus, TechnicalStand } from "./technicalRaster.ts";
+import { normalizeStandNumber, sortStandNumbersNatural } from "./technicalStandNumber.ts";
+import { matchStandNumberToRasterLabels } from "./technicalRasterMatching.ts";
+import { classifyStandScope } from "./technicalRasterHallScope.ts";
+import type { ParsedTechnicalReport, RasterStandLabel, TechnicalServiceStatus, TechnicalStand } from "./technicalRaster.ts";
 
 export type TechnicalImportPreviewServiceRow = Readonly<{
   externalLabel: string;
@@ -98,6 +100,51 @@ export function groupImportedStandsByImport(stands: readonly TechnicalStand[], i
     });
   }
   return sortStandNumbersNatural(groups, (group) => group.standNumber);
+}
+
+// ============================================================================
+// CORRECTIVE BATCH (multi-hall imports) section 9 — a scope breakdown of a just-parsed report,
+// BEFORE it's ever merged, so a combined multi-hall report ("Importováno: 100") reads immediately
+// as "Spárováno s rastrem: 50 / Mimo aktuální rastr: 48 / Nespárováno: 1 / Nejednoznačné: 1" rather
+// than one flat, misleading "Nalezeno stánků" count. Reuses the exact same
+// matchStandNumberToRasterLabels + classifyStandScope logic domain/technicalRaster.ts's own
+// `placementFromMatch` applies at merge time (never a second, parallel classification), so the
+// preview and the eventual real merge result can never disagree.
+// ============================================================================
+
+export type TechnicalImportPreviewScopeSummary = Readonly<{
+  /** Distinct stand numbers found in the report at all (spec: "Importováno"). */
+  importedStandCount: number;
+  /** Would resolve to a real, unambiguous raster match. */
+  matchedCurrentRasterCount: number;
+  /** Would resolve to more than one raster label — a real, actionable problem. */
+  ambiguousCount: number;
+  /** No raster match AND confidently outside the current raster's own hall (domain/technicalRasterHallScope.ts) — informational, never an error. */
+  outsideCurrentRasterCount: number;
+  /** No raster match and NOT confidently outside the current hall — a genuinely actionable problem (a likely typo, or simply not yet detected in the raster). */
+  unmatchedCount: number;
+}>;
+
+/**
+ * Computes the scope breakdown above from a just-parsed report's own rows against the CURRENT
+ * project's raster labels — pure preview, never mutates anything, never itself decides what
+ * `mergeTechnicalRasterImport` will actually do (that stays the single source of truth; this only
+ * ever previews the same, shared classification ahead of time).
+ */
+export function summarizeParsedReportScope(report: ParsedTechnicalReport, rasterStandLabels: readonly RasterStandLabel[]): TechnicalImportPreviewScopeSummary {
+  const standNumbers = new Set(report.rows.map((row) => normalizeStandNumber(row.standNumber)));
+  let matchedCurrentRasterCount = 0;
+  let ambiguousCount = 0;
+  let outsideCurrentRasterCount = 0;
+  let unmatchedCount = 0;
+  for (const standNumber of standNumbers) {
+    const result = matchStandNumberToRasterLabels(standNumber, rasterStandLabels);
+    if (result.status === "matched_auto") { matchedCurrentRasterCount += 1; continue; }
+    if (result.status === "ambiguous") { ambiguousCount += 1; continue; }
+    if (classifyStandScope(standNumber, rasterStandLabels) === "outsideCurrentRaster") outsideCurrentRasterCount += 1;
+    else unmatchedCount += 1;
+  }
+  return { importedStandCount: standNumbers.size, matchedCurrentRasterCount, ambiguousCount, outsideCurrentRasterCount, unmatchedCount };
 }
 
 function normalizedForSearch(value: string | undefined): string {

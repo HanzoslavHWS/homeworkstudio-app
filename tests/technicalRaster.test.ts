@@ -19,6 +19,17 @@ import {
   withWorkModeHiddenLayers,
   withWhiteFillOpacity,
   withoutTechnicalRasterProject,
+  placeTechnicalService,
+  moveTechnicalServicePlacement,
+  removeTechnicalServicePlacement,
+  effectiveServicePlacements,
+  effectiveShowRealizations,
+  effectiveIncludeRealizationsInExport,
+  setStandRealizationCompany,
+  withShowRealizations,
+  withIncludeRealizationsInExport,
+  mergeSupplementalCatalogImport,
+  buildPrimaryReportMentions,
   DEFAULT_WHITE_FILL_OPACITY,
   type ParsedTechnicalReport,
   type RasterSettings,
@@ -28,6 +39,8 @@ import {
   type TechnicalRasterProjectSummary,
 } from "../domain/technicalRaster.ts";
 import type { StoredAsset } from "../domain/assets.ts";
+import { resolveRealizationDisplayState } from "../domain/technicalRasterRealization.ts";
+import { groupStandsByPlacementWorkQueue, computeTechnicalRasterPlacementSummary } from "../domain/technicalRasterWorkQueue.ts";
 
 function makeAsset(id: string): StoredAsset {
   return { id, storageKey: `technical-rasters/p1/source/${id}.pdf`, originalFileName: `${id}.pdf`, mimeType: "application/pdf", size: 100, createdAt: "2026-01-01T00:00:00.000Z", category: "technical-raster-source" };
@@ -514,4 +527,476 @@ test("original mode ignores whiteFillOpacity at the DATA level too: withRasterVi
   project = withWhiteFillOpacity(project, 0.25);
   project = withRasterViewMode(project, "original");
   assert.equal(project.rasterSettings.whiteFillOpacity, 0.25, "switching to original mode never resets/clears the stored work-mode opacity — it's preserved for when the user switches back");
+});
+
+// =========================================================================================
+// Service placement (spec batch 7, section 5/6/9/70). Uses the SAME real electricity/internet/
+// cleaning categories the presentation config (tests/technicalRasterServicePresentation.test.ts)
+// covers, so "point" vs "informational" vs "none" behavior is exercised against real category
+// strings, never a made-up one.
+// =========================================================================================
+
+function projectWithService(externalLabel: string, quantity: number, category = "electricity") {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const report: ParsedTechnicalReport = {
+    category,
+    rows: [{ standNumber: "1A21", services: [{ category, externalLabel, quantity, rawValue: String(quantity), sourcePage: 1 }], notes: [] }],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport(category, "imp-1"), report, alwaysResolved);
+  const stand = project.stands[0]!;
+  return { project, standId: stand.id, serviceId: stand.services[0]!.id };
+}
+
+test("A) point service qty 1 -> max 1 placement", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 1);
+  const once = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.1, yNormalized: 0.2 });
+  const service1 = once.stands[0]!.services[0]!;
+  assert.equal(effectiveServicePlacements(service1).length, 1);
+
+  const twice = placeTechnicalService(once, standId, serviceId, { page: 1, xNormalized: 0.3, yNormalized: 0.4 });
+  const service2 = twice.stands[0]!.services[0]!;
+  assert.equal(effectiveServicePlacements(service2).length, 1, "quantity=1 must never accept a second placement");
+});
+
+test("B) point service qty 2 -> 0/2, 1/2, 2/2", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 2);
+  assert.equal(effectiveServicePlacements(project.stands[0]!.services[0]!).length, 0);
+
+  const one = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.1, yNormalized: 0.1 });
+  assert.equal(effectiveServicePlacements(one.stands[0]!.services[0]!).length, 1);
+
+  const two = placeTechnicalService(one, standId, serviceId, { page: 1, xNormalized: 0.2, yNormalized: 0.2 });
+  assert.equal(effectiveServicePlacements(two.stands[0]!.services[0]!).length, 2);
+});
+
+test("C) a third placement on a qty=2 service is refused/no-op", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 2);
+  const two = [{ x: 0.1, y: 0.1 }, { x: 0.2, y: 0.2 }].reduce(
+    (proj, point) => placeTechnicalService(proj, standId, serviceId, { page: 1, xNormalized: point.x, yNormalized: point.y }),
+    project,
+  );
+  const three = placeTechnicalService(two, standId, serviceId, { page: 1, xNormalized: 0.9, yNormalized: 0.9 });
+  assert.equal(effectiveServicePlacements(three.stands[0]!.services[0]!).length, 2, "the third click must not create a placement");
+  assert.equal(three, two, "a refused placement returns the SAME project reference — genuinely a no-op, not even a re-timestamped copy");
+});
+
+test("D) remove placement -> quantity state updates, service/quantity/notes untouched", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 1);
+  const placed = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
+  const placementId = effectiveServicePlacements(placed.stands[0]!.services[0]!)[0]!.id;
+
+  const removed = removeTechnicalServicePlacement(placed, standId, serviceId, placementId);
+  const service = removed.stands[0]!.services[0]!;
+  assert.equal(effectiveServicePlacements(service).length, 0, "back to Neumístěno");
+  assert.equal(service.quantity, 1, "quantity itself is never touched");
+  assert.equal(service.id, serviceId, "removing a placement never removes/replaces the service itself");
+});
+
+test("E) move placement -> SAME placement id, new coordinates", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 1);
+  const placed = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.1, yNormalized: 0.1 });
+  const original = effectiveServicePlacements(placed.stands[0]!.services[0]!)[0]!;
+
+  const moved = moveTechnicalServicePlacement(placed, standId, serviceId, original.id, { page: 1, xNormalized: 0.8, yNormalized: 0.9 });
+  const movedPlacement = effectiveServicePlacements(moved.stands[0]!.services[0]!)[0]!;
+  assert.equal(movedPlacement.id, original.id, "same placement id — a move is never a delete+recreate");
+  assert.equal(movedPlacement.xNormalized, 0.8);
+  assert.equal(movedPlacement.yNormalized, 0.9);
+});
+
+test("F) informational service (WIFI) -> placeTechnicalService is a structural no-op, never creates a placement", () => {
+  const { project, standId, serviceId } = projectWithService("WIFI", 2, "internet");
+  const attempted = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
+  assert.equal(effectiveServicePlacements(attempted.stands[0]!.services[0]!).length, 0);
+  assert.equal(attempted, project, "refused placement on a non-point service returns the SAME project reference — a genuine no-op");
+});
+
+test("G) cleaning qty 40 -> placeTechnicalService never creates any of the 40 points", () => {
+  const { project, standId, serviceId } = projectWithService("Denní úklid", 40, "cleaning");
+  const attempted = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
+  assert.equal(effectiveServicePlacements(attempted.stands[0]!.services[0]!).length, 0);
+});
+
+test("H) coordinates persist through a plain JSON round trip (save/reload)", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 1);
+  const placed = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.3333, yNormalized: 0.6667 });
+  const reloaded = JSON.parse(JSON.stringify(placed)) as TechnicalRasterProject;
+  const placement = effectiveServicePlacements(reloaded.stands[0]!.services[0]!)[0]!;
+  assert.equal(placement.xNormalized, 0.3333);
+  assert.equal(placement.yNormalized, 0.6667);
+});
+
+test("H2) a quantity>1 service's placement round trip survives with distinct ids/coordinates/page/createdAt for EACH placement (spec batch 12 section 10)", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 2);
+  const first = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.1, yNormalized: 0.2 });
+  const both = placeTechnicalService(first, standId, serviceId, { page: 2, xNormalized: 0.8, yNormalized: 0.9 });
+  const reloaded = JSON.parse(JSON.stringify(both)) as TechnicalRasterProject;
+  const placements = effectiveServicePlacements(reloaded.stands[0]!.services[0]!);
+  assert.equal(placements.length, 2);
+  assert.notEqual(placements[0]!.id, placements[1]!.id, "each placement keeps its own distinct id");
+  assert.equal(placements[0]!.page, 1);
+  assert.equal(placements[0]!.xNormalized, 0.1);
+  assert.equal(placements[0]!.yNormalized, 0.2);
+  assert.equal(placements[1]!.page, 2);
+  assert.equal(placements[1]!.xNormalized, 0.8);
+  assert.equal(placements[1]!.yNormalized, 0.9);
+  assert.ok(placements[0]!.createdAt && placements[1]!.createdAt, "createdAt survives on both");
+});
+
+test("I) placement coordinates are stored normalized (0-1), with no notion of zoom at all — the domain layer never touches/derives them from a zoom value", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 1);
+  const placed = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.42, yNormalized: 0.17 });
+  const placement = effectiveServicePlacements(placed.stands[0]!.services[0]!)[0]!;
+  assert.ok(placement.xNormalized >= 0 && placement.xNormalized <= 1);
+  assert.ok(placement.yNormalized >= 0 && placement.yNormalized <= 1);
+  assert.ok(!("zoom" in placement) && !("screenX" in placement) && !("screenY" in placement), "placement must never carry any screen/zoom-derived field");
+});
+
+test("removeTechnicalServicePlacement / moveTechnicalServicePlacement: unknown placementId is a safe no-op", () => {
+  const { project, standId, serviceId } = projectWithService("Do 3kW 230V", 1);
+  const placed = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.1, yNormalized: 0.1 });
+  const afterBadRemove = removeTechnicalServicePlacement(placed, standId, serviceId, "does-not-exist");
+  assert.equal(afterBadRemove, placed, "a true structural no-op returns the SAME project reference, never even a re-timestamped copy");
+  const afterBadMove = moveTechnicalServicePlacement(placed, standId, serviceId, "does-not-exist", { page: 1, xNormalized: 0.9, yNormalized: 0.9 });
+  assert.equal(afterBadMove, placed);
+});
+
+test("unknown standId/serviceId: every placement mutator is a safe no-op, never throws", () => {
+  const { project } = projectWithService("Do 3kW 230V", 1);
+  assert.doesNotThrow(() => placeTechnicalService(project, "no-such-stand", "no-such-service", { page: 1, xNormalized: 0.1, yNormalized: 0.1 }));
+  const result = placeTechnicalService(project, "no-such-stand", "no-such-service", { page: 1, xNormalized: 0.1, yNormalized: 0.1 });
+  assert.equal(result, project);
+});
+
+// ============================================================================
+// Corrective batch section 9/10 — realizace data model.
+// ============================================================================
+
+test("effectiveShowRealizations / effectiveIncludeRealizationsInExport default to false for a brand-new project — no realization data yet means no badges by default", () => {
+  const project = createTechnicalRasterProject({ name: "X" }, "p1");
+  assert.equal(effectiveShowRealizations(project.rasterSettings), false);
+  assert.equal(effectiveIncludeRealizationsInExport(project.rasterSettings), false);
+});
+
+test("withShowRealizations / withIncludeRealizationsInExport toggle independently, never touch each other", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withShowRealizations(project, true);
+  assert.equal(effectiveShowRealizations(project.rasterSettings), true);
+  assert.equal(effectiveIncludeRealizationsInExport(project.rasterSettings), false);
+  project = withIncludeRealizationsInExport(project, true);
+  assert.equal(effectiveShowRealizations(project.rasterSettings), true);
+  assert.equal(effectiveIncludeRealizationsInExport(project.rasterSettings), true);
+});
+
+test("setStandRealizationCompany: sets the raw text on exactly the matching stand, leaves services/placement/notes untouched", () => {
+  const { project, standId } = projectWithService("Do 3kW 230V", 1);
+  const updated = setStandRealizationCompany(project, standId, "CREATIV EXPO, s.r.o.");
+  const stand = updated.stands.find((candidate) => candidate.id === standId)!;
+  assert.equal(stand.realizationCompany, "CREATIV EXPO, s.r.o.");
+  assert.equal(stand.services.length, project.stands[0]!.services.length);
+  assert.deepEqual(stand.placement, project.stands[0]!.placement);
+});
+
+test("setStandRealizationCompany: can clear back to undefined", () => {
+  const { project, standId } = projectWithService("Do 3kW 230V", 1);
+  const withCompany = setStandRealizationCompany(project, standId, "GENDAI");
+  const cleared = setStandRealizationCompany(withCompany, standId, undefined);
+  assert.equal(cleared.stands[0]!.realizationCompany, undefined);
+});
+
+test("setStandRealizationCompany: unknown standId is a safe no-op", () => {
+  const { project } = projectWithService("Do 3kW 230V", 1);
+  const result = setStandRealizationCompany(project, "no-such-stand", "GENDAI");
+  assert.deepEqual(result.stands, project.stands);
+});
+
+// ============================================================================
+// Corrective batch (post real-file acceptance test) section 7-11 — supplemental catalog import.
+// ============================================================================
+
+test("mergeSupplementalCatalogImport: auto-assigns realizationCompany on a stand whose number matches, never touches services", () => {
+  const { project, standId } = projectWithService("Do 3kW 230V", 1);
+  // projectWithService's own stand is "1A21".
+  const updated = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "1A21", realizationCompanyRaw: "GENDAI, s.r.o.", items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  const stand = updated.stands.find((candidate) => candidate.id === standId)!;
+  assert.equal(stand.realizationCompany, "GENDAI, s.r.o.");
+  assert.equal(stand.services.length, project.stands[0]!.services.length, "services must never be touched by a catalog import");
+});
+
+test("mergeSupplementalCatalogImport: a catalog stand number matching NO existing project stand creates a NEW catalog-only stand (real 1B06 case), never crashes, never invents a technical service", () => {
+  const { project } = projectWithService("Do 3kW 230V", 1);
+  const updated = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "9Z99", realizationCompanyRaw: "GENDAI", items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  assert.equal(updated.stands.length, project.stands.length + 1, "a brand-new stand must be created for a catalog-only build record");
+  const newStand = updated.stands.find((stand) => stand.standNumber === "9Z99");
+  assert.ok(newStand, "the new stand must carry the catalog's own stand number");
+  assert.equal(newStand!.services.length, 0, "must never invent a fake technical service just to make the catalog stand exist");
+  assert.equal(newStand!.hasCatalogBuildRecord, true);
+  assert.equal(newStand!.realizationCompany, "GENDAI");
+  assert.equal(newStand!.placement.status, "unassigned", "no raster label exists for 9Z99 in this test project, so it stays unassigned rather than being force-placed");
+  // matchedStandCount means matched to an actual RASTER stand (section 16) — this project has no
+  // raster labels at all, so even though a catalog record/stand now exists, it is NOT counted here.
+  assert.equal(updated.catalogImportMeta?.standCount, 1);
+  assert.equal(updated.catalogImportMeta?.matchedStandCount, 0);
+});
+
+test("mergeSupplementalCatalogImport: replaces catalogMentions wholesale on a SECOND import, never accumulates duplicates from the first", () => {
+  const { project } = projectWithService("Do 3kW 230V", 1);
+  const firstImport = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "1A21", items: [{ label: "ELEKTRICKÁ ENERGIE - PŘÍKON DO 2 kW/230", quantity: 1, unit: "ks", rawQuantityText: "1,0 ks", notes: [], page: 1 }], page: 1 }], warnings: [] },
+    "realizacky-v1.pdf",
+  );
+  assert.equal(firstImport.catalogMentions?.length, 1);
+  const secondImport = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "1A21", items: [{ label: "ELEKTRICKÁ ENERGIE - PŘÍKON DO 5 kW/230", quantity: 1, unit: "ks", rawQuantityText: "1,0 ks", notes: [], page: 1 }], page: 1 }], warnings: [] },
+    "realizacky-v2.pdf",
+  );
+  assert.equal(secondImport.catalogMentions?.length, 1, "the second import replaces, never appends to, the first");
+  assert.equal(secondImport.catalogMentions?.[0]?.externalLabel, "ELEKTRICKÁ ENERGIE - PŘÍKON DO 5 kW/230");
+});
+
+test("mergeSupplementalCatalogImport: a catalog stand with realizationCompanyRaw undefined (no R: line this run) does NOT wipe a previously-set value", () => {
+  const { project, standId } = projectWithService("Do 3kW 230V", 1);
+  const withManualEntry = setStandRealizationCompany(project, standId, "MAC Praha");
+  const updated = mergeSupplementalCatalogImport(
+    withManualEntry,
+    { stands: [{ standNumber: "1A21", realizationCompanyRaw: undefined, items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  assert.equal(updated.stands.find((candidate) => candidate.id === standId)!.realizationCompany, "MAC Praha");
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (multi-hall imports) — a single technical-service report can legitimately mix
+// rows from several halls (real scenario: an electricity report with 50 Hala 3 rows and 50 Hala 4
+// rows, imported into a Hala 3 project). These pin the exact classification/work-queue/manual-
+// override behavior domain/technicalRasterHallScope.ts's own doc describes in full.
+// ============================================================================
+
+function electricityRowsReport(standNumbers: readonly string[]): ParsedTechnicalReport {
+  return {
+    category: "electricity",
+    rows: standNumbers.map((standNumber) => ({
+      standNumber,
+      services: [{ category: "electricity", externalLabel: "Do 2 kW", quantity: 1, rawValue: "1", sourcePage: 1 }],
+      notes: [],
+    })),
+    warnings: [],
+  };
+}
+
+test("BASIC MULTI-HALL CASE: raster 3A01/3A02/3B01, imported 3A01/4A01/4B02 -> 3A01 matched, 4A01/4B02 outside_current_raster, never fake stands, never entered as errors", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A01", "l1"), makeLabel("3A02", "l2"), makeLabel("3B01", "l3")]);
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), electricityRowsReport(["3A01", "4A01", "4B02"]), alwaysResolved);
+
+  const byNumber = new Map(project.stands.map((stand) => [stand.standNumber, stand]));
+  assert.equal(byNumber.get("3A01")?.placement.status, "matched_auto");
+  assert.equal(byNumber.get("4A01")?.placement.status, "outside_current_raster");
+  assert.equal(byNumber.get("4B02")?.placement.status, "outside_current_raster");
+  // The records themselves are fully preserved — raw stand number, service, quantity — never discarded.
+  assert.equal(byNumber.get("4A01")?.services[0]?.externalLabel, "Do 2 kW");
+  assert.equal(byNumber.get("4A01")?.services[0]?.quantity, 1);
+});
+
+test("CURRENT-HALL TYPO: raster 3A01/3A02, imported 3A99 -> stays 'unassigned' (a real problem), never reclassified as outside_current_raster", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A01", "l1"), makeLabel("3A02", "l2")]);
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), electricityRowsReport(["3A99"]), alwaysResolved);
+  assert.equal(project.stands[0]?.placement.status, "unassigned");
+});
+
+test("AMBIGUOUS RASTER: preserved exactly as before — a stand number matching MULTIPLE raster labels stays 'ambiguous', never reclassified as outside_current_raster", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A01", "l1"), makeLabel("3A01", "l2")]);
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), electricityRowsReport(["3A01"]), alwaysResolved);
+  assert.equal(project.stands[0]?.placement.status, "ambiguous");
+});
+
+test("NO RELIABLE HALL PREFIX: raster A01/A02 (no leading digit), imported B99 -> stays 'unassigned' via ordinary behavior, never assumed foreign", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("A01", "l1"), makeLabel("A02", "l2")]);
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), electricityRowsReport(["B99"]), alwaysResolved);
+  assert.equal(project.stands[0]?.placement.status, "unassigned");
+});
+
+test("CROSS-CATEGORY CONSISTENCY: the scope classification applies identically to EVERY primary technical-report category (internet/water/waste/cleaning), never electricity-only — all funnel through the SAME mergeTechnicalRasterImport + rematchStands pipeline", () => {
+  for (const category of ["internet", "water", "waste", "cleaning"]) {
+    let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+    project = withRasterStandLabels(project, [makeLabel("3A01", "l1")]);
+    const report: ParsedTechnicalReport = {
+      category,
+      rows: [{ standNumber: "4A01", services: [{ category, externalLabel: "X", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }],
+      warnings: [],
+    };
+    project = mergeTechnicalRasterImport(project, makeImport(category, `imp-${category}`), report, alwaysResolved);
+    assert.equal(project.stands[0]?.placement.status, "outside_current_raster", `category "${category}" must classify a foreign-hall stand the same way electricity does`);
+  }
+});
+
+test("WORK QUEUE: outside_current_raster stands never enter K umístění/Hotovo/Bez bodových služeb, and never affect completion totals — mirrors TechnicalStandBuffer.tsx's own matched_auto/matched_manual filter", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A01", "l1")]);
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), electricityRowsReport(["3A01", "4A01"]), alwaysResolved);
+
+  const assigned = project.stands.filter((stand) => stand.placement.status === "matched_auto" || stand.placement.status === "matched_manual");
+  assert.equal(assigned.length, 1, "only the real Hala 3 stand is ever considered 'assigned'");
+  const queue = groupStandsByPlacementWorkQueue(assigned);
+  assert.equal(queue.toPlace.length + queue.done.length + queue.noPointServices.length, 1, "the foreign-hall stand never appears in ANY work-queue bucket");
+  const summary = computeTechnicalRasterPlacementSummary(assigned);
+  assert.equal(summary.standCountWithPointServices, 1, "completion totals are computed ONLY from current-raster assigned stands");
+});
+
+test("MANUAL OVERRIDE: an automatically outside_current_raster stand can still be explicitly manually paired — the manual action takes precedence over the automatic classification", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A01", "l1")]);
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), electricityRowsReport(["4A01"]), alwaysResolved);
+  const foreignStand = project.stands.find((stand) => stand.standNumber === "4A01")!;
+  assert.equal(foreignStand.placement.status, "outside_current_raster");
+
+  project = assignStandManually(project, foreignStand.id, { page: 1, anchorXNormalized: 0.5, anchorYNormalized: 0.5 });
+  const manuallyPaired = project.stands.find((stand) => stand.id === foreignStand.id)!;
+  assert.equal(manuallyPaired.placement.status, "matched_manual");
+
+  // A later rematch (e.g. the raster reloading) must NEVER undo the explicit manual pairing.
+  project = withRasterStandLabels(project, [makeLabel("3A01", "l1"), makeLabel("3A02", "l2")]);
+  assert.equal(project.stands.find((stand) => stand.id === foreignStand.id)!.placement.status, "matched_manual");
+});
+
+test("SUPPLEMENTAL STAVBY CATALOG: raster 3A01/3B01, catalog 3B01=MAC PRAHA + 4A01=CREATIV EXPO -> 3B01 gets the current-raster catalog build, 4A01 is skipped entirely (no lightweight stand, no realization)", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A01", "l1"), makeLabel("3B01", "l2")]);
+  const updated = mergeSupplementalCatalogImport(
+    project,
+    {
+      stands: [
+        { standNumber: "3B01", realizationCompanyRaw: "MAC Praha, spol. s r.o.", items: [], page: 1 },
+        { standNumber: "4A01", realizationCompanyRaw: "CREATIV EXPO, s.r.o.", items: [], page: 1 },
+      ],
+      warnings: [],
+    },
+    "realizacky.pdf",
+  );
+
+  const stand3B01 = updated.stands.find((stand) => stand.standNumber === "3B01");
+  assert.ok(stand3B01);
+  assert.equal(stand3B01!.hasCatalogBuildRecord, true);
+  assert.equal(stand3B01!.realizationCompany, "MAC Praha, spol. s r.o.");
+  const display3B01 = resolveRealizationDisplayState(stand3B01!.hasCatalogBuildRecord, stand3B01!.realizationCompany);
+  assert.equal(display3B01.shouldShow && display3B01.group, "macPraha");
+
+  const stand4A01 = updated.stands.find((stand) => stand.standNumber === "4A01");
+  assert.equal(stand4A01, undefined, "a confidently foreign-hall catalog record must NEVER create a current-project lightweight TechnicalStand");
+  assert.equal(updated.catalogImportMeta?.outsideCurrentRasterCount, 1);
+  assert.equal(updated.catalogImportMeta?.matchedStandCount, 1, "only the real current-raster catalog build (3B01) is ever counted as matched");
+});
+
+test("SUPPLEMENTAL STAVBY CATALOG: a foreign-hall catalog record is skipped even when an EXISTING project stand of that number already exists (e.g. itself already correctly classified outside_current_raster by a primary report)", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A01", "l1")]);
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), electricityRowsReport(["4A01"]), alwaysResolved);
+  const before = project.stands.find((stand) => stand.standNumber === "4A01")!;
+  assert.equal(before.hasCatalogBuildRecord, undefined);
+
+  const updated = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "4A01", realizationCompanyRaw: "CREATIV EXPO, s.r.o.", items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  const after = updated.stands.find((stand) => stand.standNumber === "4A01")!;
+  assert.equal(after.hasCatalogBuildRecord, undefined, "an existing foreign-hall stand must never retroactively gain a catalog build record");
+  assert.equal(after.realizationCompany, undefined);
+  assert.equal(updated.catalogImportMeta?.outsideCurrentRasterCount, 1);
+});
+
+test("CATALOG-ONLY CURRENT-RASTER STAND (regression): a stand present in the CURRENT raster, absent from every primary technical report, present only in the Stavby catalog -> still gets a lightweight current-raster stand with hasCatalogBuildRecord + realization, no fake service", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3B01", "label-3b01")]);
+  const updated = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "3B01", realizationCompanyRaw: "MAC Praha, spol. s r.o.", items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  const stand = updated.stands.find((candidate) => candidate.standNumber === "3B01")!;
+  assert.equal(stand.services.length, 0);
+  assert.equal(stand.hasCatalogBuildRecord, true);
+  assert.equal(stand.placement.status, "matched_auto");
+  assert.equal(updated.catalogImportMeta?.matchedStandCount, 1);
+});
+
+// ============================================================================
+// Corrective batch (3rd) section 1/2/20 — realization domain model, 6 required cases.
+// ============================================================================
+
+test("Realization domain Case 1 (real 1B06): raster stand with NO technical service, catalog build record with MAC PRAHA -> gets catalog/build association + MAC PRAHA + eligible for the blue underline, without ever inventing a fake technical service", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("1B06", "label-1b06")]);
+  const updated = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "1B06", realizationCompanyRaw: "MAC Praha, spol. s r.o.", items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  const stand = updated.stands.find((candidate) => candidate.standNumber === "1B06")!;
+  assert.equal(stand.services.length, 0, "no fake technical service may ever be invented just to make a catalog stand exist");
+  assert.equal(stand.hasCatalogBuildRecord, true);
+  assert.equal(stand.placement.status, "matched_auto", "must match the RASTER-detected label directly, independent of any technical-service report");
+  const display = resolveRealizationDisplayState(stand.hasCatalogBuildRecord, stand.realizationCompany);
+  assert.equal(display.shouldShow, true);
+  assert.equal(display.shouldShow && display.group, "macPraha");
+  assert.equal(updated.catalogImportMeta?.matchedStandCount, 1, "matched means matched to the raster");
+});
+
+test("Realization domain Case 2: stand HAS an electricity service but does NOT exist in the build catalog -> keeps its technical service, gets NO realization indicator", () => {
+  const { project, standId } = projectWithService("Do 2kW 230V", 1);
+  const stand = project.stands.find((candidate) => candidate.id === standId)!;
+  const display = resolveRealizationDisplayState(stand.hasCatalogBuildRecord, stand.realizationCompany);
+  assert.equal(display.shouldShow, false);
+  assert.equal(stand.services.length, 1, "the technical service itself must remain untouched");
+});
+
+test("Realization domain Case 3: catalog build record present + known R -> known group/color", () => {
+  const display = resolveRealizationDisplayState(true, "CREATIV EXPO, s.r.o.");
+  assert.equal(display.shouldShow, true);
+  assert.equal(display.shouldShow && display.group, "creativExpo");
+});
+
+test("Realization domain Case 4: catalog build record present + unknown R -> OSTATNÍ (a CONFIRMED build with an unrecognized contractor)", () => {
+  const display = resolveRealizationDisplayState(true, "Elseya spol. s r.o.");
+  assert.equal(display.shouldShow, true);
+  assert.equal(display.shouldShow && display.group, "ostatni");
+});
+
+test("Realization domain Case 5: catalog build record present + blank R -> OSTATNÍ, never interpreted as 'no data'", () => {
+  const display = resolveRealizationDisplayState(true, undefined);
+  assert.equal(display.shouldShow, true);
+  assert.equal(display.shouldShow && display.group, "ostatni");
+});
+
+test("Realization domain Case 6: no catalog build record at all -> no realization marker, regardless of any stray realizationCompany text", () => {
+  const display = resolveRealizationDisplayState(undefined, "MAC Praha");
+  assert.equal(display.shouldShow, false);
+});
+
+test("buildPrimaryReportMentions: only MATCHED stands contribute, in the exact shape reconcileTechnicalReportAndCatalog expects", () => {
+  const { project, standId } = projectWithService("Do 3kW 230V", 1);
+  const unmatched = buildPrimaryReportMentions(project);
+  assert.equal(unmatched.length, 0, "an unassigned stand contributes nothing yet");
+
+  const matched = assignStandManually(project, standId, { page: 1, anchorXNormalized: 0.5, anchorYNormalized: 0.5 });
+  const mentions = buildPrimaryReportMentions(matched);
+  assert.equal(mentions.length, 1);
+  assert.equal(mentions[0]!.standNumber, "1A21");
+  assert.equal(mentions[0]!.category, "electricity");
+  assert.equal(mentions[0]!.externalLabel, "Do 3kW 230V");
+  assert.equal(mentions[0]!.quantity, 1);
 });

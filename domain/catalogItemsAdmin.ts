@@ -14,6 +14,7 @@ import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
 import { SOURCE_ASSET_KINDS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "./assets.ts";
 import { resolveBoothAssetDefinition } from "./boothAssets.ts";
+import { TECHNICAL_SERVICE_PLACEMENT_BEHAVIORS, TECHNICAL_SERVICE_SYMBOL_RENDERERS, type TechnicalRasterComponentConfig } from "./technicalRasterComponentPresentation.ts";
 
 export const CATALOG_ITEM_KIND_LABELS_CS: Readonly<Record<CatalogItemKind, string>> = {
   booth: "Stánek",
@@ -150,6 +151,65 @@ export function documentPhotoAsset(document: CatalogItemAdminDocument): StoredAs
 /** The R2-backed 3D model reference, if the document has a validly-shaped one. */
 export function documentModelAsset(document: CatalogItemAdminDocument): StoredAsset | undefined {
   return isStoredAssetShape(document.modelAsset) ? document.modelAsset : undefined;
+}
+
+/** "Krátký text" length ceiling (spec batch 11 section 8: "12-16 znaků") — generous enough for "LEDNIČKA"/"NONSTOP" while staying a genuinely SHORT on-symbol label, never a sentence. */
+const TECHNICAL_RASTER_DISPLAY_LABEL_MAX_LENGTH = 16;
+/** "Text legendy" is a full descriptive line (e.g. "INTERNET — PEVNÁ PŘÍPOJKA") — a generous but still bounded ceiling, never unlimited free text. */
+const TECHNICAL_RASTER_LEGEND_LABEL_MAX_LENGTH = 80;
+const HEX_COLOR_PATTERN = /^#[0-9a-f]{6}$/iu;
+
+/** No HTML/markup ever accepted in a plain technical-marker text field (spec batch 11 section 8: "Nevkládej arbitrary HTML/SVG markup") — a blunt but sufficient guard for a short label field: reject outright rather than attempt to sanitize. */
+function isPlainTextWithoutMarkup(value: string): boolean {
+  return !/[<>]/u.test(value);
+}
+
+function sanitizeShortLabel(value: unknown, maxLength: number): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  if (!trimmed || trimmed.length > maxLength || !isPlainTextWithoutMarkup(trimmed)) return undefined;
+  return trimmed;
+}
+
+/**
+ * Validates a raw (possibly attacker-controlled, or a previously-saved document's own)
+ * technicalRaster value into a well-shaped TechnicalRasterComponentConfig — the ONE place that
+ * validation happens, reused by both documentTechnicalRaster (reading an already-saved document)
+ * and parseCatalogItemAdminEdit (validating a fresh request body) so the two can never drift.
+ * Returns undefined for anything not shaped like an object, or an object with zero recognized
+ * fields — never throws, never partially trusts a malformed value.
+ */
+function parseTechnicalRasterConfig(value: unknown): TechnicalRasterComponentConfig | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const config: { -readonly [K in keyof TechnicalRasterComponentConfig]?: TechnicalRasterComponentConfig[K] } = {};
+  if (typeof candidate.enabled === "boolean") config.enabled = candidate.enabled;
+  if (typeof candidate.placementBehavior === "string" && (TECHNICAL_SERVICE_PLACEMENT_BEHAVIORS as readonly string[]).includes(candidate.placementBehavior)) {
+    config.placementBehavior = candidate.placementBehavior as TechnicalRasterComponentConfig["placementBehavior"];
+  }
+  if (typeof candidate.renderer === "string" && (TECHNICAL_SERVICE_SYMBOL_RENDERERS as readonly string[]).includes(candidate.renderer)) {
+    config.renderer = candidate.renderer as TechnicalRasterComponentConfig["renderer"];
+  }
+  const displayLabel = sanitizeShortLabel(candidate.displayLabel, TECHNICAL_RASTER_DISPLAY_LABEL_MAX_LENGTH);
+  if (displayLabel !== undefined) config.displayLabel = displayLabel;
+  if (typeof candidate.color === "string" && HEX_COLOR_PATTERN.test(candidate.color.trim())) config.color = candidate.color.trim().toLowerCase();
+  const legendLabel = sanitizeShortLabel(candidate.legendLabel, TECHNICAL_RASTER_LEGEND_LABEL_MAX_LENGTH);
+  if (legendLabel !== undefined) config.legendLabel = legendLabel;
+  if (isStoredAssetShape(candidate.iconAsset)) config.iconAsset = candidate.iconAsset;
+  return Object.keys(config).length > 0 ? config : undefined;
+}
+
+/**
+ * The "TECHNICKÉ RASTRY" section's own explicit config, if the document has a validly-shaped one
+ * (spec batch 11) — undefined for the overwhelming majority of existing components, which have
+ * never set this at all; domain/technicalRasterComponentPresentation.ts's
+ * resolveTechnicalRasterPresentation() already treats `undefined` as "use the central default
+ * entirely", so callers never need a second fallback here. Defensively re-validates every field's
+ * shape (never trusts the JSONB blob) rather than a bare cast — a document written by a future,
+ * differently-shaped version of this config must never crash the admin UI.
+ */
+export function documentTechnicalRaster(document: CatalogItemAdminDocument): TechnicalRasterComponentConfig | undefined {
+  return parseTechnicalRasterConfig(document.technicalRaster);
 }
 
 function isSourceAssetEntryShape(value: unknown): value is SourceAssetEntry {
@@ -489,6 +549,15 @@ export type CatalogItemAdminEdit = Readonly<{
    */
   showIn2D?: boolean;
   showIn3D?: boolean;
+  /**
+   * "TECHNICKÉ RASTRY" section (spec batch 11) — `undefined` = leave unchanged; a
+   * TechnicalRasterComponentConfig = REPLACE the whole stored config with exactly this object
+   * (same whole-value-replace discipline as photoAsset/modelAsset, never a partial server-side
+   * merge of individual sub-fields — the admin form itself is responsible for sending the
+   * complete resulting object); `null` = "Obnovit výchozí nastavení" (explicit reset — removes
+   * the override entirely, the resolver then falls through to the central default).
+   */
+  technicalRaster?: TechnicalRasterComponentConfig | null;
 }>;
 
 const EDITABLE_STRING_KEYS = ["displayName", "name", "category", "unit"] as const;
@@ -561,6 +630,13 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
       edit.removeVariantSourceAssetId = { variantId: candidate.variantId, sourceAssetId: candidate.sourceAssetId };
     }
   }
+  if ("technicalRaster" in raw) {
+    if (raw.technicalRaster === null) edit.technicalRaster = null;
+    else {
+      const parsed = parseTechnicalRasterConfig(raw.technicalRaster);
+      if (parsed) edit.technicalRaster = parsed;
+    }
+  }
   return edit;
 }
 
@@ -582,6 +658,12 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
   if (edit.lifecycleStatus !== undefined) next.lifecycleStatus = edit.lifecycleStatus;
   if (edit.showIn2D !== undefined) next.showIn2D = edit.showIn2D;
   if (edit.showIn3D !== undefined) next.showIn3D = edit.showIn3D;
+  // "Obnovit výchozí nastavení" (spec batch 11 section 18) — null removes the override entirely,
+  // never leaves a stray empty {} object sitting in the document (documentTechnicalRaster/
+  // parseTechnicalRasterConfig already treat {} as "nothing configured", but deleting it outright
+  // keeps a reset genuinely indistinguishable from "never configured" in the raw JSON too).
+  if (edit.technicalRaster === null) delete next.technicalRaster;
+  else if (edit.technicalRaster !== undefined) next.technicalRaster = edit.technicalRaster;
   // Section 5 of the capability-hardening spec: showIn2D=true needs SOME 2D representation
   // (evaluateCatalogReadiness's has2DRepresentation just checks footprint2D presence) — reuse
   // the exact minimal shape M57's own seed already uses ({shape:"rectangle"}), never a new
