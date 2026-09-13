@@ -4,13 +4,27 @@ import { PDFDocument, PDFName, PDFDict, PDFArray, PDFHexString, PDFString, PDFRa
 import { buildTechnicalRasterMultiPageVectorExportPdf, buildTechnicalRasterVectorExportPdf, reconstructOcProperties, resolveSourcePageGeometry, TechnicalRasterVectorExportError } from "../lib/technicalRasterVectorPdf.ts";
 import type { TechnicalRasterExportLegendEntry, TechnicalRasterExportPlacementItem } from "../domain/technicalRasterExport.ts";
 import { resolveTechnicalServicePresentation } from "../domain/technicalRasterServicePresentation.ts";
+import { TECHNICAL_REALIZATION_GROUPS } from "../domain/technicalRasterRealization.ts";
 import {
   EXPORT_POWER_LABEL_FONT_SIZE_PT,
+  EXPORT_STAR_SYMBOL_FONT_SIZE_PT,
   EXPORT_SYMBOL_MAX_BOUNDING_HEIGHT_PT,
   EXPORT_SYMBOL_MAX_BOUNDING_WIDTH_PT,
   EXPORT_TEXT_SYMBOL_FONT_SIZE_PT,
+  EXPORT_WATER_DROP_HEIGHT_PT,
+  EXPORT_WIFI_SYMBOL_WIDTH_PT,
+  REALIZATION_UNDERLINE_THICKNESS_PT,
   ptToMm,
 } from "../domain/technicalRasterExportSymbolSize.ts";
+import {
+  SYMBOL_CLICK_DIAMETER_TARGET_PX,
+  SYMBOL_GLYPH_SIZE_TARGET_PX,
+  SYMBOL_SELECTION_RING_BORDER_TARGET_PX,
+  SYMBOL_SELECTION_RING_GAP_TARGET_PX,
+  SYMBOL_TEXT_FONT_SIZE_TARGET_PX,
+  SYMBOL_TEXT_HALO_BLUR_TARGET_PX,
+} from "../domain/technicalRasterSymbolMarker.ts";
+import { readFile } from "node:fs/promises";
 
 // ============================================================================
 // Self-contained synthetic PDF fixtures (spec: never a real customer file in the portable test
@@ -119,6 +133,7 @@ function placementItem(overrides: Partial<TechnicalRasterExportPlacementItem> = 
     xNormalized: 0.5,
     yNormalized: 0.5,
     presentation: resolveTechnicalServicePresentation("electricity", "Do 3kW 230V"),
+    category: "electricity",
     ...overrides,
   };
 }
@@ -270,22 +285,23 @@ test("J) the legend lives on a SEPARATE page — page 1's own size is completely
   assert.equal(page1.getHeight(), 200);
 });
 
-test("J) legend page contains the expected labels when shown, and is still present (with a fallback message) when there's nothing to list", async () => {
+test("J) legend page draws real vector-outline geometry when shown, and is still present (with a fallback message) when there's nothing to list — GENERATED LEGEND BATCH: legend text is genuine vector-outline geometry, never a page.drawText()/Type0 text-showing operator, so this asserts on the raw content stream rather than pdf.js getTextContent() (which would read empty)", async () => {
   const source = await buildPlainFixture();
-  const legend: readonly TechnicalRasterExportLegendEntry[] = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" }];
+  const legend: readonly TechnicalRasterExportLegendEntry[] = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel", displayLabel: "3 kW" }];
   const withLegend = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "Technický rastr / Hala 1" });
   const reloadedWith = await PDFDocument.load(withLegend.bytes);
-  const { textContent: legendText } = await decodeForInspection(withLegend.bytes.slice());
-  // decodeForInspection reads page 1 of the passed bytes — build a small helper reading page 2 instead.
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const loaded = await pdfjsLib.getDocument({ data: new Uint8Array(withLegend.bytes) }).promise;
-  const legendPage = await loaded.getPage(2);
-  const legendPageText = await legendPage.getTextContent();
-  const joined = (legendPageText.items as { str: string }[]).map((item) => item.str).join(" ");
-  assert.ok(joined.includes("PŘÍVOD EL. ENERGIE"), `expected legend label on page 2, got: ${joined}`);
-  assert.ok(joined.includes("Technický rastr"), "expected the header line on the legend page");
   assert.equal(reloadedWith.getPageCount(), 2);
-  void legendText;
+  const legendPageText = await readAllPageContentText(withLegend.bytes, 1);
+  for (const forbidden of ["BT", "ET", "Tf", "Tj", "TJ"]) {
+    assert.ok(!new RegExp(`(^|\\s)${forbidden}(\\s|$)`, "u").test(legendPageText), `expected no "${forbidden}" text-showing operator on the legend page, got: ${legendPageText}`);
+  }
+  assert.ok(/\bf\b/u.test(legendPageText), "expected genuine vector-outline fill geometry (title/header/label/symbol) on the legend page");
+
+  const emptyLegend = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: true, headerLine: "X" });
+  const reloadedEmpty = await PDFDocument.load(emptyLegend.bytes);
+  assert.equal(reloadedEmpty.getPageCount(), 2, "the legend page is still present even with nothing to list — draws the fallback message instead of omitting the page");
+  const emptyLegendText = await readAllPageContentText(emptyLegend.bytes, 1);
+  assert.ok(/\bf\b/u.test(emptyLegendText), "expected the fallback message's own vector-outline fill geometry");
 });
 
 // ============================================================================
@@ -589,6 +605,29 @@ async function readAllPage1ContentText(bytes: Uint8Array): Promise<string> {
   const reloaded = await PDFDocument.load(bytes);
   const page1 = reloaded.getPage(0);
   const contents = page1.node.Contents();
+  const streams: PDFRawStream[] = [];
+  if (contents instanceof PDFArray) {
+    for (let i = 0; i < contents.size(); i += 1) {
+      const stream = reloaded.context.lookup(contents.get(i));
+      if (stream instanceof PDFRawStream) streams.push(stream);
+    }
+  } else if (contents instanceof PDFRawStream) {
+    streams.push(contents);
+  }
+  return streams.map((stream) => new TextDecoder("latin1").decode(decodePDFRawStream(stream).decode())).join("\n");
+}
+
+/**
+ * GENERATED LEGEND BATCH — a page-index-parameterized counterpart of readAllPage1ContentText above,
+ * needed because the legend's own generated text is now genuine vector-outline geometry (never a
+ * PDF text-showing operator), so tests can no longer use pdf.js's `getTextContent()` to "read" it —
+ * they must inspect the RAW content stream directly, on whichever page the legend actually landed
+ * on (page 2 for the separate-page fallback, or page 1 itself for an in-place region).
+ */
+async function readAllPageContentText(bytes: Uint8Array, pageIndex: number): Promise<string> {
+  const reloaded = await PDFDocument.load(bytes);
+  const page = reloaded.getPage(pageIndex);
+  const contents = page.node.Contents();
   const streams: PDFRawStream[] = [];
   if (contents instanceof PDFArray) {
     for (let i = 0; i < contents.size(); i += 1) {
@@ -1108,25 +1147,37 @@ test("POST-ACCEPTANCE REDESIGN section 14) the underline is drawn with a real ve
   assert.match(streamText, new RegExp(`${REALIZATION_UNDERLINE_THICKNESS_PT}\\s+w`, "u"));
 });
 
-test("corrective batch 10) the legend's REALIZACE key lists all 4 canonical groups when includeRealizationKey is true, and is absent otherwise", async () => {
+test("GENERATED LEGEND BATCH section 13 — the legend's REALIZACE key lists ONLY the canonical groups actually used in this export (never a fixed always-all-4 key), and is absent both when includeRealizationKey is false AND when it's true but zero underlines were actually passed", async () => {
   const source = await buildPlainFixture();
-  const withKey = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: true, headerLine: "X", includeRealizationKey: true });
-  const reloadedWithKey = await PDFDocument.load(withKey.bytes);
-  const legendPage = reloadedWithKey.getPage(1);
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const docWithKey = await pdfjsLib.getDocument({ data: await withKey.bytes }).promise;
-  const legendTextWithKey = ((await (await docWithKey.getPage(2)).getTextContent()).items as { str: string }[]).map((item) => item.str).join(" ");
-  assert.ok(legendTextWithKey.includes("REALIZACE"));
-  assert.ok(legendTextWithKey.includes("GENDAI"));
-  assert.ok(legendTextWithKey.includes("CREATIV EXPO"));
-  assert.ok(legendTextWithKey.includes("MAC PRAHA"));
-  assert.ok(legendTextWithKey.includes("OSTATNÍ"));
-  void legendPage;
+
+  // includeRealizationKey true, but genuinely ZERO underlines in this export -> no REALIZACE section at all (never all 4 groups just because the checkbox was on).
+  const keyRequestedButUnused = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: true, headerLine: "X", includeRealizationKey: true, realizationUnderlines: [] });
+  const rowHeightNoRealization = (await PDFDocument.load(keyRequestedButUnused.bytes)).getPage(1).getHeight();
+
+  // Two real underlines actually present: GENDAI (green) + MAC PRAHA (blue) — CREATIV EXPO/OSTATNÍ must NOT appear.
+  const gendai = TECHNICAL_REALIZATION_GROUPS.find((g) => g.id === "gendai")!;
+  const macPraha = TECHNICAL_REALIZATION_GROUPS.find((g) => g.id === "macPraha")!;
+  const used = await buildTechnicalRasterVectorExportPdf({
+    sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: true, headerLine: "X", includeRealizationKey: true,
+    realizationUnderlines: [
+      { standId: "s1", xNormalized: 0.1, yNormalized: 0.1, widthNormalized: 0.05, color: gendai.color },
+      { standId: "s2", xNormalized: 0.2, yNormalized: 0.2, widthNormalized: 0.05, color: macPraha.color },
+    ],
+  });
+  const usedPage = (await PDFDocument.load(used.bytes)).getPage(1);
+  // A real REALIZACE section (heading + 2 rows) makes the legend page strictly TALLER than the
+  // no-realization case above — the only content-independent structural signal available now that
+  // the text itself is vector-outline geometry, not extractable via pdf.js getTextContent().
+  assert.ok(usedPage.getHeight() > rowHeightNoRealization, "a legend page with 2 real realization rows must be taller than one with none");
+  const usedContent = await readAllPageContentText(used.bytes, 1);
+  // 2 realization rows (GENDAI + MAC PRAHA) each draw their own colored-line swatch at the central
+  // REALIZATION_UNDERLINE_THICKNESS_PT stroke width — never a filled square swatch.
+  const strokeMatches = usedContent.match(new RegExp(`${REALIZATION_UNDERLINE_THICKNESS_PT}\\s+w`, "gu")) ?? [];
+  assert.equal(strokeMatches.length, 2, `expected exactly 2 realization-colored line strokes (GENDAI + MAC PRAHA), got: ${usedContent}`);
 
   const withoutKey = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: true, headerLine: "X" });
-  const docWithoutKey = await pdfjsLib.getDocument({ data: await withoutKey.bytes }).promise;
-  const legendTextWithoutKey = ((await (await docWithoutKey.getPage(2)).getTextContent()).items as { str: string }[]).map((item) => item.str).join(" ");
-  assert.ok(!legendTextWithoutKey.includes("REALIZACE"));
+  const withoutKeyHeight = (await PDFDocument.load(withoutKey.bytes)).getPage(1).getHeight();
+  assert.equal(withoutKeyHeight, rowHeightNoRealization, "includeRealizationKey omitted vs. true-but-unused must produce the identical (no REALIZACE section) legend page height");
 });
 
 // ============================================================================
@@ -1135,7 +1186,10 @@ test("corrective batch 10) the legend's REALIZACE key lists all 4 canonical grou
 
 test("corrective batch 7) source-legend-area draws the legend directly on the source page — no separate page 2 is appended, page 1's own size is untouched", async () => {
   const source = await buildPlainFixture(); // 300x200
-  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const }];
+  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" }];
+  // A comfortably large region (120x60pt of a 300x200pt page) — big enough that ONE legend row
+  // fits at full scale/one column, so this test exercises "in-place legend actually used", not the
+  // overflow-fallback path (see the dedicated GENERATED LEGEND BATCH overflow test further below).
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source,
     page: 1,
@@ -1143,7 +1197,7 @@ test("corrective batch 7) source-legend-area draws the legend directly on the so
     legend,
     showLegend: true,
     headerLine: "X",
-    legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.7, yNormalized: 0.8, widthNormalized: 0.25, heightNormalized: 0.15 } },
+    legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.5, yNormalized: 0.6, widthNormalized: 0.4, heightNormalized: 0.3 } },
   });
   const reloaded = await PDFDocument.load(bytes);
   assert.equal(reloaded.getPageCount(), 1, "no separate legend page when drawn in-place");
@@ -1151,10 +1205,23 @@ test("corrective batch 7) source-legend-area draws the legend directly on the so
   assert.equal(page1.getWidth(), 300);
   assert.equal(page1.getHeight(), 200);
 
-  const { textContent } = await decodeForInspection(bytes);
-  const joined = (textContent.items as { str: string }[]).map((item) => item.str).join(" ");
-  assert.ok(joined.includes("LEGENDA"));
-  assert.ok(joined.includes("PŘÍVOD EL. ENERGIE"));
+  // GENERATED LEGEND BATCH — the in-place legend's own text is genuine vector-outline geometry
+  // (never a page.drawText()/Type0 text-showing operator), so pdf.js getTextContent() would read it
+  // as empty; assert on the raw content stream instead, the same discipline every other
+  // vector-outline test in this file already uses for the real placement markers. Only the
+  // GENERATOR's own portion (everything from its own "/OC ... BDC" bracket onward) is checked here
+  // — buildPlainFixture's SOURCE page legitimately has its own real page.drawText() content before
+  // that point, which must stay completely untouched (spec: "Source PDF text remains untouched").
+  const fullContent = await readAllPageContentText(bytes, 0);
+  const generatorContent = fullContent.slice(fullContent.indexOf("/OC /"));
+  assert.ok(generatorContent.length > 10, "expected to find the GENERÁTOR DATA OCG bracket in the page content");
+  for (const forbidden of ["BT", "ET", "Tf", "Tj", "TJ"]) {
+    assert.ok(!new RegExp(`(^|\\s)${forbidden}(\\s|$)`, "u").test(generatorContent), `expected no "${forbidden}" text-showing operator in the generator's own content, got: ${generatorContent}`);
+  }
+  const content = generatorContent;
+  // white cover rect (opaque, no border) + heading/label vector fills — at least a few real fill ops.
+  assert.ok((content.match(/\bf\b/gu) ?? []).length >= 2, `expected the white cover rect PLUS at least one vector-outline text fill, got: ${content}`);
+  assert.ok(/1 1 1 rg/u.test(content), "expected the legend cover's own solid white fill color to be set");
 });
 
 test("corrective batch 7) source-legend-area with no configured region falls back to today's separate-page behavior", async () => {
@@ -1177,7 +1244,7 @@ test("corrective batch 7) multi-page: source-legend-area targets ONE specific pa
   doc.addPage([300, 200]);
   doc.addPage([300, 200]);
   const source = await doc.save();
-  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const }];
+  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" }];
 
   const { buildTechnicalRasterMultiPageVectorExportPdf } = await import("../lib/technicalRasterVectorPdf.ts");
   const { bytes, legendPageNumber } = await buildTechnicalRasterMultiPageVectorExportPdf({
@@ -1186,18 +1253,19 @@ test("corrective batch 7) multi-page: source-legend-area targets ONE specific pa
     legend,
     showLegend: true,
     headerLine: "X",
-    legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 2, xNormalized: 0.7, yNormalized: 0.8, widthNormalized: 0.25, heightNormalized: 0.15 } },
+    legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 2, xNormalized: 0.5, yNormalized: 0.6, widthNormalized: 0.4, heightNormalized: 0.3 } },
   });
   const reloaded = await PDFDocument.load(bytes);
   assert.equal(reloaded.getPageCount(), 2, "no separate legend page appended");
   assert.equal(legendPageNumber, 2);
 
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const docReloaded = await pdfjsLib.getDocument({ data: await bytes }).promise;
-  const page1Text = ((await (await docReloaded.getPage(1)).getTextContent()).items as { str: string }[]).map((item) => item.str).join(" ");
-  const page2Text = ((await (await docReloaded.getPage(2)).getTextContent()).items as { str: string }[]).map((item) => item.str).join(" ");
-  assert.ok(!page1Text.includes("LEGENDA"), "page 1 (not the targeted region's page) must be untouched");
-  assert.ok(page2Text.includes("LEGENDA"));
+  // GENERATED LEGEND BATCH — vector-outline text again, so this reads the raw content streams
+  // rather than pdf.js getTextContent() (which would find nothing).
+  const page1Content = await readAllPageContentText(bytes, 0);
+  const page2Content = await readAllPageContentText(bytes, 1);
+  assert.ok(!/1 1 1 rg/u.test(page1Content), "page 1 (not the targeted region's page) must have no white legend-cover fill at all");
+  assert.ok(/1 1 1 rg/u.test(page2Content), "expected the legend cover's white fill on page 2, the targeted region's own page");
+  assert.ok((page2Content.match(/\bf\b/gu) ?? []).length >= 2, "expected the cover rect plus at least one vector-outline legend text fill on page 2");
 });
 
 // ============================================================================
@@ -1228,4 +1296,59 @@ test("corrective batch 6) the copied source content is never split by an unneces
   assert.ok(first instanceof PDFRawStream);
   const firstText = new TextDecoder("latin1").decode(decodePDFRawStream(first).decode());
   assert.ok(!/^\s*q\s*$/u.test(firstText), "the first stream must be the ORIGINAL source content, not a bare 'q'");
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (5th, export-polish-only) section 9 — every export technical-service marker
+// size is cut by a further ~15% (×0.85) from its PREVIOUS value, never touching editor/legend/
+// realization-underline sizes, placement coordinates, or hit targets. The exact previous values are
+// pinned here as plain historical numbers (not re-imported from anywhere) precisely so a future
+// accidental re-edit of the central constants is caught by this test regressing, not by silently
+// moving both the constant AND its own "old value" together.
+// ============================================================================
+
+test("CORRECTIVE BATCH (5th): every export marker size constant is ~15% (×0.85) smaller than its pre-batch value — export only", () => {
+  const PRE_BATCH_VALUES = {
+    EXPORT_TEXT_SYMBOL_FONT_SIZE_PT: 3.3,
+    EXPORT_POWER_LABEL_FONT_SIZE_PT: 2.75,
+    EXPORT_STAR_SYMBOL_FONT_SIZE_PT: 4.1,
+    EXPORT_WATER_DROP_HEIGHT_PT: 3.3,
+    EXPORT_WIFI_SYMBOL_WIDTH_PT: 3.5,
+    EXPORT_SYMBOL_MAX_BOUNDING_WIDTH_PT: 9,
+    EXPORT_SYMBOL_MAX_BOUNDING_HEIGHT_PT: 5.5,
+  } as const;
+  const CURRENT_VALUES = {
+    EXPORT_TEXT_SYMBOL_FONT_SIZE_PT,
+    EXPORT_POWER_LABEL_FONT_SIZE_PT,
+    EXPORT_STAR_SYMBOL_FONT_SIZE_PT,
+    EXPORT_WATER_DROP_HEIGHT_PT,
+    EXPORT_WIFI_SYMBOL_WIDTH_PT,
+    EXPORT_SYMBOL_MAX_BOUNDING_WIDTH_PT,
+    EXPORT_SYMBOL_MAX_BOUNDING_HEIGHT_PT,
+  } as const;
+  for (const key of Object.keys(PRE_BATCH_VALUES) as (keyof typeof PRE_BATCH_VALUES)[]) {
+    const before = PRE_BATCH_VALUES[key];
+    const after = CURRENT_VALUES[key];
+    assert.ok(after < before, `${key}: expected a real reduction from ${before}, got ${after}`);
+    const ratio = after / before;
+    assert.ok(Math.abs(ratio - 0.85) < 0.03, `${key}: expected ~0.85x its previous value (${before} -> ~${(before * 0.85).toFixed(2)}), got ${after} (ratio ${ratio.toFixed(3)})`);
+  }
+});
+
+test("CORRECTIVE BATCH (5th): the export marker-size reduction never touches editor on-screen symbol sizes — domain/technicalRasterSymbolMarker.ts's own constants stay exactly as before this batch", () => {
+  assert.equal(SYMBOL_TEXT_FONT_SIZE_TARGET_PX, 10.5);
+  assert.equal(SYMBOL_GLYPH_SIZE_TARGET_PX, 15);
+  assert.equal(SYMBOL_CLICK_DIAMETER_TARGET_PX, 26);
+  assert.equal(SYMBOL_SELECTION_RING_BORDER_TARGET_PX, 2);
+  assert.equal(SYMBOL_SELECTION_RING_GAP_TARGET_PX, 4);
+  assert.equal(SYMBOL_TEXT_HALO_BLUR_TARGET_PX, 2);
+});
+
+test("CORRECTIVE BATCH (5th): the export marker-size reduction never touches the realization underline thickness", () => {
+  assert.equal(REALIZATION_UNDERLINE_THICKNESS_PT, 0.85);
+});
+
+test("CORRECTIVE BATCH (5th): the export marker-size reduction never touches the separate in-place legend font size (lib/technicalRasterVectorPdf.ts's own IN_PLACE_LEGEND_FONT_SIZE_PT, module-private — asserted at the source level since it is deliberately never exported). Later batches gave the legend its own, separate size nudges (6 -> 5.5 -> 5) — pinned here as the current value, still completely independent of the real EXPORT_*_SIZE_PT marker constants.", async () => {
+  const source = await readFile(new URL("../lib/technicalRasterVectorPdf.ts", import.meta.url), "utf8");
+  assert.match(source, /const IN_PLACE_LEGEND_FONT_SIZE_PT = 5;/u, "the legend's own font size constant must stay independent of the export marker-size constants — MICRO POLISH BATCH nudged it to 5");
 });

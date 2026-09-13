@@ -20,10 +20,11 @@
  */
 import type { StoredAsset } from "./assets.ts";
 import { normalizeStandNumber, sortStandNumbersNatural } from "./technicalStandNumber.ts";
+import { computeStandNumberCanonicalIdentity } from "./technicalStandNumberIdentity.ts";
 import { matchStandNumberToRasterLabels } from "./technicalRasterMatching.ts";
 import { classifyStandScope } from "./technicalRasterHallScope.ts";
 import { resolveTechnicalServicePresentation } from "./technicalRasterServicePresentation.ts";
-import type { TechnicalLegendPlacement } from "./technicalRasterLegendPlacement.ts";
+import { DEFAULT_AUTO_LEGEND_PLACEMENT, type TechnicalLegendPlacement } from "./technicalRasterLegendPlacement.ts";
 import type { TechnicalReconciliationMention } from "./technicalRasterReconciliation.ts";
 import type { ParsedCatalogImport } from "./technicalRasterCatalogImport.ts";
 import { extractTechnicalMentionsFromCatalogStand } from "./technicalRasterCatalogImport.ts";
@@ -163,6 +164,24 @@ export function withLegendPlacement(project: TechnicalRasterProject, legendPlace
   return { ...project, rasterSettings: { ...project.rasterSettings, legendPlacement }, updatedAt: new Date().toISOString() };
 }
 
+/**
+ * SIMPLIFIED LEGEND BATCH — "the user should not need to configure it for every project": a
+ * project that has never set its own `legendPlacement` now automatically gets the shared
+ * hall-agnostic default (an in-place legend in the usual bottom-left area under the raster —
+ * domain/technicalRasterLegendPlacement.ts's own `DEFAULT_AUTO_LEGEND_PLACEMENT`), never the
+ * low-level "separate-page" fallback that constant's OWN sibling `DEFAULT_LEGEND_PLACEMENT` still
+ * represents (that one stays reserved for resolveEffectiveLegendPlacement's own safety net when a
+ * "source-legend-area" strategy is explicitly chosen with no region at all). An EXPLICIT
+ * `rasterSettings.legendPlacement` (set via withLegendPlacement above) always wins — this is
+ * exactly the "optional project override" the architecture already supports, this function is
+ * simply the ONE place that decides what happens when it's absent. Never called from a rendering
+ * component directly with a per-hall conditional — the caller (TechnicalRasterOutputsPanel.tsx)
+ * only ever calls this one function with the project's own settings.
+ */
+export function effectiveLegendPlacement(settings: RasterSettings): TechnicalLegendPlacement {
+  return settings.legendPlacement ?? DEFAULT_AUTO_LEGEND_PLACEMENT;
+}
+
 // ============================================================================
 // Technical service imports (one row per uploaded PDF)
 // ============================================================================
@@ -256,6 +275,27 @@ export function effectiveServicePlacements(service: TechnicalService): readonly 
   return service.placements ?? [];
 }
 
+/**
+ * CORRECTIVE BATCH (real production — "quantity is not always number of placement points") — the
+ * ONE place "how many markers does this service record actually need" is decided, everywhere in
+ * the app (placement gating, work-queue completion, export status/warnings, the stand detail
+ * panel's own "Umístěno X/Y" text). Never `service.quantity` directly outside this function.
+ *
+ * `service.quantity` is the SOURCE report's own number (kW count, cleaning days, container count,
+ * WiFi licenses, ...) — genuinely equal to "required physical points" only when the resolved
+ * presentation's own `placementCardinality` says so (`"perQuantity"`). For `"onePerRecord"`
+ * (cleaning, waste, and any as-yet-unrecognized fallback service), exactly one marker is required
+ * regardless of the raw number — the real production case this exists for: "1C01 cleaning
+ * qty=40" must need ONE marker, never 40. For a non-"point" presentation, 0 — nothing can ever be
+ * placed for it, so nothing is ever "required" either (kept defensive; every real caller already
+ * gates on `placementBehavior === "point"` separately before this is ever consulted).
+ */
+export function requiredPlacementCount(service: TechnicalService): number {
+  const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+  if (presentation.placementBehavior !== "point") return 0;
+  return presentation.placementCardinality === "perQuantity" ? service.quantity : 1;
+}
+
 /** A free-text note attached to a stand from a report (spec section 13: e.g. a "doobjednáno telefonicky..." line under a waste-report row) — never discarded. */
 export type TechnicalNote = Readonly<{
   id: string;
@@ -279,7 +319,14 @@ export type TechnicalNote = Readonly<{
  * exact raster-label match, however the hall-prefix heuristic would have guessed, always wins.
  */
 export type StandPlacementStatus = "unassigned" | "matched_auto" | "matched_manual" | "ambiguous" | "outside_current_raster";
-export type StandMatchMethod = "exact_auto" | "manual";
+/**
+ * CORRECTIVE BATCH (real production, tolerant stand-number matching) — `"tolerant_normalized"` is
+ * set ONLY when `matchStandNumberToRasterLabels` (domain/technicalRasterMatching.ts) found the
+ * match through the narrow leading-zero-tolerant canonical identity, never an exact textual match
+ * (that's still `"exact_auto"`, unchanged). Exposed so the UI can show a small, honest "normalizováno"
+ * audit detail (spec section 7) — never overwrites/hides the stand's own raw imported number.
+ */
+export type StandMatchMethod = "exact_auto" | "tolerant_normalized" | "manual";
 
 export type StandPlacement = Readonly<{
   status: StandPlacementStatus;
@@ -398,6 +445,16 @@ export type TechnicalRasterCatalogImportMeta = Readonly<{
   standlessRecordCount: number;
   /** CORRECTIVE BATCH (multi-hall imports) section 13 — catalog records whose OWN stand number is confidently outside the current raster's own hall (domain/technicalRasterHallScope.ts) — never created as a project stand, never counted in matchedStandCount, purely informational. */
   outsideCurrentRasterCount: number;
+  /**
+   * CORRECTIVE BATCH (real production, tolerant stand-number matching) — a catalog row whose own
+   * number shares its tolerant canonical identity (domain/technicalStandNumberIdentity.ts) with
+   * MORE THAN ONE existing project stand (e.g. the project somehow already has both "3A1" and
+   * "3A01" as separate stands) is never guessed — this row gets its OWN new stand rather than being
+   * silently merged into either candidate, and is counted here purely for visibility/diagnostics.
+   * Optional so an older saved project (before this field existed) reads back as 0, never a
+   * migration.
+   */
+  canonicalAmbiguousRecordCount?: number;
   warnings: readonly TechnicalRasterImportWarning[];
 }>;
 
@@ -547,7 +604,10 @@ function placementFromMatch(standNumber: string, labels: readonly RasterStandLab
       anchorXNormalized: result.label.xNormalized + result.label.widthNormalized / 2,
       anchorYNormalized: result.label.yNormalized + result.label.heightNormalized / 2,
       matchedLabelId: result.label.id,
-      matchMethod: "exact_auto",
+      // CORRECTIVE BATCH (real production, tolerant stand-number matching) — carries through
+      // WHICH pass actually found this match ("exact" -> "exact_auto", "tolerant_normalized"
+      // stays as-is) so the UI can show an honest "3A01 -> 3A1, normalizováno" audit detail.
+      matchMethod: result.matchMethod === "tolerant_normalized" ? "tolerant_normalized" : "exact_auto",
     };
   }
   if (result.status === "ambiguous") return { status: "ambiguous", candidateCount: result.candidateLabels.length };
@@ -658,12 +718,29 @@ export function mergeSupplementalCatalogImport(
   now: string = new Date().toISOString(),
 ): TechnicalRasterProject {
   const standIdByNormalizedNumber = new Map<string, string>();
-  for (const stand of project.stands) standIdByNormalizedNumber.set(normalizeStandNumber(stand.standNumber), stand.id);
+  // CORRECTIVE BATCH (real production, tolerant stand-number matching) — a catalog row's own number
+  // (e.g. "3A01") must merge into an EXISTING stand created by a primary technical-service report
+  // under a differently-formatted-but-equivalent number (e.g. "3A1"), so `hasCatalogBuildRecord`
+  // actually lands on the right stand — see domain/technicalStandNumberIdentity.ts's own doc for the
+  // real H3 evidence this fixes. `standIdsByCanonicalIdentity` maps canonical identity -> the SET of
+  // distinct standIds sharing it, so more than one existing stand sharing an identity (a genuine,
+  // rare data problem — e.g. the project somehow already has both "3A1" and "3A01" as separate
+  // stands) is detected as ambiguous rather than guessed.
+  const standIdsByCanonicalIdentity = new Map<string, Set<string>>();
+  function registerStandKeys(standNumber: string, standId: string): void {
+    standIdByNormalizedNumber.set(normalizeStandNumber(standNumber), standId);
+    const canonical = computeStandNumberCanonicalIdentity(standNumber);
+    const bucket = standIdsByCanonicalIdentity.get(canonical) ?? new Set<string>();
+    bucket.add(standId);
+    standIdsByCanonicalIdentity.set(canonical, bucket);
+  }
+  for (const stand of project.stands) registerStandKeys(stand.standNumber, stand.id);
 
   const realizationByStandId = new Map<string, string | undefined>();
   const catalogBuildStandIds = new Set<string>();
   const newStands: TechnicalStand[] = [];
   let outsideCurrentRasterCount = 0;
+  let canonicalAmbiguousRecordCount = 0;
 
   for (const catalogStand of parsed.stands) {
     if (!catalogStand.standNumber) continue; // standless catalog records never become/attach to a stand — see extractTechnicalMentionsFromCatalogStand's own doc for the matching discipline.
@@ -674,8 +751,19 @@ export function mergeSupplementalCatalogImport(
     const normalized = normalizeStandNumber(catalogStand.standNumber);
     let standId = standIdByNormalizedNumber.get(normalized);
     if (!standId) {
+      // No EXACT match — try the tolerant canonical identity (spec section 5's own precedence:
+      // exact always wins, tolerant only ever runs once exact finds nothing, ambiguous when more
+      // than one distinct existing stand shares that identity — never a guess either way).
+      const canonicalMatches = standIdsByCanonicalIdentity.get(computeStandNumberCanonicalIdentity(catalogStand.standNumber));
+      if (canonicalMatches && canonicalMatches.size === 1) {
+        standId = [...canonicalMatches][0]!;
+      } else if (canonicalMatches && canonicalMatches.size > 1) {
+        canonicalAmbiguousRecordCount += 1;
+      }
+    }
+    if (!standId) {
       standId = crypto.randomUUID();
-      standIdByNormalizedNumber.set(normalized, standId);
+      registerStandKeys(catalogStand.standNumber, standId);
       newStands.push({
         id: standId,
         standNumber: catalogStand.standNumber,
@@ -717,6 +805,7 @@ export function mergeSupplementalCatalogImport(
       matchedStandCount,
       standlessRecordCount: parsed.stands.filter((stand) => !stand.standNumber).length,
       outsideCurrentRasterCount,
+      canonicalAmbiguousRecordCount,
       warnings: parsed.warnings.map((warning, index) => ({ id: `catalog-warning-${index}`, ...warning })),
     },
     updatedAt: now,
@@ -816,7 +905,7 @@ export function placeTechnicalService(
     const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
     if (presentation.placementBehavior !== "point") return service;
     const existing = effectiveServicePlacements(service);
-    if (existing.length >= service.quantity) return service;
+    if (existing.length >= requiredPlacementCount(service)) return service;
     const placement: TechnicalServicePlacement = { id: crypto.randomUUID(), page: point.page, xNormalized: point.xNormalized, yNormalized: point.yNormalized, createdAt: new Date().toISOString() };
     return { ...service, placements: [...existing, placement] };
   });

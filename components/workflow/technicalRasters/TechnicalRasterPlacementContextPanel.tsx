@@ -47,7 +47,7 @@ export function TechnicalRasterPlacementContextPanel({
         <strong>{progress.pointIndex} / {progress.pointTotal}</strong>
       </div>
       <p className="technicalRasterPlacementContextHint">Klikněte do rastru.</p>
-      <button type="button" className="textButton" onClick={onCancel}>Zrušit</button>
+      <button type="button" className="technicalActionButton secondary compact" onClick={onCancel}>Zrušit</button>
     </div>
   );
 }

@@ -6431,7 +6431,26 @@ select:focus {
    document.body as `position: fixed` (set inline, from the trigger's own
    getBoundingClientRect()) — entirely outside the clipped ancestor. onClick stopPropagation on the
    trigger's wrapping <span> keeps clicking the button/menu from also opening the project (spec
-   section 38). */
+   section 38).
+
+   CORRECTIVE BATCH (real production — delete action still invisible after the popup-portal fix
+   above): the popup-clipping fix only ever addressed the DROPDOWN LIST — the "⋯" TRIGGER BUTTON
+   ITSELF lives inside the ROW's own grid, not the portal, and was found to be the ACTUAL remaining
+   problem. `.printSurfaceProjectRow`'s shared `grid-template-columns` (9 fixed/minmax tracks
+   sized for PrintSurfaceProjectListPage.tsx's own 9 columns) has a real minimum total width of
+   roughly 1120px before gaps/padding — comfortably wider than many real content-area widths once a
+   sidebar nav is accounted for. Since `.printSurfaceTable` sets `overflow: hidden` with no
+   horizontal scrollbar, a too-narrow container simply CLIPS the grid's own overflow — and the
+   LAST column ("Akce", holding this exact trigger button) is the one that disappears first. This
+   table now gets its OWN, narrower column widths (below) sized for its actual 9 columns, plus a
+   horizontal-scroll safety net (`overflow-x: auto` — `overflow-y` stays `hidden`, preserving the
+   rounded-corner row-background clipping .printSurfaceTable's own comment describes) so "Akce" is
+   never silently invisible again even in an unusually narrow viewport. */
+.technicalRasterProjectTable { overflow-x: auto; }
+.technicalRasterProjectTable .printSurfaceProjectRow {
+  grid-template-columns: minmax(160px, 1.2fr) minmax(80px, .6fr) minmax(100px, .8fr) 64px 64px 96px 96px 128px 48px;
+  min-width: 900px;
+}
 .technicalRasterProjectRowMenuTrigger { display: grid; place-items: center; width: 26px; height: 26px; border: 1px solid #dfe1e2; border-radius: 5px; background: #f7f8f8; font-size: 11px; line-height: 1; cursor: pointer; justify-self: end; }
 .technicalRasterProjectRowMenuTrigger:hover { background: #eef0f1; }
 .technicalRasterProjectRowMenuList { z-index: 50; display: grid; gap: 2px; width: max-content; min-width: 140px; padding: 6px; border: 1px solid #e2e3e4; border-radius: 6px; background: white; box-shadow: 0 6px 18px rgba(20, 22, 23, .14); }
@@ -6441,10 +6460,44 @@ select:focus {
 
 .technicalRasterEditorPage { display: flex; flex-direction: column; gap: 12px; }
 
-.technicalRasterStepTabs { display: flex; gap: 4px; border-bottom: 1px solid #e3e4e5; margin-bottom: 4px; }
-.technicalRasterStepTab { min-height: 34px; padding: 0 14px; border: 0; border-bottom: 2px solid transparent; background: transparent; color: #74787b; font-size: 9px; cursor: pointer; }
-.technicalRasterStepTab:hover { color: #151515; }
-.technicalRasterStepTab.active { color: #151515; border-bottom-color: #242628; font-weight: 600; }
+/* UI/CSS POLISH BATCH section 2 — a compact segmented-control, not four separate CTA buttons and
+   not a thin-underline text-link row: one rounded neutral-gray track, each step a real clickable
+   surface inside it, the active step reading as a raised white segment (background + subtle shadow
+   + bolder text) rather than relying on an underline alone. Same four steps, same onClick/active
+   logic in TechnicalRasterEditorPage.tsx — visual only. */
+.technicalRasterStepTabs {
+  display: inline-flex;
+  gap: 2px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #eef0f1;
+  margin-bottom: 10px;
+  overflow-x: auto;
+}
+.technicalRasterStepTab {
+  min-height: 28px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #6d7073;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .12s ease, color .12s ease, box-shadow .12s ease;
+}
+.technicalRasterStepTab:hover { color: #151515; background: rgba(255, 255, 255, 0.55); }
+.technicalRasterStepTab:focus-visible { outline: 2px solid var(--dark); outline-offset: 2px; }
+.technicalRasterStepTab.active {
+  background: #fff;
+  color: #151515;
+  font-weight: 700;
+  box-shadow: 0 1px 3px rgba(20, 22, 23, 0.16);
+}
 
 .technicalRasterWorkspace { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 16px; align-items: start; }
 @media (max-width: 1100px) { .technicalRasterWorkspace { grid-template-columns: 1fr; } }
@@ -6607,6 +6660,14 @@ select:focus {
 .technicalStandBufferGroup.informational h4 { color: #5a6b85; }
 
 .technicalStandDetailPanel { display: grid; gap: 8px; align-content: start; }
+
+/* UI/CSS POLISH BATCH section 3 — header hierarchy: small "STÁNEK" identity label stays as-is
+   (workflowCardHeader), the exhibitor/company name becomes the clearly PROMINENT element (was a
+   7px .fieldHint, easy to overlook), and the pairing-status pill sits directly under both, with a
+   clear border before the technical-service rows start. Wraps safely for a long exhibitor name —
+   never a fixed height/ellipsis. No change to the actual pairing state/matching logic. */
+.technicalStandIdentity { display: grid; gap: 4px; padding-bottom: 10px; margin-bottom: 2px; border-bottom: 1px solid #ededee; }
+.technicalStandCompanyName { margin: 0; overflow-wrap: anywhere; color: #151515; font-size: 15px; font-weight: 700; line-height: 1.25; }
 .technicalStandPlacementBadge { width: fit-content; }
 .technicalStandPlacementBadge.matched_auto, .technicalStandPlacementBadge.matched_manual { background: #edf5ef; color: #45634f; }
 .technicalStandPlacementBadge.ambiguous { background: #fbeeea; color: #93472b; }
@@ -6620,8 +6681,46 @@ select:focus {
 .technicalStandServicePlacementStatus.placed { color: #45634f; }
 .technicalStandServicePlacementStatus.unplaced { color: #93472b; }
 .technicalStandUnresolvedBadge { color: #93472b; margin: 0; }
-.technicalStandDetailActions { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; }
+.technicalStandDetailActions { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding-top: 8px; }
 .technicalStandRealizationInput { width: 100%; box-sizing: border-box; font-size: 9px; padding: 4px 6px; }
+
+/* UI/CSS POLISH BATCH section 4 — a small, consistent button hierarchy so every OPERATIONAL action
+   in this module (Umístit / Přemístit / Odstranit umístění / Spárovat kliknutím do rastru / Zrušit
+   spárování / the placement-context Zrušit) reads as a real clickable button, never as plain body
+   text — while staying visually distinct from the app's big global .primaryButton CTA (210px/50px
+   is far too heavy for a repeated per-row action). Purely additive CSS + a classname swap on
+   existing <button> elements — no click handler, label, or logic changed anywhere. */
+.technicalActionButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-height: 26px;
+  padding: 0 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font-size: 9.5px;
+  font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background-color .12s ease, border-color .12s ease, color .12s ease;
+}
+.technicalActionButton:focus-visible { outline: 2px solid var(--dark); outline-offset: 2px; }
+.technicalActionButton:disabled { cursor: not-allowed; opacity: .5; }
+/* Compact size for repeated per-row use (Umístit / Umístit další bod / Přemístit / Odstranit umístění) — matches the existing .technicalStandServicePlacementActions button sizing so the row stays tight. */
+.technicalActionButton.compact { min-height: 22px; padding: 0 8px; font-size: 8px; border-radius: 5px; }
+
+.technicalActionButton.primary { background: var(--dark); border-color: var(--dark); color: #fff; }
+.technicalActionButton.primary:hover:not(:disabled) { background: #000; border-color: #000; }
+.technicalActionButton.primary:active:not(:disabled) { background: #000; }
+.technicalActionButton.primary:disabled { background: #c8cacc; border-color: #c8cacc; }
+
+.technicalActionButton.secondary { background: #fff; border-color: #d7d9da; color: #44494c; }
+.technicalActionButton.secondary:hover:not(:disabled) { background: #f4f5f6; border-color: #b9bcbe; color: #151515; }
+
+.technicalActionButton.destructive { background: #fff; border-color: #e6b6ab; color: #93472b; }
+.technicalActionButton.destructive:hover:not(:disabled) { background: #fbeeea; border-color: #d68d7c; }
 
 .technicalRasterAssignHint { padding: 8px 10px; border-radius: 8px; background: #fbeeea; color: #93472b; font-size: 9px; }
 
@@ -6697,14 +6796,22 @@ select:focus {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 3px 10px 3px 8px;
+  box-sizing: border-box;
+  min-height: 24px;
+  padding: 0 10px 0 8px;
   border: 1px solid #e3e4e5;
   border-radius: 999px;
   background: #fafafa;
   font-size: 9px;
+  line-height: 1;
   color: #151515;
   white-space: nowrap;
+  cursor: pointer;
 }
+/* UI/CSS POLISH BATCH section 5 — consistent checkbox size (the browser default varies in
+   intrinsic size/baseline across chips) so every chip's checkbox/dot/label align on the same row,
+   never a CSS redesign of the filter's own checked/unchecked behavior. */
+.technicalRasterSymbolLayerPanel .technicalRasterLayerList input[type="checkbox"] { width: 11px; height: 11px; margin: 0; flex: none; }
 .technicalRasterSymbolLayerSwatch { display: inline-block; width: 8px; height: 8px; border-radius: 50%; flex: none; }
 /* Corrective batch section 10 — the "Realizačky" filter's own swatch is a small 4-color square (one quadrant per canonical group) rather than a single dot, since this toggle represents ALL FOUR realization colors at once, never just one. */
 .technicalRasterSymbolLayerSwatchRealizace {

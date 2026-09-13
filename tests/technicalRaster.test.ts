@@ -25,9 +25,11 @@ import {
   effectiveServicePlacements,
   effectiveShowRealizations,
   effectiveIncludeRealizationsInExport,
+  effectiveLegendPlacement,
   setStandRealizationCompany,
   withShowRealizations,
   withIncludeRealizationsInExport,
+  withLegendPlacement,
   mergeSupplementalCatalogImport,
   buildPrimaryReportMentions,
   DEFAULT_WHITE_FILL_OPACITY,
@@ -605,17 +607,23 @@ test("E) move placement -> SAME placement id, new coordinates", () => {
   assert.equal(movedPlacement.yNormalized, 0.9);
 });
 
-test("F) informational service (WIFI) -> placeTechnicalService is a structural no-op, never creates a placement", () => {
+test("CORRECTIVE BATCH (real production): F) WiFi is now a real point service — placeTechnicalService creates a placement exactly like electricity/water, up to its own quantity", () => {
   const { project, standId, serviceId } = projectWithService("WIFI", 2, "internet");
-  const attempted = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
-  assert.equal(effectiveServicePlacements(attempted.stands[0]!.services[0]!).length, 0);
-  assert.equal(attempted, project, "refused placement on a non-point service returns the SAME project reference — a genuine no-op");
+  const once = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
+  assert.equal(effectiveServicePlacements(once.stands[0]!.services[0]!).length, 1, "WiFi must be placeable exactly like Internet/IP");
+  const twice = placeTechnicalService(once, standId, serviceId, { page: 1, xNormalized: 0.6, yNormalized: 0.6 });
+  assert.equal(effectiveServicePlacements(twice.stands[0]!.services[0]!).length, 2, "WiFi qty=2 -> 2 physical points (perQuantity)");
+  const thrice = placeTechnicalService(twice, standId, serviceId, { page: 1, xNormalized: 0.7, yNormalized: 0.7 });
+  assert.equal(effectiveServicePlacements(thrice.stands[0]!.services[0]!).length, 2, "a THIRD attempt beyond quantity=2 is refused");
 });
 
-test("G) cleaning qty 40 -> placeTechnicalService never creates any of the 40 points", () => {
+test("CORRECTIVE BATCH (real production): G) cleaning qty 40 (onePerRecord) -> placeTechnicalService creates exactly ONE point, a second attempt is refused — 40 never means 40 clicks", () => {
   const { project, standId, serviceId } = projectWithService("Denní úklid", 40, "cleaning");
-  const attempted = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
-  assert.equal(effectiveServicePlacements(attempted.stands[0]!.services[0]!).length, 0);
+  const once = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
+  assert.equal(effectiveServicePlacements(once.stands[0]!.services[0]!).length, 1, "cleaning must be placeable — exactly ONE marker regardless of quantity=40");
+  const twice = placeTechnicalService(once, standId, serviceId, { page: 1, xNormalized: 0.6, yNormalized: 0.6 });
+  assert.equal(effectiveServicePlacements(twice.stands[0]!.services[0]!).length, 1, "onePerRecord: a second placement attempt is refused — quantity=40 never requires/allows 40 points");
+  assert.equal(twice, once, "refused placement (quota already reached under onePerRecord) returns the SAME project reference — a genuine no-op");
 });
 
 test("H) coordinates persist through a plain JSON round trip (save/reload)", () => {
@@ -677,6 +685,20 @@ test("effectiveShowRealizations / effectiveIncludeRealizationsInExport default t
   const project = createTechnicalRasterProject({ name: "X" }, "p1");
   assert.equal(effectiveShowRealizations(project.rasterSettings), false);
   assert.equal(effectiveIncludeRealizationsInExport(project.rasterSettings), false);
+});
+
+test("SIMPLIFIED LEGEND BATCH — effectiveLegendPlacement: a brand-new project with NO explicit legendPlacement automatically resolves to the shared in-place default (bottom-left area under the raster), never the low-level separate-page fallback", async () => {
+  const { DEFAULT_AUTO_LEGEND_PLACEMENT } = await import("../domain/technicalRasterLegendPlacement.ts");
+  const project = createTechnicalRasterProject({ name: "X" }, "p1");
+  assert.deepEqual(effectiveLegendPlacement(project.rasterSettings), DEFAULT_AUTO_LEGEND_PLACEMENT);
+  assert.equal(effectiveLegendPlacement(project.rasterSettings).strategy, "source-legend-area");
+});
+
+test("SIMPLIFIED LEGEND BATCH — effectiveLegendPlacement: an explicit project override (withLegendPlacement) always wins over the shared automatic default", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const override = { strategy: "separate-page" as const };
+  project = withLegendPlacement(project, override);
+  assert.deepEqual(effectiveLegendPlacement(project.rasterSettings), override);
 });
 
 test("withShowRealizations / withIncludeRealizationsInExport toggle independently, never touch each other", () => {
@@ -999,4 +1021,116 @@ test("buildPrimaryReportMentions: only MATCHED stands contribute, in the exact s
   assert.equal(mentions[0]!.category, "electricity");
   assert.equal(mentions[0]!.externalLabel, "Do 3kW 230V");
   assert.equal(mentions[0]!.quantity, 1);
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (real production, tolerant stand-number matching) — real H3 evidence: raster
+// labels read "3A1" (no leading zero), imported technical-service/catalog rows read "3A01". See
+// domain/technicalStandNumberIdentity.ts's own doc for the exact canonical-identity scope.
+// ============================================================================
+
+test("TOLERANT END-TO-END: raster '3A1', imported technical-service stand '3A01' -> matched_auto via the tolerant pass, RAW imported number preserved, matchMethod exposed for audit", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A1", "l1")]);
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [{ standNumber: "3A01", services: [{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, () => ({ status: "resolved" as const }));
+
+  const stand = project.stands.find((s) => s.standNumber === "3A01");
+  assert.ok(stand, "the RAW imported stand number '3A01' must be preserved, never rewritten to the raster's own '3A1'");
+  assert.equal(stand!.placement.status, "matched_auto");
+  assert.equal(stand!.placement.matchMethod, "tolerant_normalized");
+});
+
+test("TOLERANT END-TO-END: foreign hall is unaffected — raster '3A1', imported '4A01' -> outside_current_raster, never confused with a tolerant same-hall match", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A1", "l1")]);
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [{ standNumber: "4A01", services: [{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, () => ({ status: "resolved" as const }));
+  const stand = project.stands.find((s) => s.standNumber === "4A01");
+  assert.equal(stand!.placement.status, "outside_current_raster");
+});
+
+test("TOLERANT END-TO-END: a genuinely bad/typo'd stand number stays 'Nespárováno' (unassigned) — never silently absorbed by the tolerant pass", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A1", "l1")]);
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [{ standNumber: "3A99", services: [{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, () => ({ status: "resolved" as const }));
+  const stand = project.stands.find((s) => s.standNumber === "3A99");
+  assert.equal(stand!.placement.status, "unassigned");
+});
+
+test("TOLERANT CATALOG MERGE (spec section 8): raster '3A1', supplemental catalog stand '3A01' with R: CREATIV EXPO -> current-raster match, hasCatalogBuildRecord true, CREATIV realization assigned", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A1", "l1")]);
+  const updated = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "3A01", realizationCompanyRaw: "CREATIV EXPO, s.r.o.", items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  const stand = updated.stands.find((s) => s.standNumber === "3A01");
+  assert.ok(stand, "the catalog's own raw '3A01' text is preserved on the newly created stand");
+  assert.equal(stand!.hasCatalogBuildRecord, true);
+  assert.equal(stand!.realizationCompany, "CREATIV EXPO, s.r.o.");
+  assert.equal(stand!.placement.status, "matched_auto", "must land on the current raster's own '3A1' label via the tolerant pass, never stay unassigned");
+  assert.equal(stand!.placement.matchMethod, "tolerant_normalized");
+  const display = resolveRealizationDisplayState(stand!.hasCatalogBuildRecord, stand!.realizationCompany);
+  assert.equal(display.shouldShow && display.group, "creativExpo");
+});
+
+test("TOLERANT CATALOG MERGE: a catalog row ('3A01') merges into an EXISTING stand created by a primary technical report under a canonically-equal but differently-formatted number ('3A1') — never a duplicate stand", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A1", "l1")]);
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [{ standNumber: "3A1", services: [{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, () => ({ status: "resolved" as const }));
+  assert.equal(project.stands.length, 1);
+
+  const updated = mergeSupplementalCatalogImport(
+    project,
+    { stands: [{ standNumber: "3A01", realizationCompanyRaw: "MAC Praha, spol. s r.o.", items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  assert.equal(updated.stands.length, 1, "the catalog's '3A01' must merge into the EXISTING '3A1' stand, never create a second one");
+  const stand = updated.stands[0]!;
+  assert.equal(stand.standNumber, "3A1", "the existing stand's own raw number is never overwritten by a catalog merge");
+  assert.equal(stand.hasCatalogBuildRecord, true);
+  assert.equal(stand.realizationCompany, "MAC Praha, spol. s r.o.");
+  assert.equal(stand.services.length, 1, "the pre-existing electricity service is untouched by the catalog merge");
+});
+
+test("TOLERANT CATALOG MERGE: canonical ambiguity (two EXISTING stands share a canonical identity) creates a NEW stand for the catalog row rather than guessing which one it means, and is counted in catalogImportMeta", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A1", "l1"), makeLabel("3A01", "l2")]);
+  const reportA: ParsedTechnicalReport = { category: "electricity", rows: [{ standNumber: "3A1", services: [{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }], warnings: [] };
+  const reportB: ParsedTechnicalReport = { category: "water", rows: [{ standNumber: "3A01", services: [{ category: "water", externalLabel: "Přípojka vody", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }], warnings: [] };
+  let project2 = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), reportA, () => ({ status: "resolved" as const }));
+  project2 = mergeTechnicalRasterImport(project2, makeImport("water", "imp-2"), reportB, () => ({ status: "resolved" as const }));
+  assert.equal(project2.stands.length, 2, "two genuinely distinct existing stands, '3A1' and '3A01'");
+
+  const updated = mergeSupplementalCatalogImport(
+    project2,
+    { stands: [{ standNumber: "3A001", realizationCompanyRaw: "MAC Praha, spol. s r.o.", items: [], page: 1 }], warnings: [] },
+    "realizacky.pdf",
+  );
+  assert.equal(updated.stands.length, 3, "the ambiguous catalog row gets its OWN new stand, never silently merged into either '3A1' or '3A01'");
+  assert.equal(updated.catalogImportMeta?.canonicalAmbiguousRecordCount, 1);
+  const stand3A1 = updated.stands.find((s) => s.standNumber === "3A1");
+  const stand3A01 = updated.stands.find((s) => s.standNumber === "3A01");
+  assert.equal(stand3A1!.hasCatalogBuildRecord, undefined, "never guessed onto either existing candidate");
+  assert.equal(stand3A01!.hasCatalogBuildRecord, undefined, "never guessed onto either existing candidate");
 });

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { TECHNICAL_SERVICE_CATEGORIES } from "../../../domain/technicalServiceCatalog";
 import { categoryCanHaveExportableSymbol } from "../../../domain/technicalRasterServicePresentation";
-import { effectiveIncludeRealizationsInExport, effectiveWhiteFillOpacity, type TechnicalRasterProject } from "../../../domain/technicalRaster";
+import { effectiveIncludeRealizationsInExport, effectiveLegendPlacement, effectiveWhiteFillOpacity, type TechnicalRasterProject } from "../../../domain/technicalRaster";
 import { resolveRealizationDisplayState, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
 import { computeRealizationUnderlineGeometry } from "../../../domain/technicalRasterRealizationUnderline";
 import type { TechnicalRasterExportRealizationUnderlineItem } from "../../../lib/technicalRasterVectorPdf";
@@ -167,6 +167,10 @@ export function TechnicalRasterOutputsPanel({
       // itself enforces this (throws TechnicalRasterVectorExportError with code
       // "WHITE_MODE_UNSUPPORTED" and the offending page number), so nothing extra is checked here;
       // a thrown error lands in the catch block below with a ready-to-show Czech message.
+      // SIMPLIFIED LEGEND BATCH — automatic default (usual bottom-left area under the raster) when
+      // this project hasn't explicitly configured its own legendPlacement; a real per-project
+      // override (once a settings UI exists for it) still wins via the SAME effectiveLegendPlacement
+      // resolver — never a per-hall conditional here.
       const { bytes } = await buildTechnicalRasterMultiPageVectorExportPdf({
         sourcePdfBytes,
         pages,
@@ -175,6 +179,7 @@ export function TechnicalRasterOutputsPanel({
         headerLine,
         whiteMode: whiteModeRequested ? { opacity: whiteModeOpacity } : undefined,
         includeRealizationKey: includeRealizations,
+        legendPlacement: effectiveLegendPlacement(project.rasterSettings),
       });
 
       const blobUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));

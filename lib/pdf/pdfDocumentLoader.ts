@@ -8,10 +8,44 @@
  * calls loadPdfDocument() rather than importing pdfjs-dist itself.
  */
 import { ensurePdfJsWorkerConfigured } from "./pdfJsWorkerConfig.ts";
+import { createWhiteModeCanvasContextProxy } from "./pdfWhiteModeCanvasProxy.ts";
+
+/**
+ * CORRECTIVE BATCH (editor-only white mode) — the "session" lib/pdf/technicalRasterWhiteRender.ts's
+ * `renderWhiteModePage` installs on a document's own canvas factory for the duration of ONE
+ * `page.render()` call, so `WhiteModeAwareCanvasFactory` below can apply the SAME fillStyle-forcing
+ * Proxy to every canvas pdf.js creates internally (not just the one top-level canvas the caller
+ * already wraps itself) — see that module's own doc for the real-file-confirmed root cause this
+ * closes (a Form XObject's `/Group /S /Transparency` paints onto a brand new offscreen canvas pdf.js
+ * creates via this exact factory, which the top-level-only wrap never reached).
+ */
+export type PdfJsWhiteModeCanvasSession = Readonly<{
+  patchedIndices: ReadonlySet<number>;
+  fillColor: string;
+  operatorIndexRef: Readonly<{ current: number }>;
+  /**
+   * CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill) — every operator index
+   * where a source `gs` ran while inside the target OCG scope (domain/technicalRasterWhiteModeOperators.ts's
+   * own `sourceGsIndicesInsideTarget`). `WhiteModeAwareCanvasFactory.create()` forces `globalAlpha`
+   * to `1` at exactly these indices on EVERY canvas it creates — see lib/pdf/pdfWhiteModeCanvasProxy.ts's
+   * own doc for why this (not just the fillStyle-forcing trick) is what a real H3 stand's own
+   * page-level `/ca 0.76` ExtGState actually requires to be neutralized.
+   */
+  neutralizeAlphaIndices: ReadonlySet<number>;
+}>;
+
 export type PdfJsDocument = Readonly<{
   numPages: number;
   getPage(pageNumber: number): Promise<PdfJsPage>;
   getOptionalContentConfig(): Promise<PdfJsOptionalContentConfig>;
+  /**
+   * CORRECTIVE BATCH (editor-only white mode) — installs/clears the active white-mode session (see
+   * `PdfJsWhiteModeCanvasSession`'s own doc) on this document's own canvas factory. Optional so
+   * every pre-existing `PdfJsDocument` fake in this feature's test suite (none of which exercise a
+   * real pdf.js canvas factory at all) keeps compiling unchanged; the real `loadPdfDocument()`
+   * result below always implements it.
+   */
+  setWhiteModeCanvasSession?(session: PdfJsWhiteModeCanvasSession | undefined): void;
   /**
    * Releases the document's worker/WASM resources. Callers that keep a document around across
    * renders (see components/workflow/technicalRasters/TechnicalRasterCanvas.tsx) must call this
@@ -70,6 +104,78 @@ export type PdfJsOptionalContentConfig = Readonly<{
 }>;
 
 /**
+ * CORRECTIVE BATCH (editor-only white mode) — pdf.js's `getDocument({ CanvasFactory })` option
+ * accepts a CONSTRUCTOR (it always does `new CanvasFactory({ownerDocument, enableHWA})` itself
+ * internally — confirmed directly against pdfjs-dist 6.3.289's source), used for EVERY canvas pdf.js
+ * creates on its own for the lifetime of that document: transparency-group compositing, soft masks,
+ * tiling patterns, shading meshes — never the ONE top-level canvas a caller hands to `page.render()`
+ * itself, which this app already manages directly. Mirrors pdf.js's own (internal, unexported)
+ * `DOMCanvasFactory` exactly for `create`/`reset`/`destroy` (real `<canvas>` element, real 2D
+ * context, `willReadFrequently: true` — matching what `BaseCanvasFactory.create()` does) — the ONLY
+ * difference is `create()` wraps the real context in `createWhiteModeCanvasContextProxy` whenever an
+ * "active session" is currently set via `setActiveSession`. With no active session (every ordinary,
+ * non-white-mode render — the overwhelming majority of this app's rendering) `create()` returns the
+ * exact same plain, unwrapped context pdf.js's own default factory would have — zero behavior
+ * change, so this can never regress a render that isn't currently in the middle of white mode.
+ *
+ * Root cause this exists to fix (see lib/pdf/technicalRasterWhiteRender.ts's own module doc for the
+ * full story, confirmed empirically via scripts/technicalRasterEditorWhiteModeRealDiagnostic.ts): a
+ * Form XObject's own `/Group /S /Transparency` makes pdf.js's CanvasGraphics#beginGroup create a
+ * brand-new offscreen canvas via exactly this factory and paint the Form's own content onto THAT
+ * context — a fillStyle-forcing wrap that only ever covers the top-level canvas never sees those
+ * fills at all. Wrapping every canvas THIS factory ever creates, all driven by the one shared
+ * `operatorIndexRef`/`patchedIndices` (a single continuous index across the WHOLE flattened operator
+ * list, regardless of which physical canvas ends up painting a given operator — confirmed directly),
+ * closes that gap without ever risking whitening anything outside the pre-computed target indices.
+ */
+export class WhiteModeAwareCanvasFactory {
+  #ownerDocument: Document;
+  #activeSession: PdfJsWhiteModeCanvasSession | undefined;
+
+  constructor({ ownerDocument = globalThis.document }: Readonly<{ ownerDocument?: Document; enableHWA?: boolean }> = {}) {
+    this.#ownerDocument = ownerDocument;
+  }
+
+  setActiveSession(session: PdfJsWhiteModeCanvasSession | undefined): void {
+    this.#activeSession = session;
+  }
+
+  create(width: number, height: number): Readonly<{ canvas: HTMLCanvasElement; context: CanvasRenderingContext2D }> {
+    if (width <= 0 || height <= 0) throw new Error("Invalid canvas size");
+    const canvas = this.#ownerDocument.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const rawContext = canvas.getContext("2d", { willReadFrequently: true });
+    if (!rawContext) throw new Error("Unable to obtain a 2D canvas rendering context.");
+    const context = this.#activeSession
+      ? createWhiteModeCanvasContextProxy(
+        rawContext,
+        this.#activeSession.patchedIndices,
+        this.#activeSession.fillColor,
+        this.#activeSession.operatorIndexRef,
+        this.#activeSession.neutralizeAlphaIndices,
+      )
+      : rawContext;
+    return { canvas, context };
+  }
+
+  reset(canvasAndContext: { canvas: HTMLCanvasElement | null }, width: number, height: number): void {
+    if (!canvasAndContext.canvas) throw new Error("Canvas is not specified");
+    if (width <= 0 || height <= 0) throw new Error("Invalid canvas size");
+    canvasAndContext.canvas.width = width;
+    canvasAndContext.canvas.height = height;
+  }
+
+  destroy(canvasAndContext: { canvas: HTMLCanvasElement | null; context: unknown }): void {
+    if (!canvasAndContext.canvas) throw new Error("Canvas is not specified");
+    canvasAndContext.canvas.width = 0;
+    canvasAndContext.canvas.height = 0;
+    canvasAndContext.canvas = null;
+    canvasAndContext.context = null;
+  }
+}
+
+/**
  * `pdfjs.getDocument()` returns a `PDFDocumentLoadingTask`, whose OWN `.promise` resolves to the
  * `PDFDocumentProxy` every other pdf/*.ts module in this feature actually calls `getPage()`/
  * `getOptionalContentConfig()` on. The loading task — not the proxy — is what owns `.destroy()`
@@ -91,12 +197,15 @@ export type PdfJsOptionalContentConfig = Readonly<{
 export function wrapPdfDocumentProxy(
   loadingTask: Readonly<{ destroy(): Promise<void> }>,
   proxy: Omit<PdfJsDocument, "destroy">,
+  /** CORRECTIVE BATCH (editor-only white mode) — the SAME `WhiteModeAwareCanvasFactory` instance `loadPdfDocument` handed to `getDocument({ CanvasFactory })` for this document, so the returned `PdfJsDocument` can implement `setWhiteModeCanvasSession`. Optional (defaults to no-op) so `tests/pdfDocumentLoader.test.ts`'s own direct calls — which predate this batch and never touch canvas rendering — keep working unchanged. */
+  canvasFactory?: WhiteModeAwareCanvasFactory,
 ): PdfJsDocument {
   let destroyed = false;
   return {
     get numPages() { return proxy.numPages; },
     getPage: (pageNumber: number) => proxy.getPage(pageNumber),
     getOptionalContentConfig: () => proxy.getOptionalContentConfig(),
+    setWhiteModeCanvasSession: (session) => canvasFactory?.setActiveSession(session),
     destroy: async () => {
       if (destroyed) return;
       destroyed = true;
@@ -144,7 +253,24 @@ export async function loadingTaskToDocument(
 export async function loadPdfDocument(source: string | Readonly<{ data: ArrayBuffer }>): Promise<PdfJsDocument> {
   const pdfjs = await import("pdfjs-dist");
   ensurePdfJsWorkerConfigured(pdfjs, new URL("pdfjs-dist/build/pdf.worker.min.mjs", import.meta.url));
-  const loadingTask = typeof source === "string" ? pdfjs.getDocument({ url: source }) : pdfjs.getDocument({ data: source.data });
+
+  // CORRECTIVE BATCH (editor-only white mode) — `getDocument({ CanvasFactory })` only ever accepts
+  // a CONSTRUCTOR (it calls `new CanvasFactory({...})` internally itself), never a pre-built
+  // instance, so the only way to get a handle on THIS document's own factory instance afterward is
+  // to have its constructor capture itself into a variable in this closure — construction happens
+  // synchronously inside `getDocument()`, before it returns, so `canvasFactory` is always set by
+  // the time it's read below.
+  let canvasFactory: WhiteModeAwareCanvasFactory | undefined;
+  class CapturingWhiteModeAwareCanvasFactory extends WhiteModeAwareCanvasFactory {
+    constructor(options?: ConstructorParameters<typeof WhiteModeAwareCanvasFactory>[0]) {
+      super(options);
+      canvasFactory = this;
+    }
+  }
+
+  const loadingTask = typeof source === "string"
+    ? pdfjs.getDocument({ url: source, CanvasFactory: CapturingWhiteModeAwareCanvasFactory })
+    : pdfjs.getDocument({ data: source.data, CanvasFactory: CapturingWhiteModeAwareCanvasFactory });
   const proxy = await loadingTaskToDocument(loadingTask);
-  return wrapPdfDocumentProxy(loadingTask, proxy);
+  return wrapPdfDocumentProxy(loadingTask, proxy, canvasFactory);
 }

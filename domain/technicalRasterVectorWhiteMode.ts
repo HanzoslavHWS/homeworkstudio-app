@@ -31,7 +31,11 @@
  *     `resolveWhiteFillColor` already uses (a literal `rgba(255,255,255,opacity)` canvas fill,
  *     painted over whatever the page has already drawn beneath it at that point in the stream) —
  *     opacity 0 means the fill effectively disappears (revealing whatever was drawn earlier in the
- *     SAME content stream at that location), opacity 1 needs no ExtGState at all.
+ *     SAME content stream at that location); opacity 1 needs no ExtGState UNLESS the target scope's
+ *     own SOURCE content sets its own alpha via a `gs` call (see `hasSourceGsInsideTarget`'s own
+ *     doc below — real production evidence, Hala 3/FOR BEAUTY, where a per-stand `/ca 0.76`
+ *     ExtGState is set at the page level before every stand's own Form XObject, letting the hall's
+ *     background grid show through even a "fully opaque" white fill unless neutralized).
  *
  * Anything this algorithm cannot confidently classify — a Pattern-space fill (`scn` whose last
  * operand is a Name, i.e. a tiling/shading pattern), a shading fill (`sh`), an XObject invocation
@@ -243,16 +247,61 @@ function skipInlineImage(bytes: Uint8Array, afterBiEnd: number): number {
 }
 
 export type VectorWhiteModeOptions = Readonly<{
-  /** Decoded (no leading "/") resource-dictionary key names, from the copied page's own `/Resources/Properties`, that all resolve to the SAME target Optional Content Group object — a `BDC` operator's `/OC <Name>` is a match when `<Name>` (decoded) is in this set. Empty means "the target layer could not be located in this page's own resources" — always `status: "unsupported"`, never silently a no-op. */
+  /** Decoded (no leading "/") resource-dictionary key names, from the copied page's own `/Resources/Properties`, that all resolve to the SAME target Optional Content Group object — a `BDC` operator's `/OC <Name>` is a match when `<Name>` (decoded) is in this set. Empty means "the target layer could not be located in this page's own resources" — always `status: "unsupported"`, never silently a no-op. Ignored (never checked) when `assumeEntireStreamIsTarget` is set. */
   targetOcPropertyNames: ReadonlySet<string>;
   /** 0-1, already clamped by the caller (see resolveWhiteFillColor's own doc for why this uses the exact same 0-1 fraction as the live editor's "Krytí bílé"). */
   opacityFraction: number;
   /** Resource-dictionary key (no leading "/") of an ExtGState already registered by the caller with `/ca` set to `opacityFraction` — required whenever `opacityFraction < 1`; ignored otherwise (no wrapping is emitted for full opacity, since `/ca 1` is the graphics-state default already). */
   extGStateName?: string;
+  /**
+   * CORRECTIVE BATCH (white mode / Form XObject support) — when `true`, a `Do` operator reached
+   * while inside the target scope no longer aborts the transform with "unsupported". Instead each
+   * such invocation is recorded (deduplicated by resource name, with the byte range of the name
+   * operand immediately preceding `Do`, for an optional rename edit — see `renameFormInvocations`)
+   * into the result's own `formInvocationsInsideTarget`, and left byte-for-byte untouched in the
+   * output unless renamed. Every `Do` reached OUTSIDE the target scope is also recorded (into
+   * `formInvocationsOutsideTarget`) purely for the caller's own shared-Form detection — this module
+   * itself never inspects PDF objects, it only ever reports NAMES and byte ranges; resolving a name
+   * to an actual XObject, checking its `/Subtype`, and deciding mutate-vs-clone-on-write for a
+   * shared Form are all lib/technicalRasterVectorPdf.ts's own job (this module has zero pdf-lib
+   * dependency, spec's own "pure bytes in, pure bytes out" discipline). Omitted (or false) keeps
+   * today's exact original behavior: a `Do` inside target scope still aborts as "unsupported".
+   */
+  allowFormXObjects?: boolean;
+  /**
+   * When `true`, the ENTIRE stream is treated as already being inside the target scope from byte 0
+   * — no BDC/OC marked-content detection is performed at all (`targetOcPropertyNames` is ignored).
+   * Used for recursing into a Form XObject's OWN content once the caller has already established
+   * (from the PAGE's own marked-content structure) that this Form was invoked from inside the
+   * target OCG span — a Form reached that way is unconditionally "target" content for its entire
+   * body, exactly like the spec's own "target OCG -> Form A -> Form B -> fill" example.
+   */
+  assumeEntireStreamIsTarget?: boolean;
+  /**
+   * Old resource name -> new resource name, applied ONLY at `Do`-invocation name operands found
+   * INSIDE the target scope (never touches an outside-target invocation of the same name, and never
+   * touches the `Do` operator token itself — only the name operand immediately before it). Used by
+   * the caller for the "shared Form" case (spec section 10): when a Form is invoked from BOTH the
+   * target scope and elsewhere, the caller clones the Form under a NEW resource name and asks this
+   * function to redirect only the target-scope invocation(s) to that new name, leaving the original
+   * name (and therefore the original, unmodified Form object) fully intact for its other use(s).
+   */
+  renameFormInvocations?: ReadonlyMap<string, string>;
 }>;
 
+export type FormInvocation = Readonly<{ name: string }>;
+
 export type VectorWhiteModeResult =
-  | Readonly<{ status: "patched"; content: Uint8Array; whitenedFillCommandCount: number; wrappedSpanCount: number }>
+  | Readonly<{
+    status: "patched";
+    content: Uint8Array;
+    whitenedFillCommandCount: number;
+    wrappedSpanCount: number;
+    /** Deduplicated by name — every `Do` invocation reached while inside the target scope (only ever non-empty when `allowFormXObjects` was set). */
+    formInvocationsInsideTarget: readonly FormInvocation[];
+    /** Deduplicated by name — every `Do` invocation reached OUTSIDE the target scope, for the caller's own shared-Form detection. */
+    formInvocationsOutsideTarget: readonly FormInvocation[];
+  }>
   | Readonly<{ status: "unsupported"; reason: string }>;
 
 const FILL_COLOR_OPS = new Set(["g", "rg", "k", "sc", "scn"]);
@@ -268,13 +317,22 @@ type Edit = Readonly<{ offset: number; kind: "insert" | "replace"; end?: number;
  * result, so a caller never needs a second try/catch around this function.
  */
 export function computeVectorWhiteModeContentStream(content: Uint8Array, options: VectorWhiteModeOptions): VectorWhiteModeResult {
-  if (options.targetOcPropertyNames.size === 0) {
+  if (!options.assumeEntireStreamIsTarget && options.targetOcPropertyNames.size === 0) {
     return { status: "unsupported", reason: "Vrstva stánků nebyla v obsahu stránky nalezena (chybí odpovídající BDC/OC značka)." };
   }
-  const wrapOpacity = options.opacityFraction < 1;
+  // CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill) — wrapping/reasserting
+  // is needed not only when the PROJECT itself requests less than 100% opacity, but ALSO whenever
+  // the target scope's own SOURCE content contains a `gs` operator that could set alpha away from
+  // 1 (real H3 evidence — see hasSourceGsInsideTarget's own doc) — otherwise a fully-opaque
+  // "opacityFraction===1" request could still render translucent, letting earlier-drawn content
+  // (the hall's own background grid) show through. H1 (and every existing synthetic fixture with no
+  // `gs` at all) never triggers this extra check, so today's "opacity 1 needs no ExtGState at all"
+  // output is completely unchanged for that case.
+  const wrapOpacity = options.opacityFraction < 1 || hasSourceGsInsideTarget(content, options);
   if (wrapOpacity && !options.extGStateName) {
-    return { status: "unsupported", reason: "Interní chyba: pro krytí bílé menší než 100 % chybí registrovaný ExtGState." };
+    return { status: "unsupported", reason: "Interní chyba: chybí registrovaný ExtGState pro krytí bílé (potřebný i při 100 %, pokud zdrojový obsah sám nastavuje průhlednost)." };
   }
+  const renameMap = options.renameFormInvocations;
 
   try {
     type StackFrame = Readonly<{ isTarget: boolean; bdcStart: number; bdcEnd: number }>;
@@ -284,16 +342,36 @@ export function computeVectorWhiteModeContentStream(content: Uint8Array, options
     // content nested inside the stand layer's own "/OC BDC") must still count as "inside target":
     // a plain top-of-stack check would wrongly stop whitening the instant any non-OC marked content
     // is nested inside, even though the fill still visually belongs to the target OCG.
-    let targetDepth = 0;
+    let targetDepth = options.assumeEntireStreamIsTarget ? 1 : 0;
     let lastFillColorCommand: Readonly<{ start: number; end: number; isPattern: boolean }> | undefined;
     const fillPatchOffsets = new Set<number>();
     const edits: Edit[] = [];
     let wrappedSpanCount = 0;
+    const formInvocationsInsideTarget = new Map<string, FormInvocation>();
+    const formInvocationsOutsideTarget = new Map<string, FormInvocation>();
+
+    // CORRECTIVE BATCH (white mode / Form XObject support, section 8; generalized by the real-
+    // production H3 100%-white batch below) — whenever wrapping is active, ANY `gs` operator the
+    // TARGET SCOPE'S OWN content invokes (a real source ExtGState this transform never inspects/
+    // mutates — "do not strip arbitrary transparency that belongs to unrelated content") gets our
+    // own opacity ExtGState immediately RE-ASSERTED right after it. A `gs` invocation fully
+    // REPLACES the graphics state's current alpha (never multiplies), so re-asserting ours
+    // immediately after ANY source `gs` call guarantees the FINAL alpha in effect for anything
+    // drawn afterward is always exactly the project's own "Krytí bílé" value, regardless of what
+    // the source's own ExtGState set (or didn't set) — the source `gs` call itself, and everything
+    // else it may configure (blend mode, overprint, soft mask), is left completely untouched.
+    // Originally scoped to ONLY the recursed-Form-body case (`assumeEntireStreamIsTarget`) — real
+    // H3 evidence proved a source `gs` can equally be reached directly inside an ordinary page-level
+    // BDC/OC span (the per-stand `/ca 0.76` ExtGState set immediately before each `/FmNN Do`), so
+    // this now applies uniformly to BOTH shapes of target scope.
+    const reassertOpacityAfterGs = wrapOpacity;
 
     let pos = 0;
     let commandStart: number | undefined;
     let pendingOperandCount = 0;
     let lastOperandType: TokenType | undefined;
+    let lastOperandStart: number | undefined;
+    let lastOperandEnd: number | undefined;
 
     for (;;) {
       const token = nextToken(content, pos);
@@ -304,12 +382,36 @@ export function computeVectorWhiteModeContentStream(content: Uint8Array, options
         if (commandStart === undefined) commandStart = token.start;
         pendingOperandCount += 1;
         lastOperandType = token.type;
+        lastOperandStart = token.start;
+        lastOperandEnd = token.end;
         continue;
       }
 
       const op = token.text ?? "";
       const cmdStart = commandStart ?? token.start;
       const insideTarget = targetDepth > 0;
+
+      if (op === "gs" && reassertOpacityAfterGs && insideTarget) {
+        edits.push({ offset: token.end, kind: "insert", text: `\n/${options.extGStateName} gs\n` });
+      }
+
+      if (op === "Do" && options.allowFormXObjects) {
+        const name = lastOperandType === "name" && lastOperandStart !== undefined && lastOperandEnd !== undefined
+          ? decodeName(content, lastOperandStart, lastOperandEnd)
+          : undefined;
+        if (!name) throw new UnsupportedError("Operátor \"Do\" odkazuje na neplatný název zdroje.");
+        if (insideTarget) {
+          formInvocationsInsideTarget.set(name, { name });
+          const renamed = renameMap?.get(name);
+          if (renamed !== undefined && lastOperandStart !== undefined && lastOperandEnd !== undefined) {
+            edits.push({ offset: lastOperandStart, kind: "replace", end: lastOperandEnd, text: `/${renamed}` });
+          }
+        } else {
+          formInvocationsOutsideTarget.set(name, { name });
+        }
+        commandStart = undefined; pendingOperandCount = 0; lastOperandType = undefined; lastOperandStart = undefined; lastOperandEnd = undefined;
+        continue;
+      }
 
       if (op === "BI") {
         pos = skipInlineImage(content, pos);
@@ -383,11 +485,28 @@ export function computeVectorWhiteModeContentStream(content: Uint8Array, options
     }
 
     if (stack.length > 0) throw new UnsupportedError("Nevyvážené BDC/EMC značky v obsahu stránky.");
-    if (fillPatchOffsets.size === 0) {
+    if (fillPatchOffsets.size === 0 && formInvocationsInsideTarget.size === 0) {
       return { status: "unsupported", reason: "V cílové vrstvě nebyla nalezena žádná barevná výplň, kterou by šlo bezpečně přebarvit." };
     }
 
-    edits.sort((a, b) => a.offset - b.offset);
+    // CORRECTIVE BATCH (white mode / Form XObject support) — a recursed Form's ENTIRE body is
+    // itself the "target span" (there is no BDC/EMC of its own to hang the opacity wrap off), so it
+    // gets the SAME q/gs/Q bracket the page-level BDC/EMC span already gets, just spanning the
+    // whole stream instead of one marked-content region. `wrappedSpanCount` counts it identically
+    // (spec: "implement it consistently with the existing Hala 1 behavior").
+    if (options.assumeEntireStreamIsTarget && wrapOpacity) {
+      edits.push({ offset: 0, kind: "insert", text: `\nq\n/${options.extGStateName} gs\n` });
+      edits.push({ offset: content.length, kind: "insert", text: "\nQ\n" });
+      wrappedSpanCount += 1;
+    }
+
+    // An "insert" at a given offset must always be applied before a "replace" that starts at that
+    // SAME offset (e.g. the whole-form q/gs wrap inserted at offset 0 colliding with a fill-color
+    // replace that also starts at offset 0, when the form's very first bytes are the fill command).
+    // Inserts don't consume any original bytes, so they conceptually sit "at the boundary" prior to
+    // any replace starting exactly there; without this tie-break the cursor tracking below moves
+    // backward on the insert and re-emits the un-replaced original bytes from pristine `content`.
+    edits.sort((a, b) => a.offset - b.offset || (a.kind === "insert" ? -1 : b.kind === "insert" ? 1 : 0));
     const pieces: Uint8Array[] = [];
     let cursor = 0;
     for (const edit of edits) {
@@ -401,11 +520,80 @@ export function computeVectorWhiteModeContentStream(content: Uint8Array, options
     let writeOffset = 0;
     for (const piece of pieces) { result.set(piece, writeOffset); writeOffset += piece.length; }
 
-    return { status: "patched", content: result, whitenedFillCommandCount: fillPatchOffsets.size, wrappedSpanCount };
+    return {
+      status: "patched",
+      content: result,
+      whitenedFillCommandCount: fillPatchOffsets.size,
+      wrappedSpanCount,
+      formInvocationsInsideTarget: [...formInvocationsInsideTarget.values()],
+      formInvocationsOutsideTarget: [...formInvocationsOutsideTarget.values()],
+    };
   } catch (error) {
     if (error instanceof UnsupportedError) return { status: "unsupported", reason: error.message };
     throw error;
   }
+}
+
+/**
+ * CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill) — pre-scan: does the
+ * target scope contain ANY `gs` operator at all? Real evidence (Hala 3/FOR BEAUTY): the source PDF
+ * applies its OWN non-1 alpha via a `gs` call reached from inside the target OCG span — a per-stand
+ * ExtGState (`/ca 0.76 /CA 0.76`) set at the PAGE level, immediately before invoking that stand's
+ * own Form XObject, completely independent of anything this app's own "Krytí bílé" opacity slider
+ * says. Left unneutralized, that source alpha lets whatever was drawn BEFORE it in the same content
+ * stream (the hall's own background grid) show through even a fully-opaque (opacityFraction===1)
+ * white fill — confirmed structurally: H1 has zero `gs` operators anywhere in its stand span
+ * (direct fills only), so it never exercises this path at all, exactly matching why H1 never showed
+ * the artifact while H3 does. When this returns true, `computeVectorWhiteModeContentStream` wraps
+ * and re-asserts opacity EVEN AT opacityFraction===1 (a real `ca:1` ExtGState re-asserted after
+ * every source `gs`), purely to neutralize arbitrary source alpha — never to change the numeric
+ * opacity the project actually requested. A lightweight boolean walk (mirrors the main loop's own
+ * BDC/EMC/targetDepth tracking exactly, but touches nothing else — never a second edit pass).
+ */
+function hasSourceGsInsideTarget(content: Uint8Array, options: VectorWhiteModeOptions): boolean {
+  const stack: boolean[] = [];
+  let targetDepth = options.assumeEntireStreamIsTarget ? 1 : 0;
+  let pos = 0;
+  let commandStart: number | undefined;
+  let pendingOperandCount = 0;
+  let lastOperandType: TokenType | undefined;
+  for (;;) {
+    const token = nextToken(content, pos);
+    if (!token) break;
+    pos = token.end;
+    if (token.type !== "op") {
+      if (commandStart === undefined) commandStart = token.start;
+      pendingOperandCount += 1;
+      lastOperandType = token.type;
+      continue;
+    }
+    const op = token.text ?? "";
+    const cmdStart = commandStart ?? token.start;
+    if (op === "gs" && targetDepth > 0) return true;
+    if (op === "BI") { pos = skipInlineImage(content, pos); commandStart = undefined; pendingOperandCount = 0; lastOperandType = undefined; continue; }
+    if (op === "BDC" || op === "BMC") {
+      let isTarget = false;
+      if (op === "BDC" && pendingOperandCount >= 2 && lastOperandType) {
+        const tagToken = findOperandToken(content, cmdStart, pendingOperandCount - 2);
+        const propsToken = findOperandToken(content, cmdStart, pendingOperandCount - 1);
+        if (tagToken?.type === "name" && tagToken.text === "OC" && propsToken?.type === "name" && propsToken.text) {
+          isTarget = options.targetOcPropertyNames.has(propsToken.text);
+        }
+      }
+      stack.push(isTarget);
+      if (isTarget) targetDepth += 1;
+      commandStart = undefined; pendingOperandCount = 0; lastOperandType = undefined;
+      continue;
+    }
+    if (op === "EMC") {
+      const wasTarget = stack.pop();
+      if (wasTarget) targetDepth -= 1;
+      commandStart = undefined; pendingOperandCount = 0; lastOperandType = undefined;
+      continue;
+    }
+    commandStart = undefined; pendingOperandCount = 0; lastOperandType = undefined;
+  }
+  return false;
 }
 
 /** Re-scans from a known command start to pull out the Nth (0-based) operand token — used only for BDC's own two operands, which we already know exist by count (spec: never re-tokenize the whole stream just to inspect two small operands). */

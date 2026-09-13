@@ -147,3 +147,87 @@ test("technicalRasterVectorWhiteMode: a colon-balanced sequence of unrelated BMC
   const result = computeVectorWhiteModeContentStream(stream, { targetOcPropertyNames: TARGET, opacityFraction: 1 });
   assert.equal(result.status, "patched");
 });
+
+// ============================================================================
+// CORRECTIVE BATCH (white mode / Form XObject support) — real evidence: Hala 3_2026-
+// ver.12_NOVY_3.pdf (FOR BEAUTY) draws every stand fill inside a Form XObject (`/FmNN Do`) rather
+// than with a direct fill operator, unlike the Hala 1 (FOR DECOR) control file. This pure module
+// never resolves a PDF object itself (zero pdf-lib dependency) — it only ever reports resource
+// NAMES reached via `Do` inside/outside the target scope, and applies caller-supplied renames.
+// Actually resolving/cloning/mutating the referenced Form XObjects is lib/technicalRasterVectorPdf.ts's
+// own job (see its own dedicated test file for the full recursive integration coverage).
+// ============================================================================
+
+test("allowFormXObjects: a 'Do' inside the target OCG is no longer unsupported — it is recorded, and the Do call itself is left byte-for-byte untouched", () => {
+  const stream = bytes("/OC /MC0 BDC\n/Fm1 Do\nEMC\n");
+  const result = computeVectorWhiteModeContentStream(stream, { targetOcPropertyNames: TARGET, opacityFraction: 1, allowFormXObjects: true });
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.deepEqual(result.formInvocationsInsideTarget, [{ name: "Fm1" }]);
+  assert.deepEqual(result.formInvocationsOutsideTarget, []);
+  assert.match(text(result.content), /\/Fm1 Do/u, "the Do call itself is never rewritten unless a rename was explicitly requested");
+});
+
+test("allowFormXObjects: without it, a 'Do' inside the target OCG is STILL unsupported — today's exact original behavior, unaffected by this batch unless explicitly opted in", () => {
+  const stream = bytes("/OC /MC0 BDC\n/Fm1 Do\nEMC\n");
+  const result = computeVectorWhiteModeContentStream(stream, { targetOcPropertyNames: TARGET, opacityFraction: 1 });
+  assert.equal(result.status, "unsupported");
+});
+
+test("allowFormXObjects: a 'Do' OUTSIDE the target OCG is recorded separately, for the caller's own shared-Form detection — never confused with an inside-target invocation of the same name", () => {
+  const stream = bytes("/Fm1 Do\n/OC /MC0 BDC\n/Fm1 Do\nEMC\n");
+  const result = computeVectorWhiteModeContentStream(stream, { targetOcPropertyNames: TARGET, opacityFraction: 1, allowFormXObjects: true });
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.deepEqual(result.formInvocationsInsideTarget, [{ name: "Fm1" }]);
+  assert.deepEqual(result.formInvocationsOutsideTarget, [{ name: "Fm1" }]);
+});
+
+test("renameFormInvocations: redirects ONLY the inside-target Do invocation to the new name, an outside-target invocation of the SAME name is left completely untouched", () => {
+  const stream = bytes("/Fm1 Do\n/OC /MC0 BDC\n/Fm1 Do\nEMC\n");
+  const result = computeVectorWhiteModeContentStream(stream, {
+    targetOcPropertyNames: TARGET, opacityFraction: 1, allowFormXObjects: true, renameFormInvocations: new Map([["Fm1", "Fm1White"]]),
+  });
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  const out = text(result.content);
+  const doCalls = [...out.matchAll(/\/(\S+)\s+Do/gu)].map((m) => m[1]);
+  assert.deepEqual(doCalls, ["Fm1", "Fm1White"], "the FIRST (outside-target) Do call keeps the original name; only the SECOND (inside-target) one is renamed");
+});
+
+test("assumeEntireStreamIsTarget: treats the WHOLE stream as target from byte 0 — no BDC/OC detection performed, targetOcPropertyNames is ignored", () => {
+  const stream = bytes("1 0 0 rg 0 0 10 10 re f\n");
+  const result = computeVectorWhiteModeContentStream(stream, { targetOcPropertyNames: new Set(), opacityFraction: 1, assumeEntireStreamIsTarget: true });
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.match(text(result.content), /1 1 1 rg/);
+  assert.equal(result.whitenedFillCommandCount, 1);
+});
+
+test("assumeEntireStreamIsTarget + reduced opacity: wraps the WHOLE form body in q/gs/Q, exactly like a page-level BDC span does", () => {
+  const stream = bytes("1 0 0 rg 0 0 10 10 re f\n");
+  const result = computeVectorWhiteModeContentStream(stream, {
+    targetOcPropertyNames: new Set(), opacityFraction: 0.6, extGStateName: "GS1", assumeEntireStreamIsTarget: true,
+  });
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.match(text(result.content), /^\s*q\n\/GS1 gs\n[\s\S]*1 1 1 rg[\s\S]*\nQ\s*$/u);
+  assert.equal(result.wrappedSpanCount, 1);
+});
+
+test("assumeEntireStreamIsTarget + reduced opacity: a source 'gs' call INSIDE the form's own content gets our opacity RE-ASSERTED immediately after it — the source gs call itself is never removed/altered (spec section 8: 'do not strip arbitrary transparency that belongs to unrelated content')", () => {
+  const stream = bytes("/GSSource gs\n1 0 0 rg 0 0 10 10 re f\n");
+  const result = computeVectorWhiteModeContentStream(stream, {
+    targetOcPropertyNames: new Set(), opacityFraction: 0.6, extGStateName: "GS1", assumeEntireStreamIsTarget: true,
+  });
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  const out = text(result.content);
+  assert.match(out, /\/GSSource gs\n\/GS1 gs/u, "our own opacity gs is re-asserted IMMEDIATELY after the untouched source gs call");
+});
+
+test("allowFormXObjects: a shading fill ('sh') is STILL always unsupported, even with Form XObject support enabled — never conflated with Do", () => {
+  const stream = bytes("/OC /MC0 BDC\n/Sh1 sh\nEMC\n");
+  const result = computeVectorWhiteModeContentStream(stream, { targetOcPropertyNames: TARGET, opacityFraction: 1, allowFormXObjects: true });
+  assert.equal(result.status, "unsupported");
+});

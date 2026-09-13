@@ -9,6 +9,7 @@ import {
   type ParsedTechnicalReport,
   type TechnicalRasterImport,
   type TechnicalRasterProject,
+  type TechnicalStand,
 } from "../domain/technicalRaster.ts";
 import {
   computeStandPlacementProgress,
@@ -48,11 +49,29 @@ function buildMatchedStand(services: readonly Readonly<{ category: string; exter
   return { project, standId };
 }
 
-test("0 point services -> Bez bodových služeb bucket (never toPlace, never done)", () => {
-  const { project } = buildMatchedStand([{ category: "cleaning", externalLabel: "Denní úklid", quantity: 40 }]);
+test("CORRECTIVE BATCH (real production): 0 point services -> Bez bodových služeb bucket (never toPlace, never done) — the real remaining example is a stand with ZERO services at all (a catalog-only stand), since every recognized category is now placeable", () => {
+  const { project: base } = buildMatchedStand([{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1 }]);
+  const catalogOnlyStand: TechnicalStand = {
+    id: "stand-catalog-only",
+    standNumber: "1A22",
+    services: [],
+    notes: [],
+    placement: { status: "matched_manual", rasterPage: 1, anchorXNormalized: 0.5, anchorYNormalized: 0.5, matchMethod: "manual" },
+    sourceImportIds: [],
+    hasCatalogBuildRecord: true,
+  };
+  const project: TechnicalRasterProject = { ...base, stands: [catalogOnlyStand] };
   const queue = groupStandsByPlacementWorkQueue(project.stands);
   assert.equal(queue.noPointServices.length, 1);
   assert.equal(queue.toPlace.length, 0);
+  assert.equal(queue.done.length, 0);
+});
+
+test("CORRECTIVE BATCH (real production): cleaning qty=40 IS now a point service — a stand with only cleaning goes to K umístění (toPlace), never 'Bez bodových služeb'", () => {
+  const { project } = buildMatchedStand([{ category: "cleaning", externalLabel: "Denní úklid", quantity: 40 }]);
+  const queue = groupStandsByPlacementWorkQueue(project.stands);
+  assert.equal(queue.toPlace.length, 1, "cleaning is now placeable — an unplaced cleaning record needs its own marker");
+  assert.equal(queue.noPointServices.length, 0);
   assert.equal(queue.done.length, 0);
 });
 
@@ -102,27 +121,39 @@ test("D) removing one placement from a done stand -> back to K umístění", () 
   assert.equal(groupStandsByPlacementWorkQueue(project.stands).toPlace.length, 1);
 });
 
-test("E) informational services (WIFI) never block Hotovo", () => {
+test("CORRECTIVE BATCH (real production): E) WiFi is now a REAL point service (perQuantity) — an unplaced WIFI(qty=5) DOES block Hotovo until all 5 are placed", () => {
   let { project, standId } = buildMatchedStand([
     { category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1 },
     { category: "internet", externalLabel: "WIFI", quantity: 5 },
   ]);
   const electricityServiceId = project.stands[0]!.services.find((s) => s.category === "electricity")!.id;
+  const wifiServiceId = project.stands[0]!.services.find((s) => s.category === "internet")!.id;
   project = placeTechnicalService(project, standId, electricityServiceId, { page: 1, xNormalized: 0.1, yNormalized: 0.1 });
+  const afterElectricityOnly = project.stands.find((s) => s.id === standId)!;
+  assert.equal(isStandPlacementComplete(afterElectricityOnly), false, "5 required WiFi points are still unplaced — must NOT read as complete");
+
+  for (let i = 0; i < 5; i += 1) {
+    project = placeTechnicalService(project, standId, wifiServiceId, { page: 1, xNormalized: 0.1 + i * 0.01, yNormalized: 0.2 });
+  }
   const stand = project.stands.find((s) => s.id === standId)!;
-  assert.equal(isStandPlacementComplete(stand), true, "the unplaced WIFI(qty=5) service must never block completeness");
+  assert.equal(isStandPlacementComplete(stand), true, "once electricity + all 5 WiFi points are placed, the stand IS complete");
 });
 
-test("F) cleaning qty=40 (none) never blocks Hotovo", () => {
+test("CORRECTIVE BATCH (real production): F) cleaning qty=40 (onePerRecord) needs exactly ONE placement to reach Hotovo, never blocks on the raw quantity", () => {
   let { project, standId } = buildMatchedStand([
     { category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1 },
     { category: "cleaning", externalLabel: "Denní úklid", quantity: 40 },
   ]);
   const electricityServiceId = project.stands[0]!.services.find((s) => s.category === "electricity")!.id;
+  const cleaningServiceId = project.stands[0]!.services.find((s) => s.category === "cleaning")!.id;
   project = placeTechnicalService(project, standId, electricityServiceId, { page: 1, xNormalized: 0.1, yNormalized: 0.1 });
+  const afterElectricityOnly = project.stands.find((s) => s.id === standId)!;
+  assert.equal(isStandPlacementComplete(afterElectricityOnly), false, "cleaning's own required 1 marker is still unplaced");
+
+  project = placeTechnicalService(project, standId, cleaningServiceId, { page: 1, xNormalized: 0.2, yNormalized: 0.2 });
   const stand = project.stands.find((s) => s.id === standId)!;
-  assert.equal(isStandPlacementComplete(stand), true);
-  assert.equal(computeStandPlacementProgress(stand).totalCount, 1, "cleaning's own qty=40 must never leak into the point-count denominator");
+  assert.equal(isStandPlacementComplete(stand), true, "exactly ONE cleaning marker (never 40) completes the stand");
+  assert.equal(computeStandPlacementProgress(stand).totalCount, 2, "electricity(1) + cleaning(1, onePerRecord) = 2 — cleaning's own qty=40 must never leak into the point-count denominator");
 });
 
 test("G) qty=2 is correctly counted (0/2 -> 1/2 -> 2/2)", () => {
@@ -135,19 +166,36 @@ test("G) qty=2 is correctly counted (0/2 -> 1/2 -> 2/2)", () => {
   assert.deepEqual(computeStandPlacementProgress(project.stands[0]!), { placedCount: 2, totalCount: 2 });
 });
 
-test("H) summary: stand count only counts matched stands WITH point services", () => {
+test("CORRECTIVE BATCH (real production): H) summary: stand count only counts matched stands WITH point services — waste is now itself a point service, so the remaining real 'no point services' example is a catalog-only stand with ZERO services", () => {
+  const { project: p1 } = buildMatchedStand([{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1 }]);
+  const catalogOnlyStand: TechnicalStand = {
+    id: "stand-catalog-only",
+    standNumber: "1A22",
+    services: [],
+    notes: [],
+    placement: { status: "matched_manual", rasterPage: 1, anchorXNormalized: 0.5, anchorYNormalized: 0.5, matchMethod: "manual" },
+    sourceImportIds: [],
+    hasCatalogBuildRecord: true,
+  };
+  const project: TechnicalRasterProject = { ...p1, stands: [...p1.stands, catalogOnlyStand] };
+
+  const summary = computeTechnicalRasterPlacementSummary(project.stands);
+  assert.equal(summary.standCountWithPointServices, 1, "the services-less catalog-only stand never counts on either side");
+  assert.equal(summary.doneStandCount, 0);
+  assert.equal(standHasPointServices(catalogOnlyStand), false);
+});
+
+test("CORRECTIVE BATCH (real production): waste is now itself a point service — a matched waste-only stand DOES count toward standCountWithPointServices", () => {
   const { project: p1 } = buildMatchedStand([{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1 }]);
   let project = p1;
-  // Add a second matched stand with only an informational service (no point services at all).
   const report: ParsedTechnicalReport = { category: "waste", rows: [{ standNumber: "1A22", services: [{ category: "waste", externalLabel: "Kontejn 1100 l", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }], warnings: [] };
   project = mergeTechnicalRasterImport(project, makeImport("waste", "imp-x"), report, alwaysUnresolved);
   const secondStandId = project.stands.find((s) => s.standNumber === "1A22")!.id;
   project = assignStandManually(project, secondStandId, { page: 1, anchorXNormalized: 0.5, anchorYNormalized: 0.5 });
 
   const summary = computeTechnicalRasterPlacementSummary(project.stands);
-  assert.equal(summary.standCountWithPointServices, 1, "the waste-only stand never counts on either side");
-  assert.equal(summary.doneStandCount, 0);
-  assert.equal(standHasPointServices(project.stands.find((s) => s.standNumber === "1A22")!), false);
+  assert.equal(summary.standCountWithPointServices, 2, "both the electricity stand AND the (now placeable) waste stand count");
+  assert.equal(standHasPointServices(project.stands.find((s) => s.standNumber === "1A22")!), true);
 });
 
 test("I) summary: placement point counts aggregate correctly across stands", () => {
@@ -198,7 +246,21 @@ test("auto-advance: qty=2 -> first click stays on the SAME service (1 remaining)
   assert.equal(afterSecond, undefined, "qty=2 with 2 placed -> no more targets");
 });
 
-test("resolveNextPlacementTarget: a stand with no point services at all resolves to undefined", () => {
+test("CORRECTIVE BATCH (real production): resolveNextPlacementTarget: a stand with no point services at all (zero services) resolves to undefined", () => {
+  const catalogOnlyStand: TechnicalStand = {
+    id: "stand-catalog-only",
+    standNumber: "1A22",
+    services: [],
+    notes: [],
+    placement: { status: "matched_manual", rasterPage: 1, anchorXNormalized: 0.5, anchorYNormalized: 0.5, matchMethod: "manual" },
+    sourceImportIds: [],
+    hasCatalogBuildRecord: true,
+  };
+  assert.equal(resolveNextPlacementTarget(catalogOnlyStand, undefined), undefined);
+});
+
+test("CORRECTIVE BATCH (real production): resolveNextPlacementTarget: cleaning qty=40 IS now a real point service — targets it like any other missing point", () => {
   const { project } = buildMatchedStand([{ category: "cleaning", externalLabel: "Denní úklid", quantity: 40 }]);
-  assert.equal(resolveNextPlacementTarget(project.stands[0]!, undefined), undefined);
+  const target = resolveNextPlacementTarget(project.stands[0]!, undefined);
+  assert.equal(target?.serviceId, project.stands[0]!.services[0]!.id);
 });

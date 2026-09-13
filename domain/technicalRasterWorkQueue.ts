@@ -7,13 +7,17 @@
  * its own existing unassigned/ambiguous/assigned split; spárování itself is untouched by this file.
  *
  * "Hotovo" (spec section 5) means every "point" service on the stand has `placements.length >=
- * quantity` — informational/none services (WIFI, odpad, úklid regardless of its own quantity, e.g.
- * "Denní úklid" qty=40) never count toward this, exactly mirroring
- * domain/technicalRasterExport.ts's own totalPointCount discipline (kept as a SEPARATE function
- * here rather than reused, since that module's summary is project-wide/export-scoped while this
- * one is deliberately scoped to the matched-stand work queue only — spec section 10: "nad SEZNAMEM").
+ * requiredPlacementCount(service)` — CORRECTIVE BATCH (real production, "quantity is not always
+ * number of placement points"): completion is measured against `requiredPlacementCount`, never
+ * raw `service.quantity` directly, so a `placementCardinality: "onePerRecord"` service (cleaning,
+ * waste, ...) needs exactly ONE placement to be "done" regardless of its own quantity (real case:
+ * "1C01 cleaning qty=40" completes after ONE marker, never 40) — see domain/technicalRaster.ts's
+ * own `requiredPlacementCount` doc for the full policy. Kept as a SEPARATE function here rather
+ * than reused from domain/technicalRasterExport.ts, since that module's summary is project-wide/
+ * export-scoped while this one is deliberately scoped to the matched-stand work queue only (spec
+ * section 10: "nad SEZNAMEM").
  */
-import { effectiveServicePlacements, type TechnicalStand, type TechnicalService } from "./technicalRaster.ts";
+import { effectiveServicePlacements, requiredPlacementCount, type TechnicalStand, type TechnicalService } from "./technicalRaster.ts";
 import { resolveTechnicalServicePresentation } from "./technicalRasterServicePresentation.ts";
 
 function isPointService(service: TechnicalService): boolean {
@@ -21,7 +25,7 @@ function isPointService(service: TechnicalService): boolean {
 }
 
 function needsMorePlacements(service: TechnicalService): boolean {
-  return isPointService(service) && effectiveServicePlacements(service).length < service.quantity;
+  return isPointService(service) && effectiveServicePlacements(service).length < requiredPlacementCount(service);
 }
 
 export type StandPlacementProgress = Readonly<{ placedCount: number; totalCount: number }>;
@@ -32,8 +36,9 @@ export function computeStandPlacementProgress(stand: TechnicalStand): StandPlace
   let totalCount = 0;
   for (const service of stand.services) {
     if (!isPointService(service)) continue;
-    totalCount += service.quantity;
-    placedCount += Math.min(effectiveServicePlacements(service).length, service.quantity);
+    const required = requiredPlacementCount(service);
+    totalCount += required;
+    placedCount += Math.min(effectiveServicePlacements(service).length, required);
   }
   return { placedCount, totalCount };
 }

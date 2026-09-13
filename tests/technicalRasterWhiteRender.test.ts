@@ -6,7 +6,7 @@ import {
   resolveWhiteFillColor,
   resolveWhiteModeAvailability,
 } from "../lib/pdf/technicalRasterWhiteRender.ts";
-import type { PdfJsOperatorList, PdfJsPage, PdfJsViewport } from "../lib/pdf/pdfDocumentLoader.ts";
+import type { PdfJsDocument, PdfJsOperatorList, PdfJsPage, PdfJsViewport } from "../lib/pdf/pdfDocumentLoader.ts";
 
 // A minimal fake PdfJsPage whose operator list draws one stand-layer fill (so computeWhiteModeArgsArray
 // always finds something to patch) — used to exercise renderWhiteModePage's caching and isolation
@@ -24,6 +24,36 @@ function makeFakePage(): Readonly<{ page: PdfJsPage; getOperatorListCalls: () =>
     render: () => ({ promise: Promise.resolve() }),
   };
   return { page: page as unknown as PdfJsPage, getOperatorListCalls: () => getOperatorListCalls };
+}
+
+/** Mirrors H3's own REAL operator shape: a source `gs` (setGState, op code 74 — pdf.js's real numeric value for this pinned version) reached inside the target OCG scope, BEFORE the fill-color-setter — real evidence a page-level `/ca 0.76` ExtGState is set right before invoking a stand's own transparency-group Form XObject. */
+function makeFakePageWithSourceGs(): Readonly<{ page: PdfJsPage }> {
+  const page = {
+    getViewport: (): PdfJsViewport => ({ width: 100, height: 100, transform: [1, 0, 0, -1, 0, 100] }),
+    getTextContent: async () => ({ items: [] }),
+    getOperatorList: async (): Promise<PdfJsOperatorList> => ({
+      // beginMarkedContentProps("STANDS"), setGState(ca=0.76), setFillRGBColor, constructPath(fillStroke), endMarkedContent
+      // (9 is pdf.js's own REAL numeric OPS.setGState value for this pinned version — verified
+      // directly, since getWhiteModeOpCodes() reads the real "pdfjs-dist" module's own OPS object)
+      fnArray: [70, 9, 59, 91, 71],
+      argsArray: [["OC", "STANDS"], [[["ca", 0.76]]], ["#ffeb3b"], [24, "geometry"], null],
+    }),
+    render: () => ({ promise: Promise.resolve() }),
+  };
+  return { page: page as unknown as PdfJsPage };
+}
+
+/** A minimal fake `PdfJsDocument` whose `setWhiteModeCanvasSession` records every call — used to prove renderWhiteModePage's own session install/clear wiring (corrective batch, editor-only white mode) without needing a real pdf.js canvas factory at all. */
+function makeSpyDocument(): Readonly<{ document: PdfJsDocument; sessions: unknown[] }> {
+  const sessions: unknown[] = [];
+  const document = {
+    numPages: 1,
+    getPage: async () => { throw new Error("not used by this fake"); },
+    getOptionalContentConfig: async () => { throw new Error("not used by this fake"); },
+    setWhiteModeCanvasSession: (session: unknown) => { sessions.push(session); },
+    destroy: async () => {},
+  } as unknown as PdfJsDocument;
+  return { document, sessions };
 }
 
 function fakeCanvasContext(): CanvasRenderingContext2D {
@@ -186,13 +216,126 @@ test("F) createWhiteModeCanvasContextProxy: any OTHER canvas state (lineWidth, g
   assert.equal(target.lineWidth, 1.5, "only fillStyle is ever intercepted — every other canvas property/method call passes straight through, which is what keeps geometry/dash/line-width untouched");
 });
 
-test("no globalAlpha: createWhiteModeCanvasContextProxy never sets globalAlpha as a side effect of any fillStyle assignment (spec section 24 — globalAlpha would transparentize the stroke too, which is forbidden)", () => {
+test("no globalAlpha SIDE EFFECT: merely setting a patched fillStyle never itself touches globalAlpha — it only arms a pending override, consumed by a LATER real globalAlpha assignment (see the dedicated CORRECTIVE BATCH tests below for that mechanism)", () => {
   const target = {} as CanvasRenderingContext2D;
   const patchedIndices = new Set([2]);
   const operatorIndexRef = { current: 2 };
   const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 0.6)", operatorIndexRef);
   proxy.fillStyle = "#0000ff";
-  assert.equal(target.globalAlpha, undefined, "globalAlpha must never be touched at all — the opacity lives entirely inside the fillStyle string");
+  assert.equal(target.globalAlpha, undefined, "fillStyle alone never writes globalAlpha");
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill) — real evidence: Hala 3's
+// source PDF sets a genuine per-stand `/ca 0.76 /CA 0.76` ExtGState via a page-level `gs` call.
+// Reading pdf.js's own source confirms `setGState`'s `ca` case does
+// `ctx.globalAlpha = current.fillAlpha = value`, and `CanvasGraphics#fillStroke` (the handler for a
+// combined fill+stroke paint) does, IN ORDER: `ctx.globalAlpha = fillAlpha; ctx.fill(...);
+// ctx.globalAlpha = strokeAlpha; ctx.stroke(...)`. Canvas 2D MULTIPLIES a fill's own rgba() alpha
+// by `globalAlpha` at paint time, so a source `ca` left untouched would silently transparentize a
+// "fully opaque" forced-white fill — exactly the reported grid-through-fill symptom, now also
+// reproduced structurally here with a synthetic fixture mirroring H3's real operator order.
+// ============================================================================
+
+test("CORRECTIVE BATCH: a globalAlpha assignment reached IMMEDIATELY after a patched fillStyle (the real pdf.js fillAlpha-before-fill() sequence) is forced to 1 — neutralizing a source 'ca' so the forced-white fill's own opacity is the ONLY thing determining the final result", () => {
+  const target = { fillStyle: undefined, globalAlpha: undefined } as unknown as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const operatorIndexRef = { current: 2 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 1)", operatorIndexRef);
+  proxy.fillStyle = "#ffeb3b"; // the patched fill-color-setter's own turn — forces white, arms the pending override
+  proxy.globalAlpha = 0.76; // pdf.js's own `ctx.globalAlpha = fillAlpha` — a real source 'ca' value, must be neutralized
+  assert.equal(target.globalAlpha, 1, "the source's own ca=0.76 must be overridden to 1 — otherwise 1(our fill alpha)×0.76 = 0.76, not the requested 100%");
+});
+
+test("CORRECTIVE BATCH: the override fires EXACTLY ONCE — a SECOND globalAlpha assignment (pdf.js's own strokeAlpha, set right before ctx.stroke()) passes through completely untouched, preserving the source's own stroke opacity", () => {
+  const target = { fillStyle: undefined, globalAlpha: undefined } as unknown as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const operatorIndexRef = { current: 2 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 1)", operatorIndexRef);
+  proxy.fillStyle = "#ffeb3b";
+  proxy.globalAlpha = 0.76; // fillAlpha -> forced to 1
+  assert.equal(target.globalAlpha, 1);
+  proxy.globalAlpha = 0.76; // strokeAlpha (CA) -> the override was already consumed, must pass through unmodified
+  assert.equal(target.globalAlpha, 0.76, "stroke alpha (CA) must never be touched — only the fill's own alpha (ca) is ever neutralized");
+});
+
+test("CORRECTIVE BATCH: a globalAlpha assignment that happens WITHOUT a preceding patched fillStyle (unrelated content) is never touched at all", () => {
+  const target = { globalAlpha: undefined } as unknown as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const operatorIndexRef = { current: 5 }; // NOT a patched index
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 1)", operatorIndexRef);
+  proxy.globalAlpha = 0.76;
+  assert.equal(target.globalAlpha, 0.76, "unrelated content's own alpha must never be overridden");
+});
+
+test("CORRECTIVE BATCH: an UN-patched fillStyle set cancels any stale pending override, defensively", () => {
+  const target = { fillStyle: undefined, globalAlpha: undefined } as unknown as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const operatorIndexRef = { current: 2 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 1)", operatorIndexRef);
+  proxy.fillStyle = "#ffeb3b"; // patched -> arms override
+  operatorIndexRef.current = 9; // move to an unrelated, unpatched index
+  proxy.fillStyle = "#000000"; // a DIFFERENT, unpatched fill color -> cancels the stale armed override
+  proxy.globalAlpha = 0.5;
+  assert.equal(target.globalAlpha, 0.5, "the stale override must not leak forward onto unrelated later content");
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill) — real evidence: H3's own
+// page-level `/ca 0.76` ExtGState is set via a `gs` operator reached from inside the target OCG
+// scope, BEFORE any Form/offscreen-canvas swap ever happens — the fillStyle-forcing backstop above
+// never sees it (it fires on a completely different context, later). `neutralizeAlphaIndices`
+// (domain/technicalRasterWhiteModeOperators.ts's `sourceGsIndicesInsideTarget`) is the fix: force
+// `globalAlpha` to 1 at EXACTLY the operator indices where a source `gs` ran inside target scope,
+// on WHATEVER canvas receives it — mirroring the export side's "reassert after any source gs
+// inside target" policy exactly.
+// ============================================================================
+
+test("CORRECTIVE BATCH (H3 100% grid-through-fill): a globalAlpha assignment at an index in neutralizeAlphaIndices is forced to 1 — this is what actually neutralizes a real source 'ca' reached BEFORE any fillStyle has even been patched yet", () => {
+  const target = { globalAlpha: undefined } as unknown as CanvasRenderingContext2D;
+  const patchedIndices = new Set([10]); // the fill-color-setter's own index — far LATER than the gs
+  const neutralizeAlphaIndices = new Set([3]); // the source gs operator's own index
+  const operatorIndexRef = { current: 3 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 1)", operatorIndexRef, neutralizeAlphaIndices);
+  proxy.globalAlpha = 0.76; // pdf.js's own setGState 'ca' handler, reached before ANY fillStyle patch
+  assert.equal(target.globalAlpha, 1, "a source ca reached inside target scope must be neutralized even with no pending fillStyle override at all");
+});
+
+test("CORRECTIVE BATCH (H3 100% grid-through-fill): a globalAlpha assignment at an index NOT in neutralizeAlphaIndices, with no pending fillStyle override either, passes through completely untouched", () => {
+  const target = { globalAlpha: undefined } as unknown as CanvasRenderingContext2D;
+  const patchedIndices = new Set([10]);
+  const neutralizeAlphaIndices = new Set([3]);
+  const operatorIndexRef = { current: 7 }; // neither a neutralize index nor a patched index
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 1)", operatorIndexRef, neutralizeAlphaIndices);
+  proxy.globalAlpha = 0.5;
+  assert.equal(target.globalAlpha, 0.5, "unrelated content's own alpha must never be overridden");
+});
+
+test("CORRECTIVE BATCH (H3 100% grid-through-fill): omitting neutralizeAlphaIndices entirely (every pre-existing call site/test above this batch) never throws — it's purely additive, defaulting to an empty set", () => {
+  const target = { fillStyle: undefined, globalAlpha: undefined } as unknown as CanvasRenderingContext2D;
+  const patchedIndices = new Set([2]);
+  const operatorIndexRef = { current: 2 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 0.6)", operatorIndexRef);
+  proxy.fillStyle = "#0000ff";
+  proxy.globalAlpha = 0.76;
+  assert.equal(target.globalAlpha, 1, "the pre-existing fillStyle-driven backstop mechanism alone still works when neutralizeAlphaIndices is omitted");
+});
+
+test("CORRECTIVE BATCH (H3 100% grid-through-fill): both mechanisms coexist safely — a neutralize-index gs (before any fill) AND a later patched-fillStyle-driven fill both end up at globalAlpha=1, matching the real H3 operator sequence end-to-end", () => {
+  const target = { fillStyle: undefined, globalAlpha: undefined } as unknown as CanvasRenderingContext2D;
+  const patchedIndices = new Set([10]);
+  const neutralizeAlphaIndices = new Set([3]);
+  const operatorIndexRef = { current: 3 };
+  const proxy = createWhiteModeCanvasContextProxy(target, patchedIndices, "rgba(255, 255, 255, 1)", operatorIndexRef, neutralizeAlphaIndices);
+
+  proxy.globalAlpha = 0.76; // the page-level source gs, BEFORE the Form/offscreen swap
+  assert.equal(target.globalAlpha, 1, "neutralized via neutralizeAlphaIndices");
+
+  operatorIndexRef.current = 10; // later: the fill-color-setter's own turn
+  proxy.fillStyle = "#ffeb3b"; // patched -> arms the backstop
+  assert.equal(target.fillStyle, "rgba(255, 255, 255, 1)");
+  proxy.globalAlpha = 0.76; // e.g. a stale internal fillAlpha re-application right before ctx.fill()
+  assert.equal(target.globalAlpha, 1, "neutralized via the fillStyle-driven backstop");
 });
 
 test("end-to-end: renderWhiteModePage threads whiteFillOpacity all the way into the actual patched fillStyle value the underlying context receives", async () => {
@@ -208,4 +351,64 @@ test("end-to-end: renderWhiteModePage threads whiteFillOpacity all the way into 
   const result = await renderWhiteModePage({ page, pageKey: `doc-${crypto.randomUUID()}#1`, standLayerId: "STANDS", canvasContext: target, viewport, whiteFillOpacity: 0.6 });
   assert.equal(result.status, "rendered");
   assert.equal(resolveWhiteFillColor(0.6), "rgba(255, 255, 255, 0.6)", "sanity: this IS the exact string renderWhiteModePage's own fillColor computation would have produced for whiteFillOpacity=0.6");
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (editor-only white mode) — real manual acceptance found Hala 3 (every stand
+// fill drawn inside a Form XObject) stays fully colored in the editor. Root cause, confirmed
+// empirically (scripts/technicalRasterEditorWhiteModeRealDiagnostic.ts): a Form XObject's own
+// `/Group /S /Transparency` makes pdf.js paint onto a brand-new OFFSCREEN canvas the top-level-only
+// Proxy never reached. The fix threads an "active session" through the OWNING PdfJsDocument's own
+// canvas factory (WhiteModeAwareCanvasFactory, tests/pdfDocumentLoader.test.ts) for the duration of
+// ONE page.render() call — these tests prove renderWhiteModePage installs/clears that session
+// correctly, using a fake PdfJsDocument (no real pdf.js canvas factory needed to prove the wiring).
+// ============================================================================
+
+test("renderWhiteModePage: installs the active white-mode session on the OWNING document BEFORE render(), and clears it back to undefined immediately after — so an offscreen canvas created DURING this render() can also be wrapped, and a LATER render never inherits a stale session", async () => {
+  const { page } = makeFakePage();
+  const viewport = page.getViewport({ scale: 1 });
+  const { document, sessions } = makeSpyDocument();
+  const result = await renderWhiteModePage({ page, pageKey: `doc-${crypto.randomUUID()}#1`, standLayerId: "STANDS", canvasContext: fakeCanvasContext(), viewport, document });
+  assert.equal(result.status, "rendered");
+  assert.equal(sessions.length, 2, "exactly one 'install' call before render(), one 'clear' call after");
+  const installed = sessions[0] as Readonly<{ patchedIndices: ReadonlySet<number>; fillColor: string; operatorIndexRef: Readonly<{ current: number }>; neutralizeAlphaIndices: ReadonlySet<number> }>;
+  // makeFakePage()'s own fixed operator list: beginMarkedContentProps("STANDS")=0, setFillRGBColor=1,
+  // constructPath(fillStroke)=2, endMarkedContent=3 — index 1 (the fill-color setter) is the one
+  // computeWhiteModeArgsArray patches.
+  assert.deepEqual([...installed.patchedIndices], [1]);
+  assert.equal(installed.fillColor, resolveWhiteFillColor());
+  assert.deepEqual([...installed.neutralizeAlphaIndices], [], "no 'gs' operator anywhere in this fixture's own operator list — never a guess/fabricated index");
+  assert.equal(sessions[1], undefined, "cleared back to undefined immediately after render() completes");
+});
+
+test("CORRECTIVE BATCH (H3 100% grid-through-fill): renderWhiteModePage installs neutralizeAlphaIndices from a source 'gs' reached inside target scope — the real H3 shape", async () => {
+  const { page } = makeFakePageWithSourceGs();
+  const viewport = page.getViewport({ scale: 1 });
+  const { document, sessions } = makeSpyDocument();
+  const result = await renderWhiteModePage({ page, pageKey: `doc-${crypto.randomUUID()}#1`, standLayerId: "STANDS", canvasContext: fakeCanvasContext(), viewport, document });
+  assert.equal(result.status, "rendered");
+  const installed = sessions[0] as Readonly<{ patchedIndices: ReadonlySet<number>; neutralizeAlphaIndices: ReadonlySet<number> }>;
+  // fnArray: beginMarkedContentProps("STANDS")=0, setGState(ca=0.76)=1, setFillRGBColor=2, constructPath=3, endMarkedContent=4.
+  assert.deepEqual([...installed.patchedIndices], [2], "the fill-color-setter is still the one whitened");
+  assert.deepEqual([...installed.neutralizeAlphaIndices], [1], "the source gs's own index is recorded for globalAlpha neutralization");
+});
+
+test("renderWhiteModePage: the session is cleared even if page.render() itself throws — never leaves a stale active session behind for a later, unrelated render on the same document", async () => {
+  const { page } = makeFakePage();
+  const viewport = page.getViewport({ scale: 1 });
+  const { document, sessions } = makeSpyDocument();
+  const throwingPage = { ...page, render: () => ({ promise: Promise.reject(new Error("simulated render failure")) }) } as unknown as PdfJsPage;
+  await assert.rejects(
+    () => renderWhiteModePage({ page: throwingPage, pageKey: `doc-${crypto.randomUUID()}#1`, standLayerId: "STANDS", canvasContext: fakeCanvasContext(), viewport, document }),
+    /simulated render failure/u,
+  );
+  assert.equal(sessions.length, 2);
+  assert.equal(sessions[1], undefined, "cleared even though render() rejected");
+});
+
+test("renderWhiteModePage: omitting `document` entirely (every pre-existing call site/test above this batch) never throws — installing the session is purely additive, never required", async () => {
+  const { page } = makeFakePage();
+  const viewport = page.getViewport({ scale: 1 });
+  const result = await renderWhiteModePage({ page, pageKey: `doc-${crypto.randomUUID()}#1`, standLayerId: "STANDS", canvasContext: fakeCanvasContext(), viewport });
+  assert.equal(result.status, "rendered");
 });

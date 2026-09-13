@@ -44,9 +44,9 @@ async function main(): Promise<void> {
   const sourcePdfBytes = new Uint8Array(await readFile(rasterPath));
 
   const placements: TechnicalRasterExportPlacementItem[] = [
-    { standId: "diag-1B04", standNumber: "1B04", serviceId: "svc-1", placementId: "p-1", xNormalized: 0.3, yNormalized: 0.35, presentation: resolveTechnicalServicePresentation("electricity", "Do 6kW 230V") },
-    { standId: "diag-1B04", standNumber: "1B04", serviceId: "svc-2", placementId: "p-2", xNormalized: 0.32, yNormalized: 0.35, presentation: resolveTechnicalServicePresentation("electricity", "Lednicový okruh") },
-    { standId: "diag-1B04", standNumber: "1B04", serviceId: "svc-3", placementId: "p-3", xNormalized: 0.34, yNormalized: 0.35, presentation: resolveTechnicalServicePresentation("internet", "Internet") },
+    { standId: "diag-1B04", standNumber: "1B04", serviceId: "svc-1", placementId: "p-1", xNormalized: 0.3, yNormalized: 0.35, presentation: resolveTechnicalServicePresentation("electricity", "Do 6kW 230V"), category: "electricity" },
+    { standId: "diag-1B04", standNumber: "1B04", serviceId: "svc-2", placementId: "p-2", xNormalized: 0.32, yNormalized: 0.35, presentation: resolveTechnicalServicePresentation("electricity", "Lednicový okruh"), category: "electricity" },
+    { standId: "diag-1B04", standNumber: "1B04", serviceId: "svc-3", placementId: "p-3", xNormalized: 0.34, yNormalized: 0.35, presentation: resolveTechnicalServicePresentation("internet", "Internet"), category: "internet" },
   ];
   const legend = buildTechnicalRasterExportLegend(placements);
 

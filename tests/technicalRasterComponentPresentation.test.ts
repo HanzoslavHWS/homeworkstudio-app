@@ -77,11 +77,12 @@ test("D) explicit placementBehavior override — a normally-point service can be
   assert.equal(forcedPoint.placementBehavior, "point");
 });
 
-test("E) fallback for an unknown service — no config still reports isFallback:true with the '?' label", () => {
+test("CORRECTIVE BATCH (real production): E) fallback for an unknown service — no config still reports isFallback:true, still placeable, with a compact label built from its own real text", () => {
   const unknown = { category: "some-future-category", externalLabel: "x" };
   const resolved = resolveTechnicalRasterPresentation(unknown);
   assert.equal(resolved.isFallback, true);
-  assert.equal(resolved.displayLabel, "?");
+  assert.equal(resolved.placementBehavior, "point", "an unrecognized-but-real imported service must still be placeable, never impossible to place");
+  assert.equal(resolved.displayLabel, "X");
 });
 
 test("E2) an unknown service WITH an explicit component override is no longer treated as a fallback", () => {
@@ -119,6 +120,7 @@ test("G) the resolved presentation is structurally usable as a TechnicalRasterEx
     xNormalized: 0.5,
     yNormalized: 0.5,
     presentation: resolved,
+    category: electricity.category,
   };
   assert.equal(item.presentation.color, "#00ff00");
 });

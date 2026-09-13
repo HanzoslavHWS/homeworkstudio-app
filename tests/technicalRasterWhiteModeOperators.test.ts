@@ -39,6 +39,7 @@ const FILL_STROKE = 24;
 const CLOSE_EO_FILL_STROKE = 27;
 const STROKE_ONLY = 20;
 const FILL_ONLY = 22;
+const SET_GSTATE = 74; // matches pdf.js's own real OPS.setGState numeric value for this pinned version
 
 function beginMc(groupId: string): [number, unknown] {
   return [BEGIN_MC_PROPS, ["OC", groupId]];
@@ -303,4 +304,122 @@ test("nested marked-content: an inner unrelated layer's own fill never leaks int
   assert.deepEqual(result.argsArray[3], ["#ff0000"]);
   // the outer stand-layer's re-declared color is whitened.
   assert.deepEqual(result.argsArray[6], ["#ffffff"]);
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (white mode / Form XObject support) — proof for the EDITOR path (spec section
+// 13): real-file evidence showed the FOR BEAUTY Hall 3 raster (Hala 3_2026- ver.12_NOVY_3.pdf)
+// draws every stand fill inside its own Form XObject (`/FmNN Do`) rather than directly in the
+// page's own content, unlike the FOR DECOR control file. Running pdf.js's OWN
+// `page.getOperatorList({ intent: "display" })` against that real file (verified directly, not
+// guessed) shows it ALREADY flattens Form XObject content into this SAME flat fnArray/argsArray —
+// wrapped in `paintFormXObjectBegin`/`paintFormXObjectEnd` markers this algorithm has never heard
+// of — with every fill resolving as a plain `setFillRGBColor` op, never something excluded like
+// `setFillColorN`. This test proves WHY that means the editor's own white-mode transform (this
+// module, via lib/pdf/technicalRasterWhiteRender.ts) needed zero code changes for Form XObjects:
+// an unrecognized op code (like the Form begin/end markers) matches none of the `if`s above and is
+// silently skipped — it can never affect the marked-content stack or the remembered fill-setter
+// index — so a fill that pdf.js delivers to us from INSIDE a flattened Form is indistinguishable
+// from one drawn directly in the page's own content.
+// ============================================================================
+
+const PAINT_FORM_XOBJECT_BEGIN = 200; // an arbitrary op code this algorithm has no case for at all
+const PAINT_FORM_XOBJECT_END = 201;
+
+test("Form XObject support (editor path): unrecognized 'paintFormXObjectBegin'/'paintFormXObjectEnd' markers around a Form-flattened fill inside the stand layer are silently ignored — the fill is still whitened exactly as if it had been drawn directly", () => {
+  const list = buildOperatorList([
+    beginMc("STANDS"),
+    [PAINT_FORM_XOBJECT_BEGIN, null], // pdf.js flattening a "/Fm1 Do" invocation reached from inside STANDS
+    [SET_FILL_RGB, ["#ffeb3b"]],
+    [CONSTRUCT_PATH, [FILL_ONLY, "geometry-inside-form"]],
+    [PAINT_FORM_XOBJECT_END, null],
+    endMc(),
+  ]);
+  const result = computeWhiteModeArgsArray(list, "STANDS", OPS);
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.deepEqual(result.argsArray[2], ["#ffffff"], "the Form-flattened fill color is whitened exactly like a direct fill would be");
+  assert.deepEqual(result.patchedIndices, [2]);
+});
+
+test("Form XObject support (editor path): a Form-flattened fill OUTSIDE the stand layer's own marked content is never touched, even with the same begin/end markers present", () => {
+  const list = buildOperatorList([
+    [PAINT_FORM_XOBJECT_BEGIN, null],
+    [SET_FILL_RGB, ["#ffeb3b"]],
+    [CONSTRUCT_PATH, [FILL_ONLY, "geometry-outside-form"]],
+    [PAINT_FORM_XOBJECT_END, null],
+  ]);
+  const result = computeWhiteModeArgsArray(list, "STANDS", OPS);
+  assert.equal(result.status, "unsupported", "no fill was ever found INSIDE the stand layer, so this correctly reports unsupported rather than guessing");
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill, editor path) — real H3
+// evidence: a page-level `gs` operator (`/ca 0.76 /CA 0.76`) reached from inside the target OCG
+// span, right before invoking a stand's own transparency-group Form XObject, sets `ctx.globalAlpha`
+// directly (pdf.js's own `setGState` "ca" case) — a leak the fillStyle-forcing trick alone never
+// addressed, since it happens on the PARENT canvas, before any Form/offscreen swap even occurs (see
+// lib/pdf/pdfWhiteModeCanvasProxy.ts's own doc for the full empirically-confirmed mechanism).
+// `sourceGsIndicesInsideTarget` is the new field these tests pin: every operator index where a
+// `gs` (setGState) op ran while inside the target layer's own marked-content scope.
+// ============================================================================
+
+const OPS_WITH_GSTATE: WhiteModeOpCodes = { ...OPS, setGState: SET_GSTATE };
+
+test("sourceGsIndicesInsideTarget: a 'gs' operator reached inside the target layer is recorded, in addition to the ordinary patched fill index", () => {
+  const list = buildOperatorList([
+    beginMc("STANDS"),
+    [SET_GSTATE, [["ca", 0.76]]],
+    [SET_FILL_RGB, ["#ffeb3b"]],
+    [CONSTRUCT_PATH, [FILL_ONLY, "geometry"]],
+    endMc(),
+  ]);
+  const result = computeWhiteModeArgsArray(list, "STANDS", OPS_WITH_GSTATE);
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.deepEqual(result.patchedIndices, [2], "the fill-color-setter is still whitened exactly as before");
+  assert.deepEqual(result.sourceGsIndicesInsideTarget, [1], "the 'gs' op's own index (1) is recorded separately");
+});
+
+test("sourceGsIndicesInsideTarget: a 'gs' operator OUTSIDE the target layer is never recorded", () => {
+  const list = buildOperatorList([
+    [SET_GSTATE, [["ca", 0.76]]], // outside any marked content at all
+    beginMc("STANDS"),
+    [SET_FILL_RGB, ["#ffeb3b"]],
+    [CONSTRUCT_PATH, [FILL_ONLY, "geometry"]],
+    endMc(),
+  ]);
+  const result = computeWhiteModeArgsArray(list, "STANDS", OPS_WITH_GSTATE);
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.deepEqual(result.sourceGsIndicesInsideTarget, [], "the 'gs' op at index 0 is outside the STANDS layer — never recorded");
+});
+
+test("sourceGsIndicesInsideTarget: multiple 'gs' operators inside target scope (mirroring H3's real per-stand pattern — one before an unrelated overprint reset, one carrying the real ca) are ALL recorded", () => {
+  const list = buildOperatorList([
+    beginMc("STANDS"),
+    [SET_GSTATE, [["op", false], ["OP", false]]], // e.g. the form-internal-style overprint-only gs
+    [SET_GSTATE, [["ca", 0.76], ["CA", 0.76]]], // the real per-stand alpha-carrying gs
+    [SET_FILL_RGB, ["#ffeb3b"]],
+    [CONSTRUCT_PATH, [FILL_ONLY, "geometry"]],
+    endMc(),
+  ]);
+  const result = computeWhiteModeArgsArray(list, "STANDS", OPS_WITH_GSTATE);
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.deepEqual(result.sourceGsIndicesInsideTarget, [1, 2], "both 'gs' ops inside target scope are recorded, regardless of what they individually set");
+});
+
+test("sourceGsIndicesInsideTarget: when opCodes.setGState is NOT supplied (undefined), no 'gs' tracking happens at all — every pre-existing caller/test that never passes it keeps working byte-for-byte unchanged", () => {
+  const list = buildOperatorList([
+    beginMc("STANDS"),
+    [SET_GSTATE, [["ca", 0.76]]],
+    [SET_FILL_RGB, ["#ffeb3b"]],
+    [CONSTRUCT_PATH, [FILL_ONLY, "geometry"]],
+    endMc(),
+  ]);
+  const result = computeWhiteModeArgsArray(list, "STANDS", OPS); // OPS has no setGState field at all
+  assert.equal(result.status, "patched");
+  if (result.status !== "patched") return;
+  assert.deepEqual(result.sourceGsIndicesInsideTarget, [], "without opCodes.setGState, the 'gs' op (74) is simply an unrecognized op code — no tracking, no crash");
 });

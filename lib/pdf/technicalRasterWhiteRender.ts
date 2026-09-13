@@ -42,11 +42,47 @@
  * PDF content stream, so this holds for any content-only difference; it has NOT been re-verified
  * against every possible `intent`/`annotationMode` combination — this app always requests the
  * same (`intent: "display"`, default annotationMode) for both calls, which is the only
- * combination exercised here.
+ * combination exercised here. This part of the mechanism was NEVER the bug (confirmed empirically,
+ * see the corrective batch below) — the index really is continuous and correct across Form-
+ * flattened content.
+ *
+ * CORRECTIVE BATCH (editor-only white mode) — real manual acceptance found Hala 3 (a raster whose
+ * every stand fill lives inside a Form XObject, see domain/technicalRasterVectorWhiteMode.ts's own
+ * doc for the export-side story) stays FULLY COLORED in the editor even though the fill-color-
+ * setter indices are computed correctly. Root cause, confirmed empirically (not guessed — see
+ * scripts/technicalRasterEditorWhiteModeRealDiagnostic.ts, which runs the REAL production
+ * mechanism against the REAL fixture and proves this directly): every one of Hala 3's Form
+ * XObjects declares its own `/Group /S /Transparency`, and pdf.js's OWN CanvasGraphics#beginGroup
+ * responds to that by creating a BRAND NEW, temporary OFFSCREEN canvas (via `canvasFactory.create()`)
+ * and painting the Form's entire content onto THAT context instead of the one originally passed to
+ * `page.render()` — only compositing the result back onto the real canvas afterward. The Proxy
+ * this module builds (`createWhiteModeCanvasContextProxy`, now in ./pdfWhiteModeCanvasProxy.ts)
+ * only ever wrapped that ONE top-level context — so every `ctx.fillStyle = ...` a Form's own fill
+ * makes lands on the real, UNWRAPPED offscreen context and is never forced white at all. Hala 1 has
+ * zero Form XObjects (confirmed by the same diagnostic: 0 `paintFormXObjectBegin`), so it never
+ * exercises this path — matching the real symptom exactly (H1 fine, H3 stays colored).
+ *
+ * Fix: lib/pdf/pdfDocumentLoader.ts's `WhiteModeAwareCanvasFactory` wraps EVERY canvas pdf.js
+ * creates internally (not just the one top-level canvas this module already wraps) with the SAME
+ * fillStyle-forcing Proxy, driven by one shared "active session" (`patchedIndices`/`fillColor`/
+ * `operatorIndexRef`) that `renderWhiteModePage` below installs on the OWNING `PdfJsDocument`
+ * immediately before `page.render()` and clears immediately after. Since `operatorIndexRef` is a
+ * single continuous index across the WHOLE flattened operator list regardless of which physical
+ * canvas ends up painting it, wrapping every canvas this way can never whiten anything outside the
+ * pre-computed `patchedIndices` — it only ever closes the gap between "the mutation was computed"
+ * and "the mutation reached the context that actually paints it".
  */
 import { computeWhiteModeArgsArray, detectStandLayerId, type WhiteModeOpCodes } from "../../domain/technicalRasterWhiteModeOperators.ts";
 import type { RasterLayer } from "../../domain/technicalRaster.ts";
-import type { PdfJsOptionalContentConfig, PdfJsPage, PdfJsViewport } from "./pdfDocumentLoader.ts";
+import type { PdfJsDocument, PdfJsOptionalContentConfig, PdfJsPage, PdfJsViewport } from "./pdfDocumentLoader.ts";
+import { createWhiteModeCanvasContextProxy } from "./pdfWhiteModeCanvasProxy.ts";
+
+// Re-exported so every existing import of `createWhiteModeCanvasContextProxy` from THIS module
+// (production and tests/technicalRasterWhiteRender.test.ts alike) keeps working unchanged — the
+// actual implementation now lives in pdfWhiteModeCanvasProxy.ts (see that module's own doc for why:
+// pdfDocumentLoader.ts's WhiteModeAwareCanvasFactory needs it too, and importing it from here would
+// create a circular dependency).
+export { createWhiteModeCanvasContextProxy };
 
 export type WhiteModeAvailability =
   | Readonly<{ status: "available"; standLayerId: string }>
@@ -80,6 +116,9 @@ async function getWhiteModeOpCodes(): Promise<WhiteModeOpCodes> {
       rawFillPath: OPS.rawFillPath,
       fillPaintTypes: new Set([OPS.fill, OPS.eoFill, OPS.fillStroke, OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke]),
       fillColorSetters: new Set([OPS.setFillRGBColor, OPS.setFillGray, OPS.setFillCMYKColor, OPS.setFillColor]),
+      // CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill) — see
+      // WhiteModeOpCodes.setGState's own doc for why this is needed at all.
+      setGState: OPS.setGState,
       unsupportedFillOps: new Set([
         OPS.setFillColorN,
         OPS.shadingFill,
@@ -95,7 +134,9 @@ async function getWhiteModeOpCodes(): Promise<WhiteModeOpCodes> {
   return opCodesPromise;
 }
 
-type PatchPlanResult = Readonly<{ status: "patched"; patchedIndices: ReadonlySet<number> }> | Readonly<{ status: "unsupported"; reason: string }>;
+type PatchPlanResult =
+  | Readonly<{ status: "patched"; patchedIndices: ReadonlySet<number>; neutralizeAlphaIndices: ReadonlySet<number> }>
+  | Readonly<{ status: "unsupported"; reason: string }>;
 
 /** Cached per (pageKey, standLayerId) — computing the plan means one getOperatorList() read plus one linear scan, never repeated on every toggle/zoom/pan (spec section 22). */
 const patchPlanCache = new Map<string, Promise<PatchPlanResult>>();
@@ -109,7 +150,11 @@ async function getOrComputePatchPlan(page: PdfJsPage, pageKey: string, standLaye
       const opCodes = await getWhiteModeOpCodes();
       const result = computeWhiteModeArgsArray(operatorList, standLayerId, opCodes);
       if (result.status === "unsupported") return { status: "unsupported", reason: result.reason };
-      return { status: "patched", patchedIndices: new Set(result.patchedIndices) };
+      return {
+        status: "patched",
+        patchedIndices: new Set(result.patchedIndices),
+        neutralizeAlphaIndices: new Set(result.sourceGsIndicesInsideTarget),
+      };
     })();
     patchPlanCache.set(key, cached);
   }
@@ -137,47 +182,20 @@ export function resolveWhiteFillColor(opacity: number = DEFAULT_WHITE_FILL_OPACI
 }
 
 /**
- * Builds the Proxy that forces `ctx.fillStyle` to `fillColor` for exactly the patched operator
- * indices — extracted from renderWhiteModePage below (spec batch 6, UI section 33) specifically so
- * tests/technicalRasterWhiteRender.test.ts can exercise the fill/stroke isolation directly, without
- * needing a full fake pdf.js render loop: `operatorIndexRef` is a plain mutable box a caller
- * (production code's own `operationsFilter`, or a test driving the proxy by hand) updates to say
- * "this is the operator about to run" — mirrors the exact real wiring, just given a name instead of
- * being a closure-private variable.
- */
-export function createWhiteModeCanvasContextProxy(
-  canvasContext: CanvasRenderingContext2D,
-  patchedIndices: ReadonlySet<number>,
-  fillColor: string,
-  operatorIndexRef: Readonly<{ current: number }>,
-): CanvasRenderingContext2D {
-  return new Proxy(canvasContext, {
-    // Both traps force `target` as the receiver (never the default, which would be the proxy
-    // itself) — the real CanvasRenderingContext2D's accessors are native-backed and throw if
-    // invoked with `this` bound to anything other than the real context (verified against
-    // node-canvas; the same defensive binding is kept for the browser for the same reason).
-    get(target, property) {
-      const value = Reflect.get(target, property, target);
-      return typeof value === "function" ? value.bind(target) : value;
-    },
-    set(target, property, value) {
-      // Deliberately checks property === "fillStyle" ONLY — never touches strokeStyle, never sets
-      // ctx.globalAlpha (spec batch 6, UI section 24/25: a real closeEOFillStroke paint call uses
-      // ONE combined fill+stroke operator, so globalAlpha would transparentize the stroke too,
-      // which is forbidden). The opacity lives entirely inside this one rgba() fill string.
-      if (property === "fillStyle" && patchedIndices.has(operatorIndexRef.current)) {
-        return Reflect.set(target, property, fillColor, target);
-      }
-      return Reflect.set(target, property, value, target);
-    },
-  });
-}
-
-/**
  * Renders `page` into `canvasContext` with the target stand layer's fill whitened (at
  * `whiteFillOpacity`, spec batch 6) and its stroke/geometry/dash/line-width completely untouched
  * (spec section 11/17/26). `pageKey` must uniquely identify this page for caching purposes (e.g.
  * `${rasterUrl}#${pageNumber}`) — see module doc for the mechanism and its one stated assumption.
+ *
+ * CORRECTIVE BATCH (editor-only white mode) — `document` (the OWNING `PdfJsDocument`, optional
+ * only so existing tests/fakes that predate this batch keep compiling) is used to install the
+ * SAME `patchedIndices`/`fillColor`/`operatorIndexRef` this function already builds onto that
+ * document's own canvas factory (`setWhiteModeCanvasSession`, see pdfDocumentLoader.ts) for the
+ * duration of this ONE `page.render()` call — so a Form XObject's own transparency-group offscreen
+ * canvas gets the identical fillStyle-forcing treatment the top-level canvas already got, closing
+ * the gap that left Hala 3 fully colored (see this module's own doc for the full root-cause). The
+ * session is always cleared in `finally`, so a later ordinary (non-white-mode) render on the same
+ * document is never affected by a stale session.
  */
 export async function renderWhiteModePage(params: Readonly<{
   page: PdfJsPage;
@@ -189,31 +207,38 @@ export async function renderWhiteModePage(params: Readonly<{
   optionalContentConfigPromise?: Promise<PdfJsOptionalContentConfig>;
   /** "Krytí bílé" 0-1 (spec batch 6). Defaults to DEFAULT_WHITE_FILL_OPACITY (1 = today's fully-opaque white) when omitted — never required, so no existing caller/test needs to change. */
   whiteFillOpacity?: number;
+  /** The `PdfJsDocument` `page` was obtained from — needed to reach its own canvas factory's `setWhiteModeCanvasSession` (see this function's own doc). Optional so every pre-existing test/fake that only ever exercised the top-level-canvas mechanism keeps working unchanged; a real production call site always passes it. */
+  document?: PdfJsDocument;
 }>): Promise<WhiteModeRenderResult> {
-  const { page, pageKey, standLayerId, canvasContext, viewport, optionalContentConfigPromise, whiteFillOpacity } = params;
+  const { page, pageKey, standLayerId, canvasContext, viewport, optionalContentConfigPromise, whiteFillOpacity, document } = params;
   const plan = await getOrComputePatchPlan(page, pageKey, standLayerId);
   if (plan.status === "unsupported") return plan;
 
   const fillColor = resolveWhiteFillColor(whiteFillOpacity);
   const operatorIndexRef = { current: -1 };
-  const proxiedContext = createWhiteModeCanvasContextProxy(canvasContext, plan.patchedIndices, fillColor, operatorIndexRef);
+  const proxiedContext = createWhiteModeCanvasContextProxy(canvasContext, plan.patchedIndices, fillColor, operatorIndexRef, plan.neutralizeAlphaIndices);
 
-  await page.render({
-    canvasContext: proxiedContext,
-    // pdf.js's own render() defaults `canvas = canvasContext.canvas` and, when `canvas` is
-    // truthy, DISCARDS the passed canvasContext entirely in favor of re-deriving a fresh, UNWRAPPED
-    // 2D context from that canvas (verified by reading pdfjs-dist's source for this pinned
-    // version) — silently defeating this whole mechanism. Explicitly passing `canvas: null` (not
-    // `undefined`, which would still trigger that default) keeps our proxied context in use.
-    canvas: null,
-    viewport,
-    intent: "display",
-    optionalContentConfigPromise,
-    operationsFilter: (index) => {
-      operatorIndexRef.current = index;
-      return true;
-    },
-  }).promise;
+  document?.setWhiteModeCanvasSession?.({ patchedIndices: plan.patchedIndices, fillColor, operatorIndexRef, neutralizeAlphaIndices: plan.neutralizeAlphaIndices });
+  try {
+    await page.render({
+      canvasContext: proxiedContext,
+      // pdf.js's own render() defaults `canvas = canvasContext.canvas` and, when `canvas` is
+      // truthy, DISCARDS the passed canvasContext entirely in favor of re-deriving a fresh, UNWRAPPED
+      // 2D context from that canvas (verified by reading pdfjs-dist's source for this pinned
+      // version) — silently defeating this whole mechanism. Explicitly passing `canvas: null` (not
+      // `undefined`, which would still trigger that default) keeps our proxied context in use.
+      canvas: null,
+      viewport,
+      intent: "display",
+      optionalContentConfigPromise,
+      operationsFilter: (index) => {
+        operatorIndexRef.current = index;
+        return true;
+      },
+    }).promise;
+  } finally {
+    document?.setWhiteModeCanvasSession?.(undefined);
+  }
 
   return { status: "rendered" };
 }

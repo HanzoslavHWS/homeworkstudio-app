@@ -3,9 +3,21 @@
 import { TECHNICAL_SERVICE_CATEGORIES } from "../../../domain/technicalServiceCatalog";
 import { resolveTechnicalServicePresentation, TECHNICAL_RASTER_COLORS } from "../../../domain/technicalRasterServicePresentation";
 
-/** One representative color swatch per category — purely a visual hint in this panel, resolved from a representative label so it never invents a one-off color (spec section 56: colors always come from TECHNICAL_RASTER_COLORS). Categories with no dedicated color (waste/cleaning/other) fall back to the same neutral gray their own presentation already uses. */
+/**
+ * One representative color swatch per category — purely a visual hint in this panel, resolved from
+ * a representative label so it never invents a one-off color (spec section 56: colors always come
+ * from TECHNICAL_RASTER_COLORS). Categories with no dedicated color (waste/other) fall back to the
+ * same neutral gray their own presentation already uses.
+ *
+ * UI/CSS POLISH BATCH section 6 — "cleaning" is now included here too: it DOES have its own real
+ * color (TECHNICAL_RASTER_COLORS.cleaning, purple), same as the actual ÚKL marker drawn on the
+ * raster/export — this swatch was previously falling through to the neutral fallback gray purely
+ * because no sample label was listed for it, which was an inconsistency, not an intentional
+ * "cleaning is gray" decision. "waste" is deliberately NOT added here yet (spec: "keep neutral gray
+ * for now, do not invent a new color for waste") — it still resolves via the fallback branch below.
+ */
 function representativeColor(categoryId: string): string {
-  const sampleLabelByCategory: Record<string, string> = { electricity: "Do 3kW 230V", internet: "Pevná IP", water: "x" };
+  const sampleLabelByCategory: Record<string, string> = { electricity: "Do 3kW 230V", internet: "Pevná IP", water: "x", cleaning: "Denní úklid" };
   const sampleLabel = sampleLabelByCategory[categoryId];
   return sampleLabel ? resolveTechnicalServicePresentation(categoryId, sampleLabel).color : TECHNICAL_RASTER_COLORS.fallback;
 }

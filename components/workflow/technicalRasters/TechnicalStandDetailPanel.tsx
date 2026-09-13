@@ -1,7 +1,7 @@
 "use client";
 
 import { technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
-import { effectiveServicePlacements, type TechnicalRasterImport, type TechnicalService, type TechnicalStand } from "../../../domain/technicalRaster";
+import { effectiveServicePlacements, requiredPlacementCount, type RasterStandLabel, type TechnicalRasterImport, type TechnicalService, type TechnicalStand } from "../../../domain/technicalRaster";
 import { resolveTechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
 import { resolveNextPlacementTarget } from "../../../domain/technicalRasterWorkQueue";
 import { resolveTechnicalRealizationGroup, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
@@ -23,6 +23,7 @@ import { resolveTechnicalRealizationGroup, technicalRealizationGroupInfo } from 
 export function TechnicalStandDetailPanel({
   stand,
   imports,
+  rasterStandLabels,
   onAssign,
   onClearAssignment,
   onPlaceService,
@@ -34,6 +35,14 @@ export function TechnicalStandDetailPanel({
 }: {
   stand: TechnicalStand | undefined;
   imports: readonly TechnicalRasterImport[];
+  /**
+   * CORRECTIVE BATCH (real production, tolerant stand-number matching) — needed ONLY to render the
+   * "3A01 -> 3A1 ✓ automaticky — normalizováno" audit detail (spec section 7) when
+   * `stand.placement.matchMethod === "tolerant_normalized"`: looks up the matched raster label's
+   * OWN text by `stand.placement.matchedLabelId`. Omitted entirely simply hides that one detail
+   * line — every other status/action in this panel works exactly the same without it.
+   */
+  rasterStandLabels?: readonly RasterStandLabel[];
   onAssign?: (standId: string) => void;
   onClearAssignment?: (standId: string) => void;
   /** Starts placement mode for the NEXT empty point of this service (spec section 6) — omitted entirely (no button rendered) when the caller doesn't support it, e.g. a read-only context. */
@@ -85,19 +94,33 @@ export function TechnicalStandDetailPanel({
     outside_current_raster: "Mimo aktuální rastr",
   };
 
+  // CORRECTIVE BATCH (real production, tolerant stand-number matching) — a small, non-noisy audit
+  // detail (spec section 7: "Do not make a new noisy warning for every successful normalized
+  // match — a small detail indicator is enough") shown ONLY for a tolerant match, so it's always
+  // clear WHY a stand whose own raw number differs from the raster's own text still matched — the
+  // raw imported number (stand.standNumber) is NEVER overwritten by this, only displayed alongside.
+  const tolerantMatchLabel = rasterStandLabels && stand.placement.matchMethod === "tolerant_normalized" && stand.placement.matchedLabelId
+    ? rasterStandLabels.find((label) => label.id === stand.placement.matchedLabelId)?.normalizedStandNumber
+    : undefined;
+
   return (
     <aside className="workflowCard technicalStandDetailPanel">
-      <div className="workflowCardHeader">
-        <div>
-          <span>STÁNEK</span>
-          <strong>{stand.standNumber}</strong>
+      <div className="technicalStandIdentity">
+        <div className="workflowCardHeader">
+          <div>
+            <span>STÁNEK</span>
+            <strong>{stand.standNumber}</strong>
+          </div>
         </div>
+        {stand.companyName && <p className="technicalStandCompanyName">{stand.companyName}</p>}
+        <p className={`stageBadge technicalStandPlacementBadge ${stand.placement.status}`}>{placementLabel[stand.placement.status] ?? stand.placement.status}</p>
+        {tolerantMatchLabel && (
+          <p className="fieldHint technicalStandToleranceDetail">{stand.standNumber} → {tolerantMatchLabel} ✓ automaticky — normalizováno</p>
+        )}
       </div>
-      {stand.companyName && <p className="fieldHint">{stand.companyName}</p>}
-      <p className={`stageBadge technicalStandPlacementBadge ${stand.placement.status}`}>{placementLabel[stand.placement.status] ?? stand.placement.status}</p>
 
       {onPlaceMissingSequentially && resolveNextPlacementTarget(stand) && (
-        <button type="button" className="textButton" disabled={placementModeActive} onClick={() => onPlaceMissingSequentially(stand.id)}>
+        <button type="button" className="technicalActionButton primary compact" disabled={placementModeActive} onClick={() => onPlaceMissingSequentially(stand.id)}>
           Umístit chybějící postupně
         </button>
       )}
@@ -108,7 +131,11 @@ export function TechnicalStandDetailPanel({
           {services.map((service) => {
             const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
             const placements = effectiveServicePlacements(service);
-            const canPlaceMore = presentation.placementBehavior === "point" && placements.length < service.quantity;
+            // CORRECTIVE BATCH (real production, "quantity is not always number of placement
+            // points") — gate/display against requiredPlacementCount, never raw service.quantity
+            // (a onePerRecord cleaning record with qty=40 needs/shows "Umístěno 1/1", never "…/40").
+            const required = requiredPlacementCount(service);
+            const canPlaceMore = presentation.placementBehavior === "point" && placements.length < required;
             return (
               <div key={service.id} className="technicalStandServiceRow">
                 <div className="technicalStandServiceRowMain">
@@ -123,24 +150,24 @@ export function TechnicalStandDetailPanel({
                 {presentation.placementBehavior === "point" && (
                   <>
                     <p className={placements.length > 0 ? "fieldHint technicalStandServicePlacementStatus placed" : "fieldHint technicalStandServicePlacementStatus unplaced"}>
-                      {placements.length === 0 ? "Neumístěno" : `Umístěno ${placements.length}/${service.quantity}`}
+                      {placements.length === 0 ? "Neumístěno" : `Umístěno ${placements.length}/${required}`}
                     </p>
                     {placements.map((placement, index) => (
                       <div key={placement.id} className="technicalStandServicePointRow">
                         <span>Bod {index + 1}</span>
                         <div className="technicalStandServicePlacementActions">
                           {onMovePlacement && (
-                            <button type="button" className="textButton" disabled={placementModeActive} onClick={() => onMovePlacement(stand.id, service.id, placement.id)}>Přemístit</button>
+                            <button type="button" className="technicalActionButton secondary compact" disabled={placementModeActive} onClick={() => onMovePlacement(stand.id, service.id, placement.id)}>Přemístit</button>
                           )}
                           {onRemovePlacement && (
-                            <button type="button" className="textButton" disabled={placementModeActive} onClick={() => onRemovePlacement(stand.id, service.id, placement.id)}>Odstranit umístění</button>
+                            <button type="button" className="technicalActionButton destructive compact" disabled={placementModeActive} onClick={() => onRemovePlacement(stand.id, service.id, placement.id)}>Odstranit umístění</button>
                           )}
                         </div>
                       </div>
                     ))}
                     {canPlaceMore && onPlaceService && (
                       <div className="technicalStandServicePlacementActions">
-                        <button type="button" className="textButton" disabled={placementModeActive} onClick={() => onPlaceService(stand.id, service.id)}>
+                        <button type="button" className="technicalActionButton primary compact" disabled={placementModeActive} onClick={() => onPlaceService(stand.id, service.id)}>
                           {placements.length > 0 ? "Umístit další bod" : "Umístit"}
                         </button>
                       </div>
@@ -193,10 +220,10 @@ export function TechnicalStandDetailPanel({
 
       <div className="technicalStandDetailActions">
         {onAssign && stand.placement.status !== "matched_manual" && (
-          <button type="button" className="textButton" onClick={() => onAssign(stand.id)}>Spárovat kliknutím do rastru</button>
+          <button type="button" className="technicalActionButton primary" onClick={() => onAssign(stand.id)}>Spárovat kliknutím do rastru</button>
         )}
         {onClearAssignment && stand.placement.status !== "unassigned" && stand.placement.status !== "outside_current_raster" && (
-          <button type="button" className="textButton" onClick={() => onClearAssignment(stand.id)}>Zrušit spárování</button>
+          <button type="button" className="technicalActionButton destructive" onClick={() => onClearAssignment(stand.id)}>Zrušit spárování</button>
         )}
       </div>
     </aside>

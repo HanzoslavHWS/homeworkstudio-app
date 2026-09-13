@@ -110,6 +110,9 @@ export function resolveTechnicalRasterPresentation(
   if (componentConfig.enabled === false) {
     return {
       placementBehavior: "none",
+      // No component-level override field exists for cardinality yet — it's meaningless once
+      // placementBehavior is forced to "none" anyway, so the central value is simply carried through.
+      placementCardinality: central.placementCardinality,
       renderer: componentConfig.renderer ?? central.renderer,
       displayLabel: componentConfig.displayLabel ?? central.displayLabel,
       color: componentConfig.color ?? central.color,
@@ -121,6 +124,9 @@ export function resolveTechnicalRasterPresentation(
   const overridden = hasAnyFieldOverride(componentConfig);
   return {
     placementBehavior: componentConfig.placementBehavior ?? central.placementBehavior,
+    // No component-level override field exists for cardinality yet (spec: this adapter isn't wired
+    // to the real pipeline — see this module's own top-of-file doc) — always the central default.
+    placementCardinality: central.placementCardinality,
     renderer: componentConfig.renderer ?? central.renderer,
     displayLabel: componentConfig.displayLabel ?? central.displayLabel,
     color: componentConfig.color ?? central.color,

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { jsPDF } from "jspdf";
-import { loadingTaskToDocument, wrapPdfDocumentProxy } from "../lib/pdf/pdfDocumentLoader.ts";
+import { loadingTaskToDocument, wrapPdfDocumentProxy, WhiteModeAwareCanvasFactory } from "../lib/pdf/pdfDocumentLoader.ts";
 
 // =========================================================================================
 // Technické rastry — regression test for the "document.destroy is not a function" runtime bug
@@ -172,4 +172,104 @@ test("loadingTaskToDocument() never calls destroy() on the SUCCESS path — a wo
   assert.equal(destroyCallCount, 0, "success must never trigger a destroy as a side effect");
   assert.equal(typeof proxy.numPages, "number");
   await loadingTask.destroy();
+});
+
+// =========================================================================================
+// CORRECTIVE BATCH (editor-only white mode) — real manual acceptance found Hala 3 (every stand
+// fill drawn inside a Form XObject) stays fully colored in the editor even though the fill-color-
+// setter indices are computed correctly. Empirically confirmed root cause (see
+// scripts/technicalRasterEditorWhiteModeRealDiagnostic.ts, which proves this against the REAL
+// fixture): every one of those Form XObjects declares its own `/Group /S /Transparency`, which
+// makes pdf.js's own CanvasGraphics#beginGroup paint the Form's content onto a BRAND NEW offscreen
+// canvas created via `canvasFactory.create()` — never the one top-level canvas this app already
+// wraps in lib/pdf/technicalRasterWhiteRender.ts's `createWhiteModeCanvasContextProxy`. Real
+// pdf.js rendering needs a real DOM `<canvas>`, unavailable under plain `node:test` — these tests
+// instead exercise `WhiteModeAwareCanvasFactory` directly against a FAKE `ownerDocument` (the same
+// technique this feature's OTHER tests use for `CanvasRenderingContext2D` — see
+// tests/technicalRasterWhiteRender.test.ts's own `fakeCanvasContext()` — a plain object is all
+// pdf.js's real `setFillRGBColor` handler ever needs: a settable `fillStyle` property).
+// =========================================================================================
+
+/** A fake `Document` whose `createElement("canvas")` returns a plain object with a settable `fillStyle` on its "2d" context — enough surface for WhiteModeAwareCanvasFactory's own create()/reset()/destroy(), without needing a real DOM. */
+function fakeOwnerDocument(): Document {
+  return {
+    createElement: (tagName: string) => {
+      assert.equal(tagName, "canvas", "WhiteModeAwareCanvasFactory must only ever create <canvas> elements");
+      const context: { fillStyle: unknown } = { fillStyle: "#000000" };
+      return {
+        width: 0,
+        height: 0,
+        getContext: (kind: string) => {
+          assert.equal(kind, "2d");
+          return context;
+        },
+      } as unknown as HTMLCanvasElement;
+    },
+  } as unknown as Document;
+}
+
+test("WhiteModeAwareCanvasFactory: with NO active session, create() returns a PLAIN, unwrapped 2D context — a fillStyle assignment is never forced, exactly matching pdf.js's own default DOMCanvasFactory behavior for every ordinary, non-white-mode render (zero regression risk)", () => {
+  const factory = new WhiteModeAwareCanvasFactory({ ownerDocument: fakeOwnerDocument() });
+  const { canvas, context } = factory.create(10, 20);
+  assert.equal(canvas.width, 10);
+  assert.equal(canvas.height, 20);
+  const ctx = context as unknown as { fillStyle: unknown };
+  ctx.fillStyle = "#ff0000";
+  assert.equal(ctx.fillStyle, "#ff0000", "no active session means no forcing at all");
+});
+
+test("WhiteModeAwareCanvasFactory: with an ACTIVE session, create() returns a context whose fillStyle is forced white EXACTLY at a patched operator index — proving the fix reaches OFFSCREEN canvases (a Form XObject's own transparency-group canvas), not just the one top-level canvas this app already managed directly", () => {
+  const factory = new WhiteModeAwareCanvasFactory({ ownerDocument: fakeOwnerDocument() });
+  const operatorIndexRef = { current: -1 };
+  factory.setActiveSession({ patchedIndices: new Set([5]), fillColor: "rgba(255, 255, 255, 1)", operatorIndexRef, neutralizeAlphaIndices: new Set() });
+  const { context } = factory.create(10, 10);
+  const ctx = context as unknown as { fillStyle: unknown };
+
+  operatorIndexRef.current = 3; // NOT a patched index — unrelated content elsewhere on the same page
+  ctx.fillStyle = "#ff0000";
+  assert.equal(ctx.fillStyle, "#ff0000", "an unrelated fill (not at a patched index) must never be forced white, even on a wrapped offscreen context");
+
+  operatorIndexRef.current = 5; // the patched index — this IS the Form's own stand fill
+  ctx.fillStyle = "#ffeb3b";
+  assert.equal(ctx.fillStyle, "rgba(255, 255, 255, 1)", "the Form's own fill at the patched index IS forced white, even though it paints on an offscreen canvas, never the top-level one");
+});
+
+test("WhiteModeAwareCanvasFactory: clearing the session (setActiveSession(undefined)) reverts create() to plain, unwrapped contexts — mirrors renderWhiteModePage's own finally-block cleanup after each render(), so a LATER ordinary render is never accidentally forced white", () => {
+  const factory = new WhiteModeAwareCanvasFactory({ ownerDocument: fakeOwnerDocument() });
+  const operatorIndexRef = { current: 5 };
+  factory.setActiveSession({ patchedIndices: new Set([5]), fillColor: "rgba(255, 255, 255, 1)", operatorIndexRef, neutralizeAlphaIndices: new Set() });
+  factory.setActiveSession(undefined);
+  const { context } = factory.create(10, 10);
+  const ctx = context as unknown as { fillStyle: unknown };
+  ctx.fillStyle = "#ffeb3b";
+  assert.equal(ctx.fillStyle, "#ffeb3b", "no active session after clearing — never stuck forcing white for a later, unrelated render");
+});
+
+test("WhiteModeAwareCanvasFactory: reset()/destroy() mirror pdf.js's own BaseCanvasFactory contract (invalid size and missing-canvas both throw, matching the real default factory's own defensive checks)", () => {
+  const factory = new WhiteModeAwareCanvasFactory({ ownerDocument: fakeOwnerDocument() });
+  assert.throws(() => factory.create(0, 10), /Invalid canvas size/u);
+  const entry = factory.create(10, 10) as unknown as { canvas: HTMLCanvasElement | null; context: unknown };
+  factory.reset(entry, 20, 30);
+  assert.equal((entry.canvas as unknown as { width: number; height: number }).width, 20);
+  assert.equal((entry.canvas as unknown as { width: number; height: number }).height, 30);
+  factory.destroy(entry);
+  assert.equal(entry.canvas, null);
+  assert.throws(() => factory.destroy(entry), /Canvas is not specified/u);
+});
+
+test("wrapPdfDocumentProxy: setWhiteModeCanvasSession forwards to the given canvasFactory's setActiveSession, and is a safe no-op when no canvasFactory is given at all (every pre-existing call site/test in this file predates this batch and never passes one)", async () => {
+  const { loadingTask, proxy } = await makeRealLoadingTaskAndProxy();
+  try {
+    let sessionSeen: unknown = "not-called";
+    const spiedFactory = { setActiveSession: (session: unknown) => { sessionSeen = session; } } as unknown as WhiteModeAwareCanvasFactory;
+    const wrapped = wrapPdfDocumentProxy(loadingTask, proxy as never, spiedFactory);
+    const session = { patchedIndices: new Set([1]), fillColor: "white", operatorIndexRef: { current: -1 }, neutralizeAlphaIndices: new Set<number>() };
+    wrapped.setWhiteModeCanvasSession?.(session);
+    assert.equal(sessionSeen, session);
+
+    const wrappedNoFactory = wrapPdfDocumentProxy(loadingTask, proxy as never);
+    assert.doesNotThrow(() => wrappedNoFactory.setWhiteModeCanvasSession?.(session));
+  } finally {
+    await loadingTask.destroy();
+  }
 });

@@ -263,6 +263,11 @@ export function TechnicalRasterCanvas({
           viewport: renderViewport,
           optionalContentConfigPromise,
           whiteFillOpacity,
+          // CORRECTIVE BATCH (editor-only white mode) — lets renderWhiteModePage install the active
+          // white-mode session on THIS document's own canvas factory, so a Form XObject's own
+          // transparency-group offscreen canvas also gets its fill forced white (see that
+          // function's own doc for the real-file-confirmed root cause this closes).
+          document,
         });
         if (result.status === "unsupported") {
           onWhiteModeUnsupported?.(result.reason);

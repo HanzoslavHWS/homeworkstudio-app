@@ -23,6 +23,7 @@ function placementItem(overrides: Partial<TechnicalRasterExportPlacementItem> = 
     xNormalized: 0.5,
     yNormalized: 0.5,
     presentation: resolveTechnicalServicePresentation("electricity", "Do 3kW 230V"),
+    category: "electricity",
     ...overrides,
   };
 }
@@ -40,6 +41,29 @@ async function buildNPageFixture(sizes: readonly Readonly<{ width: number; heigh
 async function decode(bytes: Uint8Array) {
   const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
   return pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
+}
+
+/**
+ * GENERATED LEGEND BATCH — every generator-drawn label (marker glyphs AND, since this batch, the
+ * legend's own headings/descriptions) is genuine vector-outline geometry, never a PDF text-showing
+ * operator, so pdf.js's own getTextContent() reads it as empty. This reads a page's raw content
+ * stream(s) directly instead, so a test can assert on the marker's own presentation color followed
+ * by a fill operator (or the legend's own generated fills), independent of the page index.
+ */
+async function readPageContentText(bytes: Uint8Array, pageIndex: number): Promise<string> {
+  const reloaded = await PDFDocument.load(bytes);
+  const page = reloaded.getPage(pageIndex);
+  const contents = page.node.Contents();
+  const streams: PDFRawStream[] = [];
+  if (contents instanceof PDFArray) {
+    for (let i = 0; i < contents.size(); i += 1) {
+      const stream = reloaded.context.lookup(contents.get(i));
+      if (stream instanceof PDFRawStream) streams.push(stream);
+    }
+  } else if (contents instanceof PDFRawStream) {
+    streams.push(contents);
+  }
+  return streams.map((stream) => new TextDecoder("latin1").decode(decodePDFRawStream(stream).decode())).join("\n");
 }
 
 test("single-page source (pages.length === 1) -> export page count 2: page 1 = source+overlay, page 2 = legend — same page-structure contract as the single-page function", async () => {
@@ -98,22 +122,7 @@ test("each source page draws only ITS OWN placements — a placement on page 2 n
   // CORRECTIVE BATCH (3rd) sections 8/9 — the "3 kW" marker is no longer extractable PDF text (it
   // is genuine vector-outline fill geometry — see domain/technicalRasterVectorGlyphOutline.ts's own
   // doc), so this checks each page's own raw content for the marker's own presentation color
-  // followed by a fill operator instead of a pdf.js text string.
-  async function readPageContentText(bytes: Uint8Array, pageIndex: number): Promise<string> {
-    const reloaded = await PDFDocument.load(bytes);
-    const page = reloaded.getPage(pageIndex);
-    const contents = page.node.Contents();
-    const streams: PDFRawStream[] = [];
-    if (contents instanceof PDFArray) {
-      for (let i = 0; i < contents.size(); i += 1) {
-        const stream = reloaded.context.lookup(contents.get(i));
-        if (stream instanceof PDFRawStream) streams.push(stream);
-      }
-    } else if (contents instanceof PDFRawStream) {
-      streams.push(contents);
-    }
-    return streams.map((stream) => new TextDecoder("latin1").decode(decodePDFRawStream(stream).decode())).join("\n");
-  }
+  // followed by a fill operator instead of a pdf.js text string (readPageContentText, module-level).
   const page1Text = await readPageContentText(result.bytes, 0);
   const page2Text = await readPageContentText(result.bytes, 1);
   // electricity "Do 3kW 230V" resolves to a "3 kW" powerLabel symbol (#b3261e -> 0.702 0.149 0.118).
@@ -138,7 +147,7 @@ test("OCG diagnostics are reported per exported page, in the same order as input
 test("legend content reflects only what's actually used across ALL exported pages combined, deduplicated", async () => {
   const source = await buildNPageFixture([{ width: 300, height: 200 }, { width: 300, height: 200 }]);
   const page1Placements = [placementItem({ placementId: "p1" })];
-  const page2Placements = [placementItem({ placementId: "p2", presentation: resolveTechnicalServicePresentation("water", "x") })];
+  const page2Placements = [placementItem({ placementId: "p2", presentation: resolveTechnicalServicePresentation("water", "x"), category: "water" })];
   const legend = buildTechnicalRasterExportLegend([...page1Placements, ...page2Placements]);
   assert.equal(legend.length, 2, "electricity + water, deduplicated across both pages");
 
@@ -149,14 +158,15 @@ test("legend content reflects only what's actually used across ALL exported page
     showLegend: true,
     headerLine: "X",
   });
-  const doc = await decode(result.bytes);
-  const legendText = ((await (await doc.getPage(result.legendPageNumber)).getTextContent()).items as { str: string }[]).map((item) => item.str).join(" ");
-  // Matches the established pattern in tests/technicalRasterVectorPdfHardening.test.ts's own
-  // "font glyph coverage" test: an em-dash ("—") inside a legend label doesn't survive this
-  // subsetted-font text EXTRACTION round-trip (a pre-existing pdf.js quirk, unrelated to this
-  // batch) — so this checks the label's own WORDS, never the exact string containing "—".
-  assert.ok(legendText.includes("PŘÍVOD EL. ENERGIE"), "legend page must mention the electricity legend entry");
-  assert.ok(legendText.includes("VODA") && legendText.includes("PŘÍVOD / ODPAD VODY"), "legend page must mention the water legend entry");
+  // GENERATED LEGEND BATCH — the legend page's own text (headings/descriptions) is now genuine
+  // vector-outline geometry, never a page.drawText()/Type0 text-showing operator (spec section 12),
+  // so pdf.js getTextContent() reads it as empty. Verify structurally instead: the electricity
+  // entry's own vector symbol is drawn in the electricity red, immediately followed by a fill; the
+  // water entry's own vector-outline drop symbol is drawn in the water green, also followed by a
+  // fill — the exact same discipline every other vector-outline test in this suite already uses.
+  const legendPageText = await readPageContentText(result.bytes, result.legendPageNumber - 1);
+  assert.match(legendPageText, /0\.702 0\.149 0\.118 rg[\s\S]*\bf\b/u, "legend page must draw the electricity entry's own red vector symbol");
+  assert.match(legendPageText, /0\.10196\d* 0\.47843\d* 0\.29803\d* rg[\s\S]*\bf\b/u, "legend page must draw the water entry's own green vector drop symbol");
 });
 
 test("invalid placement coordinates are skipped and counted, never crash the multi-page export", async () => {

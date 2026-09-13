@@ -18,11 +18,13 @@ import { sortStandNumbersNatural } from "./technicalStandNumber.ts";
 import { sanitizeFileNameSegment } from "./graphicsFileNaming.ts";
 import {
   effectiveServicePlacements,
+  requiredPlacementCount,
   type TechnicalRasterProject,
   type TechnicalStand,
 } from "./technicalRaster.ts";
 import {
   resolveTechnicalServicePresentation,
+  TECHNICAL_RASTER_COLORS,
   type TechnicalServicePresentation,
 } from "./technicalRasterServicePresentation.ts";
 
@@ -38,6 +40,15 @@ export type TechnicalRasterExportPlacementItem = Readonly<{
   xNormalized: number;
   yNormalized: number;
   presentation: TechnicalServicePresentation;
+  /**
+   * SIMPLIFIED LEGEND BATCH — the service's own real, imported category ("electricity"/"internet"/
+   * "water"/"waste"/"cleaning"/etc, domain/technicalServiceCatalog.ts's own ids), threaded through
+   * ONLY so buildTechnicalRasterExportLegend below can group the generated PDF legend at the
+   * CATEGORY level (never a second/independent classification) — never read by the actual symbol
+   * drawing code (lib/technicalRasterVectorPdf.ts's drawPlacementSymbol draws from `presentation`
+   * alone, exactly as before this batch).
+   */
+  category: string;
 }>;
 
 /**
@@ -69,6 +80,7 @@ export function buildTechnicalRasterExportPlacements(
           xNormalized: placement.xNormalized,
           yNormalized: placement.yNormalized,
           presentation,
+          category: service.category,
         });
       }
     }
@@ -76,15 +88,64 @@ export function buildTechnicalRasterExportPlacements(
   return items;
 }
 
-export type TechnicalRasterExportLegendEntry = Readonly<{ legendLabel: string; color: string; renderer: TechnicalServicePresentation["renderer"] }>;
+export type TechnicalRasterExportLegendEntry = Readonly<{
+  legendLabel: string;
+  color: string;
+  renderer: TechnicalServicePresentation["renderer"];
+  /**
+   * A representative displayLabel for this row's own symbol (e.g. "2 kW" for the electricity row,
+   * "WiFi" for the internet row) — captured ONLY so the generated PDF legend can draw a real,
+   * representative EXAMPLE of the actual symbol (reusing the same vector-outline text renderer real
+   * markers use), never to enumerate every distinct value/subtype actually seen. `undefined` for
+   * icon-only renderers (refrigeratedStar/waterDrop/wifiIcon), which carry their own fixed shape
+   * and need no representative text at all.
+   */
+  displayLabel?: string;
+}>;
 
-/** Only ever built from placements ACTUALLY INCLUDED in this export (spec section 49: "legenda jen z prezentací skutečně použitých v tomto exportu") — e.g. a hidden/never-placed category never appears, deduplicated by legendLabel, in first-seen order (deterministic, not alphabetical — matches encounter order across naturally-sorted stands). */
+// ============================================================================
+// SIMPLIFIED LEGEND BATCH — the generated PDF legend now explains CATEGORIES, never individual
+// exported subtypes/variants (spec: "do not list every exported subtype... remove separate legend
+// rows such as WiFi/INT/fixed IP/refrigerated circuit/breaker C/every individual kW value"). A
+// category's real presentation resolution (color/renderer/actual displayLabel per placement) stays
+// fully centralized in domain/technicalRasterServicePresentation.ts and completely untouched — the
+// individual RASTER MARKERS still show their own specific value/subtype exactly as before. This
+// table is the ONE place that decides what a category's own legend ROW looks like: a fixed,
+// representative sample symbol + a short category-level description — never a second/independent
+// classification system (the CATEGORY key itself, and every color used here, still come straight
+// from the service's own real category string and TECHNICAL_RASTER_COLORS).
+// ============================================================================
+
+type CategoryLegendPreset = Readonly<{ legendLabel: string; color: string; renderer: TechnicalServicePresentation["renderer"]; displayLabel?: string }>;
+
+const CATEGORY_LEGEND_PRESETS: Readonly<Record<string, CategoryLegendPreset>> = {
+  electricity: { legendLabel: "ELEKTRIKA", color: TECHNICAL_RASTER_COLORS.electricity, renderer: "powerLabel", displayLabel: "2 kW" },
+  internet: { legendLabel: "INTERNET / WiFi", color: TECHNICAL_RASTER_COLORS.internet, renderer: "textLabel", displayLabel: "WiFi" },
+  water: { legendLabel: "VODA", color: TECHNICAL_RASTER_COLORS.water, renderer: "waterDrop" },
+  cleaning: { legendLabel: "ÚKLID", color: TECHNICAL_RASTER_COLORS.cleaning, renderer: "textLabel", displayLabel: "ÚKL" },
+  waste: { legendLabel: "ODPAD", color: TECHNICAL_RASTER_COLORS.waste, renderer: "textLabel", displayLabel: "ODP" },
+};
+
+/**
+ * Only ever built from placements ACTUALLY INCLUDED in this export (spec section 49: "legenda jen
+ * z prezentací skutečně použitých v tomto exportu") — e.g. a hidden/never-placed category never
+ * appears. Deduplicated by CATEGORY (not by subtype/legendLabel any more — SIMPLIFIED LEGEND BATCH):
+ * every electricity placement (kW figures, refrigerated circuit, breaker characteristics) collapses
+ * into ONE "ELEKTRIKA" row; every internet placement (Internet/Pevná IP/WiFi) collapses into ONE
+ * "INTERNET / WiFi" row. A category with no known preset (a genuinely future/unrecognized category)
+ * still degrades gracefully to the OLD per-subtype behavior (grouped by its own real legendLabel) —
+ * this table is additive/extensible, never a hard requirement for every category to be listed here.
+ * Entries are returned in first-seen order (deterministic, not alphabetical).
+ */
 export function buildTechnicalRasterExportLegend(placements: readonly TechnicalRasterExportPlacementItem[]): readonly TechnicalRasterExportLegendEntry[] {
   const seen = new Map<string, TechnicalRasterExportLegendEntry>();
   for (const item of placements) {
-    if (!seen.has(item.presentation.legendLabel)) {
-      seen.set(item.presentation.legendLabel, { legendLabel: item.presentation.legendLabel, color: item.presentation.color, renderer: item.presentation.renderer });
-    }
+    const preset = CATEGORY_LEGEND_PRESETS[item.category];
+    const key = preset ? `category:${item.category}` : `label:${item.presentation.legendLabel}`;
+    if (seen.has(key)) continue;
+    seen.set(key, preset
+      ? { legendLabel: preset.legendLabel, color: preset.color, renderer: preset.renderer, displayLabel: preset.displayLabel }
+      : { legendLabel: item.presentation.legendLabel, color: item.presentation.color, renderer: item.presentation.renderer, displayLabel: item.presentation.displayLabel });
   }
   return [...seen.values()];
 }
@@ -127,8 +188,9 @@ export function computeTechnicalRasterStatusSummary(project: TechnicalRasterProj
     for (const service of stand.services) {
       const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
       if (presentation.placementBehavior !== "point") continue;
-      totalPointCount += service.quantity;
-      placedPointCount += Math.min(effectiveServicePlacements(service).length, service.quantity);
+      const required = requiredPlacementCount(service);
+      totalPointCount += required;
+      placedPointCount += Math.min(effectiveServicePlacements(service).length, required);
     }
   }
   return { matchedStandCount, totalStandCount, placedPointCount, totalPointCount };
@@ -160,7 +222,8 @@ export function computeTechnicalRasterExportWarnings(project: TechnicalRasterPro
     for (const service of stand.services) {
       const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
       if (presentation.placementBehavior !== "point") continue;
-      const missing = service.quantity - Math.min(effectiveServicePlacements(service).length, service.quantity);
+      const required = requiredPlacementCount(service);
+      const missing = required - Math.min(effectiveServicePlacements(service).length, required);
       if (missing > 0) {
         unplacedServiceCount += 1;
         unplacedPointCount += missing;

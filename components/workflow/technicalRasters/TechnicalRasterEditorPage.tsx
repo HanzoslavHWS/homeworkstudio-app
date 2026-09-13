@@ -677,11 +677,6 @@ export function TechnicalRasterEditorPage({
         <div className="technicalRasterServicesStep">
           <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={setPendingImport} />
 
-          <TechnicalCatalogImportPanel
-            project={project}
-            onImport={(parsed, filename) => setProject((current) => (current ? mergeSupplementalCatalogImport(current, parsed, filename) : current))}
-          />
-
           {pendingImport && (() => {
             const summary = summarizeParsedReport(pendingImport.report, resolveProductStatus);
             // CORRECTIVE BATCH (multi-hall imports) section 9 — a combined report (e.g. Hala 3 +
@@ -751,6 +746,15 @@ export function TechnicalRasterEditorPage({
               </div>
             )}
           </div>
+
+          {/* UI/CSS POLISH BATCH section 1 — the supplemental/control catalog card is deliberately
+              LAST on this page: it is a secondary cross-check against the primary import workflow
+              above (upload -> preview -> history), never part of it, and must never visually
+              interrupt that workflow. Layout/order only — same component, same import logic. */}
+          <TechnicalCatalogImportPanel
+            project={project}
+            onImport={(parsed, filename) => setProject((current) => (current ? mergeSupplementalCatalogImport(current, parsed, filename) : current))}
+          />
         </div>
       )}
 
@@ -807,6 +811,7 @@ export function TechnicalRasterEditorPage({
               <TechnicalStandDetailPanel
                 stand={selectedStand}
                 imports={project.imports}
+                rasterStandLabels={project.rasterStandLabels}
                 onAssign={handleStartAssignment}
                 onClearAssignment={handleClearAssignment}
                 onPlaceService={handlePlaceService}

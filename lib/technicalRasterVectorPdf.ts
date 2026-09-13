@@ -35,9 +35,9 @@
  * `/OC <name> BDC ... EMC` marked content — this module's own `reconstructOcProperties` keeps the
  * SOURCE OCGs fully intact and untouched by this addition.
  */
-import { PDFDocument, PDFName, PDFDict, PDFArray, PDFHexString, PDFString, PDFRawStream, PDFRef, LineCapStyle, decodePDFRawStream, rgb, type PDFPage, type PDFFont, type PDFContext } from "pdf-lib";
+import { PDFDocument, PDFName, PDFDict, PDFArray, PDFHexString, PDFString, PDFRawStream, PDFRef, LineCapStyle, decodePDFRawStream, rgb, type PDFPage, type PDFContext } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
-import { NOTO_SANS_CZECH_BOLD_BASE64, NOTO_SANS_CZECH_REGULAR_BASE64 } from "./fonts/graphicsProductionFont.ts";
+import { NOTO_SANS_CZECH_BOLD_BASE64 } from "./fonts/graphicsProductionFont.ts";
 import { isValidNormalizedCoordinate, normalizedDisplayPointToRawPdfPoint, normalizedDisplayRectToRawPdfBoundingBox, type AffineTransform6 } from "../domain/technicalRasterExportPlacementGeometry.ts";
 import type { TechnicalRasterExportLegendEntry, TechnicalRasterExportPlacementItem } from "../domain/technicalRasterExport.ts";
 import { resolveEffectiveLegendPlacement, type TechnicalLegendPlacement } from "../domain/technicalRasterLegendPlacement.ts";
@@ -49,9 +49,10 @@ import {
   EXPORT_STAR_SYMBOL_FONT_SIZE_PT,
   EXPORT_TEXT_SYMBOL_FONT_SIZE_PT,
   EXPORT_WATER_DROP_HEIGHT_PT,
+  EXPORT_WIFI_SYMBOL_WIDTH_PT,
   REALIZATION_UNDERLINE_THICKNESS_PT,
 } from "../domain/technicalRasterExportSymbolSize.ts";
-import { TECHNICAL_REALIZATION_GROUPS } from "../domain/technicalRasterRealization.ts";
+import { TECHNICAL_REALIZATION_GROUPS, type TechnicalRealizationGroupInfo } from "../domain/technicalRasterRealization.ts";
 import { buildVectorGlyphPathOperators, type GlyphOutlineCommand, type PositionedGlyphOutline } from "../domain/technicalRasterVectorGlyphOutline.ts";
 import { ensurePdfJsWorkerConfigured } from "./pdf/pdfJsWorkerConfig.ts";
 
@@ -558,6 +559,218 @@ function readPageContentBytes(newDoc: PDFDocument, copiedPage: PDFPage): Uint8Ar
   return merged;
 }
 
+// ============================================================================
+// CORRECTIVE BATCH (white mode / Form XObject support) — real-file evidence (Hala 3_2026-
+// ver.12_NOVY_3.pdf, the FOR BEAUTY raster) proved the previous "a Do inside the target OCG span is
+// always unsupported" rule was too strict: that PDF draws every stand fill inside its own Form
+// XObject (`/FmNN Do`, each a `/Group /S /Transparency` form with its own `/Resources`) rather than
+// with direct fill operators in the page's own content, unlike the FOR DECOR Hala 1 control file.
+// The sections below teach `applyVectorWhiteMode` to recurse into such Forms — resolving/patching
+// their own content, safely (clone-on-write) when a Form is shared with non-target content, with
+// cycle protection for a malformed/self-referencing XObject graph — while the pure tokenizer itself
+// (domain/technicalRasterVectorWhiteMode.ts) stays zero-pdf-lib-dependency: it only ever reports
+// resource NAMES reached via `Do` and applies caller-supplied renames, never inspects a PDF object.
+// ============================================================================
+
+/** One (ref, content, dict) a `context.assign`/`context.register` must apply — deferred to the very end (`applyFormWhiteningPlan`) so nothing is written to the real document until the ENTIRE recursive plan (all levels) has succeeded (spec: "no partial output ever", now proven across Form recursion too). `isClone` chooses `context.assign(ref, ...)` (mutate the ORIGINAL ref in place — safe only when exclusively reached from the target scope) vs. `context.register` at a ref already reserved via `context.nextRef()` during planning (a genuine new object, for the shared-Form case). */
+type FormMutationPlan = Readonly<{ ref: PDFRef; content: Uint8Array; dict: PDFDict; needsOpacityResources: boolean }>;
+/** A NEW `/Resources/XObject` entry (`name -> ref`) to add to some resource dict once the plan is applied — always the SAME dict object a `renameFormInvocations` edit already redirected a target-scope `Do` call to reference by this exact name. */
+type ResourceDictAddition = Readonly<{ resources: PDFDict; name: string; ref: PDFRef }>;
+
+type FormPlanResult =
+  | Readonly<{ status: "ok"; content: Uint8Array; mutations: readonly FormMutationPlan[]; resourceDictAdditions: readonly ResourceDictAddition[]; whitenedFillCommandCount: number; wrappedSpanCount: number }>
+  | Readonly<{ status: "unsupported"; reason: string }>;
+
+/** Copies every dict entry EXCEPT the ones that only ever describe the ORIGINAL encoded bytes (spec: this transform always emits fresh, uncompressed content, so a stale `/Filter`/`/DecodeParms`/`/Length` from the source must never survive onto the patched stream). Semantic entries a Form XObject actually needs — `/Type`, `/Subtype`, `/FormType`, `/Group`, `/BBox`, `/Matrix`, `/Resources` — are preserved byte-for-byte, so PLACEMENT GEOMETRY is never altered (spec section 9). */
+function copyFormDictEntriesForRewrite(context: PDFContext, originalDict: PDFDict): PDFDict {
+  const fresh = PDFDict.withContext(context);
+  // PDFName.asString()/.toString() both include the leading "/" (verified directly — "Filter" alone
+  // would never match, silently leaving the ORIGINAL /Filter entry on a stream now holding fresh
+  // UNCOMPRESSED bytes, corrupting the object the moment anything tries to decode it).
+  const skip = new Set(["/Length", "/Filter", "/DecodeParms"]);
+  for (const key of originalDict.keys()) {
+    if (skip.has(key.asString())) continue;
+    fresh.set(key, originalDict.get(key));
+  }
+  return fresh;
+}
+
+/** `/Resources` is genuinely OPTIONAL on a Form XObject per spec — absent means "resolve resource names against whatever resources the INVOKING context (page or parent Form) already has" (spec section 6's own resource-inheritance audit). Never fabricates a resource that doesn't already exist somewhere in that chain. */
+function resolveEffectiveResources(ownResources: PDFDict | undefined, inheritedResources: PDFDict | undefined): PDFDict | undefined {
+  return ownResources ?? inheritedResources;
+}
+
+/** Resolves one `Do`-invoked name against an XObject resource dict into its ref + dereferenced stream, confirming it's a plain Form (never an Image or anything else this transform can't safely recurse into). `undefined` — not a thrown error — for anything not safely resolvable, so the caller can produce ONE clear, specific "unsupported" reason at the actual call site. */
+function resolveFormXObject(context: PDFContext, resources: PDFDict, name: string): Readonly<{ ref: PDFRef; stream: PDFRawStream }> | undefined {
+  const xobjectDict = resources.lookup(PDFName.of("XObject"));
+  if (!(xobjectDict instanceof PDFDict)) return undefined;
+  const entry = xobjectDict.get(PDFName.of(name));
+  if (!(entry instanceof PDFRef)) return undefined;
+  const stream = context.lookup(entry);
+  if (!(stream instanceof PDFRawStream)) return undefined;
+  const subtype = stream.dict.lookup(PDFName.of("Subtype"));
+  if (!(subtype instanceof PDFName) || subtype.asString() !== "/Form") return undefined;
+  return { ref: entry, stream };
+}
+
+let formCloneNameCounter = 0;
+/** A short, collision-checked synthetic resource name for a cloned Form's own new `/XObject` entry — never `PDFDict.uniqueKey`'s random-suffix style, since a deterministic, readable name (`W8Clone0`, `W8Clone1`, ...) is easier to recognize while debugging a real export, and collision with a REAL source name is astronomically unlikely given the distinct prefix (checked anyway, defensively). */
+function nextFormCloneResourceName(existingNames: ReadonlySet<string>): string {
+  for (;;) {
+    const candidate = `W8Clone${formCloneNameCounter}`;
+    formCloneNameCounter += 1;
+    if (!existingNames.has(candidate)) return candidate;
+  }
+}
+
+/**
+ * Recursively plans the white-mode transform for ONE content stream (the page's own, or a Form
+ * XObject's own) reached from inside the target scope, WITHOUT writing anything to `context` yet
+ * (spec: "no partial output ever" — a deeper recursion failure must never leave a half-applied
+ * mutation behind). `pathRefs` is the cycle guard (spec section 5): the set of Form refs currently
+ * on the ACTIVE recursion path (never "ever visited" — the exact same Form legitimately reached
+ * twice from two SIBLING positions is not a cycle, only a Form appearing in its OWN ancestor chain
+ * is). `sharedRefs` is computed ONCE, up front, from the page's own top-level scan (spec section
+ * 10): any Form ref ALSO reachable from OUTSIDE the target scope at the page's own top level is
+ * cloned-on-write here rather than mutated in place, so its other, unrelated usage is never
+ * recolored. (A deeper Form shared with something ELSE several levels down, never touching the
+ * page's own top-level content, is not separately detected — see the batch's own final report for
+ * this documented limitation.)
+ */
+function planFormXObjectWhitening(params: Readonly<{
+  context: PDFContext;
+  content: Uint8Array;
+  ownResources: PDFDict | undefined;
+  inheritedResources: PDFDict | undefined;
+  targetOcPropertyNames: ReadonlySet<string>;
+  assumeEntireStreamIsTarget: boolean;
+  opacityFraction: number;
+  extGStateName: string | undefined;
+  sharedRefs: ReadonlySet<string>;
+  pathRefs: ReadonlySet<string>;
+}>): FormPlanResult {
+  const { context, content, ownResources, inheritedResources, targetOcPropertyNames, assumeEntireStreamIsTarget, opacityFraction, extGStateName, sharedRefs, pathRefs } = params;
+
+  const firstPass = computeVectorWhiteModeContentStream(content, {
+    targetOcPropertyNames,
+    opacityFraction,
+    extGStateName,
+    assumeEntireStreamIsTarget,
+    allowFormXObjects: true,
+  });
+  if (firstPass.status === "unsupported") return firstPass;
+  if (firstPass.formInvocationsInsideTarget.length === 0) {
+    return { status: "ok", content: firstPass.content, mutations: [], resourceDictAdditions: [], whitenedFillCommandCount: firstPass.whitenedFillCommandCount, wrappedSpanCount: firstPass.wrappedSpanCount };
+  }
+
+  const effectiveResources = resolveEffectiveResources(ownResources, inheritedResources);
+  if (!effectiveResources) {
+    return { status: "unsupported", reason: "Cílová vrstva odkazuje na Form XObject, ale nelze najít žádný zdrojový slovník (/Resources) pro jeho vyhledání." };
+  }
+  const xobjectDict = effectiveResources.lookup(PDFName.of("XObject"));
+  const existingXObjectNames = new Set(xobjectDict instanceof PDFDict ? xobjectDict.keys().map((key) => key.asString()) : []);
+
+  const mutations: FormMutationPlan[] = [];
+  const resourceDictAdditions: ResourceDictAddition[] = [];
+  const renamesForThisLevel = new Map<string, string>();
+  let whitenedFillCommandCount = firstPass.whitenedFillCommandCount;
+  let wrappedSpanCount = firstPass.wrappedSpanCount;
+
+  for (const invocation of firstPass.formInvocationsInsideTarget) {
+    const resolved = resolveFormXObject(context, effectiveResources, invocation.name);
+    if (!resolved) {
+      return { status: "unsupported", reason: `Cílová vrstva vyvolává "/${invocation.name} Do", ale odkazovaný zdroj není bezpečně rozpoznatelný Form XObject (např. obrázek) — nelze bezpečně přebarvit jen výplň.` };
+    }
+    const refKey = resolved.ref.toString();
+    if (pathRefs.has(refKey)) {
+      return { status: "unsupported", reason: "Cyklický odkaz na Form XObject v cílové vrstvě (Form odkazuje sám na sebe přes řetězec vyvolání) — nelze bezpečně přebarvit." };
+    }
+
+    const formOwnResources = resolved.stream.dict.lookup(PDFName.of("Resources"));
+    const childPlan = planFormXObjectWhitening({
+      context,
+      content: decodePDFRawStream(resolved.stream).decode(),
+      ownResources: formOwnResources instanceof PDFDict ? formOwnResources : undefined,
+      inheritedResources: effectiveResources,
+      targetOcPropertyNames: new Set(),
+      assumeEntireStreamIsTarget: true,
+      opacityFraction,
+      extGStateName,
+      sharedRefs,
+      pathRefs: new Set([...pathRefs, refKey]),
+    });
+    if (childPlan.status === "unsupported") return childPlan;
+
+    mutations.push(...childPlan.mutations);
+    resourceDictAdditions.push(...childPlan.resourceDictAdditions);
+    whitenedFillCommandCount += childPlan.whitenedFillCommandCount;
+    wrappedSpanCount += childPlan.wrappedSpanCount;
+
+    const patchedDict = copyFormDictEntriesForRewrite(context, resolved.stream.dict);
+    const isShared = sharedRefs.has(refKey);
+    // CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill): a Form's own patched
+    // content can now reference our ExtGState even at opacityFraction===1, whenever ITS OWN source
+    // content contained a `gs` call that needed neutralizing (see computeVectorWhiteModeContentStream's
+    // own hasSourceGsInsideTarget doc) — `childPlan.wrappedSpanCount > 0` is the correct, general
+    // signal for "this Form's own patched bytes actually invoke our ExtGState by name", never the
+    // stale `opacityFraction < 1` check alone.
+    const needsOpacityResources = childPlan.wrappedSpanCount > 0;
+    if (!isShared) {
+      mutations.push({ ref: resolved.ref, content: childPlan.content, dict: patchedDict, needsOpacityResources });
+    } else {
+      const newRef = context.nextRef();
+      mutations.push({ ref: newRef, content: childPlan.content, dict: patchedDict, needsOpacityResources });
+      const newName = nextFormCloneResourceName(existingXObjectNames);
+      existingXObjectNames.add(newName);
+      renamesForThisLevel.set(invocation.name, newName);
+      resourceDictAdditions.push({ resources: effectiveResources, name: newName, ref: newRef });
+    }
+  }
+
+  let finalContent = firstPass.content;
+  if (renamesForThisLevel.size > 0) {
+    const secondPass = computeVectorWhiteModeContentStream(content, {
+      targetOcPropertyNames,
+      opacityFraction,
+      extGStateName,
+      assumeEntireStreamIsTarget,
+      allowFormXObjects: true,
+      renameFormInvocations: renamesForThisLevel,
+    });
+    // Structurally the SAME content already tokenized successfully once above — this can only ever
+    // repeat that same success, never newly fail. Falling back to the first pass's own content
+    // instead of throwing keeps this defensive rather than a hard crash on a truly impossible path.
+    if (secondPass.status === "patched") finalContent = secondPass.content;
+  }
+
+  return { status: "ok", content: finalContent, mutations, resourceDictAdditions, whitenedFillCommandCount, wrappedSpanCount };
+}
+
+/** Ensures `resources` (a Form's own, or the page's own) has an `/ExtGState` entry named `extGStateName` pointing at `extGStateRef` — reuses `ensureDictChild` (already used by the GENERÁTOR DATA OCG work above) so every recursed Form our own `q/gs/Q` wrapping or `gs`-reassertion touches can actually resolve that name. Adding this key is always harmless even when `resources` turns out to be SHARED with unrelated content (an unused resource-dict entry changes nothing for content that never references it by name). */
+function ensureExtGStateAvailable(context: PDFContext, resources: PDFDict, extGStateName: string, extGStateRef: PDFRef): void {
+  const extGStateDict = ensureDictChild(resources, context, "ExtGState");
+  if (!(extGStateDict.get(PDFName.of(extGStateName)) instanceof PDFRef)) extGStateDict.set(PDFName.of(extGStateName), extGStateRef);
+}
+
+/** Applies an ENTIRELY SUCCESSFUL plan (from `planFormXObjectWhitening`, invoked only once the whole recursive tree has already resolved without any "unsupported") to the real document — every `context.assign`/`context.register`/resource-dict `.set()` happens here, and only here, so a caller can be certain nothing was written until this runs. */
+function applyFormWhiteningPlan(context: PDFContext, plan: FormPlanResult & { status: "ok" }, extGStateRef: PDFRef | undefined, extGStateName: string | undefined): void {
+  for (const mutation of plan.mutations) {
+    // PDFRawStream.of takes a real PDFDict directly (unlike context.stream(), whose own TS
+    // declaration only accepts a plain LiteralObject even though its runtime would accept this
+    // fine too) — mutation.dict is already a real PDFDict built by copyFormDictEntriesForRewrite.
+    const streamObj = PDFRawStream.of(mutation.dict, mutation.content);
+    context.assign(mutation.ref, streamObj);
+    if (mutation.needsOpacityResources && extGStateRef && extGStateName) {
+      const formResources = mutation.dict.lookup(PDFName.of("Resources"));
+      if (formResources instanceof PDFDict) ensureExtGStateAvailable(context, formResources, extGStateName, extGStateRef);
+    }
+  }
+  for (const addition of plan.resourceDictAdditions) {
+    const xobjectDict = ensureDictChild(addition.resources, context, "XObject");
+    xobjectDict.set(PDFName.of(addition.name), addition.ref);
+  }
+}
+
 /**
  * Applies "Pracovní — bílé" to `copiedPage`'s own content stream, at `opacityFraction` (the exact
  * same 0-1 "Krytí bílé" fraction the live editor uses — spec: "60 % v editoru = 60 % v exportu").
@@ -565,6 +778,15 @@ function readPageContentBytes(newDoc: PDFDocument, copiedPage: PDFPage): Uint8Ar
  * content stream is left completely untouched and the caller is expected to export with the
  * source's ORIGINAL (still fully vector) colors, exactly like the live editor already falls back to
  * an unpatched render when its own equivalent detection fails.
+ *
+ * CORRECTIVE BATCH (white mode / Form XObject support) — the target OCG span may invoke Form
+ * XObjects (`/FmNN Do`) instead of drawing fills directly (real evidence: Hala 3_2026-
+ * ver.12_NOVY_3.pdf/FOR BEAUTY). `planFormXObjectWhitening` recursively resolves/patches those
+ * (cycle-protected, clone-on-write when shared with non-target content, resource-inheritance-aware)
+ * entirely in memory; only once the WHOLE recursive plan succeeds does `applyFormWhiteningPlan`
+ * write anything to the real document — a deeper "unsupported" still means the page's own content
+ * stream (and every Form it references) is left completely untouched, exactly like the pre-existing
+ * single-content-stream policy this replaces.
  */
 function applyVectorWhiteMode(srcDoc: PDFDocument, newDoc: PDFDocument, copiedPage: PDFPage, opacityFraction: number): VectorWhiteModeDiagnostic {
   const targetPropertyNames = findVectorWhiteModeTargetPropertyNames(srcDoc, newDoc, copiedPage);
@@ -572,22 +794,64 @@ function applyVectorWhiteMode(srcDoc: PDFDocument, newDoc: PDFDocument, copiedPa
     return { status: "unsupported", reason: "Vrstva stánků nebyla ve zdrojovém PDF jednoznačně nalezena — export proto použije originální barvy." };
   }
 
-  let extGStateName: string | undefined;
-  if (opacityFraction < 1) {
-    const extGStateDict = newDoc.context.obj({ Type: "ExtGState", ca: opacityFraction });
-    const key = copiedPage.node.newExtGState("TechRasterWhite", newDoc.context.register(extGStateDict));
-    extGStateName = key.decodeText();
-  }
+  // CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill): registered
+  // UNCONDITIONALLY now, even at opacityFraction===1 — real H3 evidence shows the SOURCE PDF can
+  // set its own alpha (a genuine `/ca 0.76` ExtGState) via a `gs` call reached from inside the
+  // target scope, completely independent of the project's own "Krytí bílé" slider. Without our own
+  // `ca:1` ExtGState always available to re-assert after any such source `gs`, a "fully opaque"
+  // 100% white-mode request could still render translucent, letting the hall's own background grid
+  // show through the stand fill. `computeVectorWhiteModeContentStream` only ever actually EMITS a
+  // `gs` invoking this (via `hasSourceGsInsideTarget`'s own pre-scan) when the source content
+  // genuinely needs it — for a target span/Form with no `gs` at all (H1, every existing synthetic
+  // fixture), this object is registered but never referenced by any `gs` operator, so the resulting
+  // content-stream TEXT is byte-for-byte unchanged from before this batch.
+  const extGStateDict = newDoc.context.obj({ Type: "ExtGState", ca: opacityFraction });
+  const extGStateRef = newDoc.context.register(extGStateDict);
+  const extGStateName = copiedPage.node.newExtGState("TechRasterWhite", extGStateRef).decodeText();
 
+  const pageResources = copiedPage.node.lookup(PDFName.of("Resources"));
   const contentBytes = readPageContentBytes(newDoc, copiedPage);
-  const result = computeVectorWhiteModeContentStream(contentBytes, {
+
+  // Pass 1 (page-level, discovery only) — never allowed to recurse yet: we first need the FULL set
+  // of page-level "outside target" Do invocations (for shared-Form detection) before deciding
+  // anything about the forms reached from INSIDE the target span.
+  const pageScan = computeVectorWhiteModeContentStream(contentBytes, {
     targetOcPropertyNames: targetPropertyNames,
     opacityFraction,
     extGStateName,
+    allowFormXObjects: true,
   });
-  if (result.status === "unsupported") return result;
+  if (pageScan.status === "unsupported") return pageScan;
 
-  const newStreamRef = newDoc.context.register(newDoc.context.stream(result.content, {}));
+  const sharedRefs = new Set<string>();
+  if (pageScan.formInvocationsInsideTarget.length > 0 && pageResources instanceof PDFDict) {
+    const insideRefs = new Set(
+      pageScan.formInvocationsInsideTarget
+        .map((invocation) => resolveFormXObject(newDoc.context, pageResources, invocation.name)?.ref.toString())
+        .filter((ref): ref is string => ref !== undefined),
+    );
+    for (const invocation of pageScan.formInvocationsOutsideTarget) {
+      const ref = resolveFormXObject(newDoc.context, pageResources, invocation.name)?.ref.toString();
+      if (ref && insideRefs.has(ref)) sharedRefs.add(ref);
+    }
+  }
+
+  const plan = planFormXObjectWhitening({
+    context: newDoc.context,
+    content: contentBytes,
+    ownResources: pageResources instanceof PDFDict ? pageResources : undefined,
+    inheritedResources: undefined,
+    targetOcPropertyNames: targetPropertyNames,
+    assumeEntireStreamIsTarget: false,
+    opacityFraction,
+    extGStateName,
+    sharedRefs,
+    pathRefs: new Set(),
+  });
+  if (plan.status === "unsupported") return plan;
+
+  applyFormWhiteningPlan(newDoc.context, plan, extGStateRef, extGStateName);
+  const newStreamRef = newDoc.context.register(newDoc.context.stream(plan.content, {}));
   // ROOT CAUSE of the real "Contents.push is not a function" export crash (see
   // lib/pdf/pdfPageContentAppend.ts's own module doc for the full mechanism): a bare
   // `.set(Contents, newStreamRef)` here left /Contents as a single ref, which pdf-lib's own
@@ -595,7 +859,7 @@ function applyVectorWhiteMode(srcDoc: PDFDocument, newDoc: PDFDocument, copiedPa
   // crashing whenever this ran before that private bookkeeping had a chance to see the replacement.
   // replacePageContentsWithSingleStream always leaves /Contents as a genuine PDFArray instead.
   replacePageContentsWithSingleStream(newDoc.context, copiedPage, newStreamRef);
-  return { status: "applied", whitenedFillCommandCount: result.whitenedFillCommandCount, opacity: opacityFraction };
+  return { status: "applied", whitenedFillCommandCount: plan.whitenedFillCommandCount, opacity: opacityFraction };
 }
 
 /**
@@ -635,9 +899,12 @@ function requireVectorWhiteModeApplied(diagnostic: VectorWhiteModeDiagnostic, pa
 // documented category of PDF-import incompatibility in several Corel versions. Converting only
 // these generator-added marker glyphs to vector geometry sidesteps that question entirely: filled
 // path geometry renders identically in any PDF-conformant consumer, independent of composite-font
-// support. The SOURCE PDF's own text and the LEGEND's own text are deliberately left untouched
-// (`page.drawText` via a real pdf-lib `PDFFont`, exactly as before) — this conversion applies ONLY
-// to the generator's own placement-marker labels.
+// support. The SOURCE PDF's own text is completely untouched either way.
+//
+// GENERATED LEGEND BATCH — the generated legend's OWN text (heading/descriptions/realization names)
+// now uses this EXACT same vector-outline mechanism too (previously still `page.drawText()` via a
+// real pdf-lib `PDFFont`, which is exactly the Type0/CIDFont shape this whole section exists to
+// avoid) — see drawLegendPage/drawInPlaceLegend further below.
 // ============================================================================
 
 /** Runtime-verified shape of a fontkit glyph outline command (`{command, args}`) — NOT part of `@pdf-lib/fontkit`'s own .d.ts (which only exposes the imperative `Path.moveTo()`-style builder methods), confirmed directly against the installed package's own bundled source. */
@@ -713,19 +980,32 @@ function drawTextSymbol(page: PDFPage, x: number, y: number, color: ReturnType<t
   drawVectorOutlineText(page, x - width / 2, y - fontSizePt * 0.35, text, shapingFont, fontSizePt, color);
 }
 
-/** A plain colored asterisk glyph (spec section 17/29: genuinely vector geometry via the SAME embedded font as every other label here — never a Unicode "✱" the font subset might lack), no backdrop. */
-function drawStarSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>, shapingFont: ShapingFont): void {
-  const size = EXPORT_STAR_SYMBOL_FONT_SIZE_PT;
-  const width = (measureShapedTextWidthInDesignUnits(shapingFont, "*") / shapingFont.unitsPerEm) * size;
-  drawVectorOutlineText(page, x - width / 2, y - size * 0.4, "*", shapingFont, size, color);
+/**
+ * A plain colored asterisk glyph (spec section 17/29: genuinely vector geometry via the SAME
+ * embedded font as every other label here — never a Unicode "✱" the font subset might lack), no
+ * backdrop. `sizePt` is an explicit caller-supplied parameter (GENERATED LEGEND BATCH — was
+ * previously read from the single shared `EXPORT_STAR_SYMBOL_FONT_SIZE_PT` constant internally) so
+ * the generated legend can reuse this EXACT drawing code at its own, smaller/legend-appropriate
+ * scale — never a hand-drawn visual copy of the same symbol.
+ */
+function drawStarSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>, shapingFont: ShapingFont, sizePt: number): void {
+  const width = (measureShapedTextWidthInDesignUnits(shapingFont, "*") / shapingFont.unitsPerEm) * sizePt;
+  drawVectorOutlineText(page, x - width / 2, y - sizePt * 0.4, "*", shapingFont, sizePt, color);
 }
 
-/** A real vector teardrop (spec section 17: "kapka", "žádné emoji, žádná bitmapa") — the SAME SVG path the editor's on-screen symbol already uses (components/workflow/technicalRasters/TechnicalRasterCanvas.tsx), drawn here via pdf-lib's own SVG-path support instead of an inline React <svg>, directly in the service's own color, no backdrop. */
-function drawWaterDropSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>): void {
+/**
+ * A real vector teardrop (spec section 17: "kapka", "žádné emoji, žádná bitmapa") — the SAME SVG
+ * path the editor's on-screen symbol already uses (components/workflow/technicalRasters/
+ * TechnicalRasterCanvas.tsx), drawn here via pdf-lib's own SVG-path support instead of an inline
+ * React <svg>, directly in the service's own color, no backdrop. `heightPt` is an explicit
+ * caller-supplied parameter (GENERATED LEGEND BATCH — was previously the single shared
+ * `EXPORT_WATER_DROP_HEIGHT_PT` constant) for the same legend-reuse reason as drawStarSymbol above.
+ */
+function drawWaterDropSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>, heightPt: number): void {
   // The path's own bounding box is roughly 14 units wide by 13.5 tall (x:5-19, y:2-15.5 in its
-  // native 24x24-ish coordinate space) — scaled so its actual on-page HEIGHT matches the central
-  // EXPORT_WATER_DROP_HEIGHT_PT constant, never a magic ratio against the old circle radius.
-  const scale = EXPORT_WATER_DROP_HEIGHT_PT / 13.5;
+  // native 24x24-ish coordinate space) — scaled so its actual on-page HEIGHT matches the given
+  // heightPt, never a magic ratio against the old circle radius.
+  const scale = heightPt / 13.5;
   page.drawSvgPath("M12 2C12 2 5 11 5 15.5A7 7 0 0019 15.5C19 11 12 2 12 2Z", {
     x: x - 12 * scale,
     y: y + 12 * scale,
@@ -734,14 +1014,41 @@ function drawWaterDropSymbol(page: PDFPage, x: number, y: number, color: ReturnT
   });
 }
 
+/**
+ * CORRECTIVE BATCH (real production — "every imported operational service must be placeable"): the
+ * SAME stroked (never filled) wifi-arcs glyph the editor's own on-screen marker uses
+ * (components/workflow/technicalRasters/TechnicalRasterCanvas.tsx's wifiIcon renderer). No fill, no
+ * backdrop — same discipline as `drawWaterDropSymbol`/`drawStarSymbol` above. `widthPt` is an
+ * explicit caller-supplied parameter (GENERATED LEGEND BATCH — was previously the single shared
+ * `EXPORT_WIFI_SYMBOL_WIDTH_PT` constant) so the generated legend can reuse this same glyph too,
+ * for a component override that still explicitly selects the icon-only "wifiIcon" renderer (the
+ * CENTRAL default for a real WIFI report label is the plain "WiFi" text label — see
+ * domain/technicalRasterServicePresentation.ts's own doc — but this renderer stays real/drawable).
+ */
+function drawWifiSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>, widthPt: number): void {
+  // The path's own bounding box is roughly 20 units wide (x:2-22) by 16.8 tall (y:3.5-20.3) in its
+  // native 24x24-ish coordinate space — scaled off its WIDTH, matching the given widthPt.
+  const scale = widthPt / 20;
+  page.drawSvgPath("M2 8.5C7.5 3.5 16.5 3.5 22 8.5M5.5 12.5C9.5 9 14.5 9 18.5 12.5M9 16.5C10.5 15 13.5 15 15 16.5M12 20.2v.1", {
+    x: x - 12 * scale,
+    y: y + 12 * scale,
+    scale,
+    borderColor: color,
+    borderWidth: 2.5 * scale,
+  });
+}
+
 function drawPlacementSymbol(page: PDFPage, x: number, y: number, item: TechnicalRasterExportPlacementItem, markerShapingFont: ShapingFont): void {
   const color = hexToRgbFraction(item.presentation.color);
   switch (item.presentation.renderer) {
     case "refrigeratedStar":
-      drawStarSymbol(page, x, y, color, markerShapingFont);
+      drawStarSymbol(page, x, y, color, markerShapingFont, EXPORT_STAR_SYMBOL_FONT_SIZE_PT);
       return;
     case "waterDrop":
-      drawWaterDropSymbol(page, x, y, color);
+      drawWaterDropSymbol(page, x, y, color, EXPORT_WATER_DROP_HEIGHT_PT);
+      return;
+    case "wifiIcon":
+      drawWifiSymbol(page, x, y, color, EXPORT_WIFI_SYMBOL_WIDTH_PT);
       return;
     case "powerLabel":
       // CORRECTIVE BATCH (4th, export-polish-only) — electricity's own power labels ("2 kW"/"5 kW"/
@@ -791,115 +1098,362 @@ function drawRealizationUnderline(page: PDFPage, item: TechnicalRasterExportReal
 }
 
 // ============================================================================
+// GENERATED LEGEND BATCH — every generated legend row (technical + realization), in BOTH the
+// separate-page fallback and the in-place ("source-legend-area") strategy, is now drawn through
+// this ONE shared function so both strategies stay visually consistent and reuse the EXACT same
+// vector symbol renderers real technical placements use (drawStarSymbol/drawWaterDropSymbol/
+// drawWifiSymbol/drawTextSymbol above) — never a hand-drawn visual copy of the real symbol.
+// `sizes` lets each strategy pick its OWN scale (spec section 11: "legend size and placement-marker
+// size are separate concerns" — these are ALSO separate from the real EXPORT_*_SIZE_PT marker
+// constants, which stay completely untouched). SMALL POLISH BATCH — the IN-PLACE legend's own
+// technical rows additionally draw one small colored dot beside this real symbol (see
+// drawInPlaceLegend below) purely so the category color reads at a glance; that dot is a small
+// ADDITIONAL cue, never a replacement for the real symbol drawn here.
+// ============================================================================
+
+type LegendSymbolSizes = Readonly<{ textFontSizePt: number; starFontSizePt: number; waterDropHeightPt: number; wifiWidthPt: number }>;
+
+/** `(x, y)` is the symbol's own CENTER point — same convention drawPlacementSymbol's real marker drawing already uses. */
+function drawLegendEntrySymbol(page: PDFPage, x: number, y: number, entry: TechnicalRasterExportLegendEntry, shapingFont: ShapingFont, sizes: LegendSymbolSizes): void {
+  const color = hexToRgbFraction(entry.color);
+  switch (entry.renderer) {
+    case "refrigeratedStar":
+      drawStarSymbol(page, x, y, color, shapingFont, sizes.starFontSizePt);
+      return;
+    case "waterDrop":
+      drawWaterDropSymbol(page, x, y, color, sizes.waterDropHeightPt);
+      return;
+    case "wifiIcon":
+      drawWifiSymbol(page, x, y, color, sizes.wifiWidthPt);
+      return;
+    case "powerLabel":
+    case "textLabel":
+    case "fallback":
+    default:
+      drawTextSymbol(page, x, y, color, entry.displayLabel ?? "?", shapingFont, sizes.textFontSizePt);
+  }
+}
+
+/**
+ * GENERATED LEGEND BATCH section 13 — the realization legend now lists ONLY the canonical groups
+ * that actually have at least one real underline in the CURRENT export (never a fixed always-all-4
+ * key, which was the previous behavior) — matched by each group's own central `color`
+ * (domain/technicalRasterRealization.ts), since every real underline item already carries that
+ * exact color and colors are guaranteed distinct per group. Returns entries in the SAME fixed
+ * canonical order (GENDAI/CREATIV EXPO/MAC PRAHA/OSTATNÍ) every time, never encounter order, for a
+ * deterministic legend regardless of stand iteration order.
+ */
+function resolveUsedRealizationGroups(underlineColors: ReadonlySet<string>): readonly TechnicalRealizationGroupInfo[] {
+  return TECHNICAL_REALIZATION_GROUPS.filter((group) => underlineColors.has(group.color));
+}
+
+function realizationUnderlineColors(underlines: readonly Readonly<{ color: string }>[]): ReadonlySet<string> {
+  return new Set(underlines.map((underline) => underline.color));
+}
+
+// ============================================================================
 // Legend page (spec section 26/27) — a SEPARATE page, never resizing/rescaling the copied source
 // page (spec: "neškáluj copied page") — the safer of the two options the spec offered, since it
-// requires zero structural changes to the copied page's own MediaBox/CropBox/rotation.
+// requires zero structural changes to the copied page's own MediaBox/CropBox/rotation. GENERATED
+// LEGEND BATCH: every piece of generated text here (title, header line, "žádné značky" hint,
+// descriptions, realization names) is now genuine vector-outline geometry via the SAME
+// `drawVectorOutlineText`/shaping-font mechanism the real technical markers use — never
+// `page.drawText()` (spec section 12: Corel-safe, no Type0/CIDFont text for ANY generated legend
+// content). The realization swatch is now a short colored LINE (spec section 13: "represent
+// realization using the same colored line language used under stand numbers, not filled squares"),
+// reusing the exact same REALIZATION_UNDERLINE_THICKNESS_PT stroke real underlines use.
 // ============================================================================
 
 const LEGEND_PAGE_WIDTH_PT = 420;
 const LEGEND_MARGIN_PT = 28;
 const LEGEND_ROW_HEIGHT_PT = 18;
+const LEGEND_TITLE_FONT_SIZE_PT = 12;
+const LEGEND_SUBHEADING_FONT_SIZE_PT = 9;
+const LEGEND_TEXT_FONT_SIZE_PT = 9;
+const LEGEND_SYMBOL_COLUMN_WIDTH_PT = 16;
+const LEGEND_SYMBOL_SIZES: LegendSymbolSizes = { textFontSizePt: 8, starFontSizePt: 9, waterDropHeightPt: 7, wifiWidthPt: 9 };
+const LEGEND_REALIZATION_SWATCH_WIDTH_PT = 10;
+/** Gap between the technical (left) and realization (right) columns — SIMPLIFIED LEGEND BATCH. */
+const LEGEND_COLUMN_GAP_PT = 24;
 
 /**
- * `includeRealizationKey` (corrective batch section 10) adds a SEPARATE "REALIZACE" section
- * listing all four canonical groups (never just the ones actually used on a stand — spec: the key
- * itself is a fixed, always-complete legend, unlike the technical-symbol legend above which only
- * ever lists presentations actually placed) with a small colored SQUARE swatch (never a circle,
- * so it's never visually confused with a technical-symbol legend row).
+ * SIMPLIFIED LEGEND BATCH — shared side-by-side layout math for BOTH the separate-page legend and
+ * the in-place legend below: technical categories in a LEFT column, realization groups in a RIGHT
+ * column beside it (never stacked below any more) — the two sections are drawn independently
+ * top-down from the SAME starting Y, so the whole block's height is the TALLER of the two sides,
+ * never their sum. This is what keeps the legend compact (spec: "avoid unnecessary vertical
+ * growth") now that the technical side is also capped at ~5 category rows (never one row per
+ * subtype). No realization groups at all simply means no right column — the left column then owns
+ * the full available width.
  */
+function planLegendColumns(
+  availableWidth: number,
+  columnGap: number,
+  hasRealizationColumn: boolean,
+): Readonly<{ leftWidth: number; rightWidth: number }> {
+  if (!hasRealizationColumn) return { leftWidth: availableWidth, rightWidth: 0 };
+  const leftWidth = (availableWidth - columnGap) * 0.55;
+  return { leftWidth, rightWidth: availableWidth - columnGap - leftWidth };
+}
+
 function drawLegendPage(
   newDoc: PDFDocument,
   headerLine: string,
   legend: readonly TechnicalRasterExportLegendEntry[],
-  regularFont: PDFFont,
-  boldFont: PDFFont,
-  includeRealizationKey: boolean,
+  shapingFont: ShapingFont,
+  usedRealizationGroups: readonly TechnicalRealizationGroupInfo[],
 ): void {
-  const realizationRows = includeRealizationKey ? TECHNICAL_REALIZATION_GROUPS.length + 1 : 0;
-  const height = LEGEND_MARGIN_PT * 2 + 24 + Math.max(1, legend.length) * LEGEND_ROW_HEIGHT_PT + realizationRows * LEGEND_ROW_HEIGHT_PT;
+  const hasRealizationColumn = usedRealizationGroups.length > 0;
+  const leftRows = Math.max(1, legend.length);
+  const rightRows = hasRealizationColumn ? usedRealizationGroups.length : 0;
+  const bodyRows = Math.max(leftRows, rightRows) + 1; // +1 for the LEGENDA:/REALIZACE: heading row
+  const height = LEGEND_MARGIN_PT * 2 + 40 + bodyRows * LEGEND_ROW_HEIGHT_PT;
   const page = newDoc.addPage([LEGEND_PAGE_WIDTH_PT, height]);
   let y = height - LEGEND_MARGIN_PT;
 
-  page.drawText("TECHNICKÝ EXPORT — LEGENDA", { x: LEGEND_MARGIN_PT, y, size: 12, font: boldFont, color: rgb(0.08, 0.08, 0.08) });
+  drawVectorOutlineText(page, LEGEND_MARGIN_PT, y, "TECHNICKÝ EXPORT — LEGENDA", shapingFont, LEGEND_TITLE_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08));
   y -= 16;
-  page.drawText(headerLine, { x: LEGEND_MARGIN_PT, y, size: 9, font: regularFont, color: rgb(0.4, 0.42, 0.44) });
-  y -= 22;
+  if (headerLine) drawVectorOutlineText(page, LEGEND_MARGIN_PT, y, headerLine, shapingFont, LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.4, 0.42, 0.44));
+  y -= 24;
 
+  const { leftWidth } = planLegendColumns(LEGEND_PAGE_WIDTH_PT - LEGEND_MARGIN_PT * 2, LEGEND_COLUMN_GAP_PT, hasRealizationColumn);
+  const leftX = LEGEND_MARGIN_PT;
+  const rightX = leftX + leftWidth + LEGEND_COLUMN_GAP_PT;
+  const bodyTopY = y;
+
+  drawVectorOutlineText(page, leftX, y, "LEGENDA:", shapingFont, LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08));
+  let leftY = y - LEGEND_ROW_HEIGHT_PT;
   if (legend.length === 0) {
-    page.drawText("Žádné technické značky v tomto exportu.", { x: LEGEND_MARGIN_PT, y, size: 9, font: regularFont, color: rgb(0.55, 0.57, 0.58) });
-    y -= LEGEND_ROW_HEIGHT_PT;
+    drawVectorOutlineText(page, leftX, leftY, "Žádné technické značky v tomto exportu.", shapingFont, LEGEND_TEXT_FONT_SIZE_PT, rgb(0.55, 0.57, 0.58));
   } else {
     for (const entry of legend) {
-      const color = hexToRgbFraction(entry.color);
-      page.drawCircle({ x: LEGEND_MARGIN_PT + 4, y: y + 3, size: 4, color, borderColor: rgb(1, 1, 1), borderWidth: 0.5 });
-      page.drawText(entry.legendLabel, { x: LEGEND_MARGIN_PT + 16, y, size: 9, font: regularFont, color: rgb(0.1, 0.1, 0.1) });
-      y -= LEGEND_ROW_HEIGHT_PT;
+      drawLegendEntrySymbol(page, leftX + LEGEND_SYMBOL_COLUMN_WIDTH_PT / 2, leftY + LEGEND_TEXT_FONT_SIZE_PT * 0.35, entry, shapingFont, LEGEND_SYMBOL_SIZES);
+      drawVectorOutlineText(page, leftX + LEGEND_SYMBOL_COLUMN_WIDTH_PT, leftY, entry.legendLabel, shapingFont, LEGEND_TEXT_FONT_SIZE_PT, rgb(0.1, 0.1, 0.1));
+      leftY -= LEGEND_ROW_HEIGHT_PT;
     }
   }
 
-  if (includeRealizationKey) {
-    y -= 8;
-    page.drawText("REALIZACE", { x: LEGEND_MARGIN_PT, y, size: 9, font: boldFont, color: rgb(0.08, 0.08, 0.08) });
-    y -= LEGEND_ROW_HEIGHT_PT;
-    for (const group of TECHNICAL_REALIZATION_GROUPS) {
-      const color = hexToRgbFraction(group.color);
-      page.drawRectangle({ x: LEGEND_MARGIN_PT, y: y - 1, width: 8, height: 8, color });
-      page.drawText(group.label, { x: LEGEND_MARGIN_PT + 16, y, size: 9, font: regularFont, color: rgb(0.1, 0.1, 0.1) });
-      y -= LEGEND_ROW_HEIGHT_PT;
+  if (hasRealizationColumn) {
+    let rightY = bodyTopY;
+    drawVectorOutlineText(page, rightX, rightY, "REALIZACE:", shapingFont, LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08));
+    rightY -= LEGEND_ROW_HEIGHT_PT;
+    for (const group of usedRealizationGroups) {
+      const lineY = rightY + LEGEND_TEXT_FONT_SIZE_PT * 0.3;
+      page.drawLine({
+        start: { x: rightX, y: lineY },
+        end: { x: rightX + LEGEND_REALIZATION_SWATCH_WIDTH_PT, y: lineY },
+        thickness: REALIZATION_UNDERLINE_THICKNESS_PT,
+        color: hexToRgbFraction(group.color),
+        lineCap: LineCapStyle.Round,
+      });
+      drawVectorOutlineText(page, rightX + LEGEND_SYMBOL_COLUMN_WIDTH_PT, rightY, group.label, shapingFont, LEGEND_TEXT_FONT_SIZE_PT, rgb(0.1, 0.1, 0.1));
+      rightY -= LEGEND_ROW_HEIGHT_PT;
     }
   }
 }
 
 // ============================================================================
-// In-place legend (corrective batch section 7, "source-legend-area") — covers a USER-DEFINED
-// region of the copied source page (never auto-detected/guessed, see
-// domain/technicalRasterLegendPlacement.ts's own doc) with a plain white VECTOR rectangle (no
-// border, spec: "plný BÍLÝ VEKTOROVÝ obdélník bez obrysu") and redraws a compact technical legend
-// directly inside it — the source page's own size/MediaBox/CropBox is never touched, and the
-// legend renderer itself is the SAME row-drawing logic as the separate-page legend, just aimed at
-// a rectangle on the source page instead of a whole new page.
+// In-place legend (corrective batch section 7, "source-legend-area") — covers a USER-DEFINED (or
+// domain/technicalRasterLegendPlacement.ts's own hall-agnostic AUTOMATIC DEFAULT — never
+// auto-detected/guessed from the source page's own content) region of the copied source page with a
+// plain white VECTOR rectangle — solid fill, opacity always 1.0 (completely independent of "Krytí
+// bílé"/white-mode opacity, spec section 4), NO stroke/border — and redraws a compact, category-
+// level technical legend (left) + realization key (right) directly inside it. The source page's own
+// size/MediaBox/CropBox is never touched.
 //
-// Known limitation (honestly documented, never silently papered over): content is drawn top-down
-// at a fixed compact font size, not auto-shrunk to fit — a region configured too small for the
-// number of legend rows can overflow its own box. The region is always explicitly user-configured
-// (never auto-detected), so choosing a big-enough box is the user's own responsibility, same as
-// picking where to draw anything else in this app.
+// SIMPLIFIED LEGEND BATCH — OVERFLOW SAFETY: before drawing anything, `planInPlaceLegendLayout`
+// below computes whether the (now much shorter, category-level) legend actually fits the configured
+// region, trying progressively smaller (but never microscopic) scales. If none fit, this function
+// draws NOTHING at all (never a partial/overlapping/clipped drawing, never a lonely white box with
+// no content) and reports `"does_not_fit"` so the caller can fall back to the safe separate-page
+// legend instead — the configured region and its underlying source content are left completely
+// untouched in that case.
 // ============================================================================
 
+// SMALL POLISH BATCH — the whole block is now slightly smaller overall (was ROW_HEIGHT=9,
+// FONT_SIZE=6, HEADING=7, SYMBOL=5.5, STAR=6.5, WATER_DROP=5, WIFI=5.5) so it visually fits better
+// against the nearby printed source text, and SYMBOL_COLUMN_WIDTH is wider (was 11) so the
+// symbol/sample never reads as glued directly onto its description (spec: "3 kW" must not feel
+// stuck onto "ELEKTRIKA"). MARGIN/COLUMN_GAP/MIN_SCALE are unchanged — this is a size/spacing nudge,
+// not a new layout.
+//
+// MICRO POLISH BATCH (2nd size pass) — one more small, uniform reduction on top of the above (was
+// ROW_HEIGHT=8.5, FONT_SIZE=5.5, HEADING=6.5, SYMBOL=5, STAR=6, WATER_DROP=4.5, WIFI=5). The
+// realization (right column) rows reuse these SAME shared rowHeight/textFontSize/headingFontSize
+// values (see drawInPlaceLegend below), so they shrink together with the technical rows — no
+// separate realization-only constant exists for the in-place legend. MARGIN/SYMBOL_COLUMN_WIDTH/
+// COLUMN_GAP/MIN_SCALE stay exactly as-is — still a size nudge only, never a new layout.
 const IN_PLACE_LEGEND_MARGIN_PT = 4;
-const IN_PLACE_LEGEND_ROW_HEIGHT_PT = 9;
-const IN_PLACE_LEGEND_FONT_SIZE_PT = 6;
+const IN_PLACE_LEGEND_ROW_HEIGHT_PT = 8;
+const IN_PLACE_LEGEND_FONT_SIZE_PT = 5;
+const IN_PLACE_LEGEND_HEADING_FONT_SIZE_PT = 6;
+const IN_PLACE_LEGEND_SYMBOL_FONT_SIZE_PT = 4.5;
+const IN_PLACE_LEGEND_STAR_FONT_SIZE_PT = 5.5;
+const IN_PLACE_LEGEND_WATER_DROP_HEIGHT_PT = 4;
+const IN_PLACE_LEGEND_WIFI_WIDTH_PT = 4.5;
+const IN_PLACE_LEGEND_SYMBOL_COLUMN_WIDTH_PT = 15;
+const IN_PLACE_LEGEND_COLUMN_GAP_PT = 10;
+/** Radius of the small colored category dot drawn next to each TECHNICAL row's own symbol/sample (SMALL POLISH BATCH) — never used for the realization column, which already has its own colored line swatch. Size unchanged by the MICRO POLISH BATCH — only its own offset (below) moved. */
+const IN_PLACE_LEGEND_DOT_RADIUS_PT = 1.3;
+/**
+ * DOT POLISH BATCH — the dot's own CENTER offset from the row's left content edge (`leftX`), before
+ * scale. Was an inline `plan.dotRadius + 0.5` (1.8pt at scale 1) — the dot's own right edge (at
+ * dotRadius 1.3, i.e. ~3.1pt from leftX) could sit close enough to a wide symbol's own left edge to
+ * read as touching it. Moved further left (0.5pt from leftX, i.e. 1.3pt further left than before) so
+ * a small but clearly visible gap always remains before the symbol/sample — the symbol/text and
+ * description positions themselves are completely untouched by this constant.
+ *
+ * MICRO POLISH BATCH — real manual review found 0.5pt still not quite enough breathing room, so
+ * this moved a bit further left again (into the row's own left margin — still safely inside
+ * IN_PLACE_LEGEND_MARGIN_PT, never clipped by the box edge). The dot stays the SAME size/color and
+ * still sits at the very start of its own row, so it reads as clearly associated with that row.
+ */
+const IN_PLACE_LEGEND_DOT_LEFT_OFFSET_PT = -0.2;
+/** The smallest scale a size reduction is allowed to shrink to (spec: "modest... within a sensible minimum", "no microscopic text") — a 30% reduction, never more. */
+const IN_PLACE_LEGEND_MIN_SCALE = 0.7;
+const IN_PLACE_LEGEND_SCALE_STEPS: readonly number[] = [1, 0.85, IN_PLACE_LEGEND_MIN_SCALE];
 
+type InPlaceLegendPlan = Readonly<{
+  rowHeight: number;
+  headingFontSize: number;
+  textFontSize: number;
+  symbolSizes: LegendSymbolSizes;
+  symbolColumnWidth: number;
+  columnGap: number;
+  leftWidth: number;
+  rightWidth: number;
+  hasRealizationColumn: boolean;
+  dotRadius: number;
+  dotOffsetFromLeftX: number;
+}>;
+
+function computeInPlaceLegendPlanAt(
+  scale: number,
+  box: Readonly<{ width: number; height: number }>,
+  legend: readonly TechnicalRasterExportLegendEntry[],
+  usedRealizationGroups: readonly TechnicalRealizationGroupInfo[],
+  shapingFont: ShapingFont,
+): InPlaceLegendPlan | undefined {
+  const margin = IN_PLACE_LEGEND_MARGIN_PT;
+  const rowHeight = IN_PLACE_LEGEND_ROW_HEIGHT_PT * scale;
+  const headingFontSize = IN_PLACE_LEGEND_HEADING_FONT_SIZE_PT * scale;
+  const textFontSize = IN_PLACE_LEGEND_FONT_SIZE_PT * scale;
+  const symbolSizes: LegendSymbolSizes = {
+    textFontSizePt: IN_PLACE_LEGEND_SYMBOL_FONT_SIZE_PT * scale,
+    starFontSizePt: IN_PLACE_LEGEND_STAR_FONT_SIZE_PT * scale,
+    waterDropHeightPt: IN_PLACE_LEGEND_WATER_DROP_HEIGHT_PT * scale,
+    wifiWidthPt: IN_PLACE_LEGEND_WIFI_WIDTH_PT * scale,
+  };
+  const symbolColumnWidth = IN_PLACE_LEGEND_SYMBOL_COLUMN_WIDTH_PT * scale;
+  const columnGap = IN_PLACE_LEGEND_COLUMN_GAP_PT * scale;
+  const hasRealizationColumn = usedRealizationGroups.length > 0;
+  const availableWidth = box.width - margin * 2;
+  const { leftWidth, rightWidth } = planLegendColumns(availableWidth, columnGap, hasRealizationColumn);
+  const leftDescriptionWidth = leftWidth - symbolColumnWidth;
+  const rightDescriptionWidth = rightWidth - symbolColumnWidth;
+  if (leftDescriptionWidth <= 0 || (hasRealizationColumn && rightDescriptionWidth <= 0)) return undefined;
+
+  // Side by side, never stacked (spec: "move realization legend to the RIGHT... avoid unnecessary
+  // vertical growth") — required height is the TALLER side's own row count, not their sum.
+  const leftRows = 1 + legend.length;
+  const rightRows = hasRealizationColumn ? 1 + usedRealizationGroups.length : 0;
+  const requiredHeight = Math.max(leftRows, rightRows) * rowHeight + margin * 2;
+  if (requiredHeight > box.height) return undefined;
+
+  for (const entry of legend) {
+    const width = (measureShapedTextWidthInDesignUnits(shapingFont, entry.legendLabel) / shapingFont.unitsPerEm) * textFontSize;
+    if (width > leftDescriptionWidth) return undefined;
+  }
+  for (const group of usedRealizationGroups) {
+    const width = (measureShapedTextWidthInDesignUnits(shapingFont, group.label) / shapingFont.unitsPerEm) * textFontSize;
+    if (width > rightDescriptionWidth) return undefined;
+  }
+
+  return {
+    rowHeight, headingFontSize, textFontSize, symbolSizes, symbolColumnWidth, columnGap, leftWidth, rightWidth, hasRealizationColumn,
+    dotRadius: IN_PLACE_LEGEND_DOT_RADIUS_PT * scale,
+    dotOffsetFromLeftX: IN_PLACE_LEGEND_DOT_LEFT_OFFSET_PT * scale,
+  };
+}
+
+/**
+ * Tries progressively smaller scales (never a column-count search any more — the two "columns" are
+ * now the FIXED technical-left/realization-right roles, not an overflow strategy). `undefined` means
+ * the configured region genuinely cannot hold this export's legend at any attempted scale — the
+ * caller must fall back to the separate-page legend rather than draw a broken/overflowing box.
+ */
+function planInPlaceLegendLayout(
+  box: Readonly<{ width: number; height: number }>,
+  legend: readonly TechnicalRasterExportLegendEntry[],
+  usedRealizationGroups: readonly TechnicalRealizationGroupInfo[],
+  shapingFont: ShapingFont,
+): InPlaceLegendPlan | undefined {
+  for (const scale of IN_PLACE_LEGEND_SCALE_STEPS) {
+    const plan = computeInPlaceLegendPlanAt(scale, box, legend, usedRealizationGroups, shapingFont);
+    if (plan) return plan;
+  }
+  return undefined;
+}
+
+/** `"drawn"` on success; `"does_not_fit"` when NOTHING was drawn (not even the white cover) — see this section's own header doc for why the caller must treat that as "use the separate-page legend instead", never as "legend silently missing". */
 function drawInPlaceLegend(
   page: PDFPage,
   box: Readonly<{ x: number; y: number; width: number; height: number }>,
   legend: readonly TechnicalRasterExportLegendEntry[],
-  includeRealizationKey: boolean,
-  regularFont: PDFFont,
-  boldFont: PDFFont,
-): void {
+  usedRealizationGroups: readonly TechnicalRealizationGroupInfo[],
+  shapingFont: ShapingFont,
+): "drawn" | "does_not_fit" {
+  const plan = planInPlaceLegendLayout(box, legend, usedRealizationGroups, shapingFont);
+  if (!plan) return "does_not_fit";
+
+  // 1. Opaque white cover rectangle — vector, solid white, opacity ALWAYS 1.0 (never derived from
+  // "Krytí bílé"/booth white-mode opacity, which this drawing call never even receives), NO stroke.
+  // `opacity` is deliberately OMITTED rather than passed as `1` — pdf-lib wraps ANY explicit
+  // `opacity` (even 1) in its own `/GS gs` ExtGState; omitting it keeps this the same simple,
+  // ExtGState-free "rg ... f" fill every other plain vector shape in this pipeline already uses,
+  // while still being unconditionally, exactly 1.0 opaque (pdf's own un-overridden default alpha).
   page.drawRectangle({ x: box.x, y: box.y, width: box.width, height: box.height, color: rgb(1, 1, 1) });
 
-  let y = box.y + box.height - IN_PLACE_LEGEND_MARGIN_PT - IN_PLACE_LEGEND_FONT_SIZE_PT;
-  const textX = box.x + IN_PLACE_LEGEND_MARGIN_PT;
-  page.drawText("LEGENDA:", { x: textX, y, size: IN_PLACE_LEGEND_FONT_SIZE_PT, font: boldFont, color: rgb(0.08, 0.08, 0.08) });
-  y -= IN_PLACE_LEGEND_ROW_HEIGHT_PT;
+  const margin = IN_PLACE_LEGEND_MARGIN_PT;
+  const leftX = box.x + margin;
+  const rightX = leftX + plan.leftWidth + plan.columnGap;
+  const topY = box.y + box.height - margin - plan.headingFontSize;
 
+  // 2/3/4. Technical categories — LEFT column: heading, then one row per category. Each row also
+  // gets a small colored dot (SMALL POLISH BATCH) next to its symbol/sample, in that row's own
+  // category color, purely so the category color reads at a glance — never replacing the real
+  // symbol renderer already reused here, just a small additional visual cue beside it.
+  drawVectorOutlineText(page, leftX, topY, "LEGENDA:", shapingFont, plan.headingFontSize, rgb(0.08, 0.08, 0.08));
+  let leftY = topY - plan.rowHeight;
   for (const entry of legend) {
-    const color = hexToRgbFraction(entry.color);
-    page.drawCircle({ x: textX + 3, y: y + 2.5, size: 3, color });
-    page.drawText(entry.legendLabel, { x: textX + 10, y, size: IN_PLACE_LEGEND_FONT_SIZE_PT, font: regularFont, color: rgb(0.1, 0.1, 0.1) });
-    y -= IN_PLACE_LEGEND_ROW_HEIGHT_PT;
+    const rowCenterY = leftY + plan.textFontSize * 0.35;
+    page.drawCircle({ x: leftX + plan.dotOffsetFromLeftX, y: rowCenterY, size: plan.dotRadius, color: hexToRgbFraction(entry.color) });
+    drawLegendEntrySymbol(page, leftX + plan.symbolColumnWidth / 2, rowCenterY, entry, shapingFont, plan.symbolSizes);
+    drawVectorOutlineText(page, leftX + plan.symbolColumnWidth, leftY, entry.legendLabel, shapingFont, plan.textFontSize, rgb(0.1, 0.1, 0.1));
+    leftY -= plan.rowHeight;
   }
 
-  if (includeRealizationKey) {
-    for (const group of TECHNICAL_REALIZATION_GROUPS) {
-      const color = hexToRgbFraction(group.color);
-      page.drawRectangle({ x: textX, y: y - 1, width: 6, height: 6, color });
-      page.drawText(group.label, { x: textX + 10, y, size: IN_PLACE_LEGEND_FONT_SIZE_PT, font: regularFont, color: rgb(0.1, 0.1, 0.1) });
-      y -= IN_PLACE_LEGEND_ROW_HEIGHT_PT;
+  // 5. Realization — RIGHT column, beside the technical legend (never below it any more), starting
+  // from the SAME top Y — a colored LINE swatch (never a filled square), matching the real
+  // underline's own visual language. Only the groups actually used in this export.
+  if (plan.hasRealizationColumn) {
+    drawVectorOutlineText(page, rightX, topY, "REALIZACE:", shapingFont, plan.headingFontSize, rgb(0.08, 0.08, 0.08));
+    let rightY = topY - plan.rowHeight;
+    for (const group of usedRealizationGroups) {
+      const lineY = rightY + plan.textFontSize * 0.3;
+      page.drawLine({
+        start: { x: rightX, y: lineY },
+        end: { x: rightX + plan.symbolColumnWidth - 2, y: lineY },
+        thickness: REALIZATION_UNDERLINE_THICKNESS_PT,
+        color: hexToRgbFraction(group.color),
+        lineCap: LineCapStyle.Round,
+      });
+      drawVectorOutlineText(page, rightX + plan.symbolColumnWidth, rightY, group.label, shapingFont, plan.textFontSize, rgb(0.1, 0.1, 0.1));
+      rightY -= plan.rowHeight;
     }
   }
+
+  return "drawn";
 }
 
 // ============================================================================
@@ -965,12 +1519,11 @@ export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRaster
     ? requireVectorWhiteModeApplied(applyVectorWhiteMode(srcDoc, newDoc, copiedPage, Math.min(1, Math.max(0, input.whiteMode.opacity))), input.page)
     : { status: "not_requested" };
 
-  const regularFont = await newDoc.embedFont(base64ToBytes(NOTO_SANS_CZECH_REGULAR_BASE64), { subset: true });
-  const boldFont = await newDoc.embedFont(base64ToBytes(NOTO_SANS_CZECH_BOLD_BASE64), { subset: true });
-  // Loaded independently of the pdf-lib embed above (corrective batch 3rd, section 8/9) — this
-  // fontkit instance is used ONLY to shape/outline the generator's own placement-marker glyphs into
-  // vector geometry; it never becomes a PDF font resource itself. The legend continues to use the
-  // real embedded `regularFont`/`boldFont` PDFFont objects via ordinary `page.drawText`.
+  // GENERATED LEGEND BATCH — the legend's own generated text (heading/descriptions/realization
+  // names) now shares this SAME fontkit-only shaping font instance, drawn via the SAME
+  // drawVectorOutlineText vector-outline mechanism the real placement markers already use — never a
+  // pdf-lib `embedFont`/`page.drawText()`/Type0 font resource of any kind for generator content
+  // (spec section 12). The source PDF's own text is completely untouched either way.
   const markerShapingFont: ShapingFont = fontkit.create(base64ToBytes(NOTO_SANS_CZECH_BOLD_BASE64));
 
   // GENERÁTOR DATA OCG (corrective batch 3rd, sections 10/11) — every generator-added overlay piece
@@ -999,17 +1552,24 @@ export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRaster
 
   const effectiveLegendPlacement = resolveEffectiveLegendPlacement(input.legendPlacement);
   const legendToShow = input.showLegend ? input.legend : [];
-  const usesInPlaceLegend = effectiveLegendPlacement.strategy === "source-legend-area" && effectiveLegendPlacement.sourceRegion!.page === input.page;
+  // GENERATED LEGEND BATCH section 13 — only the realization groups with a REAL underline on this
+  // page's own export contribute to the key; `includeRealizationKey` stays the user's own "Zahrnout
+  // realizačky do exportu" opt-in gate, never a fixed always-show-all-4 list.
+  const usedRealizationGroups = input.includeRealizationKey ? resolveUsedRealizationGroups(realizationUnderlineColors(input.realizationUnderlines ?? [])) : [];
+  let usesInPlaceLegend = effectiveLegendPlacement.strategy === "source-legend-area" && effectiveLegendPlacement.sourceRegion!.page === input.page;
   if (usesInPlaceLegend) {
     const box = normalizedDisplayRectToRawPdfBoundingBox(effectiveLegendPlacement.sourceRegion!, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
-    drawInPlaceLegend(copiedPage, box, legendToShow, input.includeRealizationKey ?? false, regularFont, boldFont);
+    // GENERATED LEGEND BATCH section 15 — if the configured region genuinely cannot hold this
+    // export's legend (at any attempted scale/column count), NOTHING is drawn here at all (no
+    // partial cover, no clipped text) and the separate-page fallback below takes over instead.
+    if (drawInPlaceLegend(copiedPage, box, legendToShow, usedRealizationGroups, markerShapingFont) === "does_not_fit") usesInPlaceLegend = false;
   }
   appendRawContentChunk(newDoc.context, copiedPage, "EMC");
   if (!usesInPlaceLegend) {
     // A separate, entirely new legend PAGE (never mixed with source content) is deliberately left
     // OUTSIDE the GENERÁTOR DATA span — there is no source raster content on that page for a viewer
     // to toggle back to, so nothing meaningful is gained by making the whole page OCG-controlled.
-    drawLegendPage(newDoc, input.headerLine, legendToShow, regularFont, boldFont, input.includeRealizationKey ?? false);
+    drawLegendPage(newDoc, input.headerLine, legendToShow, markerShapingFont, usedRealizationGroups);
   }
 
   const bytes = await newDoc.save();
@@ -1074,16 +1634,23 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
   const newDoc = await PDFDocument.create();
   newDoc.registerFontkit(fontkit);
 
-  const regularFont = await newDoc.embedFont(base64ToBytes(NOTO_SANS_CZECH_REGULAR_BASE64), { subset: true });
-  const boldFont = await newDoc.embedFont(base64ToBytes(NOTO_SANS_CZECH_BOLD_BASE64), { subset: true });
-  // See buildTechnicalRasterVectorExportPdf's own doc — loaded independently of the pdf-lib embed
-  // above, used ONLY to shape the generator's own placement-marker glyphs into vector outlines.
+  // See buildTechnicalRasterVectorExportPdf's own doc — loaded independently of any pdf-lib
+  // embedFont, used to shape BOTH the generator's own placement-marker glyphs AND the generated
+  // legend's own text into pure vector outlines (spec section 12) — never a page.drawText()/Type0
+  // font resource for any generator content.
   const markerShapingFont: ShapingFont = fontkit.create(base64ToBytes(NOTO_SANS_CZECH_BOLD_BASE64));
 
   const ocgDiagnosticsByPage: OcgReconstructionResult[] = [];
   const whiteModeDiagnosticsByPage: VectorWhiteModeDiagnostic[] = [];
   let skippedInvalidPlacementCount = 0;
   const effectiveLegendPlacement = resolveEffectiveLegendPlacement(input.legendPlacement);
+  // GENERATED LEGEND BATCH section 13/19 — computed ONCE across every exported page's own
+  // underlines (never just the in-place legend's own target page) since the realization key
+  // reflects the WHOLE export, matching this function's own pre-existing doc comment on
+  // `includeRealizationKey` itself.
+  const usedRealizationGroups = input.includeRealizationKey
+    ? resolveUsedRealizationGroups(realizationUnderlineColors(input.pages.flatMap((pageInput) => pageInput.realizationUnderlines ?? [])))
+    : [];
   let inPlaceLegendPageNumber: number | undefined;
   // GENERÁTOR DATA OCG (corrective batch 3rd, sections 10/11) — ONE shared ref threaded across
   // every exported page (`reconstructOcProperties` rebuilds `/OCProperties` from scratch on each
@@ -1133,8 +1700,12 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
     // white mode's own recoloring, only which content-stream chunk they end up in.
     if (effectiveLegendPlacement.strategy === "source-legend-area" && effectiveLegendPlacement.sourceRegion!.page === pageInput.page) {
       const box = normalizedDisplayRectToRawPdfBoundingBox(effectiveLegendPlacement.sourceRegion!, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
-      inPlaceLegendPageNumber = exportPageNumber;
-      drawInPlaceLegend(copiedPage, box, input.showLegend ? input.legend : [], input.includeRealizationKey ?? false, regularFont, boldFont);
+      // GENERATED LEGEND BATCH section 15 — a "does_not_fit" result draws NOTHING on this page (no
+      // partial cover/text) and simply never sets inPlaceLegendPageNumber, so the fallback below
+      // appends a normal separate legend page instead — the safe behavior, never a broken drawing.
+      if (drawInPlaceLegend(copiedPage, box, input.showLegend ? input.legend : [], usedRealizationGroups, markerShapingFont) === "drawn") {
+        inPlaceLegendPageNumber = exportPageNumber;
+      }
     }
     appendRawContentChunk(newDoc.context, copiedPage, "EMC");
   }
@@ -1143,7 +1714,7 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
   if (inPlaceLegendPageNumber !== undefined) {
     legendPageNumber = inPlaceLegendPageNumber;
   } else {
-    drawLegendPage(newDoc, input.headerLine, input.showLegend ? input.legend : [], regularFont, boldFont, input.includeRealizationKey ?? false);
+    drawLegendPage(newDoc, input.headerLine, input.showLegend ? input.legend : [], markerShapingFont, usedRealizationGroups);
     legendPageNumber = newDoc.getPageCount();
   }
 

@@ -50,36 +50,47 @@ export function mmToPt(mm: number): number {
  * CORRECTIVE BATCH (4th, export-polish-only): split OFF electricity's own power-label size (see
  * `EXPORT_POWER_LABEL_FONT_SIZE_PT` below) after real manual acceptance found exported power labels
  * ("2 kW"/"5 kW"/"6 kW"/"9 kW") still slightly too large. This constant now applies ONLY to the
- * `textLabel` renderer (internet "IP"/"INT") and the neutral `fallback` ("?") glyph — never touched
- * by this 4th batch, per its own explicit "do NOT change INT/IP" instruction.
+ * `textLabel` renderer (internet "IP"/"INT"/"WiFi") and the neutral `fallback` ("?") glyph — never
+ * touched by that 4th batch, per its own explicit "do NOT change INT/IP" instruction.
+ *
+ * CORRECTIVE BATCH (5th, export-polish-only) section 9: real manual acceptance still found every
+ * export marker "slightly too large" — every constant in this file (except the realization
+ * underline thickness below, explicitly out of scope) is cut by a further ~15% (×0.85) from its
+ * previous value, preserving the exact same relative proportions between text/power/star/drop sizes
+ * that already existed. EXPORT-ONLY: the editor's own on-screen sizes (domain/
+ * technicalRasterSymbolMarker.ts) and the legend's own IN_PLACE_LEGEND_FONT_SIZE_PT
+ * (lib/technicalRasterVectorPdf.ts) are untouched.
  */
-export const EXPORT_TEXT_SYMBOL_FONT_SIZE_PT = 3.3;
+export const EXPORT_TEXT_SYMBOL_FONT_SIZE_PT = 2.8;
 /**
- * CORRECTIVE BATCH (4th, export-polish-only) — electricity's own "N kW"/"EL" power-label size,
- * split off from the shared `EXPORT_TEXT_SYMBOL_FONT_SIZE_PT` above so it can be tuned
+ * CORRECTIVE BATCH (4th, export-polish-only) — electricity's own "N kW"/"EL"/"C" (breaker) power-
+ * label size, split off from the shared `EXPORT_TEXT_SYMBOL_FONT_SIZE_PT` above so it can be tuned
  * independently of INT/IP/fallback (spec: "do NOT change INT/IP... split the export constants so
  * power labels can be tuned independently"). Reduced ~16.7% from the previous shared 3.3pt value
  * (spec: "reduce by approximately 15-20%... target approximately 2.7-2.8pt, prefer ~2.75pt") — this
  * is an EXPORT-ONLY change; the editor's own on-screen power-label size is untouched.
+ *
+ * CORRECTIVE BATCH (5th, export-polish-only) section 9: cut a further ~15% (×0.85, 2.75pt -> 2.34pt)
+ * — see this file's own top-of-section doc above.
  */
-export const EXPORT_POWER_LABEL_FONT_SIZE_PT = 2.75;
-/** The "refrigerated/non-stop" asterisk glyph gets its own, slightly larger size (a bare "*" reads smaller than a same-size digit at a glance). Reduced to ~47% alongside the text size above (section 7). */
-export const EXPORT_STAR_SYMBOL_FONT_SIZE_PT = 4.1;
-/** Target overall height (bounding box) for the vector water-drop shape. Reduced to ~47% alongside the text size above (section 7). */
-export const EXPORT_WATER_DROP_HEIGHT_PT = 3.3;
-/** Target overall width for the small vector WiFi-arcs shape (informational-only in V1 — see resolveTechnicalServicePresentation's own doc — but the export drawing code stays ready for it). Reduced to ~47% alongside the text size above (section 7). */
-export const EXPORT_WIFI_SYMBOL_WIDTH_PT = 3.5;
+export const EXPORT_POWER_LABEL_FONT_SIZE_PT = 2.34;
+/** The "refrigerated/non-stop" asterisk glyph gets its own, slightly larger size (a bare "*" reads smaller than a same-size digit at a glance). Reduced to ~47% alongside the text size above (section 7), then a further ~15% (CORRECTIVE BATCH 5th, section 9). */
+export const EXPORT_STAR_SYMBOL_FONT_SIZE_PT = 3.49;
+/** Target overall height (bounding box) for the vector water-drop shape. Reduced to ~47% alongside the text size above (section 7), then a further ~15% (CORRECTIVE BATCH 5th, section 9). */
+export const EXPORT_WATER_DROP_HEIGHT_PT = 2.8;
+/** Target overall width for the small vector WiFi-arcs shape — no longer the CENTRAL default for a real WIFI report label (which now resolves to the plain textLabel "WiFi" above, CORRECTIVE BATCH 5th section 8), but still a valid, drawable TechnicalServiceSymbolRenderer (e.g. via a component's own TechnicalRasterComponentConfig override). Reduced to ~47% alongside the text size above (section 7), then a further ~15% (section 9). */
+export const EXPORT_WIFI_SYMBOL_WIDTH_PT = 2.98;
 
 /**
  * A hard ceiling this batch's own tests assert every point symbol's bounding box against (spec:
  * "velmi kompaktní... nepřekrývat stánek") — generous enough for the longest real label this app
  * produces ("9 kW" / "12 kW"-shaped strings) at `EXPORT_TEXT_SYMBOL_FONT_SIZE_PT`, but small enough
  * to catch a real regression back toward an oversized marker. Reduced proportionally alongside the
- * ~47% font-size reduction above (corrective batch section 7) so the ceiling still comfortably
- * (never tightly) covers the new size.
+ * ~47% font-size reduction above (corrective batch section 7), then a further ~15% (CORRECTIVE BATCH
+ * 5th, section 9), so the ceiling still comfortably (never tightly) covers the new size.
  */
-export const EXPORT_SYMBOL_MAX_BOUNDING_WIDTH_PT = 9;
-export const EXPORT_SYMBOL_MAX_BOUNDING_HEIGHT_PT = 5.5;
+export const EXPORT_SYMBOL_MAX_BOUNDING_WIDTH_PT = 7.65;
+export const EXPORT_SYMBOL_MAX_BOUNDING_HEIGHT_PT = 4.68;
 
 // ============================================================================
 // Realization underline print sizing (corrective batch, post real-file acceptance test, section 5)

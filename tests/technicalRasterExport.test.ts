@@ -69,6 +69,32 @@ test("buildTechnicalRasterExportPlacements: only includes placements on the requ
   assert.equal(onPage2.length, 0, "a placement stored on page 1 must never leak into a different page's export");
 });
 
+test("CORRECTIVE BATCH (real production): buildTechnicalRasterExportPlacements includes WiFi, cleaning, and waste placements too — every imported operational service is now export-eligible, never filtered merely because its OLD behavior was informational/none", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const wifiReport: ParsedTechnicalReport = { category: "internet", rows: [{ standNumber: "1A21", services: [{ category: "internet", externalLabel: "WIFI", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }], warnings: [] };
+  project = mergeTechnicalRasterImport(project, makeImport("internet", "imp-wifi"), wifiReport, alwaysResolved);
+  const cleaningReport: ParsedTechnicalReport = { category: "cleaning", rows: [{ standNumber: "1A21", services: [{ category: "cleaning", externalLabel: "Denní úklid", quantity: 40, rawValue: "40", sourcePage: 1 }], notes: [] }], warnings: [] };
+  project = mergeTechnicalRasterImport(project, makeImport("cleaning", "imp-cleaning"), cleaningReport, alwaysResolved);
+  const wasteReport: ParsedTechnicalReport = { category: "waste", rows: [{ standNumber: "1A21", services: [{ category: "waste", externalLabel: "Kontejn 1100 l", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }], warnings: [] };
+  project = mergeTechnicalRasterImport(project, makeImport("waste", "imp-waste"), wasteReport, alwaysResolved);
+
+  const standId = project.stands[0]!.id;
+  project = assignStandManually(project, standId, { page: 1, anchorXNormalized: 0.2, anchorYNormalized: 0.3 });
+  const wifiServiceId = project.stands[0]!.services.find((s) => s.category === "internet")!.id;
+  const cleaningServiceId = project.stands[0]!.services.find((s) => s.category === "cleaning")!.id;
+  const wasteServiceId = project.stands[0]!.services.find((s) => s.category === "waste")!.id;
+  project = placeTechnicalService(project, standId, wifiServiceId, { page: 1, xNormalized: 0.1, yNormalized: 0.1 });
+  project = placeTechnicalService(project, standId, cleaningServiceId, { page: 1, xNormalized: 0.2, yNormalized: 0.2 });
+  project = placeTechnicalService(project, standId, wasteServiceId, { page: 1, xNormalized: 0.3, yNormalized: 0.3 });
+
+  const placements = buildTechnicalRasterExportPlacements(project, 1, new Set());
+  assert.equal(placements.length, 3, "WiFi + cleaning + waste placements all now reach the export overlay list");
+  const renderers = placements.map((p) => p.presentation.renderer).sort();
+  assert.deepEqual(renderers, ["textLabel", "textLabel", "textLabel"], "textLabel (WiFi's own 'WiFi' text, CORRECTIVE BATCH 2nd) + textLabel (waste's ODP) + textLabel (cleaning's ÚKL)");
+  const labels = placements.map((p) => p.presentation.displayLabel).filter((label): label is string => label !== undefined).sort();
+  assert.deepEqual(labels, ["ODP", "WiFi", "ÚKL"].sort(), "waste's own 'ODP' + cleaning's own 'ÚKL' + WiFi's own literal 'WiFi' text label");
+});
+
 test("buildTechnicalRasterExportPlacements: a hidden category is excluded (spec section 37: export respects technical layer visibility)", () => {
   let project = buildProject({ electricityQuantity: 1 });
   const standId = project.stands[0]!.id;
@@ -85,6 +111,24 @@ test("buildTechnicalRasterExportPlacements: an UNMATCHED stand's own services ne
   const project = buildProject({ electricityQuantity: 1, addUnmatchedStandWithService: true });
   const placements = buildTechnicalRasterExportPlacements(project, 1, new Set());
   assert.ok(placements.every((item) => item.standNumber !== "1B04"));
+});
+
+test("CORRECTIVE BATCH (real production, H3 export overlay loss root cause + fix): raster '3A1', imported/placed technical service '3A01' -> the placement now reaches buildTechnicalRasterExportPlacements end-to-end (BEFORE the tolerant-matching fix, this exact shape produced an empty export — placement.status stayed 'unassigned' since '3A01' !== '3A1' textually)", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [{ id: "l1", rawText: "3A1", normalizedStandNumber: "3A1", page: 1, xNormalized: 0.2, yNormalized: 0.3, widthNormalized: 0.03, heightNormalized: 0.015 }]);
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [{ standNumber: "3A01", services: [{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, alwaysResolved);
+  const stand = project.stands[0]!;
+  assert.equal(stand.placement.status, "matched_auto", "the tolerant pass must resolve this — this is the exact real H3 shape");
+  project = placeTechnicalService(project, stand.id, stand.services[0]!.id, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
+
+  const placements = buildTechnicalRasterExportPlacements(project, 1, new Set());
+  assert.equal(placements.length, 1, "the placement must now reach the export overlay list — this is the fix for H3's disappearing technical-service markers");
+  assert.equal(placements[0]!.standNumber, "3A01", "the RAW imported stand number is preserved even in the export item");
 });
 
 function makeLabel(standNumber: string, id: string): RasterStandLabel {
@@ -163,7 +207,7 @@ test("computeTechnicalRasterExportWarnings: a foreign-hall stand with services n
   assert.deepEqual(warnings, { unplacedServiceCount: 0, unplacedPointCount: 0, unmatchedStandsWithServices: [] });
 });
 
-test("buildTechnicalRasterExportLegend: only entries from placements actually passed in, deduplicated by legendLabel", () => {
+test("buildTechnicalRasterExportLegend: only entries from placements actually passed in, deduplicated by CATEGORY (SIMPLIFIED LEGEND BATCH — was by legendLabel/subtype)", () => {
   let project = buildProject({ electricityQuantity: 2 });
   const standId = project.stands[0]!.id;
   const serviceId = project.stands[0]!.services[0]!.id;
@@ -174,16 +218,17 @@ test("buildTechnicalRasterExportLegend: only entries from placements actually pa
   assert.equal(placements.length, 2);
   const legend = buildTechnicalRasterExportLegend(placements);
   assert.equal(legend.length, 1, "two placements of the SAME presentation collapse into one legend entry");
-  assert.equal(legend[0]!.legendLabel, "PŘÍVOD EL. ENERGIE");
+  assert.equal(legend[0]!.legendLabel, "ELEKTRIKA");
 });
 
 test("buildTechnicalRasterExportLegend: an empty placement list (nothing placed, or everything filtered out) produces an empty legend, never a crash", () => {
   assert.deepEqual(buildTechnicalRasterExportLegend([]), []);
 });
 
-test("computeTechnicalRasterStatusSummary: 'Technické body' counts only point services, informational/none never inflate the denominator", () => {
+test("CORRECTIVE BATCH (real production): computeTechnicalRasterStatusSummary: 'Technické body' counts REQUIRED placements, not raw quantity — cleaning(40, onePerRecord) contributes 1, WiFi(3, perQuantity) contributes 3", () => {
   let project = buildProject({ electricityQuantity: 2 });
-  // add a cleaning service (qty 40, "none") and a WIFI service (informational) to the SAME stand — neither should ever show up in totalPointCount.
+  // cleaning qty=40 is "onePerRecord" (1 required marker, never 40); WIFI qty=3 is "perQuantity"
+  // (now placeable, 3 required physical points) — both on the SAME stand as the electricity service.
   const cleaningReport: ParsedTechnicalReport = {
     category: "cleaning",
     rows: [{ standNumber: "1A21", services: [{ category: "cleaning", externalLabel: "Denní úklid", quantity: 40, rawValue: "40", sourcePage: 1 }], notes: [] }],
@@ -198,7 +243,7 @@ test("computeTechnicalRasterStatusSummary: 'Technické body' counts only point s
   project = mergeTechnicalRasterImport(project, makeImport("internet", "imp-4"), wifiReport, alwaysResolved);
 
   const summary = computeTechnicalRasterStatusSummary(project);
-  assert.equal(summary.totalPointCount, 2, "only the electricity service's own qty=2 counts — cleaning(40) and WIFI(3) never inflate this");
+  assert.equal(summary.totalPointCount, 6, "electricity(2) + cleaning(1, onePerRecord — never 40) + WIFI(3, perQuantity) = 6");
   assert.equal(summary.placedPointCount, 0);
   assert.equal(summary.matchedStandCount, 1);
   assert.equal(summary.totalStandCount, 1);
@@ -214,7 +259,7 @@ test("computeTechnicalRasterStatusSummary: placedPointCount tracks real placemen
   assert.equal(computeTechnicalRasterStatusSummary(project).placedPointCount, 2);
 });
 
-test("computeTechnicalRasterExportWarnings: unplaced point services/points counted correctly, cleaning(40) never appears as '40 missing points'", () => {
+test("CORRECTIVE BATCH (real production): computeTechnicalRasterExportWarnings: cleaning(40, onePerRecord) contributes exactly 1 missing point, never 40", () => {
   let project = buildProject({ electricityQuantity: 2 });
   const cleaningReport: ParsedTechnicalReport = {
     category: "cleaning",
@@ -224,8 +269,8 @@ test("computeTechnicalRasterExportWarnings: unplaced point services/points count
   project = mergeTechnicalRasterImport(project, makeImport("cleaning", "imp-3"), cleaningReport, alwaysResolved);
 
   const warnings = computeTechnicalRasterExportWarnings(project);
-  assert.equal(warnings.unplacedServiceCount, 1, "exactly the one electricity service, never the cleaning row");
-  assert.equal(warnings.unplacedPointCount, 2, "2 missing electricity points, never 42");
+  assert.equal(warnings.unplacedServiceCount, 2, "the electricity service AND the (now placeable) cleaning service");
+  assert.equal(warnings.unplacedPointCount, 3, "2 missing electricity points + 1 missing cleaning point (onePerRecord — never 42)");
 });
 
 test("computeTechnicalRasterExportWarnings: a service that's already fully placed contributes zero", () => {

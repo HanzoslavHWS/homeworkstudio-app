@@ -32,8 +32,45 @@ export type TechnicalLegendPlacement = Readonly<{
   sourceRegion?: TechnicalLegendSourceRegion;
 }>;
 
-/** Today's existing, already-accepted behavior (spec section 7: "zachovat původní velikost stránky... source stránku nezvětšovat") — a brand-new project (or one saved before this field existed) gets exactly this, no migration needed. */
+/** Today's existing, already-accepted behavior (spec section 7: "zachovat původní velikost stránky... source stránku nezvětšovat") — a brand-new project (or one saved before this field existed) gets exactly this, no migration needed. Still the LOW-LEVEL fallback resolveEffectiveLegendPlacement itself uses whenever a "source-legend-area" strategy has no region — never removed/changed by the AUTOMATIC-DEFAULT batch below, which only changes what the UI layer PASSES IN, never this function's own safety net. */
 export const DEFAULT_LEGEND_PLACEMENT: TechnicalLegendPlacement = { strategy: "separate-page" };
+
+/**
+ * SIMPLIFIED LEGEND BATCH — "for the current hall-raster style, the original legend is consistently
+ * located in the bottom-left blank area under the raster." A normalized (0-1) region works for ANY
+ * page size without per-hall/per-project configuration (spec: "do NOT hardcode logic inside
+ * rendering components like `if Hala 3`"). Deliberately sized a bit larger than a typical printed
+ * hall legend block ("can be slightly larger... to ensure full coverage") — the overflow-safety
+ * fallback in lib/technicalRasterVectorPdf.ts's own drawInPlaceLegend still protects against a real
+ * page where this generous default genuinely doesn't fit (falls back to the separate-page legend,
+ * never a broken/overlapping drawing). `page: 1` matches the common single-plan-page hall raster;
+ * a project whose legend genuinely lives elsewhere still overrides this via
+ * domain/technicalRaster.ts's own `withLegendPlacement`/`RasterSettings.legendPlacement` — a real,
+ * already-existing per-project override, this default is only ever consulted when that's unset (see
+ * `effectiveLegendPlacement` in domain/technicalRaster.ts, the ONE place this constant is read).
+ *
+ * SMALL POLISH BATCH — nudged slightly right/down and slightly smaller (was x=0.02 y=0.74
+ * w=0.3 h=0.24) so the block sits a bit better against the nearby printed source text and reads as
+ * more deliberately placed, per real manual review of the exported PDF. Still the same bottom-left
+ * area, still just as automatic — this is a position/size nudge only, not a new region strategy.
+ */
+export const DEFAULT_IN_PLACE_LEGEND_REGION: TechnicalLegendSourceRegion = {
+  page: 1,
+  xNormalized: 0.06,
+  yNormalized: 0.79,
+  widthNormalized: 0.25,
+  heightNormalized: 0.19,
+};
+
+/**
+ * The shared, hall-agnostic AUTOMATIC default (spec: "the user should not need to configure it for
+ * every project") — an in-place legend in the usual bottom-left area, with the existing safe
+ * separate-page fallback (resolveEffectiveLegendPlacement / drawInPlaceLegend's own overflow check)
+ * doing the rest if a specific real page genuinely can't fit it. Consumed by
+ * domain/technicalRaster.ts's `effectiveLegendPlacement`, never read directly by a
+ * rendering component.
+ */
+export const DEFAULT_AUTO_LEGEND_PLACEMENT: TechnicalLegendPlacement = { strategy: "source-legend-area", sourceRegion: DEFAULT_IN_PLACE_LEGEND_REGION };
 
 /**
  * The ONE place export code (or a settings-panel preview) resolves "where does the legend actually

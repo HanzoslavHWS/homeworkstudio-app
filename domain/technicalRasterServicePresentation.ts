@@ -22,21 +22,47 @@
  *     real fixture set)
  *   internet externalLabel ∈ {"Internet", "Pevná IP", "WIFI"}
  *   waste externalLabel ∈ {"Kontejn 1100 l"} (+ spec section 21 lists "vana 3 m3"/"vana 9 m3"/
- *     "Odvoz odpadu" as OTHER possible real labels this app has seen — none configured as point
- *     placements for V1, see WASTE's own doc below for why)
+ *     "Odvoz odpadu" as OTHER possible real labels this app has seen)
  *   cleaning externalLabel ∈ {"Denní úklid"}
  *   water: no real externalLabel sample was available in this batch's fixture set — configured at
  *     the CATEGORY level only (spec section 18 doesn't need per-label variants the way electricity
  *     does).
+ *
+ * CORRECTIVE BATCH (real production — "every imported operational service must be placeable"):
+ * every category above (electricity/internet incl. WiFi/water/waste/cleaning) — and any future
+ * category this app doesn't have a name for yet, via resolveFallbackPresentation — now resolves to
+ * `placementBehavior: "point"`. The remaining, genuinely load-bearing decision per category/variant
+ * is `placementCardinality` ("onePerRecord" vs "perQuantity" — see that type's own doc), never
+ * whether it can be placed at all.
  */
 
 export type TechnicalServicePlacementBehavior = "point" | "informational" | "none";
+
+/**
+ * CORRECTIVE BATCH (real production — "every imported operational service must be placeable")
+ * — separates the imported record's own `quantity` (how many kW/days/licenses/etc. the SOURCE
+ * report says) from how many physical marker CLICKS the raster actually needs:
+ *
+ *   - "perQuantity"  — quantity genuinely means "this many distinct physical points" (e.g. 2
+ *     electricity connections, 2 WiFi access points, 2 water drops) — the existing, previously
+ *     implicit default every "point" service already had.
+ *   - "onePerRecord" — quantity means something else entirely (area/frequency/period/capacity —
+ *     e.g. "Denní úklid" qty=40 means 40 CLEANING DAYS, not 40 physical spots) — exactly ONE marker
+ *     is required regardless of the raw number.
+ *
+ * Meaningless (never read) when `placementBehavior !== "point"`. Centralized here, per-variant,
+ * so matching/work-queue/export code never re-decides this itself — see
+ * domain/technicalRaster.ts's `requiredPlacementCount()`, the ONE place this is actually consumed.
+ */
+export type TechnicalServicePlacementCardinality = "onePerRecord" | "perQuantity";
 
 /** How the symbol is actually drawn — both the editor (real SVG) and the export (jsPDF vector primitives) pick their own concrete drawing code from this tag; this file only decides WHICH one, never how pixels/points get drawn (spec section 22: editor vs. export size are separate concerns, and so is editor-vs-export drawing code). */
 export type TechnicalServiceSymbolRenderer = "powerLabel" | "refrigeratedStar" | "textLabel" | "wifiIcon" | "waterDrop" | "fallback";
 
 export type TechnicalServicePresentation = Readonly<{
   placementBehavior: TechnicalServicePlacementBehavior;
+  /** Only meaningful when placementBehavior === "point" — see TechnicalServicePlacementCardinality's own doc. Always "perQuantity" for a non-"point" presentation (never read, kept only so every presentation object has the same shape). */
+  placementCardinality: TechnicalServicePlacementCardinality;
   renderer: TechnicalServiceSymbolRenderer;
   /** The short text actually drawn for text-based renderers ("3 kW", "IP", "INT") — undefined for icon-only renderers (refrigeratedStar/wifiIcon/waterDrop), which carry their own fixed shape instead. */
   displayLabel?: string;
@@ -62,6 +88,9 @@ export const TECHNICAL_RASTER_COLORS = {
   electricity: "#b3261e",
   internet: "#b8860b",
   water: "#1a7a4c",
+  /** CORRECTIVE BATCH (every imported operational service must be placeable) — waste/cleaning previously never needed their own color (both were "informational"/"none", drawn nowhere), reusing neutral `fallback` gray was harmless. Now that both are real canvas points, each needs its own distinct, print-safe color so a stand's markers stay visually distinguishable. */
+  waste: "#7a5230",
+  cleaning: "#6a4c93",
   /** Neutral technical gray (spec section 19: "barva: neutrální technická barva") — same tone this app's own "unassigned" badges already use elsewhere. */
   fallback: "#6b6f72",
 } as const;
@@ -71,10 +100,27 @@ export const TECHNICAL_RASTER_COLORS = {
 // ============================================================================
 
 const LEGEND_ELECTRICITY_POWER = "PŘÍVOD EL. ENERGIE";
-const LEGEND_REFRIGERATED = "LEDNICOVÝ / NONSTOP OKRUH";
-const LEGEND_FIXED_IP = "INTERNET — PEVNÁ IP";
+/** GENERATED LEGEND BATCH — shortened to the exact requested legend wording ("LEDNICOVÝ OKRUH", was "LEDNICOVÝ / NONSTOP OKRUH"); "Non stop" stays a recognized ALIAS for the same presentation (REFRIGERATED_PATTERN below), it just no longer needs mentioning in the legend's own description text. */
+const LEGEND_REFRIGERATED = "LEDNICOVÝ OKRUH";
+const LEGEND_FIXED_IP = "PEVNÁ IP";
 const LEGEND_INTERNET_GENERAL = "INTERNET";
-const LEGEND_WATER = "VODA — PŘÍVOD / ODPAD VODY";
+const LEGEND_WIFI = "WIFI";
+const LEGEND_WATER = "PŘÍVOD / ODPAD VODY";
+const LEGEND_WASTE = "ODPAD";
+const LEGEND_CLEANING = "ÚKLID";
+
+/**
+ * GENERATED LEGEND BATCH — breaker legend text is now per-CHARACTERISTIC-LETTER ("JISTIČ
+ * CHARAKTERISTIKY C" vs "...D"), replacing the previous single shared "JISTIČ (CHARAKTERISTIKA)"
+ * text every letter used to collapse into. This is what keeps the architecture extensible (spec:
+ * "if additional normalized breaker characteristics are supported in the future, keep this
+ * extensible") — a future "Jistič K"/"Jistič Z" row automatically gets its OWN distinct legend
+ * entry, deduplicated by this exact string, never merged with C/D. Never invents a letter — always
+ * derived from extractBreakerCharacteristicLabel's own real, already-extracted value.
+ */
+function legendBreakerLabel(characteristicLetters: string): string {
+  return `JISTIČ CHARAKTERISTIKY ${characteristicLetters}`;
+}
 
 // ============================================================================
 // electricity (spec section 14-16)
@@ -82,6 +128,35 @@ const LEGEND_WATER = "VODA — PŘÍVOD / ODPAD VODY";
 
 const KW_PATTERN = /(\d+(?:[.,]\d+)?)\s*kw/iu;
 const REFRIGERATED_PATTERN = /lednic|non\s*-?\s*stop/iu;
+
+/**
+ * CORRECTIVE BATCH — real electricity reports can also carry a breaker-characteristic column
+ * ("Jistič C/D", per domain/technicalReportParsers/electricityReportParser.ts's own doc comment
+ * and detectionHints) that this resolver previously had no dedicated branch for — it silently fell
+ * through to the generic "EL" fallback below, which is what the user reported ("breaker C currently
+ * renders as EL"). `č` is matched without requiring the diacritic (`jisti[cč]`) since some real PDF
+ * text extraction strips it.
+ */
+const BREAKER_PATTERN = /jisti[cč]/iu;
+
+/** Thin, exported wrapper — same reasoning as isRefrigeratedElectricityLabel/isFixedIpLabel/isWifiLabel above. */
+export function isBreakerCharacteristicLabel(externalLabel: string): boolean {
+  return BREAKER_PATTERN.test(externalLabel);
+}
+
+/**
+ * "Jistič C" -> "C", "Jistič C16" / "Jistič C 16A" -> "C16" (spec: "pokud existuje konkrétní hodnota
+ * v datech/katalogu, zobraz ji — nikdy si ji nevymýšlej"). Returns undefined when the breaker word
+ * itself is present but no recognizable characteristic letter follows it — the caller falls back to
+ * an honest, still-distinct "JIS" label in that case, never a guessed letter.
+ */
+export function extractBreakerCharacteristicLabel(externalLabel: string): string | undefined {
+  const match = externalLabel.match(/jisti[cč]\w*[^a-z0-9]*([a-z])\s*(\d{1,3})?/iu);
+  if (!match) return undefined;
+  const letter = match[1]!.toUpperCase();
+  const amps = match[2];
+  return amps ? `${letter}${amps}` : letter;
+}
 
 /**
  * "Do 3kW 230V" -> "3 kW" (spec section 15: "technical display label", explicitly NOT a pricing/
@@ -105,28 +180,35 @@ export function isRefrigeratedElectricityLabel(externalLabel: string): boolean {
 
 function resolveElectricityPresentation(externalLabel: string): TechnicalServicePresentation {
   if (REFRIGERATED_PATTERN.test(externalLabel)) {
-    return { placementBehavior: "point", renderer: "refrigeratedStar", color: TECHNICAL_RASTER_COLORS.electricity, legendLabel: LEGEND_REFRIGERATED, isFallback: false };
+    return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "refrigeratedStar", color: TECHNICAL_RASTER_COLORS.electricity, legendLabel: LEGEND_REFRIGERATED, isFallback: false };
+  }
+  if (BREAKER_PATTERN.test(externalLabel)) {
+    const breakerLabel = extractBreakerCharacteristicLabel(externalLabel) ?? "JIS";
+    const characteristicLetters = breakerLabel.match(/^[A-Z]+/u)?.[0] ?? breakerLabel;
+    return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: breakerLabel, color: TECHNICAL_RASTER_COLORS.electricity, legendLabel: legendBreakerLabel(characteristicLetters), isFallback: false };
   }
   const kwLabel = extractElectricityKwLabel(externalLabel);
   if (kwLabel) {
-    return { placementBehavior: "point", renderer: "powerLabel", displayLabel: kwLabel, color: TECHNICAL_RASTER_COLORS.electricity, legendLabel: LEGEND_ELECTRICITY_POWER, isFallback: false };
+    return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "powerLabel", displayLabel: kwLabel, color: TECHNICAL_RASTER_COLORS.electricity, legendLabel: LEGEND_ELECTRICITY_POWER, isFallback: false };
   }
   // A real electricity row this app can't safely turn into a kW figure (spec section 15: never
   // guess) — still a real, point-placeable connection, just with an honest "EL" label instead of
   // an invented number.
-  return { placementBehavior: "point", renderer: "powerLabel", displayLabel: "EL", color: TECHNICAL_RASTER_COLORS.electricity, legendLabel: LEGEND_ELECTRICITY_POWER, isFallback: false };
+  return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "powerLabel", displayLabel: "EL", color: TECHNICAL_RASTER_COLORS.electricity, legendLabel: LEGEND_ELECTRICITY_POWER, isFallback: false };
 }
 
 // ============================================================================
 // internet (spec section 17) — real labels: "Internet", "Pevná IP", "WIFI".
 //
-// DECISION (spec section 69, "rozhodni konzervativně"): only "Pevná IP" and the plain "Internet"
-// row are placementBehavior "point" — both represent an actual cabled drop that needs one physical
-// spot. "WIFI" is placementBehavior "informational": unlike a fixed IP cable end, a WiFi order
-// generally describes wireless COVERAGE/licensing for the stand (its own quantity — e.g. 1C01's
-// WiFi qty=2 — plausibly means "2 device licenses", not "2 distinct physical drop points"), not one
-// specific spot a technician needs to run a cable to. Still fully tracked in the service panel
-// (never silently dropped), just never a canvas point in V1.
+// CORRECTIVE BATCH (real production — "every imported operational service must be placeable"):
+// WiFi is now placementBehavior "point" too — the business requirement is now explicit that WiFi
+// must be placeable exactly like Internet/IP (previous "informational" decision, made when this
+// was still a V1 guess, is superseded). `placementCardinality: "perQuantity"` — a WiFi order's own
+// quantity (e.g. 1C01's qty=2) is treated as "2 distinct physical access-point locations", the same
+// semantics the plain "Internet"/fixed-IP rows already had — consistent with how this app already
+// treats every other internet-category row, and the safer reading of "WiFi quantity 2 may
+// legitimately represent 2 physical WiFi points" (never "40 cleaning days"-style non-spatial
+// quantity, which is exactly what `placementCardinality: "onePerRecord"` exists for instead).
 // ============================================================================
 
 const FIXED_IP_PATTERN = /pevn[aá]\s*ip/iu;
@@ -142,13 +224,22 @@ export function isWifiLabel(externalLabel: string): boolean {
 
 function resolveInternetPresentation(externalLabel: string): TechnicalServicePresentation {
   if (FIXED_IP_PATTERN.test(externalLabel)) {
-    return { placementBehavior: "point", renderer: "textLabel", displayLabel: "IP", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_FIXED_IP, isFallback: false };
+    return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "IP", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_FIXED_IP, isFallback: false };
   }
   if (WIFI_PATTERN.test(externalLabel)) {
-    return { placementBehavior: "informational", renderer: "wifiIcon", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_INTERNET_GENERAL, isFallback: false };
+    // CORRECTIVE BATCH (2nd) — the icon-only wifiIcon glyph (no displayLabel) was found, on real
+    // manual acceptance, to be visually indistinguishable at a glance from the plain "Internet"
+    // marker, and was reported as "WiFi renders as INT". The user's own corrected mapping table
+    // wants literal readable "WiFi" text, matching every other internet/electricity variant's own
+    // plain textLabel presentation (IP/INT/EL/C) rather than an icon-only glyph. `renderer:
+    // "wifiIcon"` stays a valid TechnicalServiceSymbolRenderer (still selectable via a component's
+    // own TechnicalRasterComponentConfig override, and still drawn correctly by both the editor and
+    // lib/technicalRasterVectorPdf.ts's drawWifiSymbol) — only the CENTRAL default for a real WIFI
+    // report label changes here.
+    return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "WiFi", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_WIFI, isFallback: false };
   }
   // The plain "Internet" row — a general cabled connection, still a real physical drop point.
-  return { placementBehavior: "point", renderer: "textLabel", displayLabel: "INT", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_INTERNET_GENERAL, isFallback: false };
+  return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "INT", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_INTERNET_GENERAL, isFallback: false };
 }
 
 // ============================================================================
@@ -156,49 +247,78 @@ function resolveInternetPresentation(externalLabel: string): TechnicalServicePre
 // ============================================================================
 
 function resolveWaterPresentation(): TechnicalServicePresentation {
-  return { placementBehavior: "point", renderer: "waterDrop", color: TECHNICAL_RASTER_COLORS.water, legendLabel: LEGEND_WATER, isFallback: false };
+  return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "waterDrop", color: TECHNICAL_RASTER_COLORS.water, legendLabel: LEGEND_WATER, isFallback: false };
 }
 
 // ============================================================================
-// waste (spec section 21) — DECISION, returned in this batch's report as requested: "Kontejn
-// 1100 l" (the one real label seen) is a genuine physical object, but WHERE it stands is typically
-// outside the exhibitor's own booth footprint (a shared collection point/aisle, not a spot inside
-// the stand this app's raster labels describe) and this app has no data distinguishing that from a
-// stand-internal placement. Per spec section 21's own explicit fallback ("pokud nemáme rozhodnuté,
-// označ jako informational"), waste is "informational" for V1, never "point" — tracked in the
-// service panel, never silently dropped, but no canvas point invented. The other real labels named
-// in spec section 21 ("vana 3 m3", "vana 9 m3", "Odvoz odpadu") get the exact same treatment —
-// they're all still just "waste" category, no per-label split needed since none of them are
-// configured as point placements.
+// waste (spec section 21; superseded by the CORRECTIVE BATCH below) — "Kontejn 1100 l" (the one
+// real label seen) IS a genuine physical object the technician places somewhere for the stand.
+//
+// CORRECTIVE BATCH (real production — "every imported operational service must be placeable"):
+// waste is now placementBehavior "point" too (the earlier "informational" decision predates this
+// explicit business requirement). `placementCardinality: "onePerRecord"` — a waste row's own
+// quantity is not documented anywhere as "N distinct container spots" (every real label seen so far
+// — "Kontejn 1100 l", "vana 3 m3", "vana 9 m3", "Odvoz odpadu" — describes ONE container/service per
+// row), so this defaults to the conservative "one marker regardless of quantity" policy rather than
+// risk demanding many clicks for a number that doesn't mean "physical points". Centrally
+// configurable here alone if real data later proves otherwise.
 // ============================================================================
 
 function resolveWastePresentation(): TechnicalServicePresentation {
-  return { placementBehavior: "informational", renderer: "fallback", color: TECHNICAL_RASTER_COLORS.fallback, legendLabel: "ODPAD", isFallback: false };
+  return { placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "textLabel", displayLabel: "ODP", color: TECHNICAL_RASTER_COLORS.waste, legendLabel: LEGEND_WASTE, isFallback: false };
 }
 
 // ============================================================================
-// cleaning (spec section 20) — never a canvas point, never even "informational" (spec section 3's
-// own NONE examples literally name "denní úklid, generální úklid" — a cleaning frequency has zero
-// spatial meaning at all, unlike waste's "a real object somewhere, just not confidently placeable
-// yet").
+// cleaning (spec section 20; superseded by the CORRECTIVE BATCH below).
+//
+// CORRECTIVE BATCH (real production — "every imported operational service must be placeable"):
+// cleaning is now placementBehavior "point" too — the business requirement is explicit that a
+// cleaning record must be placeable on the raster like any other service. `placementCardinality:
+// "onePerRecord"` is the load-bearing part of this change: the real example "1C01 daily cleaning
+// qty=40" means 40 CLEANING DAYS, never 40 physical spots — this stand still needs exactly ONE
+// marker. See domain/technicalRaster.ts's `requiredPlacementCount()` for where this is enforced.
 // ============================================================================
 
 function resolveCleaningPresentation(): TechnicalServicePresentation {
-  return { placementBehavior: "none", renderer: "fallback", color: TECHNICAL_RASTER_COLORS.fallback, legendLabel: "ÚKLID", isFallback: false };
+  return { placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "textLabel", displayLabel: "ÚKL", color: TECHNICAL_RASTER_COLORS.cleaning, legendLabel: LEGEND_CLEANING, isFallback: false };
 }
 
 // ============================================================================
 // Fallback (spec section 19) — ANY category/label this config doesn't recognize. Never invented,
 // never silently treated as configured — isFallback:true is the one signal every caller (service
 // panel badge, dev console) keys off of.
+//
+// CORRECTIVE BATCH (real production, section 10/13 — "do not make it impossible to place merely
+// because its custom icon is missing"): a genuinely UNKNOWN category/label is still a real imported
+// operational service the user must be able to place — "point"/"onePerRecord" (the safe, conservative
+// default when this app has no data telling it the quantity means physical points) with a compact
+// fallback label built from the service's own real externalLabel/category text, never an invented
+// name. `isFallback: true` still flags it for the dev console/service-panel badge exactly as before
+// — this batch only changes whether it can be PLACED, never whether it's flagged as unrecognized.
 // ============================================================================
+
+function fallbackDisplayLabel(category: string, externalLabel: string): string {
+  const source = (externalLabel || category).trim();
+  if (!source) return "?";
+  // A short, compact technical-marker-sized label (spec: "compact fallback based on catalog
+  // shortText") — never the whole raw sentence, which would blow past the marker's own bounding box.
+  return source.slice(0, 4).toUpperCase();
+}
 
 function resolveFallbackPresentation(category: string, externalLabel: string): TechnicalServicePresentation {
   if (typeof console !== "undefined") {
     // eslint-disable-next-line no-console
-    console.warn(`[technicalRasterServicePresentation] no presentation configured for category "${category}" / label "${externalLabel}" — falling back to a neutral, non-placed "?" presentation.`);
+    console.warn(`[technicalRasterServicePresentation] no dedicated presentation configured for category "${category}" / label "${externalLabel}" — falling back to a compact, still-placeable generic marker.`);
   }
-  return { placementBehavior: "informational", renderer: "fallback", displayLabel: "?", color: TECHNICAL_RASTER_COLORS.fallback, legendLabel: externalLabel || category, isFallback: true };
+  return {
+    placementBehavior: "point",
+    placementCardinality: "onePerRecord",
+    renderer: "fallback",
+    displayLabel: fallbackDisplayLabel(category, externalLabel),
+    color: TECHNICAL_RASTER_COLORS.fallback,
+    legendLabel: externalLabel || category,
+    isFallback: true,
+  };
 }
 
 /**
@@ -223,14 +343,19 @@ export function resolveTechnicalServicePresentation(category: string, externalLa
  * Whether ANY real externalLabel in this category can ever resolve to a "point" placementBehavior
  * — i.e. whether this category could ever draw a vector export symbol at all (manual acceptance
  * batch, section 43: "pokud kategorie nemá žádný exportovatelný point symbol, nemusí být ve
- * filtru"). `resolveWastePresentation`/`resolveCleaningPresentation` above never return "point"
- * for ANY label (waste is always "informational", cleaning is always "none") — electricity/
- * internet/water always CAN (even "WIFI" internet's own category still has other point-placeable
- * labels like "Pevná IP"). Used ONLY to decide whether a category belongs in the EXPORT symbol
- * filter (TechnicalRasterOutputsPanel.tsx) — never changes what's tracked/shown in the stand
- * detail panel or the editor's own "TECHNICKÉ ZNAČKY" view filters, which still list every
- * category (spec section 43 is explicitly export-only: "NEMĚŇ service semantics").
+ * filtru"). Used ONLY to decide whether a category belongs in the EXPORT symbol filter
+ * (TechnicalRasterOutputsPanel.tsx) — never changes what's tracked/shown in the stand detail panel
+ * or the editor's own "TECHNICKÉ ZNAČKY" view filters, which still list every category.
+ *
+ * CORRECTIVE BATCH (real production — "every imported operational service must be placeable"):
+ * waste/cleaning are now "point" too (see their own resolvers above), so both must belong in the
+ * export filter same as every other category — and any FUTURE category this app doesn't have a
+ * name for yet still resolves through `resolveFallbackPresentation`, which is ALSO now "point" —
+ * so this simply returns `true` unconditionally. Kept as a named function (never inlined away)
+ * so the export filter's own call site stays self-documenting and this decision has one place to
+ * change again if a genuinely non-placeable category is ever introduced.
  */
 export function categoryCanHaveExportableSymbol(categoryId: string): boolean {
-  return categoryId === "electricity" || categoryId === "internet" || categoryId === "water";
+  void categoryId;
+  return true;
 }

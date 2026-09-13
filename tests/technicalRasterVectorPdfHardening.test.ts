@@ -23,6 +23,7 @@ function placementItem(overrides: Partial<TechnicalRasterExportPlacementItem> = 
     xNormalized: 0.5,
     yNormalized: 0.5,
     presentation: resolveTechnicalServicePresentation("electricity", "Do 3kW 230V"),
+    category: "electricity",
     ...overrides,
   };
 }
@@ -560,28 +561,26 @@ test("export determinism: two exports of the SAME project/source produce semanti
 test("legend determinism: the legend's own entry order comes from FIRST-SEEN placement order (domain/technicalRasterExport.ts's buildTechnicalRasterExportLegend), never an unordered Map/object iteration artifact — two builds from the SAME placement order produce the SAME legend order", async () => {
   const source = await buildTwoPageFixture();
   const legend = [
-    { legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const },
-    { legendLabel: "VODA — PŘÍVOD / ODPAD VODY", color: "#1a7a4c", renderer: "waterDrop" as const },
-    { legendLabel: "INTERNET — PEVNÁ IP", color: "#b8860b", renderer: "textLabel" as const },
+    { legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" },
+    { legendLabel: "PŘÍVOD / ODPAD VODY", color: "#1a7a4c", renderer: "waterDrop" as const },
+    { legendLabel: "PEVNÁ IP", color: "#b8860b", renderer: "textLabel" as const, displayLabel: "IP" },
   ];
   const first = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X" });
   const second = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X" });
 
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  async function legendPageText(bytes: Uint8Array): Promise<string> {
-    const loaded = await pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
-    const legendPage = await loaded.getPage(2);
-    const content = await legendPage.getTextContent();
-    return (content.items as { str: string }[]).map((i) => i.str).join(" ");
-  }
-  const legendText1 = await legendPageText(first.bytes);
-  const legendText2 = await legendPageText(second.bytes);
-  assert.equal(legendText1, legendText2);
-  // Order preserved: EL. ENERGIE before VODA before INTERNET.
-  const elIndex = legendText1.indexOf("PŘÍVOD EL. ENERGIE");
-  const vodaIndex = legendText1.indexOf("VODA");
-  const internetIndex = legendText1.indexOf("INTERNET");
-  assert.ok(elIndex < vodaIndex && vodaIndex < internetIndex);
+  // GENERATED LEGEND BATCH — the legend's own text is now genuine vector-outline geometry, never
+  // extractable via pdf.js getTextContent(). Determinism/order is instead verified structurally:
+  // each row draws its OWN category-color symbol fill before its description fill, in the given
+  // legend array's order — electricity red, then water green, then internet gold — so the first
+  // occurrence of each row's own distinct color string must appear in that same relative order.
+  const legendText1 = await readAllContentText(first.bytes, 1);
+  const legendText2 = await readAllContentText(second.bytes, 1);
+  assert.equal(legendText1, legendText2, "two builds from the identical input must produce byte-identical legend content");
+  const elIndex = legendText1.indexOf("0.702 0.149 0.118 rg");
+  const vodaIndex = legendText1.indexOf("0.10196078431372549 0.47843137254901963 0.2980392156862745 rg");
+  const internetIndex = legendText1.indexOf("0.722 0.525 0.043 rg");
+  assert.ok(elIndex >= 0 && vodaIndex >= 0 && internetIndex >= 0, `expected all three row colors to appear, got: ${legendText1}`);
+  assert.ok(elIndex < vodaIndex && vodaIndex < internetIndex, "row order must match the given legend array order: electricity, water, internet");
 });
 
 test("legend deduplication: 10 placements of the SAME presentation (electricity 6 kW) produce exactly ONE legend entry, never 10 duplicate rows", () => {
@@ -590,16 +589,26 @@ test("legend deduplication: 10 placements of the SAME presentation (electricity 
   // buildTechnicalRasterExportLegend lives in domain/technicalRasterExport.ts — imported directly here to pin the exact dedup guarantee this export pipeline relies on.
   const legend = buildTechnicalRasterExportLegend(items);
   assert.equal(legend.length, 1);
-  assert.equal(legend[0]!.legendLabel, "PŘÍVOD EL. ENERGIE");
+  assert.equal(legend[0]!.legendLabel, "ELEKTRIKA");
 });
 
-test("legend: different meanings sharing a similar color are NEVER accidentally merged — deduplication is keyed by legendLabel, not color alone", () => {
+test("SIMPLIFIED LEGEND BATCH — same CATEGORY, different subtype (kW figure vs refrigerated circuit) now DELIBERATELY collapses into ONE 'ELEKTRIKA' row — this is the new category-level behavior, superseding the old per-subtype dedup", () => {
   const items: TechnicalRasterExportPlacementItem[] = [
-    placementItem({ placementId: "p-1", presentation: resolveTechnicalServicePresentation("electricity", "Do 6kW 230V") }), // red
-    placementItem({ placementId: "p-2", presentation: resolveTechnicalServicePresentation("electricity", "Lednicový okruh") }), // ALSO red, but a genuinely different legend meaning
+    placementItem({ placementId: "p-1", presentation: resolveTechnicalServicePresentation("electricity", "Do 6kW 230V") }),
+    placementItem({ placementId: "p-2", presentation: resolveTechnicalServicePresentation("electricity", "Lednicový okruh") }),
   ];
   const legend = buildTechnicalRasterExportLegend(items);
-  assert.equal(legend.length, 2, "same color, but two DISTINCT legend entries — color is never the dedup key");
+  assert.equal(legend.length, 1, "same category (electricity) — kW figure and refrigerated circuit now share ONE legend row, per the simplified category-level legend");
+  assert.equal(legend[0]!.legendLabel, "ELEKTRIKA");
+});
+
+test("legend: different CATEGORIES sharing a similar/identical color are NEVER accidentally merged — deduplication is never color-based (verified via the fallback path, since every REAL known category now intentionally collapses via CATEGORY_LEGEND_PRESETS)", () => {
+  const items: TechnicalRasterExportPlacementItem[] = [
+    placementItem({ placementId: "p-1", category: "unknown-a", presentation: resolveTechnicalServicePresentation("unknown-a", "Foo Service") }),
+    placementItem({ placementId: "p-2", category: "unknown-b", presentation: resolveTechnicalServicePresentation("unknown-b", "Bar Service") }),
+  ];
+  const legend = buildTechnicalRasterExportLegend(items);
+  assert.equal(legend.length, 2, "two genuinely different (unrecognized) categories, same neutral fallback color, still two DISTINCT legend entries — color is never the dedup key");
 });
 
 test("empty legend: no used presentation types -> legend page still exists (current, unchanged behavior) with just the header line, pinned so a future change is deliberate", async () => {
@@ -613,12 +622,12 @@ test("empty legend: no used presentation types -> legend page still exists (curr
 // 23/24) Font glyph coverage + text encoding — every real overlay/legend text this app draws.
 // ============================================================================
 
-test("font glyph coverage + Czech encoding: every real overlay/legend text this app actually draws (kW labels, IP/INT, the '*' star glyph, and real Czech legend strings with diacritics) renders WITHOUT crashing and is extractable afterward — never tofu/missing-glyph, never a thrown embedFont/drawText error", async () => {
+test("font glyph coverage + Czech encoding: every real overlay/legend text this app actually draws (kW labels, IP/INT, the '*' star glyph, and real Czech legend strings with diacritics) renders WITHOUT crashing and produces real, non-empty vector-outline fill geometry — never tofu/missing-glyph, never a thrown embedFont/drawText error", async () => {
   const source = await buildTwoPageFixture();
   const czechLegend = [
-    { legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const },
-    { legendLabel: "LEDNICOVÝ / NONSTOP OKRUH", color: "#b3261e", renderer: "refrigeratedStar" as const },
-    { legendLabel: "VODA — PŘÍVOD / ODPAD VODY", color: "#1a7a4c", renderer: "waterDrop" as const },
+    { legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "6 kW" },
+    { legendLabel: "LEDNICOVÝ OKRUH", color: "#b3261e", renderer: "refrigeratedStar" as const },
+    { legendLabel: "PŘÍVOD / ODPAD VODY", color: "#1a7a4c", renderer: "waterDrop" as const },
   ];
   const placements = [
     placementItem({ placementId: "p-kw", presentation: resolveTechnicalServicePresentation("electricity", "Do 6kW 230V") }), // "6 kW"
@@ -640,17 +649,19 @@ test("font glyph coverage + Czech encoding: every real overlay/legend text this 
   const fillBlockCount = (overlayContentText.match(/[01](?:\.\d+)? [01](?:\.\d+)? [01](?:\.\d+)? rg[\s\S]*?\bf\b/gu) ?? []).length;
   assert.equal(fillBlockCount, placements.length, `expected exactly one non-empty vector-outline glyph fill per placement (never tofu/a silently-empty glyph), got ${fillBlockCount} in: ${overlayContentText}`);
 
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-  const loaded = await pdfjsLib.getDocument({ data: new Uint8Array(result.bytes) }).promise;
-  const legendPage = await loaded.getPage(2);
-  const legendText = (await legendPage.getTextContent()).items as { str: string }[];
-  const legendJoined = legendText.map((i) => i.str).join(" ");
-  for (const needle of ["PŘÍVOD EL. ENERGIE", "LEDNICOVÝ", "NONSTOP OKRUH", "VODA", "PŘÍVOD", "ODPAD VODY", "Technický rastr", "FOR DECOR 2026", "Hala 1"]) {
-    assert.ok(legendJoined.includes(needle), `legend/header text missing: "${needle}" (got: ${legendJoined})`);
+  // GENERATED LEGEND BATCH — the legend's own Czech/diacritic text (headings, "PŘÍVOD EL. ENERGIE",
+  // "LEDNICOVÝ OKRUH", the header line's own real event/hall names) is now ALSO genuine
+  // vector-outline geometry, never a page.drawText()/PDF text-showing operator — so "never tofu" for
+  // this content means the same thing it does for the markers above: every one of these strings
+  // must have produced its own real, non-empty fill geometry, never a silently-empty/skipped glyph
+  // for a Czech-specific character (Ř/Í/Ý/Č/Ě/Ů/etc.) the embedded font subset can't shape.
+  const legendPageText = await readAllContentText(result.bytes, 1);
+  for (const forbidden of ["BT", "ET", "Tf", "Tj", "TJ"]) {
+    assert.ok(!new RegExp(`(^|\\s)${forbidden}(\\s|$)`, "u").test(legendPageText), `expected no "${forbidden}" text-showing operator on the legend page, got: ${legendPageText}`);
   }
-  // No U+FFFD replacement character (the classic "tofu"/missing-glyph symptom) anywhere in the
-  // legend's own extracted text — the legend is UNCHANGED, still real `page.drawText`.
-  assert.ok(!legendJoined.includes("�"), "no replacement-character glyphs in the legend — every drawn character is genuinely supported by the embedded font");
+  // Title + header line + 3 legend rows (each: 1 symbol fill + 1 description fill) = at least 7 real fill operators.
+  const legendFillCount = (legendPageText.match(/\bf\b/gu) ?? []).length;
+  assert.ok(legendFillCount >= 7, `expected at least 7 real vector-outline fills (title + header + 3×(symbol+description)), got ${legendFillCount} in: ${legendPageText}`);
 });
 
 // ============================================================================

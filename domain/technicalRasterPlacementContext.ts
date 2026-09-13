@@ -13,7 +13,7 @@
  * number is computed, so TechnicalRasterEditorPage.tsx / the new placement-context panel component
  * never duplicate the logic.
  */
-import { effectiveServicePlacements, type TechnicalService } from "./technicalRaster.ts";
+import { effectiveServicePlacements, requiredPlacementCount, type TechnicalService } from "./technicalRaster.ts";
 
 export type TechnicalRasterPlacementPointProgress = Readonly<{
   /** 1-based index of the point this specific placement/move interaction is about ("Bod X / Y"). */
@@ -40,7 +40,10 @@ export function computePlacementPointProgress(
   placementId?: string,
 ): TechnicalRasterPlacementPointProgress {
   const placements = effectiveServicePlacements(service);
-  const pointTotal = service.quantity;
+  // CORRECTIVE BATCH (real production, "quantity is not always number of placement points") —
+  // "Bod X / Y" must read against the REQUIRED placement count, never raw service.quantity (a
+  // onePerRecord cleaning record with qty=40 must show "Bod 1 / 1", never "Bod 1 / 40").
+  const pointTotal = requiredPlacementCount(service);
   if (mode === "move" && placementId) {
     const index = placements.findIndex((placement) => placement.id === placementId);
     return { pointIndex: index >= 0 ? index + 1 : 1, pointTotal };

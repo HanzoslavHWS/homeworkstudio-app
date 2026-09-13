@@ -49,10 +49,38 @@ export type WhiteModeOpCodes = Readonly<{
   fillColorSetters: ReadonlySet<number>;
   /** Fill mechanisms this transform refuses to touch — shading patterns, images, image masks. */
   unsupportedFillOps: ReadonlySet<number>;
+  /**
+   * CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill, editor path) —
+   * pdf.js's own `setGState` op (a `gs` operator). Real, empirically-confirmed root cause (see
+   * lib/pdf/pdfWhiteModeCanvasProxy.ts's own doc): a Form XObject with `/Group /S /Transparency`
+   * invoked from inside the target OCG span reads its OWN invocation alpha from
+   * `ctx.globalAlpha` — set by a genuine source `gs` call (H3's real per-stand `/ca 0.76`) that
+   * runs on the PARENT canvas BEFORE `beginGroup`/the offscreen swap ever happens. Neither the
+   * fillStyle-forcing trick nor pdf.js's own internal group-alpha reset (which only resets the
+   * OFFSCREEN canvas's own alpha, never the parent's) ever touches this — the parent's own
+   * `globalAlpha` survives, unmodified, all the way to `endGroup`'s final `drawImage` composite,
+   * diluting an otherwise fully-opaque forced-white fill back down to the source's own alpha.
+   * Optional (`undefined` skips this new mechanism entirely) so no existing caller/test needs it.
+   */
+  setGState?: number;
 }>;
 
 export type WhiteModeTransformResult =
-  | Readonly<{ status: "patched"; argsArray: readonly unknown[]; patchedIndices: readonly number[] }>
+  | Readonly<{
+    status: "patched";
+    argsArray: readonly unknown[];
+    patchedIndices: readonly number[];
+    /**
+     * CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill, editor path) — every
+     * operator index where a `gs` (setGState) operator ran WHILE inside the target OCG scope
+     * (`opCodes.setGState` must be provided for this to ever be non-empty — see that field's own
+     * doc). The caller (lib/pdf/technicalRasterWhiteRender.ts) forces `ctx.globalAlpha` to `1` at
+     * every one of these indices, neutralizing a genuine source `ca` reached inside target scope —
+     * mirroring the EXPORT side's own "reassert opacity after any source gs inside target" policy
+     * exactly, just implemented as a canvas-property override instead of a PDF-byte rewrite.
+     */
+    sourceGsIndicesInsideTarget: readonly number[];
+  }>
   | Readonly<{ status: "unsupported"; reason: string }>;
 
 /** The exact whitened value stored for every one of the fill-color-setter ops above — pdf.js's evaluator pre-resolves PDF colors into ready-to-use canvas CSS color strings, so replacing an op's args with a single white CSS color string is correct across all of them (verified for setFillRGBColor against the real "Hala 1.pdf"; the other color-space variants follow the same pre-resolved-string convention). */
@@ -85,6 +113,7 @@ export function computeWhiteModeArgsArray(
   const stack: (string | undefined)[] = [];
   let lastFillSetterIndex: number | undefined;
   const patchIndices = new Set<number>();
+  const sourceGsIndicesInsideTarget = new Set<number>();
   let unsupportedReason: string | undefined;
 
   for (let index = 0; index < fnArray.length; index += 1) {
@@ -101,6 +130,17 @@ export function computeWhiteModeArgsArray(
     }
 
     const insideTarget = stack.length > 0 && stack[stack.length - 1] === targetLayerId;
+
+    // CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill, editor path) — a
+    // `gs` operator reached inside target scope is recorded here REGARDLESS of what it's about to
+    // set (`ca`, blend mode, overprint, ...) — the caller neutralizes `ctx.globalAlpha` at exactly
+    // these indices, mirroring the export-side "reassert opacity after any source gs inside
+    // target" policy. Checked BEFORE the fillColorSetters/insideTarget-gate below since a `gs` op
+    // is neither a fill-color-setter nor gated behind `!insideTarget` the same way paint ops are.
+    if (insideTarget && opCodes.setGState !== undefined && fn === opCodes.setGState) {
+      sourceGsIndicesInsideTarget.add(index);
+      continue;
+    }
 
     if (opCodes.fillColorSetters.has(fn)) {
       lastFillSetterIndex = index;
@@ -134,7 +174,12 @@ export function computeWhiteModeArgsArray(
 
   const patchedArgsArray = argsArray.slice();
   for (const index of patchIndices) patchedArgsArray[index] = WHITE_FILL_ARGS;
-  return { status: "patched", argsArray: patchedArgsArray, patchedIndices: [...patchIndices].sort((a, b) => a - b) };
+  return {
+    status: "patched",
+    argsArray: patchedArgsArray,
+    patchedIndices: [...patchIndices].sort((a, b) => a - b),
+    sourceGsIndicesInsideTarget: [...sourceGsIndicesInsideTarget].sort((a, b) => a - b),
+  };
 }
 
 /**
