@@ -28,14 +28,27 @@
  *   ...
  *   Výtisk sestavil(a) ... dne ... strana ...                       <- page footer, skipped
  *
- * A HEADER row is detected by its OWN most distinctive, position-independent signal — a token
- * shaped like this customer's real document-number format (e.g. "V229-5/2026") sitting in the
- * document-number column — NOT by assuming a stand number is always present: the real fixture
- * contains at least one stand whose OWN number is genuinely blank in the source (verified directly,
- * not a hypothetical) — that stand is still captured (company/R:/items), just with `standNumber:
- * undefined`, and a warning explaining why, never a fabricated number.
+ * A HEADER row is detected PRIMARILY by its own stand number's SHAPE — reusing the same shared,
+ * already-tested `looksLikeStandNumberToken` primitive domain/technicalReportTableParsing.ts's
+ * primary-report parser relies on (never a second, parallel pattern) — rather than by the
+ * document-number token alone. CORRECTIVE BATCH (real Beauty-catalog production import) root cause:
+ * an earlier version of this parser used the document-number token (its pattern AND its narrow
+ * column position) as the ONLY header signal. Real production stand headers whose own document
+ * number was not recognized there (a pattern mismatch, a position shift, or pdf.js splitting that
+ * token across multiple runs) were silently swallowed as an ITEM ROW of the still-open PREVIOUS
+ * stand — and because the state machine never flushed/reset, the header's own following
+ * company/trade/"R:" row was then ALSO swallowed as a second bogus item (verified against the real
+ * report's own warnings, e.g. stand "3A33" and its company "Terra99 Europe s.r.o." both appearing as
+ * item rows under the PRECEDING stand "3A46"). A stand's OWN number is a far more distinctive,
+ * position-independent signal than its document number — the same shape (`\d+[A-Za-z]\d{1,4}[a-z]?`)
+ * is already relied on everywhere else in this app — so it is now the PRIMARY boundary signal here
+ * too, with the document-number token/pattern kept only as (a) an auxiliary field on the header once
+ * found, and (b) the fallback signal for the one real, verified edge case where a stand's own number
+ * is genuinely blank in the source (see `extractLeftColumnStandNumber`/`classifyRow` below) — that
+ * stand is still captured (company/R:/items), just with `standNumber: undefined`, and a warning
+ * explaining why, never a fabricated number.
  */
-import { groupTextItemsIntoRows, type PdfTextItem, type PdfTextRow } from "./technicalReportTableParsing.ts";
+import { groupTextItemsIntoRows, looksLikeStandNumberToken, type PdfTextItem, type PdfTextRow } from "./technicalReportTableParsing.ts";
 import type { TechnicalReconciliationMention } from "./technicalRasterReconciliation.ts";
 
 // ============================================================================
@@ -99,7 +112,7 @@ export type ParsedCatalogImport = Readonly<{
 // ============================================================================
 
 type ClassifiedRow =
-  | Readonly<{ kind: "header"; standNumber?: string; documentNumber: string; page: number }>
+  | Readonly<{ kind: "header"; standNumber?: string; documentNumber?: string; page: number }>
   | Readonly<{ kind: "columnHeader" }>
   | Readonly<{ kind: "footer" }>
   | Readonly<{ kind: "dimensions" }>
@@ -124,12 +137,37 @@ function isKnownDocumentMetadataRow(text: string): boolean {
   return KNOWN_DOCUMENT_METADATA_PREFIXES.some((prefix) => text.startsWith(prefix));
 }
 
+/**
+ * A row's own LEFT-COLUMN token(s), tried joined WITHOUT a space, checked against the shared,
+ * already-tested stand-number shape (`looksLikeStandNumberToken` — digit(s) + letter + digit(s) +
+ * optional lowercase suffix, e.g. "3A46", "4B08") that domain/technicalReportTableParsing.ts's own
+ * primary-report parser already relies on for the exact same real PDF-extraction quirk: pdf.js can
+ * split one visual token across multiple adjacent positioned runs (e.g. "3" + "A33"). This is now
+ * THE primary, position-independent signal a new catalog stand record has started — see this file's
+ * own top-of-file doc comment for why the previous document-number-only approach was fragile. Real
+ * item labels (free Czech text) never happen to match this narrow digit-letter-digit shape, so this
+ * never misfires on a genuine item row.
+ */
+function extractLeftColumnStandNumber(row: PdfTextRow): string | undefined {
+  const items = row.items;
+  for (let count = 1; count <= Math.min(3, items.length); count += 1) {
+    if (!inRange(items[count - 1]!.x, LEFT_COLUMN_X_RANGE)) break;
+    const accumulated = items.slice(0, count).map((item) => item.str).join("").trim();
+    if (looksLikeStandNumberToken(accumulated)) return accumulated;
+  }
+  return undefined;
+}
+
 function classifyRow(row: PdfTextRow): ClassifiedRow {
   const items = row.items; // groupTextItemsIntoRows already drops blank/whitespace-only tokens.
   const documentNumberItem = items.find((item) => inRange(item.x, DOCUMENT_NUMBER_X_RANGE) && DOCUMENT_NUMBER_PATTERN.test(item.str.trim()));
-  if (documentNumberItem) {
-    const standNumberItem = items.find((item) => inRange(item.x, LEFT_COLUMN_X_RANGE));
-    return { kind: "header", standNumber: standNumberItem?.str.trim(), documentNumber: documentNumberItem.str.trim(), page: row.page };
+  const standNumberFromShape = extractLeftColumnStandNumber(row);
+  if (standNumberFromShape || documentNumberItem) {
+    // A stand's OWN number (recognized by shape) is authoritative once found — it does not depend
+    // on the document-number token being present/recognized at all. The document-number token is
+    // kept only as auxiliary metadata (when found) and as the sole boundary signal for the one real,
+    // verified edge case where the stand's own number is genuinely blank in the source.
+    return { kind: "header", standNumber: standNumberFromShape, documentNumber: documentNumberItem?.str.trim(), page: row.page };
   }
   if (items.some((item) => item.str.trim() === "Stánek")) return { kind: "columnHeader" };
   if (items[0]?.str.trim().startsWith("Výtisk sestavil")) return { kind: "footer" };

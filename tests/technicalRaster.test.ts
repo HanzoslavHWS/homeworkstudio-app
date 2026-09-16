@@ -43,6 +43,8 @@ import {
 import type { StoredAsset } from "../domain/assets.ts";
 import { resolveRealizationDisplayState } from "../domain/technicalRasterRealization.ts";
 import { groupStandsByPlacementWorkQueue, computeTechnicalRasterPlacementSummary } from "../domain/technicalRasterWorkQueue.ts";
+import { extractTechnicalMentionsFromCatalogStand } from "../domain/technicalRasterCatalogImport.ts";
+import { reconcileTechnicalReportAndCatalog } from "../domain/technicalRasterReconciliation.ts";
 
 function makeAsset(id: string): StoredAsset {
   return { id, storageKey: `technical-rasters/p1/source/${id}.pdf`, originalFileName: `${id}.pdf`, mimeType: "application/pdf", size: 100, createdAt: "2026-01-01T00:00:00.000Z", category: "technical-raster-source" };
@@ -1133,4 +1135,63 @@ test("TOLERANT CATALOG MERGE: canonical ambiguity (two EXISTING stands share a c
   const stand3A01 = updated.stands.find((s) => s.standNumber === "3A01");
   assert.equal(stand3A1!.hasCatalogBuildRecord, undefined, "never guessed onto either existing candidate");
   assert.equal(stand3A01!.hasCatalogBuildRecord, undefined, "never guessed onto either existing candidate");
+});
+
+// ============================================================================
+// CORRECTIVE BATCH (4th, real Beauty-catalog production import) section 5/20 — realization
+// assignment MUST be independent of service reconciliation. A quantity mismatch or a genuine
+// service conflict between the primary report and the supplemental catalog is a diagnostic finding
+// ONLY (reconcileTechnicalReportAndCatalog's own output) — it must never feed back into
+// hasCatalogBuildRecord/realizationCompany, which mergeSupplementalCatalogImport already derives
+// straight from the catalog stand's own presence/`R:` value, never from any reconciliation outcome.
+// These integration tests exercise the full real pipeline (primary import -> catalog import ->
+// reconciliation) end to end to prove that independence holds, not just at the unit level.
+// ============================================================================
+
+test("REALIZATION INDEPENDENCE (real 3B03 case): report says 1x 2kW, catalog says 3x 2kW (quantity mismatch) -> reconciliation flags the mismatch, but realization/hasCatalogBuildRecord are completely unaffected", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3B03", "l1")]);
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [{ standNumber: "3B03", services: [{ category: "electricity", externalLabel: "Do 2kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, () => ({ status: "resolved" as const }));
+
+  const catalogStand = { standNumber: "3B03", realizationCompanyRaw: "MAC Praha, spol. s r.o.", items: [{ label: "ELEKTRICKÁ ENERGIE - PŘÍKON DO 2 kW/230", quantity: 3, unit: "ks", rawQuantityText: "3,0 ks", notes: [], page: 1 }], page: 1 };
+  const updated = mergeSupplementalCatalogImport(project, { stands: [catalogStand], warnings: [] }, "realizacky.pdf");
+
+  const outcomes = reconcileTechnicalReportAndCatalog(buildPrimaryReportMentions(updated), extractTechnicalMentionsFromCatalogStand(catalogStand));
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0]!.status, "quantity_mismatch", "the mismatch must still surface as a diagnostic finding");
+
+  const stand = updated.stands.find((candidate) => candidate.standNumber === "3B03")!;
+  assert.equal(stand.hasCatalogBuildRecord, true, "a quantity mismatch must never clear hasCatalogBuildRecord");
+  assert.equal(stand.realizationCompany, "MAC Praha, spol. s r.o.", "a quantity mismatch must never clear/replace the realization company");
+  const display = resolveRealizationDisplayState(stand.hasCatalogBuildRecord, stand.realizationCompany);
+  assert.equal(display.shouldShow && display.group, "macPraha", "the realization underline must export normally despite the mismatch");
+});
+
+test("REALIZATION INDEPENDENCE (real 3A49/3C29 case): report says 2 kW, catalog says BEZ (a genuine true conflict) -> reconciliation reports a real conflict, but realization/hasCatalogBuildRecord are still completely unaffected", () => {
+  let project = createTechnicalRasterProject({ name: "Hala 3" }, "p1");
+  project = withRasterStandLabels(project, [makeLabel("3A49", "l1")]);
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [{ standNumber: "3A49", services: [{ category: "electricity", externalLabel: "Do 2kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, () => ({ status: "resolved" as const }));
+
+  const catalogStand = { standNumber: "3A49", realizationCompanyRaw: "CREATIV EXPO, s.r.o.", items: [{ label: "BEZ ELEKTRICKÉ ENERGIE", quantity: 1, unit: "ks", rawQuantityText: "1,0 ks", notes: [], page: 1 }], page: 1 };
+  const updated = mergeSupplementalCatalogImport(project, { stands: [catalogStand], warnings: [] }, "realizacky.pdf");
+
+  const outcomes = reconcileTechnicalReportAndCatalog(buildPrimaryReportMentions(updated), extractTechnicalMentionsFromCatalogStand(catalogStand));
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0]!.status, "conflict", "report vs. BEZ must still surface as a true conflict");
+
+  const stand = updated.stands.find((candidate) => candidate.standNumber === "3A49")!;
+  assert.equal(stand.hasCatalogBuildRecord, true, "even a true service conflict must never clear hasCatalogBuildRecord");
+  assert.equal(stand.realizationCompany, "CREATIV EXPO, s.r.o.", "even a true service conflict must never clear/replace the realization company");
+  const display = resolveRealizationDisplayState(stand.hasCatalogBuildRecord, stand.realizationCompany);
+  assert.equal(display.shouldShow && display.group, "creativExpo", "the realization assignment must survive a true conflict");
 });

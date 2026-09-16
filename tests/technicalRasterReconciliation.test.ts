@@ -164,3 +164,42 @@ test("canonical variant: cleaning word order never affects the canonical variant
   assert.equal(resolveCanonicalServiceVariant("cleaning", "denní úklid"), resolveCanonicalServiceVariant("cleaning", "úklid denní"));
   assert.notEqual(resolveCanonicalServiceVariant("cleaning", "denni uklid"), resolveCanonicalServiceVariant("cleaning", "generální úklid"));
 });
+
+// ============================================================================
+// CORRECTIVE BATCH (4th, real Beauty-catalog production import) section 7 — false service
+// conflicts: "generální úklid" (report) vs "úklid jednorázový" (catalog), and "voda, odpad" (report)
+// vs "voda / odpad (přívod)" (catalog) are operationally equivalent enough for this reconciliation
+// and must not surface as hard conflicts.
+// ============================================================================
+
+test("REAL FIXTURE CASE: report 'generalni uklid' vs catalog 'uklid jednorazovy' is SHODA, never a false conflict", () => {
+  const outcomes = reconcileTechnicalReportAndCatalog(
+    [mention({ standNumber: "3B10", category: "cleaning", externalLabel: "generalni uklid" })],
+    [mention({ standNumber: "3B10", category: "cleaning", externalLabel: "uklid jednorazovy" })],
+  );
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0]!.status, "shoda");
+});
+
+test("canonical variant: 'generální úklid'/'generalni uklid' and 'úklid jednorázový'/'uklid jednorazovy' all resolve to the SAME cleaning variant, distinct from daily cleaning", () => {
+  const base = resolveCanonicalServiceVariant("cleaning", "generální úklid");
+  assert.equal(resolveCanonicalServiceVariant("cleaning", "generalni uklid"), base);
+  assert.equal(resolveCanonicalServiceVariant("cleaning", "úklid jednorázový"), base);
+  assert.equal(resolveCanonicalServiceVariant("cleaning", "uklid jednorazovy"), base);
+  assert.notEqual(base, resolveCanonicalServiceVariant("cleaning", "denní úklid"));
+});
+
+test("REAL FIXTURE CASE: report 'voda, odpad' vs catalog 'voda / odpad (přívod)' is SHODA, never a false conflict", () => {
+  const outcomes = reconcileTechnicalReportAndCatalog(
+    [mention({ standNumber: "3B03", category: "water", externalLabel: "voda, odpad" })],
+    [mention({ standNumber: "3B03", category: "water", externalLabel: "voda / odpad (přívod)" })],
+  );
+  assert.equal(outcomes.length, 1);
+  assert.equal(outcomes[0]!.status, "shoda");
+});
+
+test("canonical variant: 'voda, odpad' and 'voda / odpad (přívod)' (plus its diacritic-free equivalent) all resolve to the SAME water/waste-connection variant", () => {
+  const base = resolveCanonicalServiceVariant("water", "voda, odpad");
+  assert.equal(resolveCanonicalServiceVariant("water", "voda / odpad (přívod)"), base);
+  assert.equal(resolveCanonicalServiceVariant("water", "voda / odpad (privod)"), base);
+});

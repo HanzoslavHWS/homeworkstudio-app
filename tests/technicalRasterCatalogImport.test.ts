@@ -253,6 +253,117 @@ test("N) a stand with no standNumber produces NO mentions at all — never recon
   assert.equal(mentions.length, 0);
 });
 
+// ============================================================================
+// CORRECTIVE BATCH (4th, real Beauty-catalog production import) section 2/3/19 — real production
+// root cause: header-row detection depended ENTIRELY on the document-number token (its pattern AND
+// its narrow column position). A later stand's own header row whose document-number token was not
+// recognized (pattern mismatch / position shift / pdf.js splitting it across runs) was silently
+// swallowed as an ITEM ROW of the still-open PREVIOUS stand — and because the state machine never
+// flushed/reset, that header's own following company/"R:" row was then ALSO swallowed as a second
+// bogus item. Verified against the real report's own warnings (stand "3A33" and its company
+// "Terra99 Europe s.r.o." both appearing as item rows under the PRECEDING stand "3A46"). The fix
+// (extractLeftColumnStandNumber in domain/technicalRasterCatalogImport.ts) makes the stand's OWN
+// number — recognized by the SAME shared shape every other parser in this app already trusts — the
+// PRIMARY, structural boundary signal, independent of the document-number token entirely.
+// ============================================================================
+
+test("R) REAL PRODUCTION SEQUENCE: 3A46 -> 3A33 (header row whose OWN document-number token is unrecognized) -> Terra99 Europe s.r.o. + R: CREATIV EXPO -> both stands are independent records, neither swallows the other", () => {
+  const items: PdfTextItem[] = [
+    ...standPreamble(700, "3A46", "V231-46/2026", "Firma A46", "Firma A46", "GENDAI, s.r.o."),
+    ...itemRow("ELEKTRICKÁ ENERGIE - PŘÍKON DO 2 kW/230", "1,0 ks", 660),
+    // 3A33's own header row: its document-number token is garbled/unrecognized — the real production
+    // failure mode — so ONLY the stand number's own shape is available as a boundary signal.
+    item("3A33", STAND_COL_X, 630),
+    item("V231-XX?", DOC_COL_X, 630),
+    item("Terra99 Europe s.r.o.", STAND_COL_X, 616),
+    item("R: CREATIV EXPO, s.r.o.", R_COL_X, 616),
+  ];
+  const result = parseSupplementalCatalogPdf(items);
+  assert.equal(result.stands.length, 2, "3A33 must be its OWN record, never swallowed as an item of 3A46");
+
+  const stand3A46 = result.stands.find((stand) => stand.standNumber === "3A46")!;
+  assert.equal(stand3A46.items.length, 1, "3A46 must keep ONLY its own real item, never gain 3A33/Terra99/R: as bogus items");
+  assert.equal(stand3A46.items[0]!.label, "ELEKTRICKÁ ENERGIE - PŘÍKON DO 2 kW/230");
+
+  const stand3A33 = result.stands.find((stand) => stand.standNumber === "3A33")!;
+  assert.equal(stand3A33.companyName, "Terra99 Europe s.r.o.", "the company row must attach to the NEW stand (3A33), never fall through as an item of 3A46");
+  assert.equal(stand3A33.realizationCompanyRaw, "CREATIV EXPO, s.r.o.");
+  assert.equal(stand3A33.items.length, 0);
+
+  assert.ok(!result.warnings.some((w) => w.message.includes("3A33") && w.message.includes("3A46")), 'no warning like `Položka "3A33" u stánku 3A46...` may ever be produced');
+  assert.ok(!result.warnings.some((w) => w.message.includes("Terra99")), "the company name must never be treated as a service item / warned about");
+  assert.ok(!result.warnings.some((w) => w.message.includes("CREATIV EXPO")), "the R: text must never be treated as an item quantity / warned about");
+});
+
+test("S) a later valid stand number terminates the previous record even with NO document-number token present on its header row at all", () => {
+  const items: PdfTextItem[] = [
+    ...standPreamble(700, "4C07", "V231-70/2026", "Firma C07", "Firma C07", "MAC Praha, spol. s r.o."),
+    ...itemRow("STAVBA OBVODOVÝCH STĚN - OCTANORM", "5,0 bm", 660),
+    // 4B08's header row: no document-number token at all on this row (real edge case — the doc
+    // number can be entirely absent/unrecognized, not just malformed).
+    item("4B08", STAND_COL_X, 630),
+    item("Beauty Import s.r.o.", STAND_COL_X, 616),
+    item("R: GENDAI, s.r.o.", R_COL_X, 616),
+    ...itemRow("KOBEREC ŠEDÝ", "9,0 m2", 600),
+  ];
+  const result = parseSupplementalCatalogPdf(items);
+  assert.equal(result.stands.length, 2);
+  const stand4C07 = result.stands.find((stand) => stand.standNumber === "4C07")!;
+  assert.equal(stand4C07.items.length, 1);
+  const stand4B08 = result.stands.find((stand) => stand.standNumber === "4B08")!;
+  assert.equal(stand4B08.companyName, "Beauty Import s.r.o.");
+  assert.equal(stand4B08.realizationCompanyRaw, "GENDAI, s.r.o.");
+  assert.equal(stand4B08.items.length, 1);
+  assert.equal(stand4B08.items[0]!.label, "KOBEREC ŠEDÝ");
+  assert.equal(stand4B08.documentNumber, undefined, "a header recognized purely by stand-number shape may legitimately have no captured document number");
+});
+
+test("T) H3 and H4 stand numbers both parse as independent records at the PARSER level — hall-scope classification is deliberately a LATER, separate concern", () => {
+  const items: PdfTextItem[] = [
+    ...standPreamble(700, "3A35", "V231-35/2026", "Firma H3", "Firma H3", "CREATIV EXPO, s.r.o."),
+    ...itemRow("ELEKTRICKÁ ENERGIE - PŘÍKON DO 2 kW/230", "1,0 ks", 660),
+    ...standPreamble(630, "4A22", "V231-90/2026", "Firma H4", "Firma H4", "GENDAI, s.r.o.", 1),
+    ...itemRow("ÚKLID DENNÍ", "20,0 m2/ak", 590),
+  ];
+  const result = parseSupplementalCatalogPdf(items);
+  assert.equal(result.stands.length, 2, "the parser itself never discards/merges a hall-4 record just because this raster's own current hall might be 3");
+  const stand3A35 = result.stands.find((stand) => stand.standNumber === "3A35")!;
+  const stand4A22 = result.stands.find((stand) => stand.standNumber === "4A22")!;
+  assert.equal(stand3A35.items.length, 1);
+  assert.equal(stand4A22.items.length, 1);
+  assert.equal(stand4A22.realizationCompanyRaw, "GENDAI, s.r.o.");
+});
+
+test("U) an unknown/unrecognized realization value at the parser level is still captured verbatim (never dropped/fabricated) — canonical grouping to OSTATNÍ happens later in domain/technicalRasterRealization.ts", () => {
+  const items: PdfTextItem[] = [...standPreamble(691, "3B15", "V231-15/2026", "Firma", "Firma", "Elseya spol. s r.o.")];
+  const stand = parseSupplementalCatalogPdf(items).stands[0]!;
+  assert.equal(stand.realizationCompanyRaw, "Elseya spol. s r.o.", "a genuinely unrecognized realization company is still a valid, captured build record — never treated as absent");
+});
+
+test("V) cross-page continuation still works alongside the new stand-shape header detection: a genuine new stand near a page boundary is recognized even without a matching document-number token", () => {
+  const items: PdfTextItem[] = [
+    ...standPreamble(691, "3C26", "V231-26/2026", "ROSA IMPORT s.r.o.", "ROSA IMPORT s.r.o.", "CREATIV EXPO, s.r.o.", 1),
+    ...itemRow("KOBEREC BAREVNÝ", "45,0 m2", 600, 1),
+    ...footerRow(33.1, 1),
+    ...columnHeaderRow(806.3, 2),
+    ...itemRow("REFLEKTOR HALOGENOVÝ HQI 150 W", "15,0 ks", 795.0, 2),
+    // a new stand begins right after the page-2 column-header noise, with its doc-number token
+    // unrecognized (the same real production failure mode as test R above):
+    item("3C32", STAND_COL_X, 760, 2),
+    item("??-32", DOC_COL_X, 760, 2),
+    item("Firma 3C32", STAND_COL_X, 746, 2),
+    item("R: MAC Praha, spol. s r.o.", R_COL_X, 746, 2),
+  ];
+  const result = parseSupplementalCatalogPdf(items);
+  assert.equal(result.stands.length, 2);
+  const stand3C26 = result.stands.find((stand) => stand.standNumber === "3C26")!;
+  assert.equal(stand3C26.items.length, 2, "the page-2 item before the next header must still belong to 3C26");
+  const stand3C32 = result.stands.find((stand) => stand.standNumber === "3C32")!;
+  assert.equal(stand3C32.companyName, "Firma 3C32");
+  assert.equal(stand3C32.realizationCompanyRaw, "MAC Praha, spol. s r.o.");
+  assert.equal(stand3C32.page, 2);
+});
+
 test("O) waste service labels (kontejner/odvoz odpadu) classify as waste, but a wastebasket furniture item does not", () => {
   assert.equal(extractTechnicalMentionsFromCatalogStand(stand({ items: [{ label: "Kontejn 1100 l", quantity: 1, unit: "ks", rawQuantityText: "1,0 ks", notes: [], page: 1 }] }))[0]?.category, "waste");
   assert.equal(extractTechnicalMentionsFromCatalogStand(stand({ items: [{ label: "Odvoz odpadu", quantity: 1, unit: "ks", rawQuantityText: "1,0 ks", notes: [], page: 1 }] }))[0]?.category, "waste");

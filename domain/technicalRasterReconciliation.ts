@@ -67,6 +67,31 @@ function isAbfNightCurrentRefrigeratedCatalogLabel(externalLabel: string): boole
   return /nocni\s*proud/u.test(stripDiacritics(externalLabel));
 }
 
+/**
+ * CORRECTIVE BATCH (4th, real Beauty-catalog production import) section 7 — real case: report says
+ * "generalni uklid", catalog says "uklid jednorazovy". Operationally equivalent enough for this
+ * reconciliation not to be shown as a hard conflict (spec's own explicit instruction), even though
+ * the exact Czech terms differ. Scoped to exactly this real pair, never a general cleaning-service
+ * merger — "denní úklid" (daily, handled above by isAbfDailyCleaningLabel) and any other real
+ * cleaning wording stay their own distinct variant.
+ */
+function isAbfGeneralOneTimeCleaningLabel(externalLabel: string): boolean {
+  const normalized = stripDiacritics(externalLabel);
+  return /uklid/u.test(normalized) && (/general/u.test(normalized) || /jednorazov/u.test(normalized));
+}
+
+/**
+ * CORRECTIVE BATCH (4th, real Beauty-catalog production import) section 7 — real case: report says
+ * "voda, odpad", catalog says "voda / odpad (přívod)" — the same real water/waste CONNECTION
+ * service, worded differently by the two sources. Checked for BOTH tokens present anywhere in the
+ * label, independent of order/exact punctuation — the same narrow, real-pair-only discipline as
+ * isAbfDailyCleaningLabel above (never a general fuzzy matcher for arbitrary water/waste labels).
+ */
+function isAbfWaterWasteConnectionLabel(externalLabel: string): boolean {
+  const normalized = stripDiacritics(externalLabel);
+  return /voda/u.test(normalized) && /odpad/u.test(normalized);
+}
+
 function normalizeGenericVariant(externalLabel: string): string {
   return externalLabel
     .normalize("NFD")
@@ -136,6 +161,11 @@ export function resolveCanonicalServiceVariant(category: string, externalLabel: 
   }
   if (category === "cleaning") {
     if (isAbfDailyCleaningLabel(externalLabel)) return "cleaning:daily";
+    if (isAbfGeneralOneTimeCleaningLabel(externalLabel)) return "cleaning:general";
+    return normalizeGenericVariant(externalLabel);
+  }
+  if (category === "water") {
+    if (isAbfWaterWasteConnectionLabel(externalLabel)) return "water:connection";
     return normalizeGenericVariant(externalLabel);
   }
   return normalizeGenericVariant(externalLabel);
