@@ -60,6 +60,18 @@ export type RasterLayer = Readonly<{
   id: string;
   name: string;
   defaultVisible: boolean;
+  /**
+   * PRODUCTION BATCH (per-source-OCG-layer text-size reduction, spec section 3) — true ONLY when
+   * this layer's own content actually contains PDF text-showing operators (detected via
+   * lib/pdf/pdfTextLayerDetection.ts at raster-upload time, the SAME real-PDF read that already
+   * produces this layer list). Undefined for an older cached/persisted layer list computed before
+   * this field existed — the UI treats that identically to `false` (never shows a text-size control
+   * for a layer this app hasn't confirmed contains text), and it self-heals on the next raster
+   * upload, which always recomputes the WHOLE layer list fresh. Purely a UI-gating signal — it has
+   * no effect on which layers CAN be scaled (a project's own `sourceLayerTextScales` entry always
+   * takes effect at render/export time regardless of this flag).
+   */
+  containsText?: boolean;
 }>;
 
 /**
@@ -117,6 +129,24 @@ export type RasterSettings = Readonly<{
   includeRealizationsInExport?: boolean;
   /** Corrective batch section 7 — WHERE the export's legend is drawn (domain/technicalRasterLegendPlacement.ts's own doc has the full story). Optional/undefined resolves to today's existing "separate-page" behavior via resolveEffectiveLegendPlacement — never a raw read here. */
   legendPlacement?: TechnicalLegendPlacement;
+  /**
+   * PRODUCTION BATCH ("BEZ elektriky" automatic red X) — "Exportovat označení „BEZ elektriky“"
+   * (spec section 17), independent of the realization export toggle above and of the editor's own
+   * always-on visibility for this marker (spec section 16: the red X is automatically visible in the
+   * editor regardless of this setting — this ONLY gates whether it's drawn into the exported PDF).
+   * Optional/undefined defaults to OFF (spec: "we want the information available during preparation,
+   * but the user decides whether it belongs in the final client/production PDF") — see
+   * effectiveIncludeNoElectricityMarkersInExport, always used instead of a raw read.
+   */
+  includeNoElectricityMarkersInExport?: boolean;
+  /**
+   * PRODUCTION BATCH (per-source-OCG-layer text-size reduction) — `<RasterLayer.id> -> scale
+   * fraction`, 0.5-1 (100% = original source size, values below 100% shrink that layer's own PDF
+   * text). Optional/undefined for a layer not present here reads as 1 (unchanged) via
+   * effectiveSourceLayerTextScale — never a raw read. See domain/technicalRasterTextScale.ts for the
+   * actual content-stream transform this setting drives.
+   */
+  sourceLayerTextScales?: Readonly<Record<string, number>>;
 }>;
 
 export function effectiveShowRealizations(settings: RasterSettings): boolean {
@@ -157,6 +187,48 @@ export function withShowRealizations(project: TechnicalRasterProject, show: bool
 /** Corrective batch section 10 — "Zahrnout realizačky do exportu" (export only, independent of the editor's own display toggle above). */
 export function withIncludeRealizationsInExport(project: TechnicalRasterProject, include: boolean): TechnicalRasterProject {
   return { ...project, rasterSettings: { ...project.rasterSettings, includeRealizationsInExport: include }, updatedAt: new Date().toISOString() };
+}
+
+/** Never a raw `settings.includeNoElectricityMarkersInExport` read elsewhere (spec section 17: defaults to OFF). */
+export function effectiveIncludeNoElectricityMarkersInExport(settings: RasterSettings): boolean {
+  return settings.includeNoElectricityMarkersInExport ?? false;
+}
+
+/** "Exportovat označení „BEZ elektriky“" (PRODUCTION BATCH section 17) — export-only, independent of the editor's always-on display for this marker. */
+export function withIncludeNoElectricityMarkersInExport(project: TechnicalRasterProject, include: boolean): TechnicalRasterProject {
+  return { ...project, rasterSettings: { ...project.rasterSettings, includeNoElectricityMarkersInExport: include }, updatedAt: new Date().toISOString() };
+}
+
+// ============================================================================
+// Per-source-OCG-layer text scale (PRODUCTION BATCH, part A) — 100% = original source size; below
+// 100% shrinks; values above 100% are never allowed (spec section 2).
+// ============================================================================
+
+export const DEFAULT_SOURCE_LAYER_TEXT_SCALE = 1;
+export const MIN_SOURCE_LAYER_TEXT_SCALE = 0.5;
+export const MAX_SOURCE_LAYER_TEXT_SCALE = 1;
+
+/** Never a raw `settings.sourceLayerTextScales` read elsewhere — a project saved before this field existed (or a layer never explicitly configured) reads back as the SAME 100% default new projects get. */
+export function effectiveSourceLayerTextScale(settings: RasterSettings, layerId: string): number {
+  return settings.sourceLayerTextScales?.[layerId] ?? DEFAULT_SOURCE_LAYER_TEXT_SCALE;
+}
+
+/** The full configured map (layer id -> scale) — never a raw `settings.sourceLayerTextScales` read elsewhere. */
+export function effectiveSourceLayerTextScales(settings: RasterSettings): Readonly<Record<string, number>> {
+  return settings.sourceLayerTextScales ?? {};
+}
+
+/** Sets one layer's own text scale (spec section 2/9/10) — clamped to [MIN_SOURCE_LAYER_TEXT_SCALE, MAX_SOURCE_LAYER_TEXT_SCALE] defensively, same discipline as withWhiteFillOpacity's own clamp. Setting exactly DEFAULT_SOURCE_LAYER_TEXT_SCALE (100%) is a harmless no-op scale, kept as an ordinary explicit entry rather than a special "unset" — reading it back behaves identically to an absent entry either way. */
+export function withSourceLayerTextScale(project: TechnicalRasterProject, layerId: string, scale: number): TechnicalRasterProject {
+  const clamped = Math.min(MAX_SOURCE_LAYER_TEXT_SCALE, Math.max(MIN_SOURCE_LAYER_TEXT_SCALE, scale));
+  return {
+    ...project,
+    rasterSettings: {
+      ...project.rasterSettings,
+      sourceLayerTextScales: { ...project.rasterSettings.sourceLayerTextScales, [layerId]: clamped },
+    },
+    updatedAt: new Date().toISOString(),
+  };
 }
 
 /** Corrective batch section 7 — sets WHERE the export's legend is drawn (domain/technicalRasterLegendPlacement.ts). A plain replace, same shape as every other rasterSettings mutator here. */
@@ -391,6 +463,36 @@ export type TechnicalStand = Readonly<{
    * realizationCompany being present, never inferred from having technical services).
    */
   hasCatalogBuildRecord?: boolean;
+  /**
+   * PRODUCTION BATCH ("BEZ elektriky" automatic red X) — true ONLY when the stand's own row in the
+   * MOST RECENT active PRIMARY ELECTRICITY import explicitly evaluated to zero real electricity
+   * (every column on that row's own report line was zero/blank — the report's own normalized way of
+   * saying "explicitně bez přiřazení elektriky", spec section 12/13), never merely because this
+   * stand happens to have no electricity SERVICE for some other reason.
+   *
+   * Deliberately NOT the same thing as "this stand has zero electricity services" in general — a
+   * stand that was never touched by ANY electricity import at all (an unmatched/missing report row)
+   * must read as `undefined` here, never `true` (spec section 13: "Do not confuse zero electricity
+   * with an unmatched/missing report row"). Only `mergeTechnicalRasterImport` ever sets this field,
+   * and only while merging an import whose OWN `category === "electricity"` — see
+   * `ParsedTechnicalServiceRow.explicitNoServiceAssignment`'s own doc for where the underlying
+   * per-row signal comes from. A stand touched by a NEWER active electricity import always has this
+   * flag fully recomputed (true or false) from that import's own row — never a stale value surviving
+   * from an older, now-superseded electricity import.
+   *
+   * Driven EXCLUSIVELY by the primary electricity report — the supplemental "Stavby" catalog import
+   * (`mergeSupplementalCatalogImport`) NEVER reads or writes this field, even when its own "BEZ"
+   * wording conflicts with the primary report (spec section 13: the primary report's own explicit
+   * state always wins; a real report "2 kW" + catalog "BEZ" is a reconciliation CONFLICT, visible
+   * elsewhere, but never turns this flag on).
+   *
+   * A stand can never legitimately be both `hasNoElectricityAssignment: true` AND carry a real
+   * electricity `TechnicalService` from the SAME active import at the same time — the per-row signal
+   * this is derived from is itself "every electricity column on this row was zero", which is
+   * mutually exclusive with "at least one column produced a real service" by construction (spec
+   * section 20).
+   */
+  hasNoElectricityAssignment?: boolean;
 }>;
 
 // ============================================================================
@@ -957,6 +1059,16 @@ export type ParsedTechnicalServiceRow = Readonly<{
   companyName?: string;
   services: readonly Omit<TechnicalService, "id" | "sourceImportId" | "status" | "internalProductId" | "internalProductCode">[];
   notes: readonly Omit<TechnicalNote, "id" | "sourceImportId">[];
+  /**
+   * PRODUCTION BATCH ("BEZ elektriky" automatic red X) — true when this row's own report columns
+   * ALL evaluated to zero/blank (domain/technicalReportParsers/technicalReportParser.ts's own
+   * `buildParsedTechnicalReport` sets this, currently only for `category === "electricity"` — see
+   * that function's own doc). Only ever consulted by `mergeTechnicalRasterImport` below, and only
+   * while merging an electricity-category import, to set `TechnicalStand.hasNoElectricityAssignment`
+   * — see that field's own doc for the full "explicit BEZ vs. unmatched/missing row" distinction.
+   * Undefined/false for every other category's row (meaningless there today).
+   */
+  explicitNoServiceAssignment?: boolean;
 }>;
 
 /** The standardized output every TechnicalReportParser implementation returns (spec section 40) — category-agnostic, so the merge logic below never special-cases a report type. */
@@ -998,6 +1110,12 @@ export function mergeTechnicalRasterImport(
     }));
   }
 
+  // PRODUCTION BATCH ("BEZ elektriky" automatic red X) — only the PRIMARY ELECTRICITY report ever
+  // drives TechnicalStand.hasNoElectricityAssignment (spec section 13); every other category's own
+  // row-level explicitNoServiceAssignment (always undefined for non-electricity parsers today
+  // anyway) is simply never consulted below.
+  const isElectricityImport = importRecord.category === "electricity";
+
   let nextStands = [...stands];
   for (const row of report.rows) {
     const standNumber = normalizeStandNumber(row.standNumber);
@@ -1013,6 +1131,7 @@ export function mergeTechnicalRasterImport(
       };
     });
     const notes: TechnicalNote[] = row.notes.map((note) => ({ ...note, id: crypto.randomUUID(), sourceImportId: importRecord.id }));
+    const explicitNoElectricity = isElectricityImport && row.explicitNoServiceAssignment === true;
 
     const existingIndex = findStandIndex(nextStands, standNumber);
     if (existingIndex === -1) {
@@ -1024,6 +1143,7 @@ export function mergeTechnicalRasterImport(
         notes,
         placement: UNASSIGNED_PLACEMENT,
         sourceImportIds: [importRecord.id],
+        hasNoElectricityAssignment: isElectricityImport ? explicitNoElectricity : undefined,
       });
     } else {
       const existing = nextStands[existingIndex]!;
@@ -1033,6 +1153,11 @@ export function mergeTechnicalRasterImport(
         services: [...existing.services, ...services],
         notes: [...existing.notes, ...notes],
         sourceImportIds: existing.sourceImportIds.includes(importRecord.id) ? existing.sourceImportIds : [...existing.sourceImportIds, importRecord.id],
+        // A NEW electricity import always fully recomputes this flag (true or false) from its OWN
+        // row — never leaves a stale `true` from an older, now-superseded electricity import (the
+        // superseded services were already stripped above via `replaceImportId`). A non-electricity
+        // import's own row never touches this field either way.
+        hasNoElectricityAssignment: isElectricityImport ? explicitNoElectricity : existing.hasNoElectricityAssignment,
       };
     }
   }

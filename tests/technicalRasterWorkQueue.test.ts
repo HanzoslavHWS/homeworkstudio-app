@@ -121,7 +121,7 @@ test("D) removing one placement from a done stand -> back to K umístění", () 
   assert.equal(groupStandsByPlacementWorkQueue(project.stands).toPlace.length, 1);
 });
 
-test("CORRECTIVE BATCH (real production): E) WiFi is now a REAL point service (perQuantity) — an unplaced WIFI(qty=5) DOES block Hotovo until all 5 are placed", () => {
+test("PRODUCTION BATCH (real production): E) WiFi is onePerRecord — an unplaced WIFI(qty=5) blocks Hotovo until exactly ONE point is placed, never all 5", () => {
   let { project, standId } = buildMatchedStand([
     { category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1 },
     { category: "internet", externalLabel: "WIFI", quantity: 5 },
@@ -130,13 +130,17 @@ test("CORRECTIVE BATCH (real production): E) WiFi is now a REAL point service (p
   const wifiServiceId = project.stands[0]!.services.find((s) => s.category === "internet")!.id;
   project = placeTechnicalService(project, standId, electricityServiceId, { page: 1, xNormalized: 0.1, yNormalized: 0.1 });
   const afterElectricityOnly = project.stands.find((s) => s.id === standId)!;
-  assert.equal(isStandPlacementComplete(afterElectricityOnly), false, "5 required WiFi points are still unplaced — must NOT read as complete");
+  assert.equal(isStandPlacementComplete(afterElectricityOnly), false, "the required single WiFi point is still unplaced — must NOT read as complete");
 
-  for (let i = 0; i < 5; i += 1) {
-    project = placeTechnicalService(project, standId, wifiServiceId, { page: 1, xNormalized: 0.1 + i * 0.01, yNormalized: 0.2 });
-  }
+  project = placeTechnicalService(project, standId, wifiServiceId, { page: 1, xNormalized: 0.1, yNormalized: 0.2 });
   const stand = project.stands.find((s) => s.id === standId)!;
-  assert.equal(isStandPlacementComplete(stand), true, "once electricity + all 5 WiFi points are placed, the stand IS complete");
+  assert.equal(isStandPlacementComplete(stand), true, "once electricity + exactly ONE WiFi point are placed, the stand IS complete — never 5");
+  assert.equal(stand.services.find((s) => s.category === "internet")!.quantity, 5, "the raw imported quantity is preserved for diagnostics, only the REQUIRED placement count changes");
+
+  // A second WiFi placement attempt is refused (no-op) — requiredPlacementCount is 1, not 5.
+  const beforeSecondAttempt = project;
+  project = placeTechnicalService(project, standId, wifiServiceId, { page: 1, xNormalized: 0.3, yNormalized: 0.3 });
+  assert.deepEqual(project, beforeSecondAttempt, "a second WiFi placement must be refused once the single required point already exists");
 });
 
 test("CORRECTIVE BATCH (real production): F) cleaning qty=40 (onePerRecord) needs exactly ONE placement to reach Hotovo, never blocks on the raw quantity", () => {

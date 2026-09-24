@@ -33,6 +33,9 @@ import {
   mergeSupplementalCatalogImport,
   buildPrimaryReportMentions,
   DEFAULT_WHITE_FILL_OPACITY,
+  effectiveSourceLayerTextScale,
+  effectiveSourceLayerTextScales,
+  withSourceLayerTextScale,
   type ParsedTechnicalReport,
   type RasterSettings,
   type RasterStandLabel,
@@ -609,14 +612,13 @@ test("E) move placement -> SAME placement id, new coordinates", () => {
   assert.equal(movedPlacement.yNormalized, 0.9);
 });
 
-test("CORRECTIVE BATCH (real production): F) WiFi is now a real point service — placeTechnicalService creates a placement exactly like electricity/water, up to its own quantity", () => {
-  const { project, standId, serviceId } = projectWithService("WIFI", 2, "internet");
+test("PRODUCTION BATCH (real production): F) WiFi is a real point service, but onePerRecord — placeTechnicalService creates exactly ONE placement regardless of quantity", () => {
+  const { project, standId, serviceId } = projectWithService("WIFI", 5, "internet");
   const once = placeTechnicalService(project, standId, serviceId, { page: 1, xNormalized: 0.5, yNormalized: 0.5 });
   assert.equal(effectiveServicePlacements(once.stands[0]!.services[0]!).length, 1, "WiFi must be placeable exactly like Internet/IP");
   const twice = placeTechnicalService(once, standId, serviceId, { page: 1, xNormalized: 0.6, yNormalized: 0.6 });
-  assert.equal(effectiveServicePlacements(twice.stands[0]!.services[0]!).length, 2, "WiFi qty=2 -> 2 physical points (perQuantity)");
-  const thrice = placeTechnicalService(twice, standId, serviceId, { page: 1, xNormalized: 0.7, yNormalized: 0.7 });
-  assert.equal(effectiveServicePlacements(thrice.stands[0]!.services[0]!).length, 2, "a THIRD attempt beyond quantity=2 is refused");
+  assert.equal(effectiveServicePlacements(twice.stands[0]!.services[0]!).length, 1, "WiFi qty=5 -> exactly ONE required physical point (onePerRecord) — a second attempt is refused");
+  assert.equal(twice.stands[0]!.services[0]!.quantity, 5, "the raw imported quantity is preserved verbatim for diagnostics");
 });
 
 test("CORRECTIVE BATCH (real production): G) cleaning qty 40 (onePerRecord) -> placeTechnicalService creates exactly ONE point, a second attempt is refused — 40 never means 40 clicks", () => {
@@ -1194,4 +1196,122 @@ test("REALIZATION INDEPENDENCE (real 3A49/3C29 case): report says 2 kW, catalog 
   assert.equal(stand.realizationCompany, "CREATIV EXPO, s.r.o.", "even a true service conflict must never clear/replace the realization company");
   const display = resolveRealizationDisplayState(stand.hasCatalogBuildRecord, stand.realizationCompany);
   assert.equal(display.shouldShow && display.group, "creativExpo", "the realization assignment must survive a true conflict");
+});
+
+// ============================================================================
+// PRODUCTION BATCH ("BEZ elektriky" automatic red X) — TechnicalStand.hasNoElectricityAssignment,
+// driven exclusively by mergeTechnicalRasterImport's own electricity-category handling.
+// ============================================================================
+
+function electricityReportRow(standNumber: string, services: readonly { category: string; externalLabel: string; quantity: number; rawValue: string; sourcePage: number }[], explicitNoServiceAssignment?: boolean) {
+  return { standNumber, services, notes: [], explicitNoServiceAssignment };
+}
+
+test("PRODUCTION BATCH: mergeTechnicalRasterImport sets hasNoElectricityAssignment:true for an electricity row explicitly marked explicitNoServiceAssignment", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const report: ParsedTechnicalReport = { category: "electricity", rows: [electricityReportRow("1A10", [], true)], warnings: [] };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, alwaysResolved);
+  const stand = project.stands.find((s) => s.standNumber === "1A10")!;
+  assert.equal(stand.hasNoElectricityAssignment, true);
+  assert.equal(stand.services.length, 0);
+});
+
+test("PRODUCTION BATCH: a stand never touched by any electricity import reads hasNoElectricityAssignment as undefined — never confused with an unmatched/missing report row", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const internetReport: ParsedTechnicalReport = { category: "internet", rows: [{ standNumber: "1A11", services: [{ category: "internet", externalLabel: "Internet", quantity: 1, rawValue: "1", sourcePage: 1 }], notes: [] }], warnings: [] };
+  project = mergeTechnicalRasterImport(project, makeImport("internet", "imp-1"), internetReport, alwaysResolved);
+  const stand = project.stands.find((s) => s.standNumber === "1A11")!;
+  assert.equal(stand.hasNoElectricityAssignment, undefined);
+});
+
+test("PRODUCTION BATCH: an electricity row WITH real services never sets hasNoElectricityAssignment", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [electricityReportRow("1A12", [{ category: "electricity", externalLabel: "Do 2kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], false)],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, alwaysResolved);
+  const stand = project.stands.find((s) => s.standNumber === "1A12")!;
+  assert.equal(stand.hasNoElectricityAssignment, false);
+});
+
+test("PRODUCTION BATCH: the supplemental Stavby catalog NEVER sets/touches hasNoElectricityAssignment, even when its own 'BEZ' wording conflicts with a real primary-report electricity service", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const report: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [electricityReportRow("3A49", [{ category: "electricity", externalLabel: "Do 2 kW", quantity: 1, rawValue: "1", sourcePage: 1 }], false)],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-1"), report, () => ({ status: "resolved" as const }));
+
+  const catalogStand = { standNumber: "3A49", realizationCompanyRaw: "MAC Praha", items: [{ label: "BEZ ELEKTRICKÉ ENERGIE", quantity: 1, unit: "ks", rawQuantityText: "1,0 ks", notes: [], page: 1 }], page: 1 };
+  const updated = mergeSupplementalCatalogImport(project, { stands: [catalogStand], warnings: [] }, "realizacky.pdf");
+
+  const stand = updated.stands.find((s) => s.standNumber === "3A49")!;
+  assert.equal(stand.hasNoElectricityAssignment, false, "the PRIMARY report's own real '2 kW' service always wins — the catalog's own 'BEZ' wording must never flip this flag");
+});
+
+test("PRODUCTION BATCH: a NEWER electricity import (replaceImportId) fully recomputes hasNoElectricityAssignment, never leaves a stale flag from the superseded import", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  const firstReport: ParsedTechnicalReport = { category: "electricity", rows: [electricityReportRow("1A20", [], true)], warnings: [] };
+  const firstImport = makeImport("electricity", "imp-1");
+  project = mergeTechnicalRasterImport(project, firstImport, firstReport, alwaysResolved);
+  assert.equal(project.stands.find((s) => s.standNumber === "1A20")!.hasNoElectricityAssignment, true);
+
+  const secondReport: ParsedTechnicalReport = {
+    category: "electricity",
+    rows: [electricityReportRow("1A20", [{ category: "electricity", externalLabel: "Do 3kW 230V", quantity: 1, rawValue: "1", sourcePage: 1 }], false)],
+    warnings: [],
+  };
+  project = mergeTechnicalRasterImport(project, makeImport("electricity", "imp-2"), secondReport, alwaysResolved, firstImport.id);
+  const stand = project.stands.find((s) => s.standNumber === "1A20")!;
+  assert.equal(stand.hasNoElectricityAssignment, false, "the newer, now-active electricity import's own row must fully replace the stale true from the superseded import");
+  assert.equal(stand.services.length, 1);
+});
+
+// ============================================================================
+// PRODUCTION BATCH, PART A — per-source-OCG-layer text scale project settings.
+// ============================================================================
+
+test("PRODUCTION BATCH part A: effectiveSourceLayerTextScale defaults to 1 (100%) for any layer with no explicit override", () => {
+  const project = createTechnicalRasterProject({ name: "X" }, "p1");
+  assert.equal(effectiveSourceLayerTextScale(project.rasterSettings, "layer-1"), 1);
+});
+
+test("PRODUCTION BATCH part A: withSourceLayerTextScale sets and clamps to [0.5, 1]", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withSourceLayerTextScale(project, "layer-1", 0.85);
+  assert.equal(effectiveSourceLayerTextScale(project.rasterSettings, "layer-1"), 0.85);
+
+  project = withSourceLayerTextScale(project, "layer-1", 1.5);
+  assert.equal(effectiveSourceLayerTextScale(project.rasterSettings, "layer-1"), 1, "values above 100% are never allowed — clamped to the max");
+
+  project = withSourceLayerTextScale(project, "layer-1", 0.1);
+  assert.equal(effectiveSourceLayerTextScale(project.rasterSettings, "layer-1"), 0.5, "clamped to the suggested minimum");
+});
+
+test("PRODUCTION BATCH part A: per-layer, not global — setting one layer's scale never affects another's", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withSourceLayerTextScale(project, "nazvy-a-rozmery", 0.8);
+  project = withSourceLayerTextScale(project, "cisla-expozic", 1);
+  assert.equal(effectiveSourceLayerTextScale(project.rasterSettings, "nazvy-a-rozmery"), 0.8);
+  assert.equal(effectiveSourceLayerTextScale(project.rasterSettings, "cisla-expozic"), 1);
+  assert.equal(effectiveSourceLayerTextScale(project.rasterSettings, "oznaceni-sektoru"), 1, "an unconfigured third layer is unaffected");
+});
+
+test("PRODUCTION BATCH part A: an existing project saved before this field existed reads every layer as 100% — no migration needed", () => {
+  const legacySettings: RasterSettings = { layerVisibility: {}, workModeHiddenLayerIds: [], viewMode: "work" };
+  assert.equal(effectiveSourceLayerTextScale(legacySettings, "any-layer"), 1);
+  assert.deepEqual(effectiveSourceLayerTextScales(legacySettings), {});
+});
+
+test("PRODUCTION BATCH part A: RasterLayer.containsText is a plain, optional passthrough field on withRasterLayers — never derived/guessed by domain/technicalRaster.ts itself", () => {
+  let project = createTechnicalRasterProject({ name: "X" }, "p1");
+  project = withRasterLayers(project, [
+    { id: "text-layer", name: "NÁZVY + ROZMĚRY ***", defaultVisible: true, containsText: true },
+    { id: "geometry-layer", name: "STÁNKY ***", defaultVisible: true, containsText: false },
+  ]);
+  assert.equal(project.rasterLayers.find((l) => l.id === "text-layer")?.containsText, true);
+  assert.equal(project.rasterLayers.find((l) => l.id === "geometry-layer")?.containsText, false);
 });

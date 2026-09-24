@@ -208,6 +208,37 @@ leaving stroke/geometry/dash/line-width completely untouched. **The vector PDF e
 support this mode** — see "Deliberately not done yet" below; the export UI shows "Originální
 barvy" as the only available option, with an honest explanation, never a silent raster fallback.
 
+## PRODUCTION BATCH — per-source-OCG text scale, "BEZ elektriky" red X, WiFi cardinality
+
+Three independent, real-production fixes:
+
+- **Per-source-OCG text-size reduction** (`domain/technicalRasterTextScale.ts` for the export,
+  `domain/technicalRasterTextScaleOperators.ts` + `lib/pdf/pdfWhiteModeCanvasProxy.ts`'s
+  `fontScaleByIndex` for the live editor). `RasterSettings.sourceLayerTextScales` (keyed by
+  `RasterLayer.id`, 0.5-1) scales ONLY the `Tf` font-size operand of a chosen source OCG's own real
+  PDF text — never geometry, never `Tm`/`Td` (so the text's own anchor never moves), never a
+  different layer. Real-fixture audit (both Hala 1 and Hala 3): "NÁZVY + ROZMĚRY ***" and "ČÍSLA
+  EXPOZIC ***" draw text DIRECTLY in the page's own content stream, with zero Form XObject nesting
+  — so this feature is deliberately scoped to that shape; a `Do` reached inside a target text-scale
+  layer is `"unsupported"` (export throws `TEXT_SCALE_UNSUPPORTED`; the editor degrades gracefully
+  with a visible explanation instead — same editor/export asymmetry white mode already established).
+  `domain/pdfContentStreamTokenizer.ts` is the byte-level tokenizer shared with
+  `domain/technicalRasterVectorWhiteMode.ts` (extracted from it, not duplicated).
+- **Automatic red "×" for "BEZ" electricity** (`TechnicalStand.hasNoElectricityAssignment`,
+  `domain/technicalRasterNoElectricityMarker.ts`). Driven exclusively by the PRIMARY electricity
+  import: a stand row whose own columns all evaluated to zero (`ParsedTechnicalServiceRow.explicitNoServiceAssignment`,
+  set only by the electricity parser) sets this flag — never the supplemental Stavby catalog, never
+  a stand simply missing from the report. No literal "BEZ" text token was found in any real
+  electricity fixture available this batch; an all-zero row (e.g. real stand 1A10) is this app's own
+  already-verified normalized meaning. Auto-positioned next to the matched stand's own label (same
+  matched_auto/matched_manual safety gate as realization underlines), visible automatically in the
+  editor, export-gated by `rasterSettings.includeNoElectricityMarkersInExport` (default OFF), drawn
+  as two plain vector diagonal strokes (never a text glyph) inside GENERÁTOR DATA.
+- **WiFi cardinality** — `resolveTechnicalServicePresentation`'s WiFi variant is now
+  `placementCardinality: "onePerRecord"` (was `"perQuantity"`): exactly ONE required marker
+  regardless of the imported quantity (2/3/5), same mechanism cleaning/waste already used. The raw
+  imported quantity is untouched; only `requiredPlacementCount` changes.
+
 ## Component "Technické rastry" config + icon assets
 
 A collapsible section on the catalog component admin card (`components/workflow/ComponentAdminPage.tsx`)

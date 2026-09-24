@@ -56,13 +56,33 @@
  * PDF-byte rewrite. This is safe for stroke alpha too: `case "CA"` (pdf.js's own setGState handler)
  * never writes `ctx.globalAlpha` directly — only `case "ca"` does — so this mechanism can only ever
  * neutralize a genuine non-stroking (`ca`) source alpha, never a stroking (`CA`) one.
+ *
+ * PRODUCTION BATCH (per-source-OCG-layer text-size reduction, part A) — `fontScaleByIndex` adds a
+ * THIRD, fully independent interception: pdf.js's own `CanvasGraphics#setFont` handler (the `Tf`
+ * operator) assigns `ctx.font = "<size>px <family>"` directly, the SAME "operator handler configures
+ * canvas 2D state synchronously" pattern `fillStyle` already relies on above — reading that pinned
+ * pdfjs-dist version's own source confirms this. Whenever the CURRENTLY EXECUTING operator index
+ * (the SAME `operatorIndexRef` white mode already tracks) is a key in `fontScaleByIndex`, the
+ * assigned font string's own leading `<number>px` size is parsed and multiplied by that index's own
+ * scale, then the modified string is what's actually written — every other `font` assignment (any
+ * OTHER Tf call, anywhere else on the page) passes through completely untouched. Independent of the
+ * fillStyle/globalAlpha mechanisms above: a single render can have white mode active for one OCG and
+ * text scaling active for a completely different one at the same time, on the SAME canvas.
  */
+const FONT_SIZE_PATTERN = /(-?\d+(?:\.\d+)?)px/u;
+
+/** Rewrites a CSS `font` shorthand string's own leading `<number>px` size, multiplied by `scale` — every other part of the string (style/weight/family) is left byte-for-byte untouched. Returns the ORIGINAL string unchanged if no `px` size token is found at all (defensive; pdf.js always emits one for this app's own real fonts). */
+export function scaleFontSizeInCssFontString(font: string, scale: number): string {
+  return font.replace(FONT_SIZE_PATTERN, (_match, sizeText: string) => `${Number(sizeText) * scale}px`);
+}
+
 export function createWhiteModeCanvasContextProxy(
   canvasContext: CanvasRenderingContext2D,
   patchedIndices: ReadonlySet<number>,
   fillColor: string,
   operatorIndexRef: Readonly<{ current: number }>,
   neutralizeAlphaIndices: ReadonlySet<number> = new Set(),
+  fontScaleByIndex: ReadonlyMap<number, number> = new Map(),
 ): CanvasRenderingContext2D {
   let pendingFillAlphaOverride = false;
   return new Proxy(canvasContext, {
@@ -98,6 +118,12 @@ export function createWhiteModeCanvasContextProxy(
         if (pendingFillAlphaOverride) {
           pendingFillAlphaOverride = false;
           return Reflect.set(target, property, 1, target);
+        }
+      }
+      if (property === "font" && typeof value === "string") {
+        const scale = fontScaleByIndex.get(operatorIndexRef.current);
+        if (scale !== undefined) {
+          return Reflect.set(target, property, scaleFontSizeInCssFontString(value, scale), target);
         }
       }
       return Reflect.set(target, property, value, target);

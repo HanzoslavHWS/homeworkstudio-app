@@ -6758,6 +6758,20 @@ select:focus {
    rounded caps jsou OK"), no shadow. */
 .technicalRasterRealizationUnderline { position: absolute; pointer-events: none; border-radius: 999px; }
 
+/* PRODUCTION BATCH ("BEZ elektriky" automatic red X) — a small, always-visible "×" next to a
+   matched stand's own number whose primary electricity report explicitly assigned zero electricity.
+   Positioned at an already-resolved normalized page-space center point; only `left`/`top`/`font-size`
+   are ever set inline (per-render). Never clickable/selectable — a passive diagnostic annotation. */
+.technicalRasterNoElectricityMarker {
+  position: absolute;
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+  color: #c1121f;
+  font-weight: 700;
+  line-height: 1;
+  text-shadow: 0 0 2px #fff, 0 0 2px #fff, 0 0 2px #fff;
+}
+
 /* Manual acceptance batch, section 6/7 — "PRÁVĚ UMISŤUJI" context block, replacing the old
    single-line ".technicalRasterPlacementBanner" (removed): priority #1 in the right panel while a
    placement/move is active, so it's never ambiguous what the next raster click will do. */

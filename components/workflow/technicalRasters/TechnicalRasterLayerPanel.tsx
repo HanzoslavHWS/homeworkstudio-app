@@ -1,7 +1,20 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { effectiveWhiteFillOpacity, type RasterLayer, type RasterSettings } from "../../../domain/technicalRaster";
+import {
+  effectiveSourceLayerTextScale,
+  effectiveWhiteFillOpacity,
+  MAX_SOURCE_LAYER_TEXT_SCALE,
+  MIN_SOURCE_LAYER_TEXT_SCALE,
+  type RasterLayer,
+  type RasterSettings,
+} from "../../../domain/technicalRaster";
+
+/** Suggested UI range/increment (spec section 10): 50-100 %, 5 % steps. */
+const TEXT_SCALE_OPTIONS_PERCENT: readonly number[] = Array.from(
+  { length: Math.round((MAX_SOURCE_LAYER_TEXT_SCALE - MIN_SOURCE_LAYER_TEXT_SCALE) * 100) / 5 + 1 },
+  (_, index) => Math.round(MIN_SOURCE_LAYER_TEXT_SCALE * 100) + index * 5,
+);
 import type { WhiteModeAvailability } from "../../../lib/pdf/technicalRasterWhiteRender";
 
 /** How long after the user stops dragging "Krytí bílé" before the actual (re-render-triggering) value is committed — spec batch 6, UI section 30: UI value reacts instantly, only the render is debounced. */
@@ -30,6 +43,7 @@ export function TechnicalRasterLayerPanel({
   onSetViewMode,
   onSetWorkModeHiddenLayers,
   onSetWhiteFillOpacity,
+  onSetSourceLayerTextScale,
 }: {
   layers: readonly RasterLayer[];
   settings: RasterSettings;
@@ -38,6 +52,8 @@ export function TechnicalRasterLayerPanel({
   onSetViewMode: (mode: RasterSettings["viewMode"]) => void;
   onSetWorkModeHiddenLayers: (layerIds: readonly string[]) => void;
   onSetWhiteFillOpacity: (opacity: number) => void;
+  /** PRODUCTION BATCH, part A — "Text size" per source layer (spec section 2/3/10), 50-100 %. Optional so a caller/test that predates this batch keeps compiling; a real production call site always passes it. */
+  onSetSourceLayerTextScale?: (layerId: string, scale: number) => void;
 }) {
   const whiteModeUnavailable = whiteModeAvailability.status === "unavailable";
   const whiteModeActive = settings.viewMode === "work" && whiteModeAvailability.status === "available";
@@ -119,6 +135,19 @@ export function TechnicalRasterLayerPanel({
               />
               {layer.name}
             </label>
+            {layer.containsText && onSetSourceLayerTextScale && (
+              <label className="technicalRasterTextScaleOption fieldHint">
+                Text
+                <select
+                  value={Math.round(effectiveSourceLayerTextScale(settings, layer.id) * 100)}
+                  onChange={(event) => onSetSourceLayerTextScale(layer.id, Number(event.target.value) / 100)}
+                >
+                  {TEXT_SCALE_OPTIONS_PERCENT.map((percent) => (
+                    <option key={percent} value={percent}>{percent} %</option>
+                  ))}
+                </select>
+              </label>
+            )}
             {settings.viewMode === "work" && (
               <label className="technicalRasterWorkModeHideOption fieldHint">
                 <input

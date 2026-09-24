@@ -73,6 +73,7 @@
  * and "the mutation reached the context that actually paints it".
  */
 import { computeWhiteModeArgsArray, detectStandLayerId, type WhiteModeOpCodes } from "../../domain/technicalRasterWhiteModeOperators.ts";
+import { computeTextScalePatchIndices, type TextScaleOpCodes } from "../../domain/technicalRasterTextScaleOperators.ts";
 import type { RasterLayer } from "../../domain/technicalRaster.ts";
 import type { PdfJsDocument, PdfJsOptionalContentConfig, PdfJsPage, PdfJsViewport } from "./pdfDocumentLoader.ts";
 import { createWhiteModeCanvasContextProxy } from "./pdfWhiteModeCanvasProxy.ts";
@@ -138,6 +139,72 @@ type PatchPlanResult =
   | Readonly<{ status: "patched"; patchedIndices: ReadonlySet<number>; neutralizeAlphaIndices: ReadonlySet<number> }>
   | Readonly<{ status: "unsupported"; reason: string }>;
 
+// ============================================================================
+// PRODUCTION BATCH (per-source-OCG-layer text-size reduction, part A) — the LIVE EDITOR side of
+// "text and export must match" (spec section 6). Mirrors the white-mode patch-plan machinery above
+// exactly: one operator-list read per (pageKey, layerId), cached, never recomputed on every zoom/pan
+// tick. Unlike white mode (a single target layer at a time), MULTIPLE text-scale layers can be
+// active on the same page simultaneously — each is computed independently and merged into ONE
+// `fontScaleByIndex` map, since two different OCGs' own marked-content spans never overlap.
+// ============================================================================
+
+let textScaleOpCodesPromise: Promise<TextScaleOpCodes> | undefined;
+
+async function getTextScaleOpCodes(): Promise<TextScaleOpCodes> {
+  textScaleOpCodesPromise ??= import("pdfjs-dist").then((pdfjsModule) => {
+    const OPS = (pdfjsModule as unknown as { OPS: Record<string, number> }).OPS;
+    return {
+      beginMarkedContentProps: OPS.beginMarkedContentProps,
+      beginMarkedContent: OPS.beginMarkedContent,
+      endMarkedContent: OPS.endMarkedContent,
+      setFont: OPS.setFont,
+    } satisfies TextScaleOpCodes;
+  });
+  return textScaleOpCodesPromise;
+}
+
+export type TextScaleLayerConfig = Readonly<{ layerId: string; scale: number }>;
+
+type TextScalePlanResult = Readonly<{
+  fontScaleByIndex: ReadonlyMap<number, number>;
+  /** Every configured layer whose own patch plan came back "unsupported" for this page (e.g. the layer's own text no longer matches, or a Do was reached inside its scope) — the caller surfaces this via `onTextScaleUnsupported`, never throws (spec section 6's own "editor degrades gracefully, export blocks" asymmetry, same as white mode's own established precedent). */
+  unsupportedLayers: readonly Readonly<{ layerId: string; reason: string }>[];
+}>;
+
+const textScalePlanCache = new Map<string, Promise<TextScalePlanResult>>();
+
+async function getOrComputeTextScalePlan(page: PdfJsPage, pageKey: string, layers: readonly TextScaleLayerConfig[]): Promise<TextScalePlanResult> {
+  if (layers.length === 0) return { fontScaleByIndex: new Map(), unsupportedLayers: [] };
+  const key = `${pageKey}::textscale::${[...layers].map((l) => `${l.layerId}=${l.scale}`).sort().join(",")}`;
+  let cached = textScalePlanCache.get(key);
+  if (!cached) {
+    cached = (async (): Promise<TextScalePlanResult> => {
+      const operatorList = await page.getOperatorList({ intent: "display" });
+      const opCodes = await getTextScaleOpCodes();
+      const fontScaleByIndex = new Map<number, number>();
+      const unsupportedLayers: { layerId: string; reason: string }[] = [];
+      for (const layer of layers) {
+        const result = computeTextScalePatchIndices(operatorList, layer.layerId, opCodes);
+        if (result.status === "unsupported") {
+          unsupportedLayers.push({ layerId: layer.layerId, reason: result.reason });
+          continue;
+        }
+        for (const index of result.patchedIndices) fontScaleByIndex.set(index, layer.scale);
+      }
+      return { fontScaleByIndex, unsupportedLayers };
+    })();
+    textScalePlanCache.set(key, cached);
+  }
+  return cached;
+}
+
+/** Drops cached text-scale plans for a page — same "call only when the source PDF changes" discipline as clearWhiteModePatchPlanCache. */
+export function clearTextScalePlanCache(pageKey: string): void {
+  for (const key of [...textScalePlanCache.keys()]) {
+    if (key.startsWith(`${pageKey}::textscale::`)) textScalePlanCache.delete(key);
+  }
+}
+
 /** Cached per (pageKey, standLayerId) — computing the plan means one getOperatorList() read plus one linear scan, never repeated on every toggle/zoom/pan (spec section 22). */
 const patchPlanCache = new Map<string, Promise<PatchPlanResult>>();
 
@@ -200,7 +267,8 @@ export function resolveWhiteFillColor(opacity: number = DEFAULT_WHITE_FILL_OPACI
 export async function renderWhiteModePage(params: Readonly<{
   page: PdfJsPage;
   pageKey: string;
-  standLayerId: string;
+  /** Omitted entirely means "white mode not requested for this render" (PRODUCTION BATCH, part A) — this function can then still be used purely to drive `textScaleLayers` below, with zero fillStyle/globalAlpha interception. */
+  standLayerId?: string;
   canvasContext: CanvasRenderingContext2D;
   viewport: PdfJsViewport;
   /** Threaded straight through to pdf.js's render() — lets the layer-visibility panel (an unrelated feature, spec section 28) keep hiding/showing OTHER layers while white mode handles the stand layer's own fill. */
@@ -209,16 +277,31 @@ export async function renderWhiteModePage(params: Readonly<{
   whiteFillOpacity?: number;
   /** The `PdfJsDocument` `page` was obtained from — needed to reach its own canvas factory's `setWhiteModeCanvasSession` (see this function's own doc). Optional so every pre-existing test/fake that only ever exercised the top-level-canvas mechanism keeps working unchanged; a real production call site always passes it. */
   document?: PdfJsDocument;
+  /** PRODUCTION BATCH, part A — every source layer configured with a text scale != 100% (spec section 2/6: "editor and export must match"). Independent of `standLayerId`/white mode — both can be active on the same render. */
+  textScaleLayers?: readonly TextScaleLayerConfig[];
+  /** Called once per configured `textScaleLayers` entry that couldn't be safely scaled on this page (spec section 6's own editor/export asymmetry — the editor degrades gracefully with an explanation, never blocks the whole render; a real EXPORT for the same layer instead throws, see lib/technicalRasterVectorPdf.ts). Never called for white mode's own unsupported case, which already has its own return-value contract below. */
+  onTextScaleUnsupported?: (layerId: string, reason: string) => void;
 }>): Promise<WhiteModeRenderResult> {
-  const { page, pageKey, standLayerId, canvasContext, viewport, optionalContentConfigPromise, whiteFillOpacity, document } = params;
-  const plan = await getOrComputePatchPlan(page, pageKey, standLayerId);
+  const { page, pageKey, standLayerId, canvasContext, viewport, optionalContentConfigPromise, whiteFillOpacity, document, textScaleLayers, onTextScaleUnsupported } = params;
+  const plan = standLayerId
+    ? await getOrComputePatchPlan(page, pageKey, standLayerId)
+    : ({ status: "patched", patchedIndices: new Set<number>(), neutralizeAlphaIndices: new Set<number>() } as const);
   if (plan.status === "unsupported") return plan;
+
+  const textScalePlan = await getOrComputeTextScalePlan(page, pageKey, textScaleLayers ?? []);
+  for (const failure of textScalePlan.unsupportedLayers) onTextScaleUnsupported?.(failure.layerId, failure.reason);
 
   const fillColor = resolveWhiteFillColor(whiteFillOpacity);
   const operatorIndexRef = { current: -1 };
-  const proxiedContext = createWhiteModeCanvasContextProxy(canvasContext, plan.patchedIndices, fillColor, operatorIndexRef, plan.neutralizeAlphaIndices);
+  const proxiedContext = createWhiteModeCanvasContextProxy(canvasContext, plan.patchedIndices, fillColor, operatorIndexRef, plan.neutralizeAlphaIndices, textScalePlan.fontScaleByIndex);
 
-  document?.setWhiteModeCanvasSession?.({ patchedIndices: plan.patchedIndices, fillColor, operatorIndexRef, neutralizeAlphaIndices: plan.neutralizeAlphaIndices });
+  document?.setWhiteModeCanvasSession?.({
+    patchedIndices: plan.patchedIndices,
+    fillColor,
+    operatorIndexRef,
+    neutralizeAlphaIndices: plan.neutralizeAlphaIndices,
+    fontScaleByIndex: textScalePlan.fontScaleByIndex,
+  });
   try {
     await page.render({
       canvasContext: proxiedContext,

@@ -225,10 +225,11 @@ test("buildTechnicalRasterExportLegend: an empty placement list (nothing placed,
   assert.deepEqual(buildTechnicalRasterExportLegend([]), []);
 });
 
-test("CORRECTIVE BATCH (real production): computeTechnicalRasterStatusSummary: 'Technické body' counts REQUIRED placements, not raw quantity — cleaning(40, onePerRecord) contributes 1, WiFi(3, perQuantity) contributes 3", () => {
+test("PRODUCTION BATCH (real production): computeTechnicalRasterStatusSummary: 'Technické body' counts REQUIRED placements, not raw quantity — cleaning(40, onePerRecord) contributes 1, WiFi(3, onePerRecord) contributes 1", () => {
   let project = buildProject({ electricityQuantity: 2 });
-  // cleaning qty=40 is "onePerRecord" (1 required marker, never 40); WIFI qty=3 is "perQuantity"
-  // (now placeable, 3 required physical points) — both on the SAME stand as the electricity service.
+  // cleaning qty=40 is "onePerRecord" (1 required marker, never 40); WIFI qty=3 is ALSO
+  // "onePerRecord" (production batch: a WiFi marker is required exactly once regardless of raw
+  // quantity) — both on the SAME stand as the electricity service.
   const cleaningReport: ParsedTechnicalReport = {
     category: "cleaning",
     rows: [{ standNumber: "1A21", services: [{ category: "cleaning", externalLabel: "Denní úklid", quantity: 40, rawValue: "40", sourcePage: 1 }], notes: [] }],
@@ -243,7 +244,7 @@ test("CORRECTIVE BATCH (real production): computeTechnicalRasterStatusSummary: '
   project = mergeTechnicalRasterImport(project, makeImport("internet", "imp-4"), wifiReport, alwaysResolved);
 
   const summary = computeTechnicalRasterStatusSummary(project);
-  assert.equal(summary.totalPointCount, 6, "electricity(2) + cleaning(1, onePerRecord — never 40) + WIFI(3, perQuantity) = 6");
+  assert.equal(summary.totalPointCount, 4, "electricity(2) + cleaning(1, onePerRecord — never 40) + WIFI(1, onePerRecord — never 3) = 4");
   assert.equal(summary.placedPointCount, 0);
   assert.equal(summary.matchedStandCount, 1);
   assert.equal(summary.totalStandCount, 1);

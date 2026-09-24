@@ -101,6 +101,66 @@ test("an all-zero compound value (fused columns, both genuinely unordered) creat
   assert.equal(report.warnings.length, 0, "an all-zero compound is legitimately 'not ordered' — no warning noise");
 });
 
+// =========================================================================================
+// PRODUCTION BATCH ("BEZ elektriky" automatic red X) — ParsedTechnicalServiceRow.explicitNoServiceAssignment,
+// the per-row signal domain/technicalRaster.ts's mergeTechnicalRasterImport turns into
+// TechnicalStand.hasNoElectricityAssignment. Real-fixture evidence (Decor 26 electricity report):
+// a stand row with every column reporting "0" (e.g. real stand "1A10 Super-Lock s.r.o.") is this
+// app's own already-observed normalized meaning of an explicit "no electricity" assignment — no
+// literal "BEZ" text token was found in any real electricity fixture available this batch.
+// =========================================================================================
+test("PRODUCTION BATCH: an all-zero electricity row (a real, header-matched stand with every column 0) is marked explicitNoServiceAssignment:true", () => {
+  const items: PdfTextItem[] = [
+    item("Do 2kW 230V", 200, 466), item("Do 3kW 230V", 320, 466),
+    item("1A10", 20, 448), item("Super-Lock", 60, 448), item("s.r.o.", 140, 448),
+    item("0", 210, 448), item("0", 330, 448),
+  ];
+  const parser = getTechnicalReportParser("electricity")!;
+  const report = parser.parse(items);
+  const stand = report.rows.find((row) => row.standNumber === "1A10");
+  assert.equal(stand?.services.length, 0);
+  assert.equal(stand?.explicitNoServiceAssignment, true);
+});
+
+test("PRODUCTION BATCH: an electricity row with at least one real non-zero column is NOT marked explicitNoServiceAssignment", () => {
+  const items: PdfTextItem[] = [
+    item("Do 2kW 230V", 200, 466), item("Do 3kW 230V", 320, 466),
+    item("1A09", 20, 448), item("OZDOBA", 60, 448), item("CZ", 110, 448), item("s.r.o.", 140, 448),
+    item("1", 210, 448), item("0", 330, 448),
+  ];
+  const parser = getTechnicalReportParser("electricity")!;
+  const report = parser.parse(items);
+  const stand = report.rows.find((row) => row.standNumber === "1A09");
+  assert.equal(stand?.services.length, 1);
+  assert.notEqual(stand?.explicitNoServiceAssignment, true);
+});
+
+test("PRODUCTION BATCH: explicitNoServiceAssignment is scoped to electricity ONLY — an all-zero row from any OTHER category is never marked", () => {
+  const items: PdfTextItem[] = [
+    item("Internet", 200, 466), item("Pevná IP", 320, 466),
+    item("1A11", 20, 448), item("Firma", 60, 448), item("s.r.o.", 110, 448),
+    item("0", 210, 448), item("0", 330, 448),
+  ];
+  for (const category of ["internet", "water", "waste", "cleaning"]) {
+    const parser = getTechnicalReportParser(category)!;
+    const report = parser.parse(items);
+    const stand = report.rows.find((row) => row.standNumber === "1A11");
+    assert.notEqual(stand?.explicitNoServiceAssignment, true, `category "${category}" must never set this electricity-only flag`);
+  }
+});
+
+test("PRODUCTION BATCH: a row with an ambiguous (never-confirmed-zero) compound cell is never marked explicitNoServiceAssignment, even if every OTHER column is zero", () => {
+  const items: PdfTextItem[] = [
+    item("Do 2kW 230V", 200, 466), item("Osvětlení", 300, 466), item("Non stop", 340, 466),
+    item("1A01", 20, 448), item("European", 60, 448), item("Trading", 110, 448), item("s.r.o.", 160, 448),
+    item("0", 210, 448), item("1 0", 320, 448),
+  ];
+  const parser = getTechnicalReportParser("electricity")!;
+  const report = parser.parse(items);
+  const stand = report.rows.find((row) => row.standNumber === "1A01");
+  assert.notEqual(stand?.explicitNoServiceAssignment, true, "an ambiguous compound cell is a genuine unknown, never a confirmed explicit zero");
+});
+
 test("a note between two stand rows is attached correctly through the full parser (not just the shared core in isolation)", () => {
   const items: PdfTextItem[] = [
     item("Kontejner 1100 l", 200, 100),

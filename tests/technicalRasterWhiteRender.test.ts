@@ -6,6 +6,7 @@ import {
   resolveWhiteFillColor,
   resolveWhiteModeAvailability,
 } from "../lib/pdf/technicalRasterWhiteRender.ts";
+import { scaleFontSizeInCssFontString } from "../lib/pdf/pdfWhiteModeCanvasProxy.ts";
 import type { PdfJsDocument, PdfJsOperatorList, PdfJsPage, PdfJsViewport } from "../lib/pdf/pdfDocumentLoader.ts";
 
 // A minimal fake PdfJsPage whose operator list draws one stand-layer fill (so computeWhiteModeArgsArray
@@ -216,6 +217,56 @@ test("F) createWhiteModeCanvasContextProxy: any OTHER canvas state (lineWidth, g
   assert.equal(target.lineWidth, 1.5, "only fillStyle is ever intercepted — every other canvas property/method call passes straight through, which is what keeps geometry/dash/line-width untouched");
 });
 
+// =========================================================================================
+// PRODUCTION BATCH (per-source-OCG-layer text-size reduction, part A) — createWhiteModeCanvasContextProxy's
+// THIRD, independent interception: `font` assignments at a configured `fontScaleByIndex` entry.
+// =========================================================================================
+
+test("scaleFontSizeInCssFontString: rewrites only the leading '<number>px' size, multiplied by scale — the rest of the font shorthand is untouched", () => {
+  assert.equal(scaleFontSizeInCssFontString("12px sans-serif", 0.5), "6px sans-serif");
+  assert.equal(scaleFontSizeInCssFontString("italic 700 16px Arial, sans-serif", 0.75), "italic 700 12px Arial, sans-serif");
+});
+
+test("scaleFontSizeInCssFontString: a string with no 'px' size at all is returned unchanged, never crashes", () => {
+  assert.equal(scaleFontSizeInCssFontString("sans-serif", 0.5), "sans-serif");
+});
+
+test("createWhiteModeCanvasContextProxy: 'font' is scaled ONLY at an operator index present in fontScaleByIndex", () => {
+  const target = {} as CanvasRenderingContext2D;
+  const operatorIndexRef = { current: -1 };
+  const proxy = createWhiteModeCanvasContextProxy(target, new Set(), "", operatorIndexRef, new Set(), new Map([[3, 0.8]]));
+
+  operatorIndexRef.current = 0; // NOT a font-scale index
+  proxy.font = "10px NotoSans";
+  assert.equal(target.font, "10px NotoSans", "an unconfigured index passes the font string through completely untouched");
+
+  operatorIndexRef.current = 3; // the configured index
+  proxy.font = "10px NotoSans";
+  assert.equal(target.font, "8px NotoSans", "10 * 0.8 = 8 — the SAME multiplier pdf.js's own setFont(Tf) handler assigns synchronously, forced here at the exact operator index");
+});
+
+test("createWhiteModeCanvasContextProxy: font scaling and fillStyle whitening are fully independent — both can be active on the SAME render for DIFFERENT operator indices", () => {
+  const target = {} as CanvasRenderingContext2D;
+  const operatorIndexRef = { current: -1 };
+  const proxy = createWhiteModeCanvasContextProxy(target, new Set([1]), "rgba(255, 255, 255, 1)", operatorIndexRef, new Set(), new Map([[5, 0.5]]));
+
+  operatorIndexRef.current = 1;
+  proxy.fillStyle = "#ff0000";
+  assert.equal(target.fillStyle, "rgba(255, 255, 255, 1)", "white-mode fill whitening still works exactly as before");
+
+  operatorIndexRef.current = 5;
+  proxy.font = "20px NotoSans";
+  assert.equal(target.font, "10px NotoSans", "text scaling works independently at its own index");
+});
+
+test("createWhiteModeCanvasContextProxy: omitting fontScaleByIndex entirely (every pre-existing call site) never touches 'font' at all", () => {
+  const target = {} as CanvasRenderingContext2D;
+  const operatorIndexRef = { current: 0 };
+  const proxy = createWhiteModeCanvasContextProxy(target, new Set(), "", operatorIndexRef);
+  proxy.font = "14px Arial";
+  assert.equal(target.font, "14px Arial");
+});
+
 test("no globalAlpha SIDE EFFECT: merely setting a patched fillStyle never itself touches globalAlpha — it only arms a pending override, consumed by a LATER real globalAlpha assignment (see the dedicated CORRECTIVE BATCH tests below for that mechanism)", () => {
   const target = {} as CanvasRenderingContext2D;
   const patchedIndices = new Set([2]);
@@ -411,4 +462,88 @@ test("renderWhiteModePage: omitting `document` entirely (every pre-existing call
   const viewport = page.getViewport({ scale: 1 });
   const result = await renderWhiteModePage({ page, pageKey: `doc-${crypto.randomUUID()}#1`, standLayerId: "STANDS", canvasContext: fakeCanvasContext(), viewport });
   assert.equal(result.status, "rendered");
+});
+
+// =========================================================================================
+// PRODUCTION BATCH (per-source-OCG-layer text-size reduction, part A) — renderWhiteModePage now
+// ALSO drives text scaling, independent of white mode (spec section 6: "editor and export must
+// match"). `standLayerId` is optional; `textScaleLayers` composes with it on the SAME session.
+// =========================================================================================
+
+/** beginMarkedContentProps("STANDS")=0, setFillRGBColor=1, constructPath(fillStroke)=2, endMarkedContent=3, beginMarkedContentProps("NAMES")=4, setFont("F1",12)=5, endMarkedContent=6. Op code 37 is pdf.js's own REAL numeric OPS.setFont value for this pinned version (verified directly, same discipline as makeFakePageWithSourceGs's own OPS.setGState=9 comment — getTextScaleOpCodes() reads the real "pdfjs-dist" module's own OPS object). */
+function makeFakePageWithTextLayer(): Readonly<{ page: PdfJsPage }> {
+  const page = {
+    getViewport: (): PdfJsViewport => ({ width: 100, height: 100, transform: [1, 0, 0, -1, 0, 100] }),
+    getTextContent: async () => ({ items: [] }),
+    getOperatorList: async (): Promise<PdfJsOperatorList> => ({
+      fnArray: [70, 59, 91, 71, 70, 37, 71],
+      argsArray: [["OC", "STANDS"], ["#009edd"], [24, "geometry"], null, ["OC", "NAMES"], ["F1", 12], null],
+    }),
+    render: () => ({ promise: Promise.resolve() }),
+  };
+  return { page: page as unknown as PdfJsPage };
+}
+
+test("renderWhiteModePage: standLayerId omitted, textScaleLayers only — installs a session with an empty white-mode patch set and a real fontScaleByIndex", async () => {
+  const { page } = makeFakePageWithTextLayer();
+  const viewport = page.getViewport({ scale: 1 });
+  const { document, sessions } = makeSpyDocument();
+  const result = await renderWhiteModePage({
+    page,
+    pageKey: `doc-${crypto.randomUUID()}#1`,
+    canvasContext: fakeCanvasContext(),
+    viewport,
+    document,
+    textScaleLayers: [{ layerId: "NAMES", scale: 0.8 }],
+  });
+  assert.equal(result.status, "rendered");
+  const installed = sessions[0] as Readonly<{ patchedIndices: ReadonlySet<number>; fontScaleByIndex: ReadonlyMap<number, number> }>;
+  assert.deepEqual([...installed.patchedIndices], [], "no white mode requested at all");
+  assert.deepEqual([...installed.fontScaleByIndex.entries()], [[5, 0.8]], "the setFont op's own index (5) maps to the configured 0.8 scale");
+});
+
+test("renderWhiteModePage: white mode AND text scaling active together, on two DIFFERENT OCGs of the SAME page, compose into one session", async () => {
+  const { page } = makeFakePageWithTextLayer();
+  const viewport = page.getViewport({ scale: 1 });
+  const { document, sessions } = makeSpyDocument();
+  const result = await renderWhiteModePage({
+    page,
+    pageKey: `doc-${crypto.randomUUID()}#1`,
+    standLayerId: "STANDS",
+    canvasContext: fakeCanvasContext(),
+    viewport,
+    document,
+    textScaleLayers: [{ layerId: "NAMES", scale: 0.5 }],
+  });
+  assert.equal(result.status, "rendered");
+  const installed = sessions[0] as Readonly<{ patchedIndices: ReadonlySet<number>; fontScaleByIndex: ReadonlyMap<number, number> }>;
+  assert.deepEqual([...installed.patchedIndices], [1], "white mode's own fill-color-setter index, unaffected by text scaling");
+  assert.deepEqual([...installed.fontScaleByIndex.entries()], [[5, 0.5]]);
+});
+
+test("renderWhiteModePage: a text-scale layer that can't be found on this page reports via onTextScaleUnsupported, but the render still completes (never blocks, unlike white mode's own unsupported case)", async () => {
+  const { page } = makeFakePageWithTextLayer();
+  const viewport = page.getViewport({ scale: 1 });
+  const unsupported: [string, string][] = [];
+  const result = await renderWhiteModePage({
+    page,
+    pageKey: `doc-${crypto.randomUUID()}#1`,
+    canvasContext: fakeCanvasContext(),
+    viewport,
+    textScaleLayers: [{ layerId: "DOES_NOT_EXIST", scale: 0.7 }],
+    onTextScaleUnsupported: (layerId, reason) => unsupported.push([layerId, reason]),
+  });
+  assert.equal(result.status, "rendered");
+  assert.equal(unsupported.length, 1);
+  assert.equal(unsupported[0]![0], "DOES_NOT_EXIST");
+});
+
+test("renderWhiteModePage: textScaleLayers omitted entirely is a plain, unaffected render (every pre-existing white-mode-only call site/test) — empty fontScaleByIndex installed", async () => {
+  const { page } = makeFakePage();
+  const viewport = page.getViewport({ scale: 1 });
+  const { document, sessions } = makeSpyDocument();
+  const result = await renderWhiteModePage({ page, pageKey: `doc-${crypto.randomUUID()}#1`, standLayerId: "STANDS", canvasContext: fakeCanvasContext(), viewport, document });
+  assert.equal(result.status, "rendered");
+  const installed = sessions[0] as Readonly<{ fontScaleByIndex: ReadonlyMap<number, number> }>;
+  assert.deepEqual([...installed.fontScaleByIndex.entries()], []);
 });

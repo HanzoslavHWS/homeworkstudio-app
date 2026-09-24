@@ -74,11 +74,20 @@ test("internet: plain 'Internet' -> INT, point (a real cabled drop, same as Pevn
   assert.equal(p.displayLabel, "INT");
 });
 
-test("CORRECTIVE BATCH (real production): internet: WIFI -> point, perQuantity — WiFi must be placeable exactly like Internet/IP", () => {
+test("CORRECTIVE BATCH (real production): internet: WIFI -> point, placeable exactly like Internet/IP", () => {
   const p = resolveTechnicalServicePresentation("internet", "WIFI");
   assert.equal(p.placementBehavior, "point");
-  assert.equal(p.placementCardinality, "perQuantity");
   assert.equal(p.color, TECHNICAL_RASTER_COLORS.internet);
+});
+
+test("PRODUCTION BATCH (real production): internet: WIFI -> onePerRecord — a WiFi order's own quantity (2/3/5) means licenses/devices, never distinct physical points; exactly one marker is required regardless of the raw imported quantity", () => {
+  for (const label of ["WIFI", "WiFi", "Wi-Fi", "wifi"]) {
+    const p = resolveTechnicalServicePresentation("internet", label);
+    assert.equal(p.placementCardinality, "onePerRecord", `label "${label}"`);
+  }
+  // Internet/Pevná IP are explicitly UNCHANGED by this batch — still perQuantity.
+  assert.equal(resolveTechnicalServicePresentation("internet", "Internet").placementCardinality, "perQuantity");
+  assert.equal(resolveTechnicalServicePresentation("internet", "Pevná IP").placementCardinality, "perQuantity");
 });
 
 test("CORRECTIVE BATCH (2nd) — label mapping: WiFi must display literal 'WiFi' text, never fall through to the generic Internet 'INT' label", () => {
@@ -193,7 +202,7 @@ const PRESENTATION_SNAPSHOT_CASES: readonly Readonly<{
   { category: "electricity", externalLabel: "Lednicový okruh", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "refrigeratedStar", colorKey: "electricity" },
   { category: "internet", externalLabel: "Pevná IP", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "IP", colorKey: "internet" },
   { category: "internet", externalLabel: "Internet", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "INT", colorKey: "internet" },
-  { category: "internet", externalLabel: "WIFI", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "WiFi", colorKey: "internet" },
+  { category: "internet", externalLabel: "WIFI", placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "textLabel", displayLabel: "WiFi", colorKey: "internet" },
   { category: "electricity", externalLabel: "Jistič C", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "C", colorKey: "electricity" },
   { category: "water", externalLabel: "Přípojka vody", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "waterDrop", colorKey: "water" },
   { category: "waste", externalLabel: "Kontejn 1100 l", placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "textLabel", displayLabel: "ODP", colorKey: "waste" },

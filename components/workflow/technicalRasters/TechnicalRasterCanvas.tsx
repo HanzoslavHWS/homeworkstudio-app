@@ -5,7 +5,7 @@ import { useBoothViewport } from "../../../hooks/useBoothViewport";
 import { loadPdfDocument, type PdfJsDocument } from "../../../lib/pdf/pdfDocumentLoader";
 import { logPdfLoadFailure, type PdfLoadFailureInfo } from "../../../lib/pdf/pdfLoadDiagnostics";
 import { buildOptionalContentConfigForRender } from "../../../lib/pdf/pdfLayers";
-import { renderWhiteModePage } from "../../../lib/pdf/technicalRasterWhiteRender";
+import { renderWhiteModePage, type TextScaleLayerConfig } from "../../../lib/pdf/technicalRasterWhiteRender";
 import { computeEffectiveRenderScale, BASE_RENDER_SCALE } from "../../../domain/technicalRasterRenderScale";
 import {
   calculateSelectedStandMarker,
@@ -16,6 +16,7 @@ import {
 } from "../../../domain/technicalRasterSelectedMarker";
 import { computeSymbolScreenStyle } from "../../../domain/technicalRasterSymbolMarker";
 import { computeRealizationUnderlineScreenStyle } from "../../../domain/technicalRasterRealizationUnderline";
+import { computeNoElectricityMarkerScreenStyle } from "../../../domain/technicalRasterNoElectricityMarker";
 import type { TechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
 import { ViewportToolbar } from "../../configurator/ViewportToolbar";
 
@@ -97,6 +98,23 @@ export type TechnicalRasterRealizationUnderlineMarker = Readonly<{
 }>;
 
 /**
+ * PRODUCTION BATCH ("BEZ elektriky" automatic red X, part B) — one automatic marker for a matched
+ * stand whose primary electricity report explicitly assigned zero electricity
+ * (`TechnicalStand.hasNoElectricityAssignment`, domain/technicalRaster.ts's own doc has the full
+ * source-of-truth story). `xNormalized`/`yNormalized` is the marker's own CENTER point, already
+ * fully resolved (domain/technicalRasterNoElectricityMarker.ts's computeNoElectricityMarkerGeometry)
+ * — this component only ever converts it to CSS left/top %, no anchor/offset math of its own, same
+ * discipline as the realization underline above. `id` is the stand's own id. No placement task, no
+ * click handler, no selection state — purely a passive, automatic annotation.
+ */
+export type TechnicalRasterNoElectricityMarker = Readonly<{
+  id: string;
+  page: number;
+  xNormalized: number;
+  yNormalized: number;
+}>;
+
+/**
  * Renders one page of the raster PDF via pdf.js (spec section 4: PDF.js for preview/zoom/pan —
  * the source PDF itself is never rasterized as ITS OWN storage format, only this ONE visible
  * canvas is a raster preview of it). Zoom/pan reuse useBoothViewport exactly like
@@ -116,12 +134,15 @@ export function TechnicalRasterCanvas({
   whiteModeStandLayerId,
   whiteFillOpacity,
   onWhiteModeUnsupported,
+  sourceLayerTextScales,
+  onTextScaleUnsupported,
   assetReference,
   onLoadFailed,
   servicePlacementMarkers,
   placementModeActive,
   onServiceSymbolClick,
   realizationUnderlineMarkers,
+  noElectricityMarkers,
 }: {
   pdfUrl: string | undefined;
   hiddenLayerIds: ReadonlySet<string>;
@@ -139,12 +160,18 @@ export function TechnicalRasterCanvas({
   onServiceSymbolClick?: (marker: TechnicalRasterServiceSymbolMarker) => void;
   /** "Realizačky" underlines (corrective batch, post real-file acceptance test, section 4/5) — independent of every other marker prop, defaults to an empty list when omitted so every existing caller is unaffected. */
   realizationUnderlineMarkers?: readonly TechnicalRasterRealizationUnderlineMarker[];
+  /** "BEZ elektriky" automatic red X markers (PRODUCTION BATCH, part B) — independent of every other marker prop, defaults to an empty list when omitted so every existing caller is unaffected. */
+  noElectricityMarkers?: readonly TechnicalRasterNoElectricityMarker[];
   /** Set only when the caller wants "pracovní bílý režim" AND a stand layer was unambiguously detected (see resolveWhiteModeAvailability) — undefined always renders the page normally (spec section 16: never guess). */
   whiteModeStandLayerId?: string;
   /** "Krytí bílé" 0-1 (spec batch 6) — only meaningful together with whiteModeStandLayerId; ignored entirely for a plain/original render. The caller is expected to already have applied effectiveWhiteFillOpacity's own default (domain/technicalRaster.ts), so this component never needs its own fallback. */
   whiteFillOpacity?: number;
   /** Called if a white-mode render this page/config actually attempted comes back "unsupported" (e.g. the layer uses a fill mechanism this can't safely rewrite) — spec section 16/19: the caller must fall back to showing the original and explain why. */
   onWhiteModeUnsupported?: (reason: string) => void;
+  /** PRODUCTION BATCH, part A — every source layer id configured with a text scale != 100% (RasterLayer.id -> scale fraction), seeded by the caller from effectiveSourceLayerTextScales. Undefined/empty is a plain, unaffected render — every pre-existing caller of this component is unaffected. */
+  sourceLayerTextScales?: ReadonlyMap<string, number>;
+  /** Called once per layer in `sourceLayerTextScales` that couldn't be safely scaled on the CURRENT page (spec section 6) — the render still completes with every OTHER requested effect applied; this is purely an explanatory callback, never a hard failure. */
+  onTextScaleUnsupported?: (layerId: string, reason: string) => void;
   /** Whatever the caller has on hand to identify the raster asset (e.g. StoredAsset.id) — purely for diagnostic logging on a load failure (spec batch 5, UI section 18), never used for anything functional. */
   assetReference?: string;
   /** Called when loadPdfDocument(pdfUrl) itself fails (spec batch 5, UI section 17-23) — this component ALWAYS shows a fixed, friendly Czech message to the user regardless (never the raw error), and always logs full technical details itself; this callback exists so the OWNER (which knows about the asset and can resolve a fresh download URL) can drive a single retry. Never called for anything other than the document-loading fetch itself — page-render failures are a separate, existing error path. */
@@ -254,7 +281,10 @@ export function TechnicalRasterCanvas({
       if (!ctx) return;
       const optionalContentConfigPromise = buildOptionalContentConfigForRender(document, hiddenLayerIds).then((config) => config as never);
 
-      if (whiteModeStandLayerId) {
+      // PRODUCTION BATCH, part A — the proxied render path is now also used purely for text
+      // scaling, independent of white mode (spec section 6: "editor and export must match").
+      const textScaleLayers: TextScaleLayerConfig[] = [...(sourceLayerTextScales ?? new Map<string, number>())].map(([layerId, scale]) => ({ layerId, scale }));
+      if (whiteModeStandLayerId || textScaleLayers.length > 0) {
         const result = await renderWhiteModePage({
           page,
           pageKey: `${pdfUrl}#${activePage}`,
@@ -263,6 +293,8 @@ export function TechnicalRasterCanvas({
           viewport: renderViewport,
           optionalContentConfigPromise,
           whiteFillOpacity,
+          textScaleLayers,
+          onTextScaleUnsupported,
           // CORRECTIVE BATCH (editor-only white mode) — lets renderWhiteModePage install the active
           // white-mode session on THIS document's own canvas factory, so a Form XObject's own
           // transparency-group offscreen canvas also gets its fill forced white (see that
@@ -296,6 +328,10 @@ export function TechnicalRasterCanvas({
     // whiteFillOpacity (spec batch 6) is listed directly — the caller (TechnicalRasterLayerPanel's
     // "Krytí bílé" slider, already debounced on ITS OWN side) can change it independently of
     // renderKey, and a redraw must follow; this never touches pdfUrl, so it never re-fetches.
+    // sourceLayerTextScales (PRODUCTION BATCH, part A) is deliberately NOT listed here, same
+    // reasoning as hiddenLayerIds above (a new Map identity every parent render would otherwise
+    // force a redraw on every unrelated re-render) — the caller (TechnicalRasterEditorPage.tsx's
+    // handleSetSourceLayerTextScale) always bumps renderKey itself on an actual scale change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePage, renderKey, whiteModeStandLayerId, whiteFillOpacity, documentVersion, renderScaleTrigger]);
 
@@ -510,6 +546,32 @@ export function TechnicalRasterCanvas({
     );
   }
 
+  /**
+   * PRODUCTION BATCH ("BEZ elektriky" automatic red X) — a small, always-visible "×", positioned at
+   * an ALREADY-COMPUTED normalized page-space CENTER point (domain/technicalRasterNoElectricityMarker.ts)
+   * — no anchor/translate math here beyond centering the glyph on that point, same `left/top %` +
+   * `translate(-50%,-50%)` convention the service-placement symbols above already use. Zoom-invariant
+   * SIZE only (the position itself is already resolution-independent, unlike the "selected stand"
+   * marker's own screen-px offset system).
+   */
+  function renderNoElectricityMarker(marker: TechnicalRasterNoElectricityMarker) {
+    const style = computeNoElectricityMarkerScreenStyle(viewport.transform.zoom);
+    return (
+      <div
+        key={`no-electricity-${marker.id}`}
+        className="technicalRasterNoElectricityMarker"
+        title="BEZ elektriky"
+        style={{
+          left: `${marker.xNormalized * 100}%`,
+          top: `${marker.yNormalized * 100}%`,
+          fontSize: `${style.fontSizePx}px`,
+        }}
+      >
+        ×
+      </div>
+    );
+  }
+
   if (!pdfUrl) {
     return (
       <div className="workflowCard technicalRasterCanvasPanel">
@@ -567,6 +629,7 @@ export function TechnicalRasterCanvas({
           {markers.filter((marker) => marker.page === activePage).map((marker) => renderMarker(marker))}
           {(servicePlacementMarkers ?? []).filter((marker) => marker.page === activePage).map((marker) => renderServicePlacementMarker(marker))}
           {(realizationUnderlineMarkers ?? []).filter((marker) => marker.page === activePage).map((marker) => renderRealizationUnderline(marker))}
+          {(noElectricityMarkers ?? []).filter((marker) => marker.page === activePage).map((marker) => renderNoElectricityMarker(marker))}
         </div>
       </div>
     </div>

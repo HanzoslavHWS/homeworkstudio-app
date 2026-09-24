@@ -565,6 +565,45 @@ async function buildStandLayerContentFixture(): Promise<Uint8Array> {
   return doc.save();
 }
 
+/** Same shape as buildStandLayerContentFixture, but the OCG is named "NÁZVY + ROZMĚRY ***" (the real H1/H3 text layer this batch's Part A targets) and the content is real PDF text (`Tf`/`Tj`) at two different font sizes, plus one text run OUTSIDE the span that must never be touched. */
+async function buildTextLayerContentFixture(): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([300, 200]);
+  const ctx = doc.context;
+
+  const ocg = PDFDict.withContext(ctx);
+  ocg.set(PDFName.of("Type"), PDFName.of("OCG"));
+  ocg.set(PDFName.of("Name"), PDFHexString.fromText("NÁZVY + ROZMĚRY ***"));
+  const ocgRef = ctx.register(ocg);
+
+  const props = PDFDict.withContext(ctx);
+  props.set(PDFName.of("MC0"), ocgRef);
+  const resources = page.node.lookup(PDFName.of("Resources"));
+  if (resources instanceof PDFDict) resources.set(PDFName.of("Properties"), props);
+
+  const ocgsArr = PDFArray.withContext(ctx);
+  ocgsArr.push(ocgRef);
+  const onArr = PDFArray.withContext(ctx);
+  onArr.push(ocgRef);
+  const orderArr = PDFArray.withContext(ctx);
+  orderArr.push(ocgRef);
+  const dDict = PDFDict.withContext(ctx);
+  dDict.set(PDFName.of("BaseState"), PDFName.of("ON"));
+  dDict.set(PDFName.of("ON"), onArr);
+  dDict.set(PDFName.of("OFF"), PDFArray.withContext(ctx));
+  dDict.set(PDFName.of("Order"), orderArr);
+  const ocPropsDict = PDFDict.withContext(ctx);
+  ocPropsDict.set(PDFName.of("OCGs"), ctx.register(ocgsArr));
+  ocPropsDict.set(PDFName.of("D"), ctx.register(dDict));
+  doc.catalog.set(PDFName.of("OCProperties"), ctx.register(ocPropsDict));
+
+  const contentText = "BT /F1 20 Tf (Outside) Tj ET\n/OC /MC0 BDC\nBT /F1 12 Tf (Firma XY) Tj ET\nBT /F1 8 Tf (2000x2000) Tj ET\nEMC\n";
+  const contentBytes = new TextEncoder().encode(contentText);
+  page.node.set(PDFName.of("Contents"), ctx.register(ctx.stream(contentBytes, {})));
+
+  return doc.save();
+}
+
 async function readPage1ContentText(bytes: Uint8Array): Promise<string> {
   const reloaded = await PDFDocument.load(bytes);
   const page1 = reloaded.getPage(0);
@@ -741,6 +780,132 @@ test("POST-ACCEPTANCE POLICY CHANGE section 2) vector white mode requested but n
       return true;
     },
   );
+});
+
+// ============================================================================
+// PRODUCTION BATCH, PART A — per-source-OCG-layer text-size reduction, export side.
+// ============================================================================
+
+test("part A) textScales: 85% scales every Tf size inside the named OCG, geometry/other text untouched", async () => {
+  const source = await buildTextLayerContentFixture();
+  const { bytes, textScaleDiagnostics } = await buildTechnicalRasterVectorExportPdf({
+    sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X",
+    textScales: [{ ocgName: "NÁZVY + ROZMĚRY ***", scale: 0.85 }],
+  });
+  assert.deepEqual(textScaleDiagnostics, [{ ocgName: "NÁZVY + ROZMĚRY ***", page: 1, status: "applied", scaledFontSizeCount: 2 }]);
+  const text = await readAllPage1ContentText(bytes);
+  assert.match(text, /\/F1 10\.2 Tf/u, "12 * 0.85 = 10.2");
+  assert.match(text, /\/F1 6\.8 Tf/u, "8 * 0.85 = 6.8");
+  assert.match(text, /\/F1 20 Tf/u, "the OUTSIDE-target text stays exactly 20pt, never scaled");
+});
+
+test("part A) textScales omitted entirely (every pre-existing caller/test): source text is byte-for-byte unchanged, zero diagnostics", async () => {
+  const source = await buildTextLayerContentFixture();
+  const { bytes, textScaleDiagnostics } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X" });
+  assert.deepEqual(textScaleDiagnostics, []);
+  const text = await readAllPage1ContentText(bytes);
+  assert.match(text, /\/F1 12 Tf/u);
+  assert.match(text, /\/F1 8 Tf/u);
+});
+
+test("part A) textScales: an unsupported layer (not found on this page) throws TEXT_SCALE_UNSUPPORTED, blocking the whole export — matches white mode's own 'never silently diverge' policy", async () => {
+  const source = await buildTextLayerContentFixture();
+  await assert.rejects(
+    buildTechnicalRasterVectorExportPdf({
+      sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X",
+      textScales: [{ ocgName: "DOES NOT EXIST", scale: 0.7 }],
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof TechnicalRasterVectorExportError);
+      assert.equal(error.code, "TEXT_SCALE_UNSUPPORTED");
+      assert.equal(error.page, 1);
+      return true;
+    },
+  );
+});
+
+test("part A) textScales composes correctly with white mode active for a DIFFERENT (fill) layer on the SAME export", async () => {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([300, 200]);
+  const ctx = doc.context;
+
+  function makeOcg(name: string): { ref: import("pdf-lib").PDFRef; propKey: string } {
+    const dict = PDFDict.withContext(ctx);
+    dict.set(PDFName.of("Type"), PDFName.of("OCG"));
+    dict.set(PDFName.of("Name"), PDFHexString.fromText(name));
+    return { ref: ctx.register(dict), propKey: name === "STÁNKY ***" ? "MC0" : "MC1" };
+  }
+  const stands = makeOcg("STÁNKY ***");
+  const names = makeOcg("NÁZVY + ROZMĚRY ***");
+
+  const props = PDFDict.withContext(ctx);
+  props.set(PDFName.of(stands.propKey), stands.ref);
+  props.set(PDFName.of(names.propKey), names.ref);
+  const resources = page.node.lookup(PDFName.of("Resources"));
+  if (resources instanceof PDFDict) resources.set(PDFName.of("Properties"), props);
+
+  const ocgsArr = PDFArray.withContext(ctx);
+  ocgsArr.push(stands.ref);
+  ocgsArr.push(names.ref);
+  const onArr = PDFArray.withContext(ctx);
+  onArr.push(stands.ref);
+  onArr.push(names.ref);
+  const dDict = PDFDict.withContext(ctx);
+  dDict.set(PDFName.of("BaseState"), PDFName.of("ON"));
+  dDict.set(PDFName.of("ON"), onArr);
+  dDict.set(PDFName.of("OFF"), PDFArray.withContext(ctx));
+  const ocPropsDict = PDFDict.withContext(ctx);
+  ocPropsDict.set(PDFName.of("OCGs"), ctx.register(ocgsArr));
+  ocPropsDict.set(PDFName.of("D"), ctx.register(dDict));
+  doc.catalog.set(PDFName.of("OCProperties"), ctx.register(ocPropsDict));
+
+  const contentText = "/OC /MC0 BDC\n1 0 0 rg 0 0 1 RG 20 20 100 60 re B\nEMC\n/OC /MC1 BDC\nBT /F1 10 Tf (Firma) Tj ET\nEMC\n";
+  page.node.set(PDFName.of("Contents"), ctx.register(ctx.stream(new TextEncoder().encode(contentText), {})));
+  const source = await doc.save();
+
+  const { bytes, whiteModeDiagnostic, textScaleDiagnostics } = await buildTechnicalRasterVectorExportPdf({
+    sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X",
+    whiteMode: { opacity: 1 },
+    textScales: [{ ocgName: "NÁZVY + ROZMĚRY ***", scale: 0.5 }],
+  });
+  assert.equal(whiteModeDiagnostic.status, "applied");
+  assert.deepEqual(textScaleDiagnostics, [{ ocgName: "NÁZVY + ROZMĚRY ***", page: 1, status: "applied", scaledFontSizeCount: 1 }]);
+  const text = await readAllPage1ContentText(bytes);
+  assert.match(text, /1 1 1 rg/u, "white mode still whitens the STÁNKY fill");
+  assert.match(text, /\/F1 5 Tf/u, "text scale still shrinks the NÁZVY text — 10 * 0.5 = 5");
+});
+
+// ============================================================================
+// PRODUCTION BATCH, PART B — "BEZ elektriky" automatic red X, export side.
+// ============================================================================
+
+test("part B) noElectricityMarkers: draws two red vector diagonal strokes (never a text glyph), inside GENERÁTOR DATA", async () => {
+  const source = await buildPlainFixture();
+  const { bytes } = await buildTechnicalRasterVectorExportPdf({
+    sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X",
+    noElectricityMarkers: [{ standId: "s1", xNormalized: 0.5, yNormalized: 0.5 }],
+  });
+  const text = await readAllPage1ContentText(bytes);
+  // Two `drawLine` calls => two "m ... l ... S" stroke sequences using the red color.
+  const strokeColorMatches = text.match(/0\.7568\d* 0\.0705\d* 0\.1215\d* RG/gu) ?? [];
+  assert.equal(strokeColorMatches.length, 2, `expected exactly 2 red diagonal strokes, got content: ${text}`);
+});
+
+test("part B) noElectricityMarkers omitted entirely is a plain, unaffected export (every pre-existing caller/test)", async () => {
+  const source = await buildPlainFixture();
+  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X" });
+  const text = await readAllPage1ContentText(bytes);
+  assert.ok(!text.includes("0.7568"), "no red X strokes when none were requested");
+});
+
+test("part B) an invalid (out of [0,1]) noElectricityMarkers coordinate is silently skipped, never crashes the export", async () => {
+  const source = await buildPlainFixture();
+  const { bytes } = await buildTechnicalRasterVectorExportPdf({
+    sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X",
+    noElectricityMarkers: [{ standId: "bad", xNormalized: Number.NaN, yNormalized: 0.5 }],
+  });
+  const text = await readAllPage1ContentText(bytes);
+  assert.ok(!text.includes("0.7568"), "an invalid coordinate must never be drawn at a fallback/clamped position");
 });
 
 test("POST-ACCEPTANCE POLICY CHANGE section 2) a Pattern-space fill inside the stand layer also fails the whole export (same policy — never a partial/fallback export)", async () => {

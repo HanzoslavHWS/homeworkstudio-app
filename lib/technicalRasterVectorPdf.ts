@@ -43,6 +43,7 @@ import type { TechnicalRasterExportLegendEntry, TechnicalRasterExportPlacementIt
 import { resolveEffectiveLegendPlacement, type TechnicalLegendPlacement } from "../domain/technicalRasterLegendPlacement.ts";
 import { detectStandLayerId } from "../domain/technicalRasterWhiteModeOperators.ts";
 import { computeVectorWhiteModeContentStream } from "../domain/technicalRasterVectorWhiteMode.ts";
+import { computeTextScaleContentStream } from "../domain/technicalRasterTextScale.ts";
 import { appendRawContentChunk, replacePageContentsWithSingleStream, resolvePageContentsShape } from "./pdf/pdfPageContentAppend.ts";
 import {
   EXPORT_POWER_LABEL_FONT_SIZE_PT,
@@ -51,6 +52,8 @@ import {
   EXPORT_WATER_DROP_HEIGHT_PT,
   EXPORT_WIFI_SYMBOL_WIDTH_PT,
   REALIZATION_UNDERLINE_THICKNESS_PT,
+  NO_ELECTRICITY_MARKER_HALF_SIZE_PT,
+  NO_ELECTRICITY_MARKER_THICKNESS_PT,
 } from "../domain/technicalRasterExportSymbolSize.ts";
 import { TECHNICAL_REALIZATION_GROUPS, type TechnicalRealizationGroupInfo } from "../domain/technicalRasterRealization.ts";
 import { buildVectorGlyphPathOperators, type GlyphOutlineCommand, type PositionedGlyphOutline } from "../domain/technicalRasterVectorGlyphOutline.ts";
@@ -64,10 +67,10 @@ import { ensurePdfJsWorkerConfigured } from "./pdf/pdfJsWorkerConfig.ts";
  * pdf-lib themselves throw; this class is not a universal wrapper.
  */
 export class TechnicalRasterVectorExportError extends Error {
-  readonly code: "INVALID_PAGE" | "WHITE_MODE_UNSUPPORTED";
-  /** Only set for `WHITE_MODE_UNSUPPORTED` — the 1-based SOURCE page number the transform failed on, so a caller/UI can say exactly where the problem is. */
+  readonly code: "INVALID_PAGE" | "WHITE_MODE_UNSUPPORTED" | "TEXT_SCALE_UNSUPPORTED";
+  /** Only set for `WHITE_MODE_UNSUPPORTED`/`TEXT_SCALE_UNSUPPORTED` — the 1-based SOURCE page number the transform failed on, so a caller/UI can say exactly where the problem is. */
   readonly page?: number;
-  constructor(code: "INVALID_PAGE" | "WHITE_MODE_UNSUPPORTED", message: string, page?: number) {
+  constructor(code: "INVALID_PAGE" | "WHITE_MODE_UNSUPPORTED" | "TEXT_SCALE_UNSUPPORTED", message: string, page?: number) {
     super(message);
     this.name = "TechnicalRasterVectorExportError";
     this.code = code;
@@ -528,6 +531,102 @@ function findVectorWhiteModeTargetPropertyNames(srcDoc: PDFDocument, newDoc: PDF
     }
   }
   return propertyNames;
+}
+
+// ============================================================================
+// Per-source-OCG-layer text scale for the EXPORT (PRODUCTION BATCH, part A) — see
+// domain/technicalRasterTextScale.ts's own module doc for the actual tokenizer/rewriter algorithm.
+// Everything HERE is pdf-lib plumbing, mirroring the white-mode plumbing immediately above: resolve
+// which resource-dictionary property NAME(s) the copied page's own content stream would use to tag
+// the CHOSEN source layer (by its real OCG NAME — never pdf.js's own internal group id, which has no
+// meaning to pdf-lib), read/decode/concatenate the page's real content stream(s), run the pure
+// rewriter, and (only on success) replace Contents with the patched bytes.
+// ============================================================================
+
+/** Every resource-dictionary key (no leading "/") in the copied page's own `/Resources/Properties` that resolves to the OCG object named `ocgName` — the same contract as findVectorWhiteModeTargetPropertyNames, just matched against an EXPLICIT, user-chosen layer name instead of the alias-detected "stand layer". Unlike that function, this needs no `srcDoc` at all: `buildOcgNameToCopiedRefMap` already resolves straight from the COPIED page's own Properties dict. */
+function findTargetPropertyNamesForOcgName(newDoc: PDFDocument, copiedPage: PDFPage, ocgName: string): ReadonlySet<string> {
+  const nameToCopiedRef = buildOcgNameToCopiedRefMap(newDoc, copiedPage);
+  const targetRef = nameToCopiedRef.get(ocgName);
+  if (!targetRef) return new Set();
+
+  const propertyNames = new Set<string>();
+  const resources = copiedPage.node.lookup(PDFName.of("Resources"));
+  if (resources instanceof PDFDict) {
+    const props = resources.lookup(PDFName.of("Properties"));
+    if (props instanceof PDFDict) {
+      for (const key of props.keys()) {
+        const ref = props.get(key);
+        if (ref instanceof PDFRef && ref.toString() === targetRef.toString()) propertyNames.add(key.decodeText());
+      }
+    }
+  }
+  return propertyNames;
+}
+
+export type TechnicalRasterExportTextScaleItem = Readonly<{
+  /** The real OCG NAME (RasterLayer.name, e.g. "NÁZVY + ROZMĚRY ***") — the caller resolves this from the project's own `sourceLayerTextScales` (keyed by RasterLayer.id) before calling the export, exactly like the editor resolves an id to a name for its own on-screen preview. */
+  ocgName: string;
+  /** Already clamped by the caller to [MIN_SOURCE_LAYER_TEXT_SCALE, MAX_SOURCE_LAYER_TEXT_SCALE] (domain/technicalRaster.ts). A scale of exactly 1 is never passed in (harmless no-op the caller already filters out before building this list). */
+  scale: number;
+}>;
+
+export type TechnicalRasterTextScaleDiagnostic = Readonly<{
+  ocgName: string;
+  page: number;
+  status: "applied" | "unsupported";
+  scaledFontSizeCount?: number;
+  reason?: string;
+}>;
+
+/**
+ * Applies EVERY configured layer's own text scale to `copiedPage`'s content stream, one layer at a
+ * time (each iteration reads the page's CURRENT content — already reflecting any earlier layer's own
+ * patch — and, on success, replaces it again; the layers' own OCG spans never overlap by
+ * construction, since a real Optional Content span belongs to exactly one OCG). Never mutates
+ * anything for a layer that resolves to "unsupported" for THIS page — that layer's own diagnostic is
+ * still reported, but the page's content stream is left exactly as it was before that one attempt
+ * (never a partial rewrite). White mode, when also requested, has ALWAYS already run by the time this
+ * is called (see call sites below) — text scaling only ever touches `Tf` operators, which white mode
+ * never reads or writes, so the two transforms can never disagree about the same bytes.
+ */
+function applyTextScalesToPage(newDoc: PDFDocument, copiedPage: PDFPage, textScales: readonly TechnicalRasterExportTextScaleItem[], page: number): readonly TechnicalRasterTextScaleDiagnostic[] {
+  const diagnostics: TechnicalRasterTextScaleDiagnostic[] = [];
+  for (const item of textScales) {
+    const targetPropertyNames = findTargetPropertyNamesForOcgName(newDoc, copiedPage, item.ocgName);
+    if (targetPropertyNames.size === 0) {
+      diagnostics.push({ ocgName: item.ocgName, page, status: "unsupported", reason: `Vrstva "${item.ocgName}" nebyla na stránce ${page} nalezena.` });
+      continue;
+    }
+    const contentBytes = readPageContentBytes(newDoc, copiedPage);
+    const result = computeTextScaleContentStream(contentBytes, { targetOcPropertyNames: targetPropertyNames, scale: item.scale });
+    if (result.status === "unsupported") {
+      diagnostics.push({ ocgName: item.ocgName, page, status: "unsupported", reason: result.reason });
+      continue;
+    }
+    const newStreamRef = newDoc.context.register(newDoc.context.stream(result.content, {}));
+    replacePageContentsWithSingleStream(newDoc.context, copiedPage, newStreamRef);
+    diagnostics.push({ ocgName: item.ocgName, page, status: "applied", scaledFontSizeCount: result.scaledFontSizeCount });
+  }
+  return diagnostics;
+}
+
+/**
+ * Enforces the SAME policy `requireVectorWhiteModeApplied` already enforces for white mode (spec
+ * section 6: "editor and export must match" — an export must never silently produce a different
+ * visual result than what the user configured): if ANY requested layer's text scale could not be
+ * safely applied on ANY page, the WHOLE export throws rather than completing with that layer's text
+ * left unscaled.
+ */
+function requireTextScalesApplied(diagnostics: readonly TechnicalRasterTextScaleDiagnostic[]): readonly TechnicalRasterTextScaleDiagnostic[] {
+  const failure = diagnostics.find((diagnostic) => diagnostic.status === "unsupported");
+  if (failure) {
+    throw new TechnicalRasterVectorExportError(
+      "TEXT_SCALE_UNSUPPORTED",
+      `Zmenšení textu vrstvy "${failure.ocgName}" na stránce ${failure.page} nelze bezpečně použít (${failure.reason}). Export byl zastaven — vypněte zmenšení textu pro tuto vrstvu nebo opravte zdrojové PDF.`,
+      failure.page,
+    );
+  }
+  return diagnostics;
 }
 
 /**
@@ -1098,6 +1197,33 @@ function drawRealizationUnderline(page: PDFPage, item: TechnicalRasterExportReal
 }
 
 // ============================================================================
+// "BEZ elektriky" automatic red X (PRODUCTION BATCH, part B) — same "plain vector stroke, never a
+// text glyph" discipline as the realization underline above (spec section 18: "Prefer two vector
+// strokes over a textual '×' glyph" — no generated-font dependency needed at all for this marker).
+// Position comes from domain/technicalRasterNoElectricityMarker.ts's own
+// computeNoElectricityMarkerGeometry, the SAME normalized page-space geometry shared with the
+// editor — this drawing code only ever converts that one CENTER point through the rotation-aware
+// raw-PDF-point transform, it never computes geometry itself.
+// ============================================================================
+
+export type TechnicalRasterExportNoElectricityMarkerItem = Readonly<{
+  standId: string;
+  /** Normalized page-space CENTER point (domain/technicalRasterNoElectricityMarker.ts's computeNoElectricityMarkerGeometry). */
+  xNormalized: number;
+  yNormalized: number;
+}>;
+
+const NO_ELECTRICITY_MARKER_COLOR = hexToRgbFraction("#c1121f");
+
+function drawNoElectricityMarker(page: PDFPage, item: TechnicalRasterExportNoElectricityMarkerItem, geometry: SourcePageGeometry): void {
+  const center = normalizedDisplayPointToRawPdfPoint(item.xNormalized, item.yNormalized, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
+  const half = NO_ELECTRICITY_MARKER_HALF_SIZE_PT;
+  const strokeOptions = { thickness: NO_ELECTRICITY_MARKER_THICKNESS_PT, color: NO_ELECTRICITY_MARKER_COLOR, lineCap: LineCapStyle.Round };
+  page.drawLine({ start: { x: center.x - half, y: center.y - half }, end: { x: center.x + half, y: center.y + half }, ...strokeOptions });
+  page.drawLine({ start: { x: center.x - half, y: center.y + half }, end: { x: center.x + half, y: center.y - half }, ...strokeOptions });
+}
+
+// ============================================================================
 // GENERATED LEGEND BATCH — every generated legend row (technical + realization), in BOTH the
 // separate-page fallback and the in-place ("source-legend-area") strategy, is now drawn through
 // this ONE shared function so both strategies stay visually consistent and reuse the EXACT same
@@ -1474,6 +1600,10 @@ export type TechnicalRasterVectorExportInput = Readonly<{
   realizationUnderlines?: readonly TechnicalRasterExportRealizationUnderlineItem[];
   /** Whether the legend page's own fixed "REALIZACE" key (all 4 canonical groups, always) is included — independent of whether `realizationUnderlines` is empty on this particular page, since a multi-page export's key reflects the WHOLE export, not just page 1. */
   includeRealizationKey?: boolean;
+  /** "Exportovat označení „BEZ elektriky“" (PRODUCTION BATCH, part B section 17/18) — every red-X marker to draw on THIS page. Optional/defaults to none so every existing caller/test is unaffected; the caller (TechnicalRasterOutputsPanel.tsx) only ever populates this when the user's own export toggle is ON. */
+  noElectricityMarkers?: readonly TechnicalRasterExportNoElectricityMarkerItem[];
+  /** PRODUCTION BATCH, part A — every source-OCG layer's own configured text scale, resolved to real OCG names (never pdf.js's own internal layer id). Optional/defaults to none so every existing caller/test is unaffected. A scale of exactly 1 (100%) is expected to already be filtered out by the caller — this list only ever contains layers that actually need a transform. */
+  textScales?: readonly TechnicalRasterExportTextScaleItem[];
   /** Corrective batch section 7 — WHERE the legend is drawn. Omitted resolves to today's existing "separate-page" behavior via resolveEffectiveLegendPlacement. A "source-legend-area" region targeting a page OTHER than `input.page` has no effect in this single-page function (there IS no other page here) — the multi-page function below is what real multi-page exports use. */
   legendPlacement?: TechnicalLegendPlacement;
 }>;
@@ -1485,6 +1615,8 @@ export type TechnicalRasterVectorExportResult = Readonly<{
   skippedInvalidPlacementCount: number;
   /** Whether/how "Pracovní — bílé" was actually applied (corrective batch section 4) — `"not_requested"` when `input.whiteMode` was omitted, `"unsupported"` when requested but the stand layer/content couldn't be safely rewritten (the export STILL succeeds, with the page's original vector colors — never a raster fallback), `"applied"` on success. */
   whiteModeDiagnostic: VectorWhiteModeDiagnostic;
+  /** PRODUCTION BATCH, part A — one diagnostic per requested `input.textScales` entry (empty when none were requested). Unlike white mode, an "unsupported" entry here always means the WHOLE export already threw (see requireTextScalesApplied) — this list only ever reaches the caller fully "applied" when it's non-empty at all. */
+  textScaleDiagnostics: readonly TechnicalRasterTextScaleDiagnostic[];
 }>;
 
 /**
@@ -1519,6 +1651,11 @@ export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRaster
     ? requireVectorWhiteModeApplied(applyVectorWhiteMode(srcDoc, newDoc, copiedPage, Math.min(1, Math.max(0, input.whiteMode.opacity))), input.page)
     : { status: "not_requested" };
 
+  // PRODUCTION BATCH, part A — per-source-OCG text scale, applied AFTER white mode (the two never
+  // touch the same bytes: white mode only rewrites fill-color operators, text scale only rewrites
+  // `Tf` size operands) and BEFORE any generator overlay content is appended below.
+  const textScaleDiagnostics = requireTextScalesApplied(applyTextScalesToPage(newDoc, copiedPage, input.textScales ?? [], input.page));
+
   // GENERATED LEGEND BATCH — the legend's own generated text (heading/descriptions/realization
   // names) now shares this SAME fontkit-only shaping font instance, drawn via the SAME
   // drawVectorOutlineText vector-outline mechanism the real placement markers already use — never a
@@ -1550,6 +1687,11 @@ export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRaster
     drawRealizationUnderline(copiedPage, underline, geometry);
   }
 
+  for (const marker of input.noElectricityMarkers ?? []) {
+    if (!isValidNormalizedCoordinate(marker.xNormalized) || !isValidNormalizedCoordinate(marker.yNormalized)) continue;
+    drawNoElectricityMarker(copiedPage, marker, geometry);
+  }
+
   const effectiveLegendPlacement = resolveEffectiveLegendPlacement(input.legendPlacement);
   const legendToShow = input.showLegend ? input.legend : [];
   // GENERATED LEGEND BATCH section 13 — only the realization groups with a REAL underline on this
@@ -1573,7 +1715,7 @@ export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRaster
   }
 
   const bytes = await newDoc.save();
-  return { bytes, ocgDiagnostic, skippedInvalidPlacementCount, whiteModeDiagnostic };
+  return { bytes, ocgDiagnostic, skippedInvalidPlacementCount, whiteModeDiagnostic, textScaleDiagnostics };
 }
 
 // ============================================================================
@@ -1591,6 +1733,8 @@ export type TechnicalRasterVectorExportPageInput = Readonly<{
   placements: readonly TechnicalRasterExportPlacementItem[];
   /** Corrective batch section 10 — every realization underline on THIS page. */
   realizationUnderlines?: readonly TechnicalRasterExportRealizationUnderlineItem[];
+  /** PRODUCTION BATCH, part B section 17/18 — every "BEZ elektriky" red-X marker on THIS page. */
+  noElectricityMarkers?: readonly TechnicalRasterExportNoElectricityMarkerItem[];
 }>;
 
 export type TechnicalRasterMultiPageVectorExportInput = Readonly<{
@@ -1604,6 +1748,8 @@ export type TechnicalRasterMultiPageVectorExportInput = Readonly<{
   whiteMode?: Readonly<{ opacity: number }>;
   /** Whether the legend page's own fixed "REALIZACE" key is included — a whole-export flag, since the key always lists all 4 canonical groups regardless of which page(s) actually carry badges. */
   includeRealizationKey?: boolean;
+  /** PRODUCTION BATCH, part A — same whole-export-level shape as `whiteMode` above: every configured layer's own text scale is applied independently to EVERY exported source page (each page has its own content stream/OCG resources, so "unsupported" on one page never affects another). */
+  textScales?: readonly TechnicalRasterExportTextScaleItem[];
   /** Corrective batch section 7 — WHERE the legend is drawn. Omitted resolves to today's existing "separate-page" behavior. */
   legendPlacement?: TechnicalLegendPlacement;
 }>;
@@ -1617,6 +1763,8 @@ export type TechnicalRasterMultiPageVectorExportResult = Readonly<{
   legendPageNumber: number;
   /** One "Pracovní — bílé" diagnostic per exported source page, same order/independence as `ocgDiagnosticsByPage`. */
   whiteModeDiagnosticsByPage: readonly VectorWhiteModeDiagnostic[];
+  /** PRODUCTION BATCH, part A — every requested layer's own diagnostic, for every exported page (empty when `input.textScales` was omitted/empty). Always fully "applied" by the time this is returned — see requireTextScalesApplied. */
+  textScaleDiagnostics: readonly TechnicalRasterTextScaleDiagnostic[];
 }>;
 
 /**
@@ -1657,6 +1805,7 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
   // per-page call; `ensureGeneratorDataOcg` is deliberately idempotent/re-appending so this stays a
   // SINGLE object re-registered on every page, never duplicated).
   let generatorDataOcgRef: PDFRef | undefined;
+  const textScaleDiagnostics: TechnicalRasterTextScaleDiagnostic[] = [];
 
   let exportPageNumber = 0;
   for (const pageInput of input.pages) {
@@ -1671,6 +1820,7 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
         ? requireVectorWhiteModeApplied(applyVectorWhiteMode(srcDoc, newDoc, copiedPage, Math.min(1, Math.max(0, input.whiteMode.opacity))), pageInput.page)
         : { status: "not_requested" },
     );
+    textScaleDiagnostics.push(...requireTextScalesApplied(applyTextScalesToPage(newDoc, copiedPage, input.textScales ?? [], pageInput.page)));
 
     const generatorDataOcg = ensureGeneratorDataOcg(newDoc, copiedPage, generatorDataOcgRef);
     generatorDataOcgRef = generatorDataOcg.ref;
@@ -1689,6 +1839,11 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
       if (!isValidNormalizedCoordinate(underline.xNormalized) || !isValidNormalizedCoordinate(underline.yNormalized)) continue;
       if (!isValidNormalizedCoordinate(underline.xNormalized + underline.widthNormalized)) continue;
       drawRealizationUnderline(copiedPage, underline, geometry);
+    }
+
+    for (const marker of pageInput.noElectricityMarkers ?? []) {
+      if (!isValidNormalizedCoordinate(marker.xNormalized) || !isValidNormalizedCoordinate(marker.yNormalized)) continue;
+      drawNoElectricityMarker(copiedPage, marker, geometry);
     }
 
     // In-place legend (corrective batch section 7) — CORRECTIVE BATCH 3rd, section 10: moved to
@@ -1719,5 +1874,5 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
   }
 
   const bytes = await newDoc.save();
-  return { bytes, ocgDiagnosticsByPage, skippedInvalidPlacementCount, legendPageNumber, whiteModeDiagnosticsByPage };
+  return { bytes, ocgDiagnosticsByPage, skippedInvalidPlacementCount, legendPageNumber, whiteModeDiagnosticsByPage, textScaleDiagnostics };
 }

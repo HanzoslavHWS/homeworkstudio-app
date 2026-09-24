@@ -180,3 +180,25 @@ test("invalid placement coordinates are skipped and counted, never crash the mul
   });
   assert.equal(result.skippedInvalidPlacementCount, 1);
 });
+
+// ============================================================================
+// PRODUCTION BATCH, PART B — "BEZ elektriky" red X, multi-page wiring.
+// ============================================================================
+
+test("part B) noElectricityMarkers: drawn on the CORRECT page only, in a 2-page export — never bleeding onto the other page", async () => {
+  const source = await buildNPageFixture([{ width: 300, height: 200 }, { width: 300, height: 200 }]);
+  const result = await buildTechnicalRasterMultiPageVectorExportPdf({
+    sourcePdfBytes: source,
+    pages: [
+      { page: 1, placements: [], noElectricityMarkers: [{ standId: "s1", xNormalized: 0.5, yNormalized: 0.5 }] },
+      { page: 2, placements: [] },
+    ],
+    legend: [],
+    showLegend: false,
+    headerLine: "X",
+  });
+  const page1Text = await readPageContentText(result.bytes, 0);
+  const page2Text = await readPageContentText(result.bytes, 1);
+  assert.match(page1Text, /0\.7568\d* 0\.0705\d* 0\.1215\d* RG/u, "page 1 has the red X strokes");
+  assert.ok(!page2Text.includes("0.7568"), "page 2 must never receive page 1's own marker");
+});

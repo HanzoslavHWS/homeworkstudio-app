@@ -25,6 +25,8 @@ import {
   setStandRealizationCompany,
   mergeSupplementalCatalogImport,
   withShowRealizations,
+  withSourceLayerTextScale,
+  effectiveSourceLayerTextScales,
   type RasterSettings,
   type TechnicalRasterImport,
   type TechnicalRasterProject,
@@ -34,6 +36,7 @@ import { resolveTechnicalServiceProduct } from "../../../domain/technicalService
 import { resolveTechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
 import { resolveRealizationDisplayState, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
 import { computeRealizationUnderlineGeometry } from "../../../domain/technicalRasterRealizationUnderline";
+import { computeNoElectricityMarkerGeometry } from "../../../domain/technicalRasterNoElectricityMarker";
 import { groupStandsByPlacementWorkQueue, resolveNextPlacementTarget } from "../../../domain/technicalRasterWorkQueue";
 import { sortStandNumbersNatural } from "../../../domain/technicalStandNumber";
 import { technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
@@ -46,9 +49,10 @@ import { loadPdfDocument } from "../../../lib/pdf/pdfDocumentLoader";
 import { logPdfLoadFailure } from "../../../lib/pdf/pdfLoadDiagnostics";
 import { extractPdfTextItems, getPdfPageSizes } from "../../../lib/pdf/pdfTextExtraction";
 import { listPdfLayers } from "../../../lib/pdf/pdfLayers";
+import { detectPdfLayersWithText } from "../../../lib/pdf/pdfTextLayerDetection";
 import { detectRasterStandLabels } from "../../../lib/pdf/rasterStandLabelDetection";
 import { resolveWhiteModeAvailability } from "../../../lib/pdf/technicalRasterWhiteRender";
-import { TechnicalRasterCanvas, type RasterCanvasMarker, type TechnicalRasterRealizationUnderlineMarker, type TechnicalRasterServiceSymbolMarker } from "./TechnicalRasterCanvas";
+import { TechnicalRasterCanvas, type RasterCanvasMarker, type TechnicalRasterNoElectricityMarker, type TechnicalRasterRealizationUnderlineMarker, type TechnicalRasterServiceSymbolMarker } from "./TechnicalRasterCanvas";
 import { TechnicalRasterLayerPanel } from "./TechnicalRasterLayerPanel";
 import { TechnicalRasterSymbolLayerPanel } from "./TechnicalRasterSymbolLayerPanel";
 import { TechnicalServiceImportPanel, type PendingTechnicalImport } from "./TechnicalServiceImportPanel";
@@ -109,6 +113,8 @@ export function TechnicalRasterEditorPage({
   const [rasterError, setRasterError] = useState("");
   const [renderKey, setRenderKey] = useState(0);
   const [whiteModeUnsupportedReason, setWhiteModeUnsupportedReason] = useState("");
+  /** PRODUCTION BATCH, part A — keyed by layerId, so an unsupported reason for ONE configured text-scale layer never hides another's (spec section 6: editor degrades gracefully per layer, never blocks the whole render). */
+  const [textScaleUnsupportedReasons, setTextScaleUnsupportedReasons] = useState<Readonly<Record<string, string>>>({});
   const [rasterUrlError, setRasterUrlError] = useState("");
   const [placementMode, setPlacementMode] = useState<PlacementMode | undefined>(undefined);
 
@@ -264,12 +270,13 @@ export function TechnicalRasterEditorPage({
       const buffer = await file.arrayBuffer();
       const asset = await uploadAsset(file, { category: "technical-raster-source", ownerId: current.id, displayName: file.name });
       const document = await loadPdfDocument({ data: buffer.slice(0) });
-      let items, pageSizes, layers;
+      let items, pageSizes, layers, textLayerIds;
       try {
-        [items, pageSizes, layers] = await Promise.all([
+        [items, pageSizes, layers, textLayerIds] = await Promise.all([
           extractPdfTextItems(document),
           getPdfPageSizes(document),
           listPdfLayers(document),
+          detectPdfLayersWithText(document),
         ]);
       } finally {
         // This is a short-lived document used only for one-time extraction (a SEPARATE instance
@@ -278,9 +285,13 @@ export function TechnicalRasterEditorPage({
         void document.destroy();
       }
       const labels = detectRasterStandLabels(items, pageSizes);
+      // PRODUCTION BATCH, part A section 3 — "detect whether the layer contains text operators
+      // before showing the size control", computed from the SAME real PDF read as everything else
+      // here, never a separate/later pass.
+      const layersWithTextInfo = layers.map((layer) => ({ ...layer, containsText: textLayerIds.has(layer.id) }));
 
       let next = withSourceRasterAsset(current, asset);
-      next = withRasterLayers(next, layers);
+      next = withRasterLayers(next, layersWithTextInfo);
       next = withRasterStandLabels(next, labels);
       updateProject(next);
       setActivePage(1);
@@ -313,6 +324,12 @@ export function TechnicalRasterEditorPage({
    */
   function handleSetWhiteFillOpacity(opacity: number) {
     setProject((current) => (current ? withWhiteFillOpacity(current, opacity) : current));
+  }
+
+  /** PRODUCTION BATCH, part A — "Text size" per source layer (spec section 2/9/10). A redraw is required so the live canvas preview stays in sync with the export (spec section 6). */
+  function handleSetSourceLayerTextScale(layerId: string, scale: number) {
+    setProject((current) => (current ? withSourceLayerTextScale(current, layerId, scale) : current));
+    setRenderKey((key) => key + 1);
   }
 
   // ============================================================================
@@ -508,6 +525,17 @@ export function TechnicalRasterEditorPage({
   const whiteModeStandLayerId =
     project.rasterSettings.viewMode === "work" && whiteModeAvailability.status === "available" ? whiteModeAvailability.standLayerId : undefined;
 
+  // PRODUCTION BATCH, part A — every configured source layer whose own scale isn't the 100%
+  // default, resolved into the shape TechnicalRasterCanvas.tsx needs (RasterLayer.id -> scale).
+  const configuredTextScales = effectiveSourceLayerTextScales(project.rasterSettings);
+  const sourceLayerTextScaleMap = new Map<string, number>();
+  for (const [layerId, scale] of Object.entries(configuredTextScales)) {
+    if (scale !== 1) sourceLayerTextScaleMap.set(layerId, scale);
+  }
+  function handleTextScaleUnsupported(layerId: string, reason: string) {
+    setTextScaleUnsupportedReasons((current) => ({ ...current, [layerId]: reason }));
+  }
+
   // ============================================================================
   // Technical service symbols (spec batch 7 section 22-37) — every MATCHED stand's own placed
   // "point" services, for whichever categories "TECHNICKÉ ZNAČKY" hasn't hidden. Independent of
@@ -575,6 +603,35 @@ export function TechnicalRasterEditorPage({
     }
   }
 
+  // ============================================================================
+  // "BEZ elektriky" automatic red X (PRODUCTION BATCH, part B section 14/16) — every MATCHED stand
+  // whose PRIMARY electricity import explicitly assigned zero electricity
+  // (`hasNoElectricityAssignment`), anchored to its own known number position exactly like the
+  // realization underlines above (same label lookup, same matched_auto/matched_manual +
+  // known-rasterPage safety gate — an ambiguous/unassigned/outside-current-raster stand never gets a
+  // guessed position). Always built when the electricity category itself isn't hidden via
+  // "TECHNICKÉ ZNAČKY" (spec section 16: "can follow the existing electricity visibility/filter
+  // where appropriate") — unlike realizations, there is no separate on/off toggle: this marker is
+  // automatic, spec section 16: "no placement task, no click needed".
+  // ============================================================================
+  const noElectricityMarkers: TechnicalRasterNoElectricityMarker[] = [];
+  if (!hiddenServiceCategories.has("electricity")) {
+    for (const stand of project.stands) {
+      if (!stand.hasNoElectricityAssignment) continue;
+      if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
+      if (stand.placement.rasterPage === undefined) continue;
+      const label = project.rasterStandLabels.find((candidate) => candidate.id === stand.placement.matchedLabelId);
+      const anchorXNormalized = label?.xNormalized ?? stand.placement.anchorXNormalized;
+      const anchorYNormalized = label?.yNormalized ?? stand.placement.anchorYNormalized;
+      if (anchorXNormalized === undefined || anchorYNormalized === undefined) continue;
+      const geometry = computeNoElectricityMarkerGeometry(
+        { xNormalized: anchorXNormalized, yNormalized: anchorYNormalized },
+        label ? { widthNormalized: label.widthNormalized, heightNormalized: label.heightNormalized } : undefined,
+      );
+      noElectricityMarkers.push({ id: stand.id, page: stand.placement.rasterPage, xNormalized: geometry.xNormalized, yNormalized: geometry.yNormalized });
+    }
+  }
+
   return (
     <div className="workspacePage technicalRasterEditorPage">
       <div className="workspacePageHeader">
@@ -614,6 +671,8 @@ export function TechnicalRasterEditorPage({
             whiteModeStandLayerId={whiteModeStandLayerId}
             whiteFillOpacity={effectiveWhiteFillOpacity(project.rasterSettings)}
             onWhiteModeUnsupported={setWhiteModeUnsupportedReason}
+            sourceLayerTextScales={sourceLayerTextScaleMap}
+            onTextScaleUnsupported={handleTextScaleUnsupported}
             assetReference={project.sourceRasterAsset?.id}
             onLoadFailed={handleRasterCanvasLoadFailed}
           />
@@ -663,7 +722,12 @@ export function TechnicalRasterEditorPage({
                   onSetViewMode={handleSetViewMode}
                   onSetWorkModeHiddenLayers={handleSetWorkModeHiddenLayers}
                   onSetWhiteFillOpacity={handleSetWhiteFillOpacity}
+                  onSetSourceLayerTextScale={handleSetSourceLayerTextScale}
                 />
+                {Object.entries(textScaleUnsupportedReasons).map(([layerId, reason]) => {
+                  const layerName = project.rasterLayers.find((candidate) => candidate.id === layerId)?.name ?? layerId;
+                  return <p key={layerId} className="uploadError">Zmenšení textu vrstvy „{layerName}“ nelze použít — {reason}</p>;
+                })}
                 {whiteModeUnsupportedReason && (
                   <p className="uploadError">U tohoto PDF nelze bezpečně změnit pouze výplně stánků — {whiteModeUnsupportedReason}</p>
                 )}
@@ -789,6 +853,9 @@ export function TechnicalRasterEditorPage({
               placementModeActive={Boolean(placementMode)}
               onServiceSymbolClick={handleServiceSymbolClick}
               realizationUnderlineMarkers={realizationUnderlineMarkers}
+              noElectricityMarkers={noElectricityMarkers}
+              sourceLayerTextScales={sourceLayerTextScaleMap}
+              onTextScaleUnsupported={handleTextScaleUnsupported}
             />
             {/* Right panel priority (manual acceptance batch, section 5): 1) PRÁVĚ UMISŤUJI,
                 2) vybraný stánek + jeho služby, 3-5) K UMÍSTĚNÍ / HOTOVO / BEZ BODOVÝCH SLUŽEB

@@ -109,3 +109,15 @@ export const EXPORT_SYMBOL_MAX_BOUNDING_HEIGHT_PT = 4.68;
  * ExtGState — the same simple primitive that already imports correctly in Corel 2018.
  */
 export const REALIZATION_UNDERLINE_THICKNESS_PT = 0.85;
+
+// ============================================================================
+// "BEZ elektriky" red X print sizing (PRODUCTION BATCH) — drawn as two plain vector diagonal
+// strokes (never a text "×" glyph, so it needs no font/text-showing operator at all — spec section
+// 18: "Prefer two vector strokes over a textual glyph"), same discipline as the realization
+// underline above.
+// ============================================================================
+
+/** Half the X's own diagonal span (the distance from its center to each arm's own endpoint) — small and readable, comparable in visual weight to a compact technical symbol. */
+export const NO_ELECTRICITY_MARKER_HALF_SIZE_PT = 2.6;
+/** Stroke thickness for both diagonal lines — same order of magnitude as the realization underline's own stroke, deliberately a plain, simple vector primitive. */
+export const NO_ELECTRICITY_MARKER_THICKNESS_PT = 0.9;

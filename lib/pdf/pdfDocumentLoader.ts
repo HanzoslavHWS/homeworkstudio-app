@@ -20,8 +20,17 @@ import { createWhiteModeCanvasContextProxy } from "./pdfWhiteModeCanvasProxy.ts"
  * creates via this exact factory, which the top-level-only wrap never reached).
  */
 export type PdfJsWhiteModeCanvasSession = Readonly<{
-  patchedIndices: ReadonlySet<number>;
-  fillColor: string;
+  /**
+   * PRODUCTION BATCH (per-source-OCG-layer text-size reduction, part A) — the fillStyle/globalAlpha
+   * fields below are now OPTIONAL: a session can be installed for TEXT SCALING ALONE (white mode
+   * off, one or more layers configured with a text scale below 100%), in which case
+   * `patchedIndices`/`fillColor`/`neutralizeAlphaIndices` are simply omitted/empty and
+   * `createWhiteModeCanvasContextProxy` skips its fillStyle/globalAlpha interception entirely —
+   * zero behavior change for a render that only ever used the white-mode fields, since those still
+   * default to `new Set()` there when omitted.
+   */
+  patchedIndices?: ReadonlySet<number>;
+  fillColor?: string;
   operatorIndexRef: Readonly<{ current: number }>;
   /**
    * CORRECTIVE BATCH (real production — H3 100% white / grid-through-fill) — every operator index
@@ -31,7 +40,9 @@ export type PdfJsWhiteModeCanvasSession = Readonly<{
    * own doc for why this (not just the fillStyle-forcing trick) is what a real H3 stand's own
    * page-level `/ca 0.76` ExtGState actually requires to be neutralized.
    */
-  neutralizeAlphaIndices: ReadonlySet<number>;
+  neutralizeAlphaIndices?: ReadonlySet<number>;
+  /** PRODUCTION BATCH, part A — operator index -> font-size multiplier, for every `setFont` (Tf) call reached inside ANY configured text-scale layer's own marked-content span (one entry per layer's own patch plan, merged). Omitted/empty for a render with no active text-scale layer. */
+  fontScaleByIndex?: ReadonlyMap<number, number>;
 }>;
 
 export type PdfJsDocument = Readonly<{
@@ -150,10 +161,11 @@ export class WhiteModeAwareCanvasFactory {
     const context = this.#activeSession
       ? createWhiteModeCanvasContextProxy(
         rawContext,
-        this.#activeSession.patchedIndices,
-        this.#activeSession.fillColor,
+        this.#activeSession.patchedIndices ?? new Set(),
+        this.#activeSession.fillColor ?? "",
         this.#activeSession.operatorIndexRef,
-        this.#activeSession.neutralizeAlphaIndices,
+        this.#activeSession.neutralizeAlphaIndices ?? new Set(),
+        this.#activeSession.fontScaleByIndex ?? new Map(),
       )
       : rawContext;
     return { canvas, context };

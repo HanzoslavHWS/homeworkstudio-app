@@ -236,7 +236,18 @@ function resolveInternetPresentation(externalLabel: string): TechnicalServicePre
     // own TechnicalRasterComponentConfig override, and still drawn correctly by both the editor and
     // lib/technicalRasterVectorPdf.ts's drawWifiSymbol) — only the CENTRAL default for a real WIFI
     // report label changes here.
-    return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "WiFi", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_WIFI, isFallback: false };
+    //
+    // PRODUCTION BATCH (real production — "WiFi qty 5 needs only 1 marker") — supersedes the
+    // "CORRECTIVE BATCH" comment above's own `placementCardinality: "perQuantity"` reasoning: real
+    // usage showed a WiFi order's own quantity (2/3/5) means licenses/devices, never distinct
+    // physical access-point locations the technician must click — placing WiFi 5 times was
+    // unnecessary operational work. `placementCardinality: "onePerRecord"` — same semantics as
+    // waste/cleaning below — makes exactly ONE marker required regardless of the raw imported
+    // quantity (domain/technicalRaster.ts's `requiredPlacementCount`), while `service.quantity`
+    // itself is untouched (still the real, verbatim imported number, kept for diagnostics/details).
+    // Internet ("INT") and Pevná IP keep their own unchanged `"perQuantity"` cardinality above —
+    // this change is scoped to WiFi alone.
+    return { placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "textLabel", displayLabel: "WiFi", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_WIFI, isFallback: false };
   }
   // The plain "Internet" row — a general cabled connection, still a real physical drop point.
   return { placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "INT", color: TECHNICAL_RASTER_COLORS.internet, legendLabel: LEGEND_INTERNET_GENERAL, isFallback: false };

@@ -3,10 +3,19 @@
 import { useState } from "react";
 import { TECHNICAL_SERVICE_CATEGORIES } from "../../../domain/technicalServiceCatalog";
 import { categoryCanHaveExportableSymbol } from "../../../domain/technicalRasterServicePresentation";
-import { effectiveIncludeRealizationsInExport, effectiveLegendPlacement, effectiveWhiteFillOpacity, type TechnicalRasterProject } from "../../../domain/technicalRaster";
+import {
+  DEFAULT_SOURCE_LAYER_TEXT_SCALE,
+  effectiveIncludeNoElectricityMarkersInExport,
+  effectiveIncludeRealizationsInExport,
+  effectiveLegendPlacement,
+  effectiveSourceLayerTextScales,
+  effectiveWhiteFillOpacity,
+  type TechnicalRasterProject,
+} from "../../../domain/technicalRaster";
 import { resolveRealizationDisplayState, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
 import { computeRealizationUnderlineGeometry } from "../../../domain/technicalRasterRealizationUnderline";
-import type { TechnicalRasterExportRealizationUnderlineItem } from "../../../lib/technicalRasterVectorPdf";
+import { computeNoElectricityMarkerGeometry } from "../../../domain/technicalRasterNoElectricityMarker";
+import type { TechnicalRasterExportNoElectricityMarkerItem, TechnicalRasterExportRealizationUnderlineItem, TechnicalRasterExportTextScaleItem } from "../../../lib/technicalRasterVectorPdf";
 import {
   buildTechnicalRasterExportFileName,
   buildTechnicalRasterExportHeaderLine,
@@ -75,6 +84,7 @@ export function TechnicalRasterOutputsPanel({
   // never writes back to the project either (spec never asked for this export dialog to persist
   // its own choices).
   const [includeRealizations, setIncludeRealizations] = useState(effectiveIncludeRealizationsInExport(project.rasterSettings));
+  const [includeNoElectricityMarkers, setIncludeNoElectricityMarkers] = useState(effectiveIncludeNoElectricityMarkersInExport(project.rasterSettings));
   const [showWarningConfirm, setShowWarningConfirm] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState("");
@@ -143,12 +153,50 @@ export function TechnicalRasterOutputsPanel({
           underlinesByPage.set(stand.placement.rasterPage, list);
         }
       }
+      // PRODUCTION BATCH, part B section 17/18 — "Exportovat označení „BEZ elektriky“", OFF by
+      // default. Same matching-safety gates as the realization underlines above (matched stand,
+      // known raster page) plus `stand.hasNoElectricityAssignment === true` — an outside-current-
+      // raster/ambiguous/unassigned stand never gets a guessed position (spec section 15).
+      const noElectricityMarkersByPage = new Map<number, TechnicalRasterExportNoElectricityMarkerItem[]>();
+      if (includeNoElectricityMarkers) {
+        for (const stand of project.stands) {
+          if (!stand.hasNoElectricityAssignment) continue;
+          if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
+          if (stand.placement.rasterPage === undefined) continue;
+          const label = project.rasterStandLabels.find((candidate) => candidate.id === stand.placement.matchedLabelId);
+          const anchorXNormalized = label?.xNormalized ?? stand.placement.anchorXNormalized;
+          const anchorYNormalized = label?.yNormalized ?? stand.placement.anchorYNormalized;
+          if (anchorXNormalized === undefined || anchorYNormalized === undefined) continue;
+          const geometry = computeNoElectricityMarkerGeometry(
+            { xNormalized: anchorXNormalized, yNormalized: anchorYNormalized },
+            label ? { widthNormalized: label.widthNormalized, heightNormalized: label.heightNormalized } : undefined,
+          );
+          const marker: TechnicalRasterExportNoElectricityMarkerItem = { standId: stand.id, xNormalized: geometry.xNormalized, yNormalized: geometry.yNormalized };
+          const list = noElectricityMarkersByPage.get(stand.placement.rasterPage) ?? [];
+          list.push(marker);
+          noElectricityMarkersByPage.set(stand.placement.rasterPage, list);
+        }
+      }
       const pages = Array.from({ length: resolvedPageCount }, (_, index) => index + 1).map((pageNumber) => ({
         page: pageNumber,
         placements: buildTechnicalRasterExportPlacements(project, pageNumber, excludedCategories),
         realizationUnderlines: underlinesByPage.get(pageNumber) ?? [],
+        noElectricityMarkers: noElectricityMarkersByPage.get(pageNumber) ?? [],
       }));
       const legend = buildTechnicalRasterExportLegend(pages.flatMap((pageInput) => pageInput.placements));
+
+      // PRODUCTION BATCH, part A — resolves the project's own `sourceLayerTextScales` (keyed by
+      // RasterLayer.id, the only stable identifier this project persists — spec section 9) to the
+      // real OCG NAMEs the export's pdf-lib content-stream matching needs (never pdf.js's own
+      // internal layer id, which has no meaning to pdf-lib). A scale of exactly 1 (100%, the
+      // default) is never included — nothing to transform, so nothing is passed to the export.
+      const configuredTextScales = effectiveSourceLayerTextScales(project.rasterSettings);
+      const textScales: TechnicalRasterExportTextScaleItem[] = [];
+      for (const layer of project.rasterLayers) {
+        const scale = configuredTextScales[layer.id] ?? DEFAULT_SOURCE_LAYER_TEXT_SCALE;
+        if (scale === DEFAULT_SOURCE_LAYER_TEXT_SCALE) continue;
+        textScales.push({ ocgName: layer.name, scale });
+      }
 
       const response = await fetch(rasterUrl);
       if (!response.ok) throw new Error("Rastr se nepodařilo stáhnout pro export.");
@@ -179,6 +227,7 @@ export function TechnicalRasterOutputsPanel({
         headerLine,
         whiteMode: whiteModeRequested ? { opacity: whiteModeOpacity } : undefined,
         includeRealizationKey: includeRealizations,
+        textScales,
         legendPlacement: effectiveLegendPlacement(project.rasterSettings),
       });
 
@@ -261,6 +310,13 @@ export function TechnicalRasterOutputsPanel({
               <label>
                 <input type="checkbox" checked={includeRealizations} onChange={(event) => setIncludeRealizations(event.target.checked)} style={{ width: "auto", height: "auto", marginRight: 6 }} />
                 Zahrnout realizačky do exportu
+              </label>
+            </div>
+
+            <div className="technicalRasterOutputsFormRow">
+              <label>
+                <input type="checkbox" checked={includeNoElectricityMarkers} onChange={(event) => setIncludeNoElectricityMarkers(event.target.checked)} style={{ width: "auto", height: "auto", marginRight: 6 }} />
+                Exportovat označení „BEZ elektriky“
               </label>
             </div>
 
