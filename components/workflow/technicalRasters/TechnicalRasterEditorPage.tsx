@@ -37,8 +37,8 @@ import { resolveTechnicalServicePresentation } from "../../../domain/technicalRa
 import { resolveRealizationDisplayState, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
 import { computeRealizationUnderlineGeometry } from "../../../domain/technicalRasterRealizationUnderline";
 import { computeNoElectricityMarkerGeometry } from "../../../domain/technicalRasterNoElectricityMarker";
-import { groupStandsByPlacementWorkQueue, resolveNextPlacementTarget } from "../../../domain/technicalRasterWorkQueue";
-import { sortStandNumbersNatural } from "../../../domain/technicalStandNumber";
+import { resolveNextPlacementTarget, resolvePlacementAdvance, resolveShortcutPlacementTarget, shouldContinuePlacementSession, type PlacementSessionKind } from "../../../domain/technicalRasterWorkQueue";
+import { resolvePlacementShortcut, type PlacementShortcutAction } from "../../../domain/technicalRasterPlacementShortcuts";
 import { technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
 import { groupImportedStandsByImport, groupParsedReportByStand, summarizeParsedReport, summarizeParsedReportScope } from "../../../domain/technicalRasterImportPreview";
 import { TechnicalImportParsedDataList } from "./TechnicalImportParsedDataList";
@@ -79,7 +79,8 @@ const STEPS: readonly Readonly<{ id: TechnicalRasterStep; label: string }>[] = [
  * "Přemístit" — never a delete+recreate).
  */
 type PlacementMode =
-  | Readonly<{ standId: string; serviceId: string; mode: "place" }>
+  /** `session` — how this placement session started (see PlacementSessionKind); carried over to every target the session advances to, and gone as soon as placementMode is cleared (cancel/Escape/step or project change). */
+  | Readonly<{ standId: string; serviceId: string; mode: "place"; session: PlacementSessionKind }>
   | Readonly<{ standId: string; serviceId: string; mode: "move"; placementId: string }>;
 
 /**
@@ -92,11 +93,16 @@ export function TechnicalRasterEditorPage({
   projectRepository,
   catalogPricingRepository,
   onBackToList,
+  autoContinuePlacement = false,
+  onAutoContinuePlacementChange,
 }: {
   projectId: string;
   projectRepository: TechnicalRasterProjectRepository;
   catalogPricingRepository: RemoteApiCatalogPricingRepository;
   onBackToList: () => void;
+  /** "Automaticky pokračovat v umisťování" — a mode PREFERENCE owned by TechnicalRastersPage (session state, survives switching projects); cancelling a placement never turns it off. */
+  autoContinuePlacement?: boolean;
+  onAutoContinuePlacementChange?: (enabled: boolean) => void;
 }) {
   const [project, setProject] = useState<TechnicalRasterProject | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -117,6 +123,8 @@ export function TechnicalRasterEditorPage({
   const [textScaleUnsupportedReasons, setTextScaleUnsupportedReasons] = useState<Readonly<Record<string, string>>>({});
   const [rasterUrlError, setRasterUrlError] = useState("");
   const [placementMode, setPlacementMode] = useState<PlacementMode | undefined>(undefined);
+  /** Short, unobtrusive feedback for the U shortcut when nothing is left to place. */
+  const [placementNotice, setPlacementNotice] = useState("");
 
   const skipNextAutosaveRef = useRef(true);
   const pendingSaveTimeoutRef = useRef<number | undefined>(undefined);
@@ -128,18 +136,42 @@ export function TechnicalRasterEditorPage({
   // retry budget, but repeated failures against the SAME resolved URL never loop.
   const rasterLoadRetriedRef = useRef(false);
 
-  // ESC cancels an in-progress placement/move WITHOUT creating/changing a point (spec section 7:
-  // "ESC zruší bez vytvoření bodu") — kept as a plain top-level effect (not gated behind the
-  // `!project` early return further down) since every hook in this component must run
-  // unconditionally on every render, same discipline the other effects here already follow.
+  // Placement keyboard shortcuts (production-workflow batch, part B): ONE window keydown listener,
+  // attached once per mount and removed on unmount — never re-attached per render. It reads the
+  // latest render's state/handlers through shortcutHandlersRef; resolvePlacementShortcut decides
+  // (ignoring inputs/textareas/selects/contenteditable, modifier combos, auto-repeat). Escape runs
+  // the SAME handleCancelPlacement as the "Zrušit umisťování" button (spec section 7: "ESC zruší bez
+  // vytvoření bodu"). Kept above the `!project` early return — every hook must run unconditionally.
+  const shortcutHandlersRef = useRef<{ placementActive: boolean; shortcutsEnabled: boolean; run: (action: PlacementShortcutAction) => void } | undefined>(undefined);
   useEffect(() => {
-    if (!placementMode) return;
     function handleKeyDown(event: KeyboardEvent) {
-      if (event.key === "Escape") setPlacementMode(undefined);
+      const handlers = shortcutHandlersRef.current;
+      if (!handlers) return;
+      const action = resolvePlacementShortcut(event, handlers);
+      if (!action) return;
+      event.preventDefault();
+      handlers.run(action);
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [placementMode]);
+  }, []);
+
+  // An active placement target never survives leaving the placement step or switching project
+  // (spec section 27) — only the auto-continue PREFERENCE (a prop) outlives it.
+  useEffect(() => {
+    if (step !== "assignment") setPlacementMode(undefined);
+  }, [step]);
+  useEffect(() => {
+    setPlacementMode(undefined);
+    setPlacementNotice("");
+    setSelectedStandId(undefined);
+    setAssignmentActiveStandId(undefined);
+  }, [projectId]);
+  useEffect(() => {
+    if (!placementNotice) return;
+    const timeout = window.setTimeout(() => setPlacementNotice(""), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [placementNotice]);
 
   useEffect(() => {
     skipNextAutosaveRef.current = true;
@@ -244,6 +276,9 @@ export function TechnicalRasterEditorPage({
   function updateProject(next: TechnicalRasterProject) {
     setProject(next);
   }
+
+  // Re-armed below once this render's handlers exist; while loading/erroring, shortcuts do nothing.
+  shortcutHandlersRef.current = undefined;
 
   if (loadError) {
     return (
@@ -412,8 +447,12 @@ export function TechnicalRasterEditorPage({
       }
 
       const next = placeTechnicalService(current, placementMode.standId, placementMode.serviceId, { page, xNormalized, yNormalized });
+      // placeTechnicalService returns the SAME project reference when it refused the point (over
+      // quota, not a point service, stale ids) — nothing was placed, so the target stays as-is and
+      // never advances (spec section 26).
+      if (next === current) return;
       updateProject(next);
-      advancePlacementAfterCommit(next, placementMode.standId, placementMode.serviceId);
+      advancePlacementAfterCommit(next, placementMode.standId, placementMode.serviceId, placementMode.session);
       return;
     }
 
@@ -436,7 +475,7 @@ export function TechnicalRasterEditorPage({
 
   function handlePlaceService(standId: string, serviceId: string) {
     setAssignmentActiveStandId(undefined);
-    setPlacementMode({ standId, serviceId, mode: "place" });
+    setPlacementMode({ standId, serviceId, mode: "place", session: "manual" });
   }
 
   function handleMovePlacement(standId: string, serviceId: string, placementId: string) {
@@ -444,47 +483,68 @@ export function TechnicalRasterEditorPage({
     setPlacementMode({ standId, serviceId, mode: "move", placementId });
   }
 
-  /** "Umístit chybějící postupně" (spec batch 8 section 8) — starts the SAME auto-advancing flow advancePlacementAfterCommit continues, just with no current service yet, so it lands on the stand's FIRST still-missing point service. A no-op if the stand has nothing left to place. */
+  /** "Umístit chybějící postupně" (spec batch 8 section 8) — starts an explicit "sequentialExplicit" session on the stand's FIRST still-missing point service; it keeps continuing (services, then queue stands) regardless of the global auto-continue preference, until nothing remains or it is cancelled. A no-op if the stand has nothing left to place. */
   function handlePlaceMissingSequentially(standId: string) {
     const stand = projectRef.current?.stands.find((candidate) => candidate.id === standId);
     if (!stand) return;
     const target = resolveNextPlacementTarget(stand);
     if (!target) return;
     setAssignmentActiveStandId(undefined);
-    setPlacementMode({ standId, serviceId: target.serviceId, mode: "place" });
+    setPlacementMode({ standId, serviceId: target.serviceId, mode: "place", session: "sequentialExplicit" });
   }
 
   /**
    * Auto-advance (spec batch 8 section 7/9) — a pure UX convenience layered on TOP of the existing
-   * manual placement flow, never a new data model: after a successful "place" (never "move", see
-   * handleCanvasClick), if the just-placed service still needs another point, stays targeting it
-   * (qty>1 never requires re-opening the panel); else jumps to the stand's next missing point
-   * service; else marks the stand done and, if another K UMÍSTĚNÍ stand exists, selects it (spec:
-   * "ideálně automaticky vyber další stánek") — selecting only, never auto-starting ITS placement,
-   * so the user always has a clear next click ("Umístit" or "Umístit chybějící postupně").
+   * manual placement flow, never a new data model, and only ever called after a placement was
+   * actually committed (never "move", see handleCanvasClick). The decision lives in
+   * domain/technicalRasterWorkQueue.ts's resolvePlacementAdvance: the same service stays active while
+   * it still needs points (requiredPlacementCount). With "Automaticky pokračovat v umisťování" OFF,
+   * placement then ends (no other service activated, no stand selected — U / Umístit starts the next
+   * item); with it ON, the stand's next missing service, then the next K UMÍSTĚNÍ stand, is activated.
+   * It only ever picks WHAT the next click places; the position always comes from a user click.
    */
-  function advancePlacementAfterCommit(updatedProject: TechnicalRasterProject, standId: string, serviceId: string) {
-    const stand = updatedProject.stands.find((candidate) => candidate.id === standId);
-    if (!stand) { setPlacementMode(undefined); return; }
-    const next = resolveNextPlacementTarget(stand, serviceId);
-    if (next) {
-      setPlacementMode({ standId, serviceId: next.serviceId, mode: "place" });
+  function advancePlacementAfterCommit(updatedProject: TechnicalRasterProject, standId: string, serviceId: string, session: PlacementSessionKind) {
+    const advance = resolvePlacementAdvance(updatedProject.stands, standId, serviceId, shouldContinuePlacementSession(session, autoContinuePlacement));
+    setPlacementMode(advance.target ? { standId: advance.target.standId, serviceId: advance.target.serviceId, mode: "place", session } : undefined);
+    if (advance.selectStandId) setSelectedStandId(advance.selectStandId);
+  }
+
+  /** "U" shortcut — the selected stand's next missing placement, else the next stand in the existing work queue. Never picks a coordinate. */
+  function handleStartNextPlacement() {
+    const current = projectRef.current;
+    if (!current || placementMode) return;
+    const target = resolveShortcutPlacementTarget(current.stands, selectedStandId);
+    if (!target) {
+      setPlacementNotice("Není co umístit.");
       return;
     }
-    setPlacementMode(undefined);
-    const matchedStands = updatedProject.stands.filter((candidate) => candidate.placement.status === "matched_auto" || candidate.placement.status === "matched_manual");
-    const queue = groupStandsByPlacementWorkQueue(matchedStands);
-    const nextStand = sortStandNumbersNatural(queue.toPlace, (candidate) => candidate.standNumber)[0];
-    if (nextStand) setSelectedStandId(nextStand.id);
+    setPlacementNotice("");
+    setAssignmentActiveStandId(undefined);
+    setSelectedStandId(target.standId);
+    setPlacementMode({ standId: target.standId, serviceId: target.serviceId, mode: "place", session: "manual" });
   }
 
   function handleRemovePlacement(standId: string, serviceId: string, placementId: string) {
     setProject((current) => (current ? removeTechnicalServicePlacement(current, standId, serviceId, placementId) : current));
   }
 
+  /**
+   * The ONE cancellation path — "Zrušit umisťování" and Escape both call this. Ends the current
+   * placement/move session only: already-committed placements stay, and the auto-continue
+   * preference is deliberately left as it is (spec section 22).
+   */
   function handleCancelPlacement() {
     setPlacementMode(undefined);
   }
+
+  shortcutHandlersRef.current = {
+    placementActive: Boolean(placementMode),
+    shortcutsEnabled: step === "assignment",
+    run: (action) => {
+      if (action === "cancelPlacement") handleCancelPlacement();
+      else handleStartNextPlacement();
+    },
+  };
 
   function handleServiceSymbolClick(marker: TechnicalRasterServiceSymbolMarker) {
     handleMovePlacement(marker.standId, marker.serviceId, marker.id);
@@ -868,9 +928,23 @@ export function TechnicalRasterEditorPage({
                   stand={placementModeStand}
                   service={placementModeService}
                   placementId={placementMode.mode === "move" ? placementMode.placementId : undefined}
+                  autoContinue={autoContinuePlacement}
+                  sequential={placementMode.mode === "place" && placementMode.session === "sequentialExplicit"}
                   onCancel={handleCancelPlacement}
                 />
               )}
+              <div className="technicalRasterPlacementWorkflow">
+                <label className="technicalRasterPlacementWorkflowToggle">
+                  <input
+                    type="checkbox"
+                    checked={autoContinuePlacement}
+                    onChange={(event) => onAutoContinuePlacementChange?.(event.target.checked)}
+                  />
+                  <span>Automaticky pokračovat v umisťování</span>
+                </label>
+                <span className="technicalRasterPlacementWorkflowHint">Zkratky: <kbd>U</kbd> umístit další · <kbd>Esc</kbd> zrušit umisťování</span>
+                {placementNotice && <span className="technicalRasterPlacementWorkflowNotice" role="status">{placementNotice}</span>}
+              </div>
               {!placementMode && assignmentActiveStandId && activeAssignmentStand && (
                 <p className="technicalRasterAssignHint">Spárujte stánek <strong>{activeAssignmentStand.standNumber}</strong> kliknutím do rastru.</p>
               )}

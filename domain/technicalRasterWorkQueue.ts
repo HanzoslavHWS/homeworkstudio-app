@@ -19,6 +19,7 @@
  */
 import { effectiveServicePlacements, requiredPlacementCount, type TechnicalStand, type TechnicalService } from "./technicalRaster.ts";
 import { resolveTechnicalServicePresentation } from "./technicalRasterServicePresentation.ts";
+import { sortStandNumbersNatural } from "./technicalStandNumber.ts";
 
 function isPointService(service: TechnicalService): boolean {
   return resolveTechnicalServicePresentation(service.category, service.externalLabel).placementBehavior === "point";
@@ -120,4 +121,109 @@ export function resolveNextPlacementTarget(stand: TechnicalStand, currentService
   if (current && needsMorePlacements(current)) return { serviceId: current.id };
   const next = stand.services.find((service) => needsMorePlacements(service));
   return next ? { serviceId: next.id } : undefined;
+}
+
+// ============================================================================
+// Fast placement workflow (production-workflow batch, part B) — the U shortcut and the optional
+// "Automaticky pokračovat v umisťování" mode. Pure helpers only: every "is anything left" decision
+// goes through needsMorePlacements -> requiredPlacementCount (never raw quantity), and every "which
+// stand is next" decision goes through orderedPlacementQueue — the SAME matched-stand K UMÍSTĚNÍ
+// bucket in the SAME natural stand-number order TechnicalStandBuffer.tsx renders. Nothing here ever
+// produces a coordinate: a target only says WHAT the next raster click places, never WHERE.
+// ============================================================================
+
+export type PlacementSessionTarget = Readonly<{ standId: string; serviceId: string }>;
+
+function isMatchedStand(stand: TechnicalStand): boolean {
+  return stand.placement.status === "matched_auto" || stand.placement.status === "matched_manual";
+}
+
+/** The K UMÍSTĚNÍ work queue as an ordered list: matched stands with a missing point, natural stand-number order. */
+export function orderedPlacementQueue(stands: readonly TechnicalStand[]): readonly TechnicalStand[] {
+  const queue = groupStandsByPlacementWorkQueue(stands.filter(isMatchedStand));
+  return sortStandNumbersNatural(queue.toPlace, (stand) => stand.standNumber);
+}
+
+/**
+ * The next queue stand AFTER `afterStandId` in queue order, wrapping to the start — so a stand the
+ * user skipped is revisited only after the rest, never re-offered immediately. `afterStandId` absent
+ * or not in the queue (e.g. just completed, so it left the queue) resolves by its natural position
+ * among the remaining stands. Never returns `afterStandId` itself unless it's the only one left.
+ */
+export function nextPlacementQueueStand(stands: readonly TechnicalStand[], afterStandId?: string): TechnicalStand | undefined {
+  const queue = orderedPlacementQueue(stands);
+  if (queue.length === 0) return undefined;
+  const after = afterStandId ? stands.find((stand) => stand.id === afterStandId) : undefined;
+  if (!after) return queue[0];
+  const ordered = sortStandNumbersNatural([...queue.filter((stand) => stand.id !== after.id), after], (stand) => stand.standNumber);
+  const afterIndex = ordered.findIndex((stand) => stand.id === after.id);
+  const candidates = [...ordered.slice(afterIndex + 1), ...ordered.slice(0, afterIndex)];
+  return candidates[0] ?? (queue.some((stand) => stand.id === after.id) ? after : undefined);
+}
+
+export type PlacementAdvance = Readonly<{
+  /** The placement that becomes active next; undefined = placement mode ends. */
+  target?: PlacementSessionTarget;
+  /** The stand the detail panel should show next, when it changes. */
+  selectStandId?: string;
+}>;
+
+/**
+ * What happens after ONE successful "place" click:
+ *   - autoContinue OFF: the SAME service stays active while it still needs points
+ *     (requiredPlacementCount); once it's complete, placement ends. No other service is
+ *     activated and no other stand is selected — the user starts the next item with U / Umístit.
+ *   - autoContinue ON: A) same service while it needs points; B) the next missing point service on
+ *     the same stand; C) the next K UMÍSTĚNÍ queue stand's first missing placement (also selected);
+ *     D) nothing left anywhere -> placement ends.
+ */
+export function resolvePlacementAdvance(
+  stands: readonly TechnicalStand[],
+  standId: string,
+  serviceId: string,
+  autoContinue: boolean,
+): PlacementAdvance {
+  const stand = stands.find((candidate) => candidate.id === standId);
+  if (!stand) return {};
+  const current = stand.services.find((candidate) => candidate.id === serviceId);
+  if (current && needsMorePlacements(current)) return { target: { standId, serviceId } };
+  if (!autoContinue) return {};
+  const sameStand = resolveNextPlacementTarget(stand, serviceId);
+  if (sameStand) return { target: { standId, serviceId: sameStand.serviceId } };
+  const nextStand = nextPlacementQueueStand(stands, standId);
+  if (!nextStand) return {};
+  const nextTarget = resolveNextPlacementTarget(nextStand);
+  if (!nextTarget) return { selectStandId: nextStand.id };
+  return { target: { standId: nextStand.id, serviceId: nextTarget.serviceId }, selectStandId: nextStand.id };
+}
+
+/**
+ * The "U" shortcut's target: the selected stand's next missing placement when that stand is matched
+ * and still has one; otherwise the next stand in the existing work queue (after the selected one,
+ * or the queue's first stand when nothing is selected). undefined = nothing placeable.
+ */
+export function resolveShortcutPlacementTarget(stands: readonly TechnicalStand[], selectedStandId?: string): PlacementSessionTarget | undefined {
+  const selected = selectedStandId ? stands.find((stand) => stand.id === selectedStandId) : undefined;
+  if (selected && isMatchedStand(selected)) {
+    const target = resolveNextPlacementTarget(selected);
+    if (target) return { standId: selected.id, serviceId: target.serviceId };
+  }
+  const nextStand = nextPlacementQueueStand(stands, selected?.id);
+  const nextTarget = nextStand ? resolveNextPlacementTarget(nextStand) : undefined;
+  return nextStand && nextTarget ? { standId: nextStand.id, serviceId: nextTarget.serviceId } : undefined;
+}
+
+/**
+ * How the ACTIVE placement session was started — session state only, never persisted, never written
+ * back into the global "Automaticky pokračovat v umisťování" preference:
+ *   - "manual": a normal Umístit click or the U shortcut — follows the global preference.
+ *   - "sequentialExplicit": "Umístit chybějící postupně" — the user explicitly asked for a
+ *     sequence, so it always continues (services, then queue stands) until nothing remains or the
+ *     session is cancelled (Escape / Zrušit umisťování / step or project change).
+ */
+export type PlacementSessionKind = "manual" | "sequentialExplicit";
+
+/** The `autoContinue` argument resolvePlacementAdvance should get for this session. */
+export function shouldContinuePlacementSession(sessionKind: PlacementSessionKind, autoContinuePreference: boolean): boolean {
+  return sessionKind === "sequentialExplicit" || autoContinuePreference;
 }

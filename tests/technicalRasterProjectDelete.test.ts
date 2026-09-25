@@ -55,7 +55,8 @@ test("delete removes exactly the matching project from a local list (success pat
 
 test("source guard: the delete action is part of EVERY project row's render path — one <button> per row, not conditionally omitted", async () => {
   const source = await readListPageSource();
-  assert.match(source, /projects\.map\(\(project\) => \(/u, "rows are rendered via .map(), so the trigger button below is emitted for every project");
+  // Production-workflow batch — rows now render from the filtered + sorted `visibleProjects`.
+  assert.match(source, /visibleProjects\.map\(\(project\) => \(/u, "rows are rendered via .map(), so the trigger button below is emitted for every (visible) project");
   assert.match(source, /className="technicalRasterProjectRowMenuTrigger"/u);
   assert.match(source, /aria-label=\{`Další akce – \$\{project\.name\}`\}/u, "the trigger is scoped to THIS row's own project, not a stale/shared one");
 });

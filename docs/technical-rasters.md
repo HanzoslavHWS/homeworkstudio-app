@@ -239,6 +239,35 @@ Three independent, real-production fixes:
   regardless of the imported quantity (2/3/5), same mechanism cleaning/waste already used. The raw
   imported quantity is untouched; only `requiredPlacementCount` changes.
 
+## PRODUCTION-WORKFLOW BATCH — project management + fast placement
+
+- **Edit project** (`domain/technicalRasterProjectList.ts`) — AKCE has a visible ✎ button (plus
+  "Upravit projekt" in the ⋯ menu). Only name / event / hall change: `updateTechnicalRasterProjectMetadata`
+  does the existing `get()` → `withTechnicalRasterProjectMetadata` → `save()`, so the id and all raster,
+  import, stand, placement and settings data round-trip untouched. The save route's own event resolver
+  still canonicalizes the event id (a legacy `for-beauty-autumn-2026` becomes `beauty`). Hall is a free-text
+  label and is never used for matching (hall scope comes from the raster's labels), so editing it
+  rematches nothing.
+- **Filter / sort** — Veletrh / Hala / Řazení selects above the list. Options come from the loaded
+  projects (event labels from the event catalog). Filtering compares stable keys (canonical event id,
+  normalized hall), then sorting runs. The default "Nejnovější" is `updatedAt` desc, the same order the
+  repository returns. Filters are kept after an edit.
+- **Shortcuts** (Přiřazení step only; ignored in form fields and with Ctrl/Meta/Alt): `U` starts the
+  selected stand's next missing placement, or the next K UMÍSTĚNÍ stand. `Esc` runs the same cancel as
+  "Zrušit umisťování".
+- **"Automaticky pokračovat v umisťování"** — default OFF. It is a per-session preference held in
+  `TechnicalRastersPage`, so it survives switching projects but not a page reload (there is no per-user
+  UI-preference store, and `rasterSettings` holds project/export data). Cancelling a placement never turns
+  it off. After each committed click (`resolvePlacementAdvance`), the same service stays active while
+  `requiredPlacementCount` isn't met. When OFF, placement then ends: no other service is activated and
+  no stand is selected (press `U` or Umístit to start the next item). When ON, the next missing service
+  on the same stand becomes active, then the next queue stand's first missing placement.
+  "Umístit chybějící postupně" starts a separate `sequentialExplicit` session. That session always
+  continues this way, whatever the toggle says, until nothing remains or it is cancelled. Normal Umístit
+  and `U` start `manual` sessions, which follow the toggle. The queue is the K UMÍSTĚNÍ list in natural order, and "next" means the stand
+  after the current one, wrapping around. The feature never creates a coordinate: every point comes from
+  a user click.
+
 ## Component "Technické rastry" config + icon assets
 
 A collapsible section on the catalog component admin card (`components/workflow/ComponentAdminPage.tsx`)

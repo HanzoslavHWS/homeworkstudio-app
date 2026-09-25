@@ -23,14 +23,22 @@ export function TechnicalRastersPage({
   events: readonly Exhibition[];
 }) {
   const [openProjectId, setOpenProjectId] = useState<string | null>(null);
+  // "Automaticky pokračovat v umisťování" (production-workflow batch, part B): a per-session mode
+  // preference, default OFF. Held here (not in the editor) so it survives opening another project,
+  // while each editor mount still starts with no active placement target. Not persisted across page
+  // reloads — there is no per-user UI-preference store to reuse, and rasterSettings is project/export data.
+  const [autoContinuePlacement, setAutoContinuePlacement] = useState(false);
 
   if (openProjectId) {
     return (
       <TechnicalRasterEditorPage
+        key={openProjectId}
         projectId={openProjectId}
         projectRepository={projectRepository}
         catalogPricingRepository={catalogPricingRepository}
         onBackToList={() => setOpenProjectId(null)}
+        autoContinuePlacement={autoContinuePlacement}
+        onAutoContinuePlacementChange={setAutoContinuePlacement}
       />
     );
   }

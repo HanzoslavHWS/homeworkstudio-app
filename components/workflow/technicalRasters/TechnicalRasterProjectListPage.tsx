@@ -1,12 +1,26 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import {
+  summarizeTechnicalRasterProject,
   withoutTechnicalRasterProject,
   type TechnicalRasterProjectRepository,
   type TechnicalRasterProjectSummary,
 } from "../../../domain/technicalRaster";
+import {
+  buildTechnicalRasterProjectFilterOptions,
+  DEFAULT_TECHNICAL_RASTER_PROJECT_LIST_VIEW,
+  filterAndSortTechnicalRasterProjects,
+  projectEventFilterKey,
+  replaceTechnicalRasterProjectSummary,
+  resolveEditableEventId,
+  TECHNICAL_RASTER_PROJECT_SORT_OPTIONS,
+  updateTechnicalRasterProjectMetadata,
+  validateTechnicalRasterProjectMetadata,
+  type TechnicalRasterProjectListView,
+  type TechnicalRasterProjectSort,
+} from "../../../domain/technicalRasterProjectList";
 import type { Exhibition } from "../../../domain/organizations";
 
 export function TechnicalRasterProjectListPage({
@@ -30,6 +44,19 @@ export function TechnicalRasterProjectListPage({
 
   const [deletingId, setDeletingId] = useState<string | undefined>(undefined);
   const [deleteError, setDeleteError] = useState("");
+
+  // Metadata editing (production-workflow batch, part A) — name/event/hall only, same project id,
+  // persisted via updateTechnicalRasterProjectMetadata (existing get() + save(), never a new path).
+  const [editingProject, setEditingProject] = useState<TechnicalRasterProjectSummary | undefined>(undefined);
+  const [editName, setEditName] = useState("");
+  const [editEventId, setEditEventId] = useState("");
+  const [editHall, setEditHall] = useState("");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
+  const [editError, setEditError] = useState("");
+
+  // Event + hall filters and sorting — local view state, never reset by editing a project.
+  const [listView, setListView] = useState<TechnicalRasterProjectListView>(DEFAULT_TECHNICAL_RASTER_PROJECT_LIST_VIEW);
+  const knownEventIds = useMemo(() => new Set(events.map((event) => event.id)), [events]);
 
   // The "⋯" menu (spec batch 6, UI section 35-39). ROOT CAUSE of it being invisible before this
   // batch: this table reuses .printSurfaceTable, which sets `overflow: hidden` (shared with
@@ -77,7 +104,51 @@ export function TechnicalRasterProjectListPage({
   useEffect(() => { reloadProjects(); }, [projectRepository]);
 
   function eventName(id: string | undefined): string {
-    return events.find((event) => event.id === id)?.name ?? "—";
+    if (!id) return "—";
+    const key = projectEventFilterKey(id, knownEventIds);
+    return events.find((event) => event.id === key)?.name ?? "—";
+  }
+
+  const filterOptions = projects ? buildTechnicalRasterProjectFilterOptions(projects, events) : { events: [], halls: [] };
+  const visibleProjects = projects ? filterAndSortTechnicalRasterProjects(projects, listView, knownEventIds) : [];
+
+  function openEditDialog(project: TechnicalRasterProjectSummary) {
+    setOpenMenuProjectId(undefined);
+    setEditingProject(project);
+    setEditName(project.name);
+    setEditEventId(resolveEditableEventId(project.eventId, knownEventIds));
+    setEditHall(project.hall ?? "");
+    setEditError("");
+  }
+
+  function closeEditDialog() {
+    if (isSavingEdit) return;
+    setEditingProject(undefined);
+  }
+
+  /**
+   * Saves ONLY name/event/hall. On success the row is swapped in place immediately (so active
+   * filters apply to the new values right away — filters are never reset), then the list is
+   * reloaded from the backend. On failure the dialog stays open with the error and the list keeps
+   * its previous values.
+   */
+  async function handleEditSubmit() {
+    if (!editingProject || isSavingEdit) return;
+    const input = { name: editName, eventId: editEventId, hall: editHall };
+    const validation = validateTechnicalRasterProjectMetadata(input);
+    if (validation.ok === false) { setEditError(validation.message); return; }
+    setIsSavingEdit(true);
+    setEditError("");
+    try {
+      const saved = await updateTechnicalRasterProjectMetadata(projectRepository, editingProject.id, input);
+      setProjects((current) => (current ? replaceTechnicalRasterProjectSummary(current, summarizeTechnicalRasterProject(saved)) : current));
+      setEditingProject(undefined);
+      reloadProjects();
+    } catch (error) {
+      setEditError(error instanceof Error ? error.message : "Projekt se nepodařilo uložit.");
+    } finally {
+      setIsSavingEdit(false);
+    }
   }
 
   function openCreateForm() {
@@ -172,6 +243,35 @@ export function TechnicalRasterProjectListPage({
       {projects && projects.length === 0 && <p className="workspaceEmpty">Zatím není vytvořený žádný projekt technického rastru.</p>}
 
       {projects && projects.length > 0 && (
+        <div className="technicalRasterProjectFilters">
+          <label>
+            <span>Veletrh</span>
+            <select aria-label="Filtr veletrhu" value={listView.eventFilter} onChange={(event) => setListView((view) => ({ ...view, eventFilter: event.target.value }))}>
+              <option value="">Všechny</option>
+              {filterOptions.events.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Hala</span>
+            <select aria-label="Filtr haly" value={listView.hallFilter} onChange={(event) => setListView((view) => ({ ...view, hallFilter: event.target.value }))}>
+              <option value="">Všechny</option>
+              {filterOptions.halls.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+          <label>
+            <span>Řazení</span>
+            <select aria-label="Řazení projektů" value={listView.sort} onChange={(event) => setListView((view) => ({ ...view, sort: event.target.value as TechnicalRasterProjectSort }))}>
+              {TECHNICAL_RASTER_PROJECT_SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
+
+      {projects && projects.length > 0 && visibleProjects.length === 0 && (
+        <p className="workspaceEmpty">Žádný projekt neodpovídá zvoleným filtrům.</p>
+      )}
+
+      {projects && visibleProjects.length > 0 && (
         <div className="printSurfaceTable technicalRasterProjectTable">
           <div className="printSurfaceProjectRow printSurfaceTableHeader">
             <span>Projekt</span>
@@ -184,7 +284,7 @@ export function TechnicalRasterProjectListPage({
             <span>Poslední změna</span>
             <span>Akce</span>
           </div>
-          {projects.map((project) => (
+          {visibleProjects.map((project) => (
             <div key={project.id} className="printSurfaceProjectRow" onClick={() => onOpenProject(project.id)}>
               <span><strong>{project.name}</strong></span>
               <span>{project.hall ?? "—"}</span>
@@ -194,7 +294,16 @@ export function TechnicalRasterProjectListPage({
               <span>{project.unassignedCount}</span>
               <span className={project.ambiguousCount > 0 ? "technicalStandBufferAmbiguousCount" : undefined}>{project.ambiguousCount}</span>
               <span>{new Date(project.updatedAt).toLocaleString("cs-CZ")}</span>
-              <span onClick={(event) => event.stopPropagation()}>
+              <span className="technicalRasterProjectRowActions" onClick={(event) => event.stopPropagation()}>
+                <button
+                  type="button"
+                  className="technicalRasterProjectRowEditButton"
+                  aria-label={`Upravit projekt – ${project.name}`}
+                  title="Upravit projekt"
+                  onClick={() => openEditDialog(project)}
+                >
+                  ✎
+                </button>
                 <button
                   type="button"
                   className="technicalRasterProjectRowMenuTrigger"
@@ -220,13 +329,51 @@ export function TechnicalRasterProjectListPage({
             const menuProject = projects?.find((candidate) => candidate.id === openMenuProjectId);
             if (!menuProject) return null;
             return (
-              <button type="button" className="dangerText" disabled={deletingId === menuProject.id} onClick={() => void handleDeleteProject(menuProject)}>
-                {deletingId === menuProject.id ? "Mazání…" : "Smazat projekt"}
-              </button>
+              <>
+                <button type="button" onClick={() => openEditDialog(menuProject)}>Upravit projekt</button>
+                <button type="button" className="dangerText" disabled={deletingId === menuProject.id} onClick={() => void handleDeleteProject(menuProject)}>
+                  {deletingId === menuProject.id ? "Mazání…" : "Smazat projekt"}
+                </button>
+              </>
             );
           })()}
         </div>,
         document.body,
+      )}
+
+      {editingProject && (
+        <div
+          className="adminModalOverlay"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="technicalRasterProjectEditTitle"
+          onClick={closeEditDialog}
+          onKeyDown={(event) => { if (event.key === "Escape") closeEditDialog(); }}
+        >
+          <form
+            className="adminModalCard technicalRasterProjectEditDialog"
+            onClick={(event) => event.stopPropagation()}
+            onSubmit={(event) => { event.preventDefault(); void handleEditSubmit(); }}
+          >
+            <h2 id="technicalRasterProjectEditTitle">Upravit projekt</h2>
+            <p>Mění se jen název, veletrh a hala — rastr, importy ani umístění se nemění.</p>
+            <label><span>Název projektu</span><input autoFocus value={editName} onChange={(event) => setEditName(event.target.value)} disabled={isSavingEdit} /></label>
+            <label>
+              <span>Veletrh</span>
+              <select value={editEventId} onChange={(event) => setEditEventId(event.target.value)} disabled={isSavingEdit}>
+                <option value="">— Bez veletrhu —</option>
+                {events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}
+                {editEventId && !knownEventIds.has(editEventId) && <option value={editEventId}>Neznámý veletrh ({editEventId})</option>}
+              </select>
+            </label>
+            <label><span>Hala</span><input value={editHall} onChange={(event) => setEditHall(event.target.value)} placeholder="např. Hala 1" disabled={isSavingEdit} /></label>
+            {editError && <div className="adminModalError" role="alert">{editError}</div>}
+            <div className="adminModalActions">
+              <button type="button" onClick={closeEditDialog} disabled={isSavingEdit}>Zrušit</button>
+              <button type="submit" className="primaryButton" disabled={!editName.trim() || isSavingEdit}>{isSavingEdit ? "Ukládám…" : "Uložit"}</button>
+            </div>
+          </form>
+        </div>
       )}
     </div>
   );

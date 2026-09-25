@@ -158,9 +158,11 @@ test("ACTIONS: Přemístit uses the neutral secondary treatment, wired to the SA
   assert.match(source, /className="technicalActionButton secondary compact" disabled=\{placementModeActive\} onClick=\{\(\) => onMovePlacement\(stand\.id, service\.id, placement\.id\)\}>Přemístit</u);
 });
 
-test("ACTIONS: the PRÁVĚ UMISŤUJI banner's Zrušit (cancel) also reads as a real button, wired to the SAME onCancel handler", async () => {
+test("ACTIONS: the PRÁVĚ UMISŤUJI banner's Zrušit umisťování (cancel) also reads as a real button, wired to the SAME onCancel handler", async () => {
   const source = await readPlacementContextSource();
-  assert.match(source, /className="technicalActionButton secondary compact" onClick=\{onCancel\}>Zrušit</u);
+  // Production-workflow batch — the label now says what it cancels ("Zrušit umisťování" /
+  // "Zrušit přemisťování"); Escape runs the same handleCancelPlacement behind onCancel.
+  assert.match(source, /className="technicalActionButton secondary compact" onClick=\{onCancel\}>\{mode === "place" \? "Zrušit umisťování" : "Zrušit přemisťování"\}</u);
 });
 
 test("ACTIONS CSS: .technicalActionButton has real hover/focus-visible/disabled states for every variant used", async () => {
