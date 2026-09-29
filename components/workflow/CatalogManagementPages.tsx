@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { realizationCompanies } from "../../data/organizations";
 import {
   eventCoverImageUrl,
@@ -29,9 +29,9 @@ function EventMediaPreview({ asset, url, label, compact = false, onOpen }: { ass
   return <button type="button" className={`eventMediaPreview ${compact ? "compact" : ""}`} onClick={() => resolved.url && onOpen?.(resolved.url)} disabled={!available || !onOpen}>{available ? <img src={resolved.url} alt={label} onError={() => setFailed(resolved.url!)} /> : <span>{resolved.loading ? "Načítám…" : label}</span>}</button>;
 }
 
-export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange }: { events: readonly Exhibition[]; priceLists: readonly PriceList[]; onChange: (events: Exhibition[]) => void; onSave: (event: Exhibition) => Promise<void>; onDirtyChange?: (dirty: boolean) => void }) {
+export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange, initialSelectedId, renderEventExtras }: { events: readonly Exhibition[]; priceLists: readonly PriceList[]; onChange: (events: Exhibition[]) => void; onSave: (event: Exhibition) => Promise<void>; onDirtyChange?: (dirty: boolean) => void; /** Opens this event instead of the first one (e.g. from a task's "Otevřít akci"). */ initialSelectedId?: string; /** Extra per-event content under the save bar (the Úkoly summary). */ renderEventExtras?: (eventId: string) => ReactNode }) {
   const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState(events[0]?.id ?? "");
+  const [selectedId, setSelectedId] = useState(initialSelectedId && events.some((event) => event.id === initialSelectedId) ? initialSelectedId : events[0]?.id ?? "");
   const [adding, setAdding] = useState(false);
   const [lightbox, setLightbox] = useState<{ url: string; label: string } | null>(null);
   const [documentCategory, setDocumentCategory] = useState("other");
@@ -156,6 +156,7 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
     <div className="adminSplit"><div className="adminList">{filtered.map((event) => <button key={event.id} className={event.id === selectedId ? "active" : ""} onClick={() => selectEvent(event.id)}><strong>{event.name}</strong><span>{event.year} · {event.venue || "Místo neuvedeno"}</span></button>)}</div>
       {selected && <section className="adminDetail eventDetail">
         <div className="eventSaveBar"><span className={saveState}>{saveState === "dirty" ? "Neuložené změny" : saveState === "saving" ? "Ukládám…" : "Uloženo"}{uploadStates.save?.message && <small className="uploadError">{uploadStates.save.message}</small>}</span><button type="button" className="primaryButton" onClick={saveSelected} disabled={!dirty || saveState === "saving"}>Uložit změny</button></div>
+        {renderEventExtras?.(selected.id)}
         <div className="eventMediaArea">
           <MediaEditor label="Logo" asset={selected.logoAsset} url={selected.logoUrl} progress={uploadStates.logo} onOpen={(url) => setLightbox({ url, label: "Logo" })} onFile={(file) => persistentMedia("logo", file)} onRetry={() => persistentMedia("logo", retryFilesRef.current.get("logo"))} onRemove={() => update({ logoUrl: "", logoAsset: undefined, logoMetadata: undefined })} />
           <MediaEditor label="Cover / banner" asset={selected.coverImageAsset} url={selected.coverImageUrl} progress={uploadStates.cover} wide onOpen={(url) => setLightbox({ url, label: "Cover" })} onFile={(file) => persistentMedia("cover", file)} onRetry={() => persistentMedia("cover", retryFilesRef.current.get("cover"))} onRemove={() => update({ coverImageUrl: "", coverImageAsset: undefined, coverImageMetadata: undefined })} />

@@ -62,6 +62,21 @@ import { TechnicalStandBuffer } from "./TechnicalStandBuffer";
 import { TechnicalStandDetailPanel } from "./TechnicalStandDetailPanel";
 import { TechnicalRasterPlacementContextPanel } from "./TechnicalRasterPlacementContextPanel";
 import { TechnicalRasterOutputsPanel } from "./TechnicalRasterOutputsPanel";
+import { TechnicalRasterDrawingToolbar } from "./TechnicalRasterDrawingToolbar";
+import {
+  createLineDrawing,
+  createPointDrawing,
+  DEFAULT_DRAWING_COLOR,
+  DEFAULT_DRAWING_SIZE,
+  effectiveManualDrawings,
+  isDegenerateLine,
+  withManualDrawingAdded,
+  withManualDrawingMoved,
+  withManualDrawingRemoved,
+  withManualDrawingStyle,
+  type DrawingSize,
+  type TechnicalRasterDrawingTool,
+} from "../../../domain/technicalRasterDrawings";
 import { TechnicalImportDiffSummary } from "./TechnicalImportDiffSummary";
 
 type TechnicalRasterStep = "raster" | "services" | "assignment" | "outputs";
@@ -129,6 +144,14 @@ export function TechnicalRasterEditorPage({
   const [placementMode, setPlacementMode] = useState<PlacementMode | undefined>(undefined);
   /** Short, unobtrusive feedback for the U shortcut when nothing is left to place. */
   const [placementNotice, setPlacementNotice] = useState("");
+  // RUČNÍ ZNAČKY — manual point/line tools (domain/technicalRasterDrawings.ts). UI state only; the
+  // drawings themselves live in project.manualDrawings.
+  const [drawingTool, setDrawingTool] = useState<TechnicalRasterDrawingTool>("off");
+  const [drawingColor, setDrawingColor] = useState(DEFAULT_DRAWING_COLOR);
+  const [drawingSize, setDrawingSize] = useState<DrawingSize>(DEFAULT_DRAWING_SIZE);
+  const [selectedDrawingId, setSelectedDrawingId] = useState<string | undefined>(undefined);
+  /** Point A of a line being drawn ("Čára" after the first click). */
+  const [lineDraft, setLineDraft] = useState<Readonly<{ page: number; x: number; y: number }> | undefined>(undefined);
 
   const skipNextAutosaveRef = useRef(true);
   const pendingSaveTimeoutRef = useRef<number | undefined>(undefined);
@@ -146,7 +169,7 @@ export function TechnicalRasterEditorPage({
   // (ignoring inputs/textareas/selects/contenteditable, modifier combos, auto-repeat). Escape runs
   // the SAME handleCancelPlacement as the "Zrušit umisťování" button (spec section 7: "ESC zruší bez
   // vytvoření bodu"). Kept above the `!project` early return — every hook must run unconditionally.
-  const shortcutHandlersRef = useRef<{ placementActive: boolean; shortcutsEnabled: boolean; run: (action: PlacementShortcutAction) => void } | undefined>(undefined);
+  const shortcutHandlersRef = useRef<{ placementActive: boolean; shortcutsEnabled: boolean; drawingSelected: boolean; run: (action: PlacementShortcutAction) => void } | undefined>(undefined);
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       const handlers = shortcutHandlersRef.current;
@@ -163,8 +186,20 @@ export function TechnicalRasterEditorPage({
   // An active placement target never survives leaving the placement step or switching project
   // (spec section 27) — only the auto-continue PREFERENCE (a prop) outlives it.
   useEffect(() => {
-    if (step !== "assignment") setPlacementMode(undefined);
+    if (step !== "assignment") {
+      setPlacementMode(undefined);
+      setLineDraft(undefined);
+    }
   }, [step]);
+  // Drawing tools and service work are mutually exclusive: starting a placement/move or a stand
+  // pairing (Umístit, U, Přemístit, Spárovat, …) switches drawing off, so a click can never be
+  // routed to the wrong thing.
+  useEffect(() => {
+    if (!placementMode && !assignmentActiveStandId) return;
+    setDrawingTool("off");
+    setLineDraft(undefined);
+    setSelectedDrawingId(undefined);
+  }, [placementMode, assignmentActiveStandId]);
   useEffect(() => {
     setPlacementMode(undefined);
     setPlacementNotice("");
@@ -547,13 +582,62 @@ export function TechnicalRasterEditorPage({
    */
   function handleCancelPlacement() {
     setPlacementMode(undefined);
+    // A line being drawn (RUČNÍ ZNAČKY) is cancelled by the same Escape; nothing is stored.
+    setLineDraft(undefined);
+  }
+
+  // ============================================================================
+  // RUČNÍ ZNAČKY — manual points/lines. Separate project data (manualDrawings), never services.
+  // ============================================================================
+
+  function handleDrawingToolChange(tool: TechnicalRasterDrawingTool) {
+    setDrawingTool(tool);
+    setLineDraft(undefined);
+    if (tool !== "select") setSelectedDrawingId(undefined);
+    if (tool !== "off") {
+      setPlacementMode(undefined);
+      setAssignmentActiveStandId(undefined);
+    }
+  }
+
+  /** "Bod": one click = one point. "Čára": first click = A (preview follows the pointer), second click = B. */
+  function handleDrawingClick(page: number, x: number, y: number) {
+    if (drawingTool === "point") {
+      setProject((current) => (current ? withManualDrawingAdded(current, createPointDrawing(page, x, y, drawingColor, drawingSize)) : current));
+      return;
+    }
+    if (drawingTool !== "line") return;
+    if (!lineDraft || lineDraft.page !== page) { setLineDraft({ page, x, y }); return; }
+    const a = lineDraft;
+    setLineDraft(undefined);
+    if (isDegenerateLine(a, { x, y })) return;
+    setProject((current) => (current ? withManualDrawingAdded(current, createLineDrawing(page, a, { x, y }, drawingColor, drawingSize)) : current));
+  }
+
+  function handleDeleteSelectedDrawing() {
+    if (!selectedDrawingId) return;
+    const id = selectedDrawingId;
+    setSelectedDrawingId(undefined);
+    setProject((current) => (current ? withManualDrawingRemoved(current, id) : current));
+  }
+
+  function handleDrawingColorChange(color: string) {
+    setDrawingColor(color);
+    if (selectedDrawingId) setProject((current) => (current ? withManualDrawingStyle(current, selectedDrawingId, { color }) : current));
+  }
+
+  function handleDrawingSizeChange(size: DrawingSize) {
+    setDrawingSize(size);
+    if (selectedDrawingId) setProject((current) => (current ? withManualDrawingStyle(current, selectedDrawingId, { size }) : current));
   }
 
   shortcutHandlersRef.current = {
-    placementActive: Boolean(placementMode),
+    placementActive: Boolean(placementMode) || Boolean(lineDraft),
     shortcutsEnabled: step === "assignment",
+    drawingSelected: drawingTool === "select" && Boolean(selectedDrawingId),
     run: (action) => {
       if (action === "cancelPlacement") handleCancelPlacement();
+      else if (action === "deleteDrawing") handleDeleteSelectedDrawing();
       else handleStartNextPlacement();
     },
   };
@@ -927,6 +1011,18 @@ export function TechnicalRasterEditorPage({
             showRealizations={showRealizations}
             onToggleShowRealizations={(show) => setProject((current) => (current ? withShowRealizations(current, show) : current))}
           />
+          <TechnicalRasterDrawingToolbar
+            tool={drawingTool}
+            onToolChange={handleDrawingToolChange}
+            color={drawingColor}
+            onColorChange={handleDrawingColorChange}
+            size={drawingSize}
+            onSizeChange={handleDrawingSizeChange}
+            hasSelection={drawingTool === "select" && Boolean(selectedDrawingId)}
+            hasLineDraft={Boolean(lineDraft)}
+            onDeleteSelected={handleDeleteSelectedDrawing}
+            onCancelLineDraft={() => setLineDraft(undefined)}
+          />
           <div className="technicalRasterWorkspace">
             <TechnicalRasterCanvas
               pdfUrl={rasterUrl}
@@ -949,6 +1045,14 @@ export function TechnicalRasterEditorPage({
               noElectricityMarkers={noElectricityMarkers}
               sourceLayerTextScales={sourceLayerTextScaleMap}
               onTextScaleUnsupported={handleTextScaleUnsupported}
+              manualDrawings={effectiveManualDrawings(project)}
+              drawingTool={drawingTool}
+              selectedDrawingId={selectedDrawingId}
+              lineDraft={lineDraft}
+              draftStyle={{ color: drawingColor, size: drawingSize }}
+              onDrawingClick={handleDrawingClick}
+              onSelectDrawing={setSelectedDrawingId}
+              onMoveDrawing={(drawingId, dx, dy) => setProject((current) => (current ? withManualDrawingMoved(current, drawingId, dx, dy) : current))}
             />
             {/* Right panel priority (manual acceptance batch, section 5): 1) PRÁVĚ UMISŤUJI,
                 2) vybraný stánek + jeho služby, 3-5) K UMÍSTĚNÍ / HOTOVO / BEZ BODOVÝCH SLUŽEB

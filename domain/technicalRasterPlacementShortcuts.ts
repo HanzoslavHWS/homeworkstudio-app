@@ -2,7 +2,9 @@
  * Technické rastry — placement keyboard shortcuts (production-workflow batch, part B):
  *   U      -> start the next relevant placement (TechnicalRasterEditorPage's handleStartNextPlacement)
  *   Escape -> cancel the active placement/move (the SAME handleCancelPlacement the
- *             "Zrušit umisťování" button calls — one cancellation path)
+ *             "Zrušit umisťování" button calls — one cancellation path; it also cancels a line
+ *             being drawn in RUČNÍ ZNAČKY)
+ *   Delete -> delete the selected manual drawing (RUČNÍ ZNAČKY, only when one is selected)
  *
  * Pure decision function so the editor's single window keydown listener stays trivial and this can
  * be unit-tested without a DOM. Never fires while the user is typing (input/textarea/select/
@@ -11,7 +13,7 @@
  * handler already consumed.
  */
 
-export type PlacementShortcutAction = "startNextPlacement" | "cancelPlacement";
+export type PlacementShortcutAction = "startNextPlacement" | "cancelPlacement" | "deleteDrawing";
 
 /** Structural subset of KeyboardEvent — lets tests pass plain objects. */
 export type ShortcutKeyEvent = Readonly<{
@@ -48,13 +50,15 @@ export function isEditableShortcutTarget(target: unknown): boolean {
 
 export function resolvePlacementShortcut(
   event: ShortcutKeyEvent,
-  context: Readonly<{ placementActive: boolean; shortcutsEnabled: boolean }>,
+  context: Readonly<{ placementActive: boolean; shortcutsEnabled: boolean; drawingSelected?: boolean }>,
 ): PlacementShortcutAction | undefined {
   if (!context.shortcutsEnabled) return undefined;
   if (event.defaultPrevented || event.isComposing) return undefined;
   if (event.ctrlKey || event.metaKey || event.altKey) return undefined;
   if (isEditableShortcutTarget(event.target)) return undefined;
   if (event.key === "Escape") return context.placementActive ? "cancelPlacement" : undefined;
+  // RUČNÍ ZNAČKY: Delete / Backspace removes the selected manual drawing (only when one is selected).
+  if (event.key === "Delete" || event.key === "Backspace") return context.drawingSelected && !event.repeat ? "deleteDrawing" : undefined;
   if (event.key === "u" || event.key === "U") {
     if (event.repeat || context.placementActive) return undefined;
     return "startNextPlacement";

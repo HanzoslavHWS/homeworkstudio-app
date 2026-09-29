@@ -2,8 +2,10 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onStartNewProject: () => void;
-  activeSection?: "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters";
-  onNavigate?: (section: "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters") => void;
+  activeSection?: "project" | "projects" | "tasks" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters";
+  onNavigate?: (section: "projects" | "tasks" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters") => void;
+  /** Úkoly badge: overdue + today's open tasks (domain/tasks.ts computeTaskCounts().attention). 0/undefined hides it. */
+  taskBadge?: number;
 };
 
 export function AppSidebar({
@@ -12,6 +14,7 @@ export function AppSidebar({
   onStartNewProject,
   activeSection = "project",
   onNavigate,
+  taskBadge,
 }: AppSidebarProps) {
   return (
     <aside className={collapsed ? "sidebar collapsed" : "sidebar"}>
@@ -39,6 +42,11 @@ export function AppSidebar({
         <button type="button" className={activeSection === "projects" ? "navItem active" : "navItem"} title="Projekty" onClick={() => onNavigate?.("projects")}>
           <span className="navIcon">▽</span>
           <span className="navLabel">Projekty</span>
+        </button>
+        <button type="button" className={activeSection === "tasks" ? "navItem active" : "navItem"} title={taskBadge ? `Úkoly — ${taskBadge} po termínu nebo na dnes` : "Úkoly"} onClick={() => onNavigate?.("tasks")}>
+          <span className="navIcon">☑</span>
+          <span className="navLabel">Úkoly</span>
+          {taskBadge ? <span className="navBadge" aria-label={`${taskBadge} úkolů po termínu nebo na dnes`}>{taskBadge}</span> : null}
         </button>
         <button type="button" className={activeSection === "booths" ? "navItem active" : "navItem"} title="Knihovna stánků" onClick={() => onNavigate?.("booths")}>
           <span className="navIcon">◇</span>

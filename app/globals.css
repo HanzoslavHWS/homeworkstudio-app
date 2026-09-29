@@ -6880,3 +6880,205 @@ select:focus {
 .technicalRasterOutputsIncludeRow { display: flex; flex-wrap: wrap; gap: 12px; }
 .technicalRasterOutputsIncludeRow label { display: flex; align-items: center; gap: 6px; font-size: 9px; }
 .technicalRasterOutputsIncludeRow input { width: auto; height: auto; }
+
+/* =========================================================================
+   Úkoly / Kalendář — compact, desktop-first. Color is used sparingly and always with text:
+   red = overdue/problem, orange = high/urgent priority, green = done, grey = waiting/inactive.
+   ========================================================================= */
+.navItem { position: relative; }
+.navBadge { margin-left: auto; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px; background: #9a4d45; color: white; font-size: 9px; font-weight: 800; line-height: 18px; text-align: center; }
+.sidebar.collapsed .navBadge { position: absolute; top: 4px; right: 4px; margin: 0; min-width: 15px; height: 15px; font-size: 8px; line-height: 15px; }
+.topbarTaskButton { min-height: 30px; padding: 0 10px; border: 1px solid #dedfe0; border-radius: 6px; background: white; color: #17191c; font-size: 8px; font-weight: 800; cursor: pointer; }
+.topbarTaskButton:hover { background: #f4f5f5; }
+
+.tasksPage { padding-bottom: 80px; }
+.taskCounts { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
+.taskCount { display: grid; gap: 4px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: white; text-align: left; cursor: pointer; }
+.taskCount span { color: #85898c; font-size: 8px; font-weight: 700; letter-spacing: .3px; }
+.taskCount strong { font-size: 22px; letter-spacing: -.5px; color: #17191c; }
+.taskCount:hover { border-color: #c9cbcd; }
+.taskCount.active { border-color: #17191c; }
+.taskCount.danger strong { color: #9a4d45; }
+
+.taskTabs { display: inline-flex; gap: 2px; max-width: 100%; padding: 3px; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; background: #eef0f1; overflow-x: auto; }
+.taskTab { min-height: 28px; padding: 0 12px; border: 0; border-radius: 7px; background: transparent; color: #55595c; font-size: 9px; font-weight: 700; white-space: nowrap; cursor: pointer; }
+.taskTab.active { background: white; color: #17191c; box-shadow: 0 1px 2px rgba(20, 22, 23, .08); }
+.taskTabs.compact { margin-bottom: 0; }
+
+.taskFilters { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.taskFilters input,
+.taskFilters select { width: auto; height: 30px; padding: 0 8px; border-radius: 6px; font-size: 9px; }
+.taskFilters select { max-width: 170px; }
+.taskFilters .taskSearch { flex: 1 1 220px; min-width: 200px; }
+.taskFilters .textButton { min-height: 30px; padding: 0 6px; color: #55595c; font-size: 9px; text-decoration: underline; cursor: pointer; }
+.taskListSummary { margin: 0 0 6px; color: #96999c; font-size: 8px; }
+
+.taskList { border: 1px solid var(--border); border-radius: 10px; background: white; overflow: hidden; }
+.taskRow { display: grid; grid-template-columns: 20px minmax(220px, 1fr) 90px 150px 70px 110px 100px; align-items: center; gap: 10px; min-height: 42px; padding: 5px 12px; border-top: 1px solid #f0f1f1; font-size: 9px; }
+.taskRow:first-child { border-top: 0; }
+.taskRow:hover { background: #fafafa; }
+.taskRowCheckbox { width: 15px; height: 15px; margin: 0; padding: 0; accent-color: #45634f; cursor: pointer; }
+.taskRowMain { display: grid; gap: 2px; min-width: 0; padding: 0; border: 0; background: none; text-align: left; cursor: pointer; }
+.taskRowTitle { overflow: hidden; color: #17191c; font-size: 10px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.taskRowContext { display: flex; gap: 8px; overflow: hidden; color: #74787b; font-size: 8px; white-space: nowrap; }
+.taskRowEvent { color: #96999c; }
+.taskRowAuto { margin-left: 6px; padding: 1px 4px; border: 1px solid #dfe1e2; border-radius: 3px; color: #74787b; font-size: 7px; font-weight: 800; vertical-align: middle; }
+.taskRowCategory,
+.taskRowAssignee { overflow: hidden; color: #74787b; text-overflow: ellipsis; white-space: nowrap; }
+.taskRowDue { color: #55595c; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.taskRowDue.overdue { color: #9a4d45; font-weight: 800; }
+.taskRowPriority { font-weight: 700; }
+.priority-high { color: #b0671f; }
+.priority-urgent { color: #9a4d45; font-weight: 800; }
+.taskRowStatus { color: #74787b; white-space: nowrap; }
+.taskRowStatus.status-waiting { color: #85898c; }
+.taskRowStatus.status-review { color: #17191c; font-weight: 700; }
+.taskRowStatus.status-done { color: #45634f; font-weight: 700; }
+.taskRow.overdue { box-shadow: inset 3px 0 0 #9a4d45; }
+.taskRow.closed .taskRowTitle { color: #96999c; text-decoration: line-through; }
+.taskList.compact .taskRow { grid-template-columns: 20px minmax(160px, 1fr) 110px 70px 100px; }
+.taskList.compact .taskRowCategory,
+.taskList.compact .taskRowAssignee { display: none; }
+
+.taskTodayView { display: grid; gap: 18px; }
+.taskSection h2 { display: flex; align-items: baseline; gap: 6px; margin-bottom: 6px; font-size: 12px; }
+.taskSection h2 span { color: #96999c; font-size: 10px; }
+.taskSection.overdue h2 { color: #9a4d45; }
+.taskSection .workspaceEmpty { padding: 8px 2px; }
+
+.taskUndoToast { position: fixed; z-index: 95; bottom: 24px; left: 50%; display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-radius: 8px; background: #17191c; color: white; font-size: 9px; transform: translateX(-50%); box-shadow: 0 8px 24px rgba(20, 22, 23, .25); }
+.taskUndoToast button { min-height: 26px; padding: 0 10px; border: 1px solid rgba(255, 255, 255, .35); border-radius: 5px; background: transparent; color: white; font-size: 9px; font-weight: 700; cursor: pointer; }
+
+/* Detail — a right-hand side panel so the list stays visible. */
+.taskDetailPanel { position: fixed; z-index: 90; top: 0; right: 0; bottom: 0; display: flex; flex-direction: column; gap: 12px; width: min(420px, 100vw); padding: 18px 20px; overflow-y: auto; border-left: 1px solid var(--border); background: white; box-shadow: -12px 0 30px rgba(20, 22, 23, .08); }
+.taskDetailHeader { display: flex; align-items: center; justify-content: space-between; }
+.taskDetailKind { color: #96999c; font-size: 7px; font-weight: 800; letter-spacing: 1.3px; }
+.taskDetailClose { width: 28px; height: 28px; border: 0; border-radius: 6px; background: #f4f5f5; font-size: 16px; line-height: 1; cursor: pointer; }
+.taskDetailTitle { font-size: 16px; letter-spacing: -.3px; }
+.taskDetailDescription { color: #55595c; font-size: 10px; line-height: 1.5; white-space: pre-wrap; }
+.taskDetailFields { display: grid; grid-template-columns: 110px 1fr; gap: 6px 10px; align-items: center; margin: 0; font-size: 9px; }
+.taskDetailFields dt { color: #85898c; }
+.taskDetailFields dd { margin: 0; color: #17191c; }
+.taskDetailFields select { height: 30px; padding: 0 8px; font-size: 9px; }
+.taskDetailSection { display: grid; gap: 5px; padding-top: 10px; border-top: 1px solid #f0f1f1; font-size: 9px; }
+.taskDetailSection h3 { color: #96999c; font-size: 7px; font-weight: 800; letter-spacing: 1.3px; }
+.taskDetailSection p { margin: 0; }
+.taskDetailSection > button,
+.taskDetailActions button { width: fit-content; min-height: 30px; padding: 0 10px; border: 1px solid #dfe0e1; border-radius: 5px; background: #fafafa; color: #55595c; font-size: 9px; cursor: pointer; }
+.taskDetailActions { display: flex; flex-wrap: wrap; gap: 6px; }
+.taskDetailActions .primaryButton { min-height: 30px; padding: 0 12px; font-size: 9px; }
+.taskDetailReturn { display: grid; gap: 6px; }
+.taskDetailReturn textarea,
+.taskEditorDescription { width: 100%; padding: 8px 10px; border: 1px solid #dcdedf; border-radius: 8px; background: #fbfbfb; font: inherit; font-size: 10px; resize: vertical; }
+.taskHistory { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.taskHistory li { display: grid; grid-template-columns: 48px 1fr; gap: 6px; color: #55595c; }
+.taskHistory li > span:first-child { color: #96999c; }
+
+/* Editor dialog */
+.taskEditorDialog { display: grid; gap: 12px; width: min(720px, 94vw); }
+.taskEditorDialog > p.taskEditorContext { margin: -6px 0 0; color: #55595c; font-size: 9px; }
+.taskEditorDialog input,
+.taskEditorDialog select { height: 36px; font-size: 10px; }
+.taskEditorTitleField input { height: 42px; font-size: 12px; font-weight: 700; }
+.taskEditorLabel { color: #52565a; font-size: 10px; font-weight: 700; }
+.taskEditorDue,
+.taskEditorPriority { display: grid; gap: 6px; }
+.taskEditorPresets { display: flex; flex-wrap: wrap; gap: 4px; }
+.taskEditorPresets button { min-height: 28px; padding: 0 10px; border: 1px solid #dfe0e1; border-radius: 14px; background: #fafafa; color: #55595c; font-size: 9px; cursor: pointer; }
+.taskEditorPresets button.active { border-color: #17191c; background: #17191c; color: white; }
+.taskEditorPresets button.active.priority-high { border-color: #b0671f; background: #b0671f; }
+.taskEditorPresets button.active.priority-urgent { border-color: #9a4d45; background: #9a4d45; }
+.taskEditorDueInputs { display: grid; grid-template-columns: 180px 120px; gap: 6px; }
+.taskEditorGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.taskEditorActions { align-items: flex-end; }
+.taskActorField { margin-right: auto; }
+.taskActorField input { width: 180px; height: 30px; font-size: 9px; }
+
+/* Calendar */
+.taskCalendar { display: grid; gap: 8px; }
+.taskCalendarToolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.taskCalendarNav { display: flex; align-items: center; gap: 4px; }
+.taskCalendarNav button { min-height: 28px; padding: 0 10px; border: 1px solid #dfe0e1; border-radius: 6px; background: white; font-size: 10px; cursor: pointer; }
+.taskCalendarNav strong { margin-left: 8px; font-size: 13px; text-transform: capitalize; }
+.taskCalendarLegend { display: flex; align-items: center; gap: 8px; margin: 0; }
+.calendarMonth { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: white; }
+.calendarWeekday { padding: 6px 8px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: #f7f8f8; color: #85898c; font-size: 8px; font-weight: 800; }
+.calendarCell { display: flex; flex-direction: column; gap: 2px; min-width: 0; min-height: 104px; padding: 4px; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); background: white; }
+.calendarCell.outside { background: #fafafa; }
+.calendarCell.outside .calendarDayNumber { color: #b2b4b6; }
+.calendarCell.today .calendarDayNumber { background: #17191c; color: white; }
+.calendarCell.dropTarget { background: #f1f4f2; box-shadow: inset 0 0 0 2px #45634f; }
+.calendarDayNumber { align-self: flex-start; min-width: 20px; height: 20px; padding: 0 4px; border: 0; border-radius: 10px; background: none; color: #55595c; font-size: 9px; font-weight: 700; cursor: pointer; }
+.calendarTask,
+.calendarMilestone,
+.calendarMore { display: block; width: 100%; overflow: hidden; padding: 2px 5px; border: 0; border-radius: 4px; font-size: 8px; text-align: left; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+.calendarTask { background: #f0f1f1; color: #17191c; }
+.calendarTask[draggable="true"] { cursor: grab; }
+.calendarTask.priority-high { box-shadow: inset 2px 0 0 #b0671f; }
+.calendarTask.priority-urgent { box-shadow: inset 2px 0 0 #9a4d45; }
+.calendarTask.overdue { background: #f7ebe9; color: #9a4d45; font-weight: 700; }
+.calendarTask.closed { background: #edf5ef; color: #45634f; text-decoration: line-through; }
+.calendarTaskTime { margin-right: 4px; color: #74787b; }
+.calendarMilestone { border: 1px dashed #8c8f92; background: white; color: #17191c; font-weight: 700; }
+.calendarMilestone.legend { display: inline-block; width: auto; cursor: default; }
+.calendarMilestoneEvent { color: #96999c; font-weight: 400; }
+.calendarMore { background: none; color: #74787b; }
+.calendarWeek { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); border-top: 1px solid var(--border); border-left: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.calendarWeek .calendarCell { min-height: 320px; }
+.calendarWeekHeader { margin-bottom: 4px; color: #55595c; font-size: 9px; font-weight: 800; }
+.calendarDay { min-height: 260px; border: 1px solid var(--border); border-radius: 8px; }
+.calendarDay .calendarTask,
+.calendarDay .calendarMilestone { padding: 5px 8px; font-size: 10px; }
+
+/* Stand detail panel + checklist */
+.standTasksPanel { margin: 18px 0; }
+.standTasksPanel .taskList { margin-bottom: 12px; }
+.standChecklist h3 { display: flex; align-items: baseline; gap: 8px; margin-bottom: 6px; color: #96999c; font-size: 7px; font-weight: 800; letter-spacing: 1.3px; }
+.standChecklist h3 span { color: #55595c; font-size: 9px; letter-spacing: 0; }
+.standChecklist ul { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 4px 14px; margin: 0; padding: 0; list-style: none; }
+.standChecklist label { flex-direction: row; align-items: center; gap: 6px; font-size: 9px; cursor: pointer; }
+.standChecklist label input { width: 14px; height: 14px; margin: 0; padding: 0; accent-color: #45634f; }
+.standChecklist label.done span { color: #45634f; }
+
+/* Event detail summary */
+.eventTasksSummary { display: flex; flex-wrap: wrap; align-items: center; gap: 14px; margin: 10px 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: #fafafa; font-size: 9px; }
+.eventTasksSummary dl { display: flex; gap: 14px; margin: 0; }
+.eventTasksSummary dl div { display: flex; gap: 5px; }
+.eventTasksSummary dt { color: #85898c; }
+.eventTasksSummary dd { margin: 0; font-weight: 800; }
+.eventTasksSummary .danger dd { color: #9a4d45; }
+.eventTasksSummary button { margin-left: auto; min-height: 28px; padding: 0 10px; border: 1px solid #dfe0e1; border-radius: 5px; background: white; font-size: 9px; cursor: pointer; }
+
+/* Incremental report re-import — change summary ("Beze změny / Nové / Odstraněné / Změna množství"). */
+.technicalImportUpdateNotice { display: grid; gap: 4px; margin: 8px 0; padding: 8px 10px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fafafa; }
+.technicalImportUpdateNotice .fieldHint { margin-top: 0; font-size: 8px; line-height: 1.5; }
+.technicalImportDiff { display: grid; gap: 2px; }
+.technicalImportDiff.compact .technicalImportPreviewSummary { margin: 2px 0; }
+.technicalImportDiffList { display: grid; gap: 2px; margin: 6px 0 0; padding: 0; list-style: none; font-size: 9px; }
+.technicalImportDiffList li { display: grid; grid-template-columns: 60px minmax(160px, 1fr) minmax(200px, 1.2fr); gap: 10px; align-items: baseline; padding: 3px 0; border-top: 1px solid #f0f1f1; color: #55595c; }
+.technicalImportDiffList li .textButton { justify-self: start; min-height: 0; padding: 0; color: #17191c; font-weight: 800; text-decoration: underline; cursor: pointer; }
+.technicalImportDiffList li.kind-added span:last-child,
+.technicalImportDiffList li.kind-quantityIncreased span:last-child { color: #93472b; font-weight: 700; }
+.technicalImportDiffList li.kind-removed { color: #96999c; }
+.technicalImportUpdated { border-color: #cfd6d1; }
+
+/* RUČNÍ ZNAČKY — manual points/lines toolbar + SVG layer on the raster stage. */
+.technicalRasterDrawingToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 7px 12px; }
+.technicalRasterDrawingToolbar.active { border-color: #17191c; }
+.technicalRasterDrawingToolbarTitle { color: #96999c; font-size: 7px; font-weight: 800; letter-spacing: 1.3px; }
+.technicalRasterDrawingToolGroup { display: inline-flex; align-items: center; gap: 3px; }
+.workflowCard .technicalRasterDrawingTool { min-height: 26px; padding: 0 9px; }
+.workflowCard .technicalRasterDrawingTool.active { border-color: #17191c; background: #17191c; color: white; font-weight: 700; }
+.workflowCard .technicalRasterDrawingTool.danger:not(:disabled) { color: #9a4d45; }
+.workflowCard .technicalRasterDrawingColor { width: 20px; min-height: 20px; height: 20px; padding: 0; border: 2px solid white; border-radius: 50%; box-shadow: 0 0 0 1px #c9cbcd; cursor: pointer; }
+.workflowCard .technicalRasterDrawingColor.active { box-shadow: 0 0 0 2px #17191c; }
+.technicalRasterDrawingHint { color: #55595c; font-size: 8px; }
+
+.technicalRasterDrawings { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; }
+.technicalRasterDrawing.interactive { pointer-events: auto; cursor: move; }
+.technicalRasterDrawingHit { fill: transparent; stroke: transparent; }
+.technicalRasterDrawingSelection { fill: none; stroke: #17191c; stroke-opacity: .35; }
+.technicalRasterDrawingHandle { fill: white; stroke: #17191c; }
+.technicalRasterDrawingDraft { pointer-events: none; }
+.technicalRasterViewport.drawingTool-point,
+.technicalRasterViewport.drawingTool-line { cursor: crosshair; }

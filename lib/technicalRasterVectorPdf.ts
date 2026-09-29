@@ -58,6 +58,7 @@ import {
 import { TECHNICAL_REALIZATION_GROUPS, type TechnicalRealizationGroupInfo } from "../domain/technicalRasterRealization.ts";
 import { buildVectorGlyphPathOperators, type GlyphOutlineCommand, type PositionedGlyphOutline } from "../domain/technicalRasterVectorGlyphOutline.ts";
 import { ensurePdfJsWorkerConfigured } from "./pdf/pdfJsWorkerConfig.ts";
+import type { TechnicalRasterExportDrawingItem } from "../domain/technicalRasterDrawings.ts";
 
 /**
  * A small set of typed failure codes for this pipeline's own genuinely distinct, anticipated
@@ -445,6 +446,8 @@ export function reconstructOcProperties(
 // ============================================================================
 
 const GENERATOR_DATA_OCG_NAME = "GENERÁTOR DATA";
+/** Manual points/lines (domain/technicalRasterDrawings.ts) get their OWN layer, separate from the generated data, so they can be toggled independently in Acrobat/Corel. */
+const MANUAL_DRAWINGS_OCG_NAME = "RUČNÍ ZNAČKY";
 
 function ensureDictChild(parent: PDFDict, ctx: PDFContext, key: string): PDFDict {
   const existing = parent.lookup(PDFName.of(key));
@@ -502,14 +505,23 @@ function appendGeneratorDataOcgToCatalog(newDoc: PDFDocument, ocgRef: PDFRef): v
  * is never shared between pages, unlike the catalog-level OCG object itself.
  */
 function ensureGeneratorDataOcg(newDoc: PDFDocument, copiedPage: PDFPage, existingRef: PDFRef | undefined): Readonly<{ ref: PDFRef; propertyName: string }> {
+  return ensureOverlayOcg(newDoc, copiedPage, existingRef, GENERATOR_DATA_OCG_NAME, "GenData");
+}
+
+/** Same mechanics as ensureGeneratorDataOcg, for any named overlay layer (GENERÁTOR DATA, RUČNÍ ZNAČKY). */
+function ensureOverlayOcg(newDoc: PDFDocument, copiedPage: PDFPage, existingRef: PDFRef | undefined, ocgName: string, propertyKeyPrefix: string): Readonly<{ ref: PDFRef; propertyName: string }> {
   const ctx = newDoc.context;
-  const ref = existingRef ?? ctx.register(ctx.obj({ Type: "OCG", Name: PDFString.of(GENERATOR_DATA_OCG_NAME) }));
+  // PDFString only carries PDFDocEncoding: "Á" in "GENERÁTOR DATA" survives, but "Č" in
+  // "RUČNÍ ZNAČKY" was silently dropped ("RUNÍ ZNAKY"). Names outside Latin-1 are therefore
+  // written as a UTF-16 hex string; GENERÁTOR DATA keeps its existing, byte-identical encoding.
+  const nameObject = /^[ -~ -ÿ]*$/u.test(ocgName) ? PDFString.of(ocgName) : PDFHexString.fromText(ocgName);
+  const ref = existingRef ?? ctx.register(ctx.obj({ Type: "OCG", Name: nameObject }));
   appendGeneratorDataOcgToCatalog(newDoc, ref);
 
   const resources = ensureDictChild(copiedPage.node, ctx, "Resources");
   const properties = ensureDictChild(resources, ctx, "Properties");
   const existingKey = properties.keys().find((key) => properties.get(key)?.toString() === ref.toString());
-  const propertyKey = existingKey ?? properties.uniqueKey("GenData");
+  const propertyKey = existingKey ?? properties.uniqueKey(propertyKeyPrefix);
   if (!existingKey) properties.set(propertyKey, ref);
   return { ref, propertyName: propertyKey.decodeText() };
 }
@@ -1244,6 +1256,50 @@ function drawNoElectricityMarker(page: PDFPage, item: TechnicalRasterExportNoEle
 }
 
 // ============================================================================
+// Manual drawings ("Bod" / "Čára", domain/technicalRasterDrawings.ts) — plain vector strokes in the
+// user's color, positioned through the SAME rotation-aware normalized -> raw PDF transform as every
+// placement. A point is a small "+" cross (two strokes), a line is one stroke A–B. Drawn inside their
+// own "RUČNÍ ZNAČKY" layer (see drawManualDrawingsLayer).
+// ============================================================================
+
+function drawManualDrawing(page: PDFPage, item: TechnicalRasterExportDrawingItem, geometry: SourcePageGeometry): void {
+  const toRaw = (x: number, y: number) => normalizedDisplayPointToRawPdfPoint(x, y, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
+  const strokeOptions = { thickness: item.strokePt, color: hexToRgbFraction(item.color), lineCap: LineCapStyle.Round };
+  if (item.kind === "point") {
+    const center = toRaw(item.x, item.y);
+    const half = item.crossHalfPt;
+    page.drawLine({ start: { x: center.x - half, y: center.y }, end: { x: center.x + half, y: center.y }, ...strokeOptions });
+    page.drawLine({ start: { x: center.x, y: center.y - half }, end: { x: center.x, y: center.y + half }, ...strokeOptions });
+    return;
+  }
+  page.drawLine({ start: toRaw(item.x1, item.y1), end: toRaw(item.x2, item.y2), ...strokeOptions });
+}
+
+function isValidDrawingItem(item: TechnicalRasterExportDrawingItem): boolean {
+  return item.kind === "point"
+    ? isValidNormalizedCoordinate(item.x) && isValidNormalizedCoordinate(item.y)
+    : [item.x1, item.y1, item.x2, item.y2].every(isValidNormalizedCoordinate);
+}
+
+/**
+ * Draws one page's manual drawings inside the "RUČNÍ ZNAČKY" OCG and returns that OCG's ref (created
+ * on first use, then shared by every page). A page with no drawings gets no layer bracket; the layer is
+ * still re-registered after every page's OCProperties rebuild once it exists.
+ */
+function drawManualDrawingsLayer(newDoc: PDFDocument, page: PDFPage, items: readonly TechnicalRasterExportDrawingItem[], geometry: SourcePageGeometry, existingRef: PDFRef | undefined): PDFRef | undefined {
+  const valid = items.filter(isValidDrawingItem);
+  if (valid.length === 0) {
+    if (existingRef) appendGeneratorDataOcgToCatalog(newDoc, existingRef);
+    return existingRef;
+  }
+  const layer = ensureOverlayOcg(newDoc, page, existingRef, MANUAL_DRAWINGS_OCG_NAME, "ManualDrawings");
+  appendRawContentChunk(newDoc.context, page, `/OC /${layer.propertyName} BDC`);
+  for (const item of valid) drawManualDrawing(page, item, geometry);
+  appendRawContentChunk(newDoc.context, page, "EMC");
+  return layer.ref;
+}
+
+// ============================================================================
 // GENERATED LEGEND BATCH — every generated legend row (technical + realization), in BOTH the
 // separate-page fallback and the in-place ("source-legend-area") strategy, is now drawn through
 // this ONE shared function so both strategies stay visually consistent and reuse the EXACT same
@@ -1628,6 +1684,8 @@ export type TechnicalRasterVectorExportInput = Readonly<{
   legendPlacement?: TechnicalLegendPlacement;
   /** The project's actual source-layer ON/OFF state -> the exported PDF's default OCG state (see reconstructOcProperties). Omitted keeps the source PDF's own defaults. */
   sourceLayerVisibility?: readonly TechnicalRasterExportSourceLayerVisibility[];
+  /** Manual points/lines on THIS page (domain/technicalRasterDrawings.ts buildManualDrawingExportItems) — drawn in their own "RUČNÍ ZNAČKY" layer. */
+  manualDrawings?: readonly TechnicalRasterExportDrawingItem[];
 }>;
 
 export type TechnicalRasterVectorExportResult = Readonly<{
@@ -1729,6 +1787,7 @@ export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRaster
     if (drawInPlaceLegend(copiedPage, box, legendToShow, usedRealizationGroups, markerShapingFont) === "does_not_fit") usesInPlaceLegend = false;
   }
   appendRawContentChunk(newDoc.context, copiedPage, "EMC");
+  drawManualDrawingsLayer(newDoc, copiedPage, input.manualDrawings ?? [], geometry, undefined);
   if (!usesInPlaceLegend) {
     // A separate, entirely new legend PAGE (never mixed with source content) is deliberately left
     // OUTSIDE the GENERÁTOR DATA span — there is no source raster content on that page for a viewer
@@ -1757,6 +1816,8 @@ export type TechnicalRasterVectorExportPageInput = Readonly<{
   realizationUnderlines?: readonly TechnicalRasterExportRealizationUnderlineItem[];
   /** PRODUCTION BATCH, part B section 17/18 — every "BEZ elektriky" red-X marker on THIS page. */
   noElectricityMarkers?: readonly TechnicalRasterExportNoElectricityMarkerItem[];
+  /** Manual points/lines on THIS page — drawn in their own "RUČNÍ ZNAČKY" layer. */
+  manualDrawings?: readonly TechnicalRasterExportDrawingItem[];
 }>;
 
 export type TechnicalRasterMultiPageVectorExportInput = Readonly<{
@@ -1829,6 +1890,8 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
   // per-page call; `ensureGeneratorDataOcg` is deliberately idempotent/re-appending so this stays a
   // SINGLE object re-registered on every page, never duplicated).
   let generatorDataOcgRef: PDFRef | undefined;
+  /** "RUČNÍ ZNAČKY" layer — created on the first page that has manual drawings, then shared. */
+  let manualDrawingsOcgRef: PDFRef | undefined;
   const textScaleDiagnostics: TechnicalRasterTextScaleDiagnostic[] = [];
 
   let exportPageNumber = 0;
@@ -1887,6 +1950,7 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
       }
     }
     appendRawContentChunk(newDoc.context, copiedPage, "EMC");
+    manualDrawingsOcgRef = drawManualDrawingsLayer(newDoc, copiedPage, pageInput.manualDrawings ?? [], geometry, manualDrawingsOcgRef);
   }
 
   let legendPageNumber: number;

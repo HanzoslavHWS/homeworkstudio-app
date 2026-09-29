@@ -239,6 +239,21 @@ Three independent, real-production fixes:
   regardless of the imported quantity (2/3/5), same mechanism cleaning/waste already used. The raw
   imported quantity is untouched; only `requiredPlacementCount` changes.
 
+## RUČNÍ ZNAČKY (manual points and lines)
+
+- `project.manualDrawings` (domain/technicalRasterDrawings.ts) holds a free point ("Bod", drawn as a colored
+  cross) and a line A–B ("Čára"). It is a separate layer: never a service, never a placement, and report
+  imports never touch it. Coordinates are page + x/y normalized to the displayed page — the same space
+  as placements — so drawings line up at any zoom, after reload and in the export.
+- Tools: Vybrat / Bod / Čára. Pick a color (5 presets) and a thickness (tenká / střední / silná); with a
+  drawing selected, picking either restyles it. Select a drawing, drag to move it, and press Delete or
+  "Smazat" to remove it. Esc cancels a line that is being drawn.
+- Starting any service work (Umístit, U, Přemístit, pairing) switches drawing off. Service symbols are
+  clickable only while drawing is off. Pan (middle button / space + drag) always works.
+- Persisted inside the project `document` JSON, so no migration is needed. Exported as vector strokes in
+  their own OCG layer "RUČNÍ ZNAČKY", next to GENERÁTOR DATA. OCG names outside Latin-1 are written as
+  UTF-16, so "Č" is not lost.
+
 ## Incremental report re-import (new version of an already imported report)
 
 - Re-importing a category no longer resets placements. `mergeTechnicalRasterImportWithDiff` pairs old and

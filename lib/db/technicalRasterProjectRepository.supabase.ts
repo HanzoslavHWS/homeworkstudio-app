@@ -13,8 +13,9 @@ import {
 } from "../../domain/technicalRaster.ts";
 import type { StoredAsset } from "../../domain/assets.ts";
 import { summarizeTechnicalRasterProject } from "../../domain/technicalRaster.ts";
+import { normalizeManualDrawings, type TechnicalRasterDrawing } from "../../domain/technicalRasterDrawings.ts";
 
-type TechnicalRasterProjectRow = Readonly<{
+export type TechnicalRasterProjectRow = Readonly<{
   id: string;
   name: string;
   event_id: string | null;
@@ -33,9 +34,12 @@ type TechnicalRasterProjectDocument = Readonly<{
   rasterStandLabels?: readonly RasterStandLabel[];
   imports?: readonly TechnicalRasterImport[];
   stands?: readonly TechnicalStand[];
+  /** Manual points/lines — stored with the rest of the project document, no own column/table needed. */
+  manualDrawings?: readonly TechnicalRasterDrawing[];
 }>;
 
-function rowToProject(row: TechnicalRasterProjectRow): TechnicalRasterProject {
+/** Exported for tests (save -> reload round trip). */
+export function rowToProject(row: TechnicalRasterProjectRow): TechnicalRasterProject {
   const document = (row.document ?? {}) as TechnicalRasterProjectDocument;
   return {
     id: row.id,
@@ -48,6 +52,7 @@ function rowToProject(row: TechnicalRasterProjectRow): TechnicalRasterProject {
     rasterStandLabels: document.rasterStandLabels ?? [],
     imports: document.imports ?? [],
     stands: document.stands ?? [],
+    manualDrawings: normalizeManualDrawings(document.manualDrawings),
     createdBy: row.created_by ?? undefined,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -58,7 +63,8 @@ function rowToSummary(row: TechnicalRasterProjectRow): TechnicalRasterProjectSum
   return summarizeTechnicalRasterProject(rowToProject(row));
 }
 
-function projectToRow(project: TechnicalRasterProject) {
+/** Exported for tests (save -> reload round trip). */
+export function projectToRow(project: TechnicalRasterProject) {
   const document: TechnicalRasterProjectDocument = {
     sourceRasterAsset: project.sourceRasterAsset,
     rasterLayers: project.rasterLayers,
@@ -66,6 +72,7 @@ function projectToRow(project: TechnicalRasterProject) {
     rasterStandLabels: project.rasterStandLabels,
     imports: project.imports,
     stands: project.stands,
+    manualDrawings: project.manualDrawings ?? [],
   };
   return {
     name: project.name,

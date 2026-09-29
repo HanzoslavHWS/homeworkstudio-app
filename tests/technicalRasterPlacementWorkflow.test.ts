@@ -305,7 +305,8 @@ test("AUTO 8: auto ON, a failed/refused placement does not advance — the same 
 
 test("AUTO 9/10: Escape stops the session via the single cancel path and never turns the auto preference off", async () => {
   const source = await readEditorSource();
-  const cancel = source.slice(source.indexOf("function handleCancelPlacement()"), source.indexOf("shortcutHandlersRef.current = {"));
+  // Exactly the body of handleCancelPlacement (the functions after it are unrelated).
+  const cancel = source.slice(source.indexOf("function handleCancelPlacement()"), source.indexOf("\n  }\n", source.indexOf("function handleCancelPlacement()")));
   assert.match(cancel, /setPlacementMode\(undefined\);/u);
   assert.ok(!cancel.includes("onAutoContinuePlacementChange"), "cancel never touches the preference");
   assert.ok(!cancel.includes("setProject("), "cancel never deletes completed placements");
@@ -346,7 +347,7 @@ test("SOURCE: canvas click only advances after a committed placement (unchanged 
 
 test("SOURCE: active placement is cleared when leaving the placement step or switching project; the preference lives in TechnicalRastersPage", async () => {
   const source = await readEditorSource();
-  assert.match(source, /if \(step !== "assignment"\) setPlacementMode\(undefined\);/u);
+  assert.match(source, /if \(step !== "assignment"\) \{?\s*setPlacementMode\(undefined\);/u);
   assert.match(source, /setPlacementMode\(undefined\);\s*setPlacementNotice\(""\);\s*setSelectedStandId\(undefined\);\s*setAssignmentActiveStandId\(undefined\);\s*\}, \[projectId\]\);/u);
   const router = await readFile(new URL("../components/workflow/TechnicalRastersPage.tsx", import.meta.url), "utf8");
   assert.match(router, /const \[autoContinuePlacement, setAutoContinuePlacement\] = useState\(false\);/u, "default OFF");
@@ -449,10 +450,11 @@ test("SESSION SOURCE: the sequential button starts a sequentialExplicit session;
 
 test("SESSION SOURCE: Escape / Zrušit umisťování end the explicit sequential session through the single cancel path, never touching the global preference", async () => {
   const source = await readEditorSource();
-  const cancel = source.slice(source.indexOf("function handleCancelPlacement()"), source.indexOf("shortcutHandlersRef.current = {"));
+  // Exactly the body of handleCancelPlacement (the functions after it are unrelated).
+  const cancel = source.slice(source.indexOf("function handleCancelPlacement()"), source.indexOf("\n  }\n", source.indexOf("function handleCancelPlacement()")));
   assert.match(cancel, /setPlacementMode\(undefined\);/u, "clearing placementMode drops the session kind with it — no stale sequential session survives");
   assert.ok(!cancel.includes("onAutoContinuePlacementChange") && !cancel.includes("autoContinuePlacement"));
   assert.match(source, /if \(action === "cancelPlacement"\) handleCancelPlacement\(\);/u);
   assert.equal(resolvePlacementShortcut({ key: "Escape", target: canvasTarget }, active), "cancelPlacement", "Escape resolves to cancel while any session (incl. sequential) is active");
-  assert.match(source, /if \(step !== "assignment"\) setPlacementMode\(undefined\);/u, "a step change also ends it");
+  assert.match(source, /if \(step !== "assignment"\) \{?\s*setPlacementMode\(undefined\);/u, "a step change also ends it");
 });

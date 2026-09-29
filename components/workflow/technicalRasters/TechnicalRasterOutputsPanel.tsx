@@ -16,6 +16,7 @@ import {
 import { resolveRealizationDisplayState, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
 import { computeRealizationUnderlineGeometry } from "../../../domain/technicalRasterRealizationUnderline";
 import { computeNoElectricityMarkerGeometry } from "../../../domain/technicalRasterNoElectricityMarker";
+import { buildManualDrawingExportItems, effectiveManualDrawings } from "../../../domain/technicalRasterDrawings";
 import type { TechnicalRasterExportNoElectricityMarkerItem, TechnicalRasterExportRealizationUnderlineItem, TechnicalRasterExportTextScaleItem } from "../../../lib/technicalRasterVectorPdf";
 import {
   buildTechnicalRasterExportFileName,
@@ -183,6 +184,8 @@ export function TechnicalRasterOutputsPanel({
         placements: buildTechnicalRasterExportPlacements(project, pageNumber, excludedCategories),
         realizationUnderlines: underlinesByPage.get(pageNumber) ?? [],
         noElectricityMarkers: noElectricityMarkersByPage.get(pageNumber) ?? [],
+        // Manual points/lines — always exported, in their own "RUČNÍ ZNAČKY" layer.
+        manualDrawings: buildManualDrawingExportItems(effectiveManualDrawings(project), pageNumber),
       }));
       const legend = buildTechnicalRasterExportLegend(pages.flatMap((pageInput) => pageInput.placements));
 

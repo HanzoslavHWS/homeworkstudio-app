@@ -6,11 +6,13 @@ type StepHeaderProps = {
   saveError?: string;
   /** The 1–5 Projekt/Konfigurátor/Vizualizace/Souhrn/Export stepper belongs only to the Booth Generator wizard itself — every other workspace section (Tiskové plochy, E-maily, admin pages, ...) keeps this header for its shared/global chrome (logout, ...) but never shows this wizard-specific stepper. Defaults to true so any caller that doesn't pass it keeps today's behavior. */
   showStepper?: boolean;
+  /** Global "+ Úkol" — opens the task dialog pre-filled from whatever the user is looking at (see BoothGenerator currentTaskContext). */
+  onCreateTask?: () => void;
 };
 
 const steps = ["Projekt", "Konfigurátor", "Vizualizace", "Souhrn", "Export"];
 
-export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus, saveError, showStepper = true }: StepHeaderProps) {
+export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus, saveError, showStepper = true, onCreateTask }: StepHeaderProps) {
   return (
     <header className="topbar">
       <div>
@@ -46,6 +48,12 @@ export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus, save
             </button>
             {saveError && <small className="uploadError">{saveError}</small>}
           </div>
+        )}
+
+        {onCreateTask && (
+          <button type="button" className="topbarTaskButton" onClick={onCreateTask} title="Vytvořit úkol">
+            + Úkol
+          </button>
         )}
 
         <form action="/api/auth/logout" method="post">

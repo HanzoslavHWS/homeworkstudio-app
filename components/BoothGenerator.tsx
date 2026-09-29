@@ -223,6 +223,16 @@ import { RemoteApiPrintSurfaceProductionDimensionRepository } from "../lib/db/pr
 import { RemoteApiPrintSurfaceExportRepository } from "../lib/db/printSurfaceExportRepository.remoteApi.client";
 import { TechnicalRastersPage } from "./workflow/TechnicalRastersPage";
 import { RemoteApiTechnicalRasterProjectRepository } from "../lib/db/technicalRasterProjectRepository.remoteApi.client";
+import { RemoteApiTaskClient } from "../lib/db/taskRepository.remoteApi.client";
+import { computeTaskCounts, localIsoDate, taskInputFromContext, taskToInput, type Task, type TaskContext, type TaskInput } from "../domain/tasks";
+import type { RealizationCompany } from "../domain/realizationCompany";
+import { useTaskStore } from "./workflow/tasks/useTaskStore";
+import { TasksPage, type TasksPageIntent } from "./workflow/tasks/TasksPage";
+import { TaskEditorDialog } from "./workflow/tasks/TaskEditorDialog";
+import { TaskDetailPanel } from "./workflow/tasks/TaskDetailPanel";
+import { StandTasksPanel } from "./workflow/tasks/StandTasksPanel";
+import { EventTasksSummary } from "./workflow/tasks/EventTasksSummary";
+import type { TaskLookups } from "./workflow/tasks/TaskRow";
 
 /** Individual-booth plot size defaults (mode=individualni, before the user has entered anything) — a neutral starting point on the 250 mm layout grid, never a fabricated real-world footprint. */
 const INDIVIDUAL_DEFAULT_WIDTH_MM = 3000;
@@ -305,6 +315,21 @@ export default function BoothGenerator() {
   // repository instance as print surfaces above (catalog items are global, not scoped to either
   // module) rather than instantiating a second, redundant client.
   const technicalRasterProjectRepositoryRef = useRef(new RemoteApiTechnicalRasterProjectRepository());
+  // Úkoly — ONE shared task list for the Úkoly page, the sidebar badge, the stand/event panels and
+  // the global "+ Úkol" dialog (components/workflow/tasks/useTaskStore.ts). The dialog and the
+  // detail panel are hosted here so every module opens the same ones.
+  const taskClientRef = useRef(new RemoteApiTaskClient());
+  const taskStore = useTaskStore(taskClientRef.current);
+  const [taskRealizationCompanies, setTaskRealizationCompanies] = useState<readonly RealizationCompany[]>([]);
+  const [taskEditor, setTaskEditor] = useState<Readonly<{ initial: TaskInput; taskId?: string; nonce: number }> | undefined>(undefined);
+  const [taskDetailId, setTaskDetailId] = useState<string | undefined>(undefined);
+  const [tasksIntent, setTasksIntent] = useState<TasksPageIntent | undefined>(undefined);
+  // Same read-once-at-mount preselect convention as printSurfaceProjectPreselect below.
+  const [technicalRasterProjectPreselect, setTechnicalRasterProjectPreselect] = useState<string | undefined>(undefined);
+  const [eventPreselect, setEventPreselect] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    realizationCompanyRepositoryRef.current.list().then(setTaskRealizationCompanies).catch(() => setTaskRealizationCompanies([]));
+  }, []);
   const [pricingAdminPreselect, setPricingAdminPreselect] = useState<string | undefined>(undefined);
   const [printSurfaceEmailPrefill, setPrintSurfaceEmailPrefill] = useState<Readonly<{ context: PrintSurfaceEmailContext; nonce: number }> | undefined>(undefined);
   function handlePrintSurfaceEmailHandoff(context: PrintSurfaceEmailContext) {
@@ -321,7 +346,7 @@ export default function BoothGenerator() {
     navigateWorkspace("printSurfaces", { printSurfaceProjectId: projectId });
   }
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters"
+    "project" | "projects" | "tasks" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters"
   >("project");
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
@@ -648,7 +673,7 @@ export default function BoothGenerator() {
     return !eventDirty || window.confirm("Máte neuložené změny. Opravdu chcete pokračovat?");
   }
 
-  function navigateWorkspace(section: typeof workspaceSection, payload?: { catalogItemId?: string; printSurfaceProjectId?: string }) {
+  function navigateWorkspace(section: typeof workspaceSection, payload?: { catalogItemId?: string; printSurfaceProjectId?: string; technicalRasterProjectId?: string; eventId?: string; tasksIntent?: TasksPageIntent }) {
     if (workspaceSection === "events" && section !== "events" && !confirmLeaveEvent()) return;
     if (workspaceSection === "events" && section !== "events" && eventDirty) {
       eventRepositoryRef.current?.list().then((events) => setAdminEvents([...events]));
@@ -657,6 +682,9 @@ export default function BoothGenerator() {
     setWorkspaceSection(section);
     setPricingAdminPreselect(section === "pricingAdmin" ? payload?.catalogItemId : undefined);
     setPrintSurfaceProjectPreselect(section === "printSurfaces" ? payload?.printSurfaceProjectId : undefined);
+    setTechnicalRasterProjectPreselect(section === "technicalRasters" ? payload?.technicalRasterProjectId : undefined);
+    setEventPreselect(section === "events" ? payload?.eventId : undefined);
+    setTasksIntent(section === "tasks" ? payload?.tasksIntent : undefined);
     if (section === "projects") {
       repositoryRef.current?.list().then((projects) => setSavedProjects([...projects]));
     }
@@ -667,6 +695,59 @@ export default function BoothGenerator() {
   /* ================================================= */
 
   const selectedExhibition = adminEvents.find((event) => event.id === fairId);
+
+  const taskLookups: TaskLookups = { events: adminEvents, categories: taskStore.categories, realizationCompanies: taskRealizationCompanies };
+  const taskDetail = taskDetailId ? taskStore.tasks?.find((task) => task.id === taskDetailId) : undefined;
+
+  /** The open booth project as a task context: event, company, stand number, the event's realizačka and the project itself as the source. */
+  function boothProjectTaskContext(): TaskContext {
+    const realizationCompanyId = selectedExhibition?.realizationCompanyId && taskRealizationCompanies.some((candidate) => candidate.id === selectedExhibition.realizationCompanyId)
+      ? selectedExhibition.realizationCompanyId
+      : undefined;
+    return {
+      eventId: fairId || undefined,
+      companyName: company.trim() || undefined,
+      standNumber: boothNumber.trim() || undefined,
+      realizationCompanyId,
+      sourceType: projectId ? "booth_project" : "manual",
+      sourceId: projectId || undefined,
+    };
+  }
+
+  function openTaskCreate(context?: TaskContext) {
+    setTaskEditor({ initial: taskInputFromContext(context), nonce: Date.now() });
+  }
+
+  function openTaskEdit(task: Task) {
+    setTaskEditor({ initial: taskToInput(task), taskId: task.id, nonce: Date.now() });
+  }
+
+  /** "Otevřít stánek / tiskové plochy / technický rastr / akci" from a task's detail. */
+  async function openTaskSource(task: Task) {
+    if (!task.sourceId) return;
+    switch (task.sourceType) {
+      case "booth_project": {
+        const known = savedProjects.find((project) => project.id === task.sourceId)
+          ?? (await repositoryRef.current?.list())?.find((project) => project.id === task.sourceId);
+        if (!known) { window.alert("Stánek (projekt) nebyl nalezen — možná ještě nebyl uložen nebo byl smazán."); return; }
+        setTaskDetailId(undefined);
+        openProject(known);
+        return;
+      }
+      case "print_surface_project":
+        setTaskDetailId(undefined);
+        navigateWorkspace("printSurfaces", { printSurfaceProjectId: task.sourceId });
+        return;
+      case "technical_raster_project":
+        setTaskDetailId(undefined);
+        navigateWorkspace("technicalRasters", { technicalRasterProjectId: task.sourceId });
+        return;
+      case "event":
+        setTaskDetailId(undefined);
+        navigateWorkspace("events", { eventId: task.sourceId });
+        return;
+    }
+  }
   // Section 1 (Batch #2A fix): the PriceList shown/used must follow the PROJECT's chosen
   // currency, never the event's defaultPriceListId — defaultPriceListId is only a preference
   // for which currency to suggest when a fair is first picked (see handleFairChange), it must
@@ -2627,6 +2708,7 @@ export default function BoothGenerator() {
         onStartNewProject={startNewProject}
         activeSection={workspaceSection}
         onNavigate={navigateWorkspace}
+        taskBadge={taskStore.tasks ? computeTaskCounts(taskStore.tasks, localIsoDate()).attention : undefined}
       />
 
       {/* ================================================= */}
@@ -2645,6 +2727,7 @@ export default function BoothGenerator() {
           saveStatus={saveStatus}
           saveError={saveError}
           showStepper={workspaceSection === "project"}
+          onCreateTask={() => openTaskCreate(workspaceSection === "project" ? boothProjectTaskContext() : undefined)}
         />
 
         {persistenceMode === "local-fallback" && (
@@ -2662,6 +2745,17 @@ export default function BoothGenerator() {
             onOpen={openProject}
             onDelete={deleteProject}
             onNew={startNewProject}
+          />
+        )}
+
+        {workspaceSection === "tasks" && (
+          <TasksPage
+            store={taskStore}
+            lookups={taskLookups}
+            intent={tasksIntent}
+            onOpenTask={(task) => setTaskDetailId(task.id)}
+            onCreateTask={() => openTaskCreate()}
+            onOpenMilestone={(milestone) => navigateWorkspace("events", { eventId: milestone.eventId })}
           />
         )}
 
@@ -2685,6 +2779,14 @@ export default function BoothGenerator() {
             priceLists={adminPriceLists}
             onChange={setAdminEvents}
             onDirtyChange={setEventDirty}
+            initialSelectedId={eventPreselect}
+            renderEventExtras={(eventId) => (
+              <EventTasksSummary
+                tasks={taskStore.tasks}
+                eventId={eventId}
+                onShowEventTasks={(id) => navigateWorkspace("tasks", { tasksIntent: { tab: "all", filters: { eventId: id } } })}
+              />
+            )}
             onSave={async (event) => {
               await eventRepositoryRef.current?.save(event);
               setAdminEvents((events) => events.map((item) => item.id === event.id ? event : item));
@@ -2748,6 +2850,29 @@ export default function BoothGenerator() {
             projectRepository={technicalRasterProjectRepositoryRef.current}
             catalogPricingRepository={printSurfaceCatalogPricingRepositoryRef.current}
             events={adminEvents}
+            initialProjectId={technicalRasterProjectPreselect}
+          />
+        )}
+
+        {taskDetail && (
+          <TaskDetailPanel
+            task={taskDetail}
+            store={taskStore}
+            lookups={taskLookups}
+            onClose={() => setTaskDetailId(undefined)}
+            onEdit={openTaskEdit}
+            onOpenSource={(task) => void openTaskSource(task)}
+          />
+        )}
+
+        {taskEditor && (
+          <TaskEditorDialog
+            key={taskEditor.nonce}
+            store={taskStore}
+            lookups={taskLookups}
+            initial={taskEditor.initial}
+            taskId={taskEditor.taskId}
+            onClose={() => setTaskEditor(undefined)}
           />
         )}
 
@@ -3305,6 +3430,14 @@ export default function BoothGenerator() {
                 </div>
               </aside>
             </div>
+
+            <StandTasksPanel
+              store={taskStore}
+              lookups={taskLookups}
+              context={boothProjectTaskContext()}
+              onCreateTask={openTaskCreate}
+              onOpenTask={(task) => setTaskDetailId(task.id)}
+            />
 
             <footer className="pageFooter">
               <span>

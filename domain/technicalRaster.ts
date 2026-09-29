@@ -27,6 +27,7 @@ import { resolveTechnicalServicePresentation } from "./technicalRasterServicePre
 import { DEFAULT_AUTO_LEGEND_PLACEMENT, type TechnicalLegendPlacement } from "./technicalRasterLegendPlacement.ts";
 import { resolveServiceIdentityKey, type TechnicalReconciliationMention } from "./technicalRasterReconciliation.ts";
 import type { ParsedCatalogImport } from "./technicalRasterCatalogImport.ts";
+import type { TechnicalRasterDrawing } from "./technicalRasterDrawings.ts";
 import { extractTechnicalMentionsFromCatalogStand } from "./technicalRasterCatalogImport.ts";
 
 // ============================================================================
@@ -550,6 +551,8 @@ export type TechnicalRasterProject = Readonly<{
    * never imported this source, or one saved before this field existed — no migration needed.
    */
   catalogMentions?: readonly TechnicalReconciliationMention[];
+  /** Manual points and lines ("Bod" / "Čára") — a separate layer, never a service or placement, never touched by report imports. See domain/technicalRasterDrawings.ts. Optional: older projects have none. */
+  manualDrawings?: readonly TechnicalRasterDrawing[];
   catalogImportMeta?: TechnicalRasterCatalogImportMeta;
   createdBy?: string;
   createdAt: string;

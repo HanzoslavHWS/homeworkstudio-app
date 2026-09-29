@@ -18,6 +18,7 @@ import { computeSymbolScreenStyle } from "../../../domain/technicalRasterSymbolM
 import { computeRealizationUnderlineScreenStyle } from "../../../domain/technicalRasterRealizationUnderline";
 import { computeNoElectricityMarkerScreenStyle } from "../../../domain/technicalRasterNoElectricityMarker";
 import type { TechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
+import { DRAWING_SIZES, drawingSizeOf, moveManualDrawing, type DrawingSize, type TechnicalRasterDrawing, type TechnicalRasterDrawingTool } from "../../../domain/technicalRasterDrawings";
 import { ViewportToolbar } from "../../configurator/ViewportToolbar";
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -35,6 +36,10 @@ const MARKER_CENTER_DIAGNOSTIC_TOLERANCE_PX = 1.5;
 const RENDER_RESCALE_DEBOUNCE_MS = 250;
 /** Only re-renders for MORE resolution, never re-renders DOWN when zooming back out (that would just be wasted work — keeping a higher-res canvas around costs memory, not correctness). 1.25 = only bother once at least 25% more sharpness is available, so tiny zoom jitter never triggers a re-render. */
 const RENDER_RESCALE_UP_RATIO = 1.25;
+/** Screen px a pointer must travel before a press on a manual drawing counts as a drag (move) rather than a click (select). */
+const DRAWING_DRAG_THRESHOLD_PX = 3;
+/** Invisible hit area around a manual drawing (screen px), so thin lines and small crosses stay easy to pick. */
+const DRAWING_HIT_SCREEN_PX = 14;
 
 export type RasterCanvasMarker = Readonly<{
   id: string;
@@ -143,6 +148,14 @@ export function TechnicalRasterCanvas({
   onServiceSymbolClick,
   realizationUnderlineMarkers,
   noElectricityMarkers,
+  manualDrawings,
+  drawingTool = "off",
+  selectedDrawingId,
+  lineDraft,
+  draftStyle,
+  onDrawingClick,
+  onSelectDrawing,
+  onMoveDrawing,
 }: {
   pdfUrl: string | undefined;
   hiddenLayerIds: ReadonlySet<string>;
@@ -162,6 +175,20 @@ export function TechnicalRasterCanvas({
   realizationUnderlineMarkers?: readonly TechnicalRasterRealizationUnderlineMarker[];
   /** "BEZ elektriky" automatic red X markers (PRODUCTION BATCH, part B) — independent of every other marker prop, defaults to an empty list when omitted so every existing caller is unaffected. */
   noElectricityMarkers?: readonly TechnicalRasterNoElectricityMarker[];
+  /** Manual points/lines ("RUČNÍ ZNAČKY") — a separate layer drawn on top; interactive only with the "select" tool. */
+  manualDrawings?: readonly TechnicalRasterDrawing[];
+  /** Active manual drawing tool. "off" (default) = normal service work, drawings are passive. */
+  drawingTool?: TechnicalRasterDrawingTool;
+  selectedDrawingId?: string;
+  /** Point A of a line being drawn — the canvas previews A -> pointer while it is on `activePage`. */
+  lineDraft?: Readonly<{ page: number; x: number; y: number }>;
+  draftStyle?: Readonly<{ color: string; size: DrawingSize }>;
+  /** A click on the page with the "point" or "line" tool (normalized page coordinates). */
+  onDrawingClick?: (page: number, xNormalized: number, yNormalized: number) => void;
+  /** "select" tool: a drawing was pressed (its id), or empty space was clicked (undefined). */
+  onSelectDrawing?: (drawingId: string | undefined) => void;
+  /** "select" tool: a drawing was dragged by this normalized offset. */
+  onMoveDrawing?: (drawingId: string, dx: number, dy: number) => void;
   /** Set only when the caller wants "pracovní bílý režim" AND a stand layer was unambiguously detected (see resolveWhiteModeAvailability) — undefined always renders the page normally (spec section 16: never guess). */
   whiteModeStandLayerId?: string;
   /** "Krytí bílé" 0-1 (spec batch 6) — only meaningful together with whiteModeStandLayerId; ignored entirely for a plain/original render. The caller is expected to already have applied effectiveWhiteFillOpacity's own default (domain/technicalRaster.ts), so this component never needs its own fallback. */
@@ -198,6 +225,13 @@ export function TechnicalRasterCanvas({
   // whether a sharper re-render is actually warranted (never on every zoom tick — see
   // RENDER_RESCALE_DEBOUNCE_MS's own doc).
   const lastRenderedScaleRef = useRef(BASE_RENDER_SCALE);
+  /** Pointer position (normalized) for the line preview A -> pointer. */
+  const [hoverPoint, setHoverPoint] = useState<Readonly<{ x: number; y: number }> | undefined>(undefined);
+  /** An in-progress press/drag on a manual drawing (select tool). */
+  const dragRef = useRef<{ id: string; pointerId: number; startClientX: number; startClientY: number; startX: number; startY: number; moved: boolean } | undefined>(undefined);
+  const [dragOffset, setDragOffset] = useState<Readonly<{ id: string; dx: number; dy: number }> | undefined>(undefined);
+  /** The click that follows a press on a drawing must not also act as an empty-space click. */
+  const suppressNextClickRef = useRef(false);
   const [renderScaleTrigger, setRenderScaleTrigger] = useState(0);
 
   const viewport = useBoothViewport({
@@ -335,7 +369,23 @@ export function TechnicalRasterCanvas({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activePage, renderKey, whiteModeStandLayerId, whiteFillOpacity, documentVersion, renderScaleTrigger]);
 
+  function toNormalized(clientX: number, clientY: number): Readonly<{ x: number; y: number }> | undefined {
+    if (!pageSizePt) return undefined;
+    const world = viewport.clientToWorld(clientX, clientY);
+    if (!world || world.x < 0 || world.y < 0 || world.x > pageSizePt.width || world.y > pageSizePt.height) return undefined;
+    return { x: world.x / pageSizePt.width, y: world.y / pageSizePt.height };
+  }
+
   function handleStageClick(event: React.MouseEvent<HTMLDivElement>) {
+    if (suppressNextClickRef.current) { suppressNextClickRef.current = false; return; }
+    // Manual drawing tools take the click; they are mutually exclusive with placement/assignment
+    // (the editor switches the tool off whenever a placement or pairing starts).
+    if (drawingTool === "point" || drawingTool === "line") {
+      const point = toNormalized(event.clientX, event.clientY);
+      if (point) onDrawingClick?.(activePage, point.x, point.y);
+      return;
+    }
+    if (drawingTool === "select") { onSelectDrawing?.(undefined); return; }
     if (!(assignMode || placementModeActive) || !onCanvasClick || !pageSizePt) return;
     const world = viewport.clientToWorld(event.clientX, event.clientY);
     if (!world) return;
@@ -471,7 +521,7 @@ export function TechnicalRasterCanvas({
    */
   function renderServicePlacementMarker(marker: TechnicalRasterServiceSymbolMarker) {
     const style = computeSymbolScreenStyle(viewport.transform.zoom);
-    const clickable = Boolean(onServiceSymbolClick) && !placementModeActive;
+    const clickable = Boolean(onServiceSymbolClick) && !placementModeActive && drawingTool === "off";
     const { renderer, displayLabel, color } = marker.presentation;
     const halo = `0 0 ${style.haloBlurPx}px #fff, 0 0 ${style.haloBlurPx}px #fff, 0 0 ${style.haloBlurPx}px #fff`;
     return (
@@ -572,6 +622,119 @@ export function TechnicalRasterCanvas({
     );
   }
 
+  function handleDrawingPointerDown(event: React.PointerEvent<SVGGElement>, drawing: TechnicalRasterDrawing) {
+    // Only the plain left button with the "select" tool — middle button / space+drag stay pan.
+    if (drawingTool !== "select" || event.button !== 0 || viewport.isSpacePressed) return;
+    event.stopPropagation();
+    const point = toNormalized(event.clientX, event.clientY);
+    if (!point) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    dragRef.current = { id: drawing.id, pointerId: event.pointerId, startClientX: event.clientX, startClientY: event.clientY, startX: point.x, startY: point.y, moved: false };
+    onSelectDrawing?.(drawing.id);
+  }
+
+  function handleDrawingPointerMove(event: React.PointerEvent<SVGGElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || !pageSizePt) return;
+    if (!drag.moved && Math.hypot(event.clientX - drag.startClientX, event.clientY - drag.startClientY) < DRAWING_DRAG_THRESHOLD_PX) return;
+    drag.moved = true;
+    const world = viewport.clientToWorld(event.clientX, event.clientY);
+    if (!world) return;
+    setDragOffset({ id: drag.id, dx: world.x / pageSizePt.width - drag.startX, dy: world.y / pageSizePt.height - drag.startY });
+  }
+
+  function handleDrawingPointerUp(event: React.PointerEvent<SVGGElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    dragRef.current = undefined;
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
+    suppressNextClickRef.current = true;
+    if (drag.moved && dragOffset && dragOffset.id === drag.id) onMoveDrawing?.(drag.id, dragOffset.dx, dragOffset.dy);
+    setDragOffset(undefined);
+  }
+
+  /**
+   * RUČNÍ ZNAČKY — one SVG layer over the whole stage (stage px = normalized × stage size, the same
+   * page space as every placement). Stroke widths and cross sizes are divided by the zoom so they
+   * look the same on screen at any zoom (same rule as the other markers). Drawings are interactive
+   * only with the "select" tool; otherwise the layer lets every click through to the page/services.
+   */
+  function renderManualDrawings(stageWidthPx: number, stageHeightPx: number) {
+    const drawings = (manualDrawings ?? []).filter((drawing) => drawing.page === activePage);
+    const draft = drawingTool === "line" && lineDraft && lineDraft.page === activePage ? lineDraft : undefined;
+    if (drawings.length === 0 && !draft) return null;
+    const zoom = viewport.transform.zoom || 1;
+    const px = (screen: number) => screen / zoom;
+    const interactive = drawingTool === "select";
+    return (
+      <svg className="technicalRasterDrawings" width={stageWidthPx} height={stageHeightPx} viewBox={`0 0 ${stageWidthPx} ${stageHeightPx}`} aria-label="Ruční značky">
+        {drawings.map((original) => {
+          const drawing = dragOffset && dragOffset.id === original.id ? moveManualDrawing(original, dragOffset.dx, dragOffset.dy) : original;
+          const size = DRAWING_SIZES[drawingSizeOf(drawing)];
+          const stroke = px(size.strokeScreenPx);
+          const selected = drawing.id === selectedDrawingId;
+          const groupProps = {
+            className: interactive ? "technicalRasterDrawing interactive" : "technicalRasterDrawing",
+            "data-drawing-id": drawing.id,
+            ...(interactive
+              ? {
+                onPointerDown: (event: React.PointerEvent<SVGGElement>) => handleDrawingPointerDown(event, original),
+                onPointerMove: handleDrawingPointerMove,
+                onPointerUp: handleDrawingPointerUp,
+                onPointerCancel: handleDrawingPointerUp,
+                onClick: (event: React.MouseEvent) => event.stopPropagation(),
+              }
+              : {}),
+          };
+          if (drawing.type === "point") {
+            const cx = drawing.x * stageWidthPx;
+            const cy = drawing.y * stageHeightPx;
+            const half = px(size.crossHalfScreenPx);
+            return (
+              <g key={drawing.id} {...groupProps}>
+                {selected && <circle cx={cx} cy={cy} r={half + px(5)} className="technicalRasterDrawingSelection" strokeWidth={px(1.5)} />}
+                <circle cx={cx} cy={cy} r={px(DRAWING_HIT_SCREEN_PX)} className="technicalRasterDrawingHit" />
+                <line x1={cx - half} y1={cy} x2={cx + half} y2={cy} stroke={drawing.color} strokeWidth={stroke} strokeLinecap="round" />
+                <line x1={cx} y1={cy - half} x2={cx} y2={cy + half} stroke={drawing.color} strokeWidth={stroke} strokeLinecap="round" />
+              </g>
+            );
+          }
+          const x1 = drawing.x1 * stageWidthPx;
+          const y1 = drawing.y1 * stageHeightPx;
+          const x2 = drawing.x2 * stageWidthPx;
+          const y2 = drawing.y2 * stageHeightPx;
+          return (
+            <g key={drawing.id} {...groupProps}>
+              {selected && <line x1={x1} y1={y1} x2={x2} y2={y2} className="technicalRasterDrawingSelection" strokeWidth={stroke + px(6)} strokeLinecap="round" />}
+              <line x1={x1} y1={y1} x2={x2} y2={y2} className="technicalRasterDrawingHit" strokeWidth={px(DRAWING_HIT_SCREEN_PX)} />
+              <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={drawing.color} strokeWidth={stroke} strokeLinecap="round" />
+              {selected && [[x1, y1], [x2, y2]].map(([x, y], index) => (
+                <rect key={index} x={x! - px(3)} y={y! - px(3)} width={px(6)} height={px(6)} className="technicalRasterDrawingHandle" strokeWidth={px(1)} />
+              ))}
+            </g>
+          );
+        })}
+        {draft && (
+          <g className="technicalRasterDrawingDraft">
+            <circle cx={draft.x * stageWidthPx} cy={draft.y * stageHeightPx} r={px(4)} fill={draftStyle?.color ?? "#d62828"} />
+            {hoverPoint && (
+              <line
+                x1={draft.x * stageWidthPx}
+                y1={draft.y * stageHeightPx}
+                x2={hoverPoint.x * stageWidthPx}
+                y2={hoverPoint.y * stageHeightPx}
+                stroke={draftStyle?.color ?? "#d62828"}
+                strokeWidth={px(DRAWING_SIZES[draftStyle?.size ?? "medium"].strokeScreenPx)}
+                strokeDasharray={`${px(6)} ${px(4)}`}
+                strokeLinecap="round"
+              />
+            )}
+          </g>
+        )}
+      </svg>
+    );
+  }
+
   if (!pdfUrl) {
     return (
       <div className="workflowCard technicalRasterCanvasPanel">
@@ -610,9 +773,13 @@ export function TechnicalRasterCanvas({
           "technicalRasterViewport",
           assignMode ? "assignMode" : "",
           placementModeActive ? "placementMode" : "",
+          drawingTool !== "off" ? `drawingTool-${drawingTool}` : "",
         ].filter(Boolean).join(" ")}
         onPointerDown={(event) => { if (viewport.startPan(event)) return; }}
-        onPointerMove={viewport.movePan}
+        onPointerMove={(event) => {
+          viewport.movePan(event);
+          if (drawingTool === "line" && lineDraft) setHoverPoint(toNormalized(event.clientX, event.clientY));
+        }}
         onPointerUp={viewport.endPan}
         onPointerCancel={viewport.endPan}
         onClick={handleStageClick}
@@ -630,6 +797,7 @@ export function TechnicalRasterCanvas({
           {(servicePlacementMarkers ?? []).filter((marker) => marker.page === activePage).map((marker) => renderServicePlacementMarker(marker))}
           {(realizationUnderlineMarkers ?? []).filter((marker) => marker.page === activePage).map((marker) => renderRealizationUnderline(marker))}
           {(noElectricityMarkers ?? []).filter((marker) => marker.page === activePage).map((marker) => renderNoElectricityMarker(marker))}
+          {renderManualDrawings(stageWidth, stageHeight)}
         </div>
       </div>
     </div>

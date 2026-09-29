@@ -17,12 +17,15 @@ export function TechnicalRastersPage({
   projectRepository,
   catalogPricingRepository,
   events,
+  initialProjectId,
 }: {
   projectRepository: TechnicalRasterProjectRepository;
   catalogPricingRepository: RemoteApiCatalogPricingRepository;
   events: readonly Exhibition[];
+  /** Opens this project directly (e.g. a task's "Otevřít technický rastr"), same as PrintSurfacesPage's initialProjectId. */
+  initialProjectId?: string;
 }) {
-  const [openProjectId, setOpenProjectId] = useState<string | null>(null);
+  const [openProjectId, setOpenProjectId] = useState<string | null>(initialProjectId ?? null);
   // "Automaticky pokračovat v umisťování" (production-workflow batch, part B): a per-session mode
   // preference, default OFF. Held here (not in the editor) so it survives opening another project,
   // while each editor mount still starts with no active placement target. Not persisted across page
