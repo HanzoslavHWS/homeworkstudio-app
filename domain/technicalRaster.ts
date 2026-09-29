@@ -682,6 +682,21 @@ export function effectiveHiddenLayerIds(project: TechnicalRasterProject): Readon
 }
 
 /**
+ * The DEFAULT ON/OFF state every source OCG gets in the exported PDF, keyed by the real OCG name
+ * the export's pdf-lib matching uses. Only the ACTUAL source-layer state (`layerVisibility`,
+ * falling back to the PDF's own default) counts; "Nezobrazovat v pracovní verzi"
+ * (`workModeHiddenLayerIds`) is a working-view preference and is deliberately ignored, so a layer
+ * hidden only while working still exports ON. The export only sets defaults — it never removes a
+ * layer's content, so an OFF layer can still be switched back on in Acrobat/Corel.
+ */
+export function resolveExportSourceLayerVisibility(project: Pick<TechnicalRasterProject, "rasterLayers" | "rasterSettings">): readonly Readonly<{ ocgName: string; visible: boolean }>[] {
+  return project.rasterLayers.map((layer) => ({
+    ocgName: layer.name,
+    visible: project.rasterSettings.layerVisibility[layer.id] ?? layer.defaultVisible,
+  }));
+}
+
+/**
  * Replaces the detected stand-number label set (from a fresh PDF text-layer read) and re-runs
  * exact matching for every stand whose placement isn't manual (spec section 19) — a manual
  * placement (matchMethod "manual") is NEVER overwritten by this, only exact_auto/unassigned/

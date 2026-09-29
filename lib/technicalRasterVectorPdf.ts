@@ -300,7 +300,25 @@ function remapFlatOcgRefList(srcArr: PDFArray, srcDoc: PDFDocument, ctx: PDFCont
   return result;
 }
 
-export function reconstructOcProperties(srcDoc: PDFDocument, newDoc: PDFDocument, copiedPage: PDFPage): OcgReconstructionResult {
+/**
+ * One source OCG's DEFAULT state for the export, by real OCG name (see
+ * domain/technicalRaster.ts resolveExportSourceLayerVisibility — the project's actual layer ON/OFF,
+ * never the working-view-only hide).
+ */
+export type TechnicalRasterExportSourceLayerVisibility = Readonly<{ ocgName: string; visible: boolean }>;
+
+/**
+ * `sourceLayerVisibility` (optional) sets each source OCG's default ON/OFF to the project's own
+ * layer state. A layer not listed keeps the source PDF's own default. Only /D/ON and /D/OFF change —
+ * the OCG objects, their content, /OCGs order, /Order, /Locked and /RBGroups are preserved as before.
+ */
+export function reconstructOcProperties(
+  srcDoc: PDFDocument,
+  newDoc: PDFDocument,
+  copiedPage: PDFPage,
+  sourceLayerVisibility: readonly TechnicalRasterExportSourceLayerVisibility[] = [],
+): OcgReconstructionResult {
+  const visibilityByName = new Map(sourceLayerVisibility.map((entry) => [entry.ocgName, entry.visible]));
   const none: OcgReconstructionResult = { attempted: false, sourceOcgCount: 0, reconstructedOcgCount: 0, reconstructedOcgNames: [], unmatchedOcgNames: [], orderReconstructed: false };
   const srcOcProps = srcDoc.catalog.lookup(PDFName.of("OCProperties"));
   if (!(srcOcProps instanceof PDFDict)) return none;
@@ -341,7 +359,9 @@ export function reconstructOcProperties(srcDoc: PDFDocument, newDoc: PDFDocument
   for (const ref of orderedRefs) {
     const ocg = newDoc.context.lookup(ref);
     const name = ocg instanceof PDFDict ? decodePdfTextLike(ocg.lookup(PDFName.of("Name"))) : undefined;
-    (name && offNames.has(name) ? offArr : onArr).push(ref);
+    const projectVisible = name !== undefined ? visibilityByName.get(name) : undefined;
+    const visible = projectVisible ?? !(name && offNames.has(name));
+    (visible ? onArr : offArr).push(ref);
   }
 
   const dDict = PDFDict.withContext(ctx);
@@ -1606,6 +1626,8 @@ export type TechnicalRasterVectorExportInput = Readonly<{
   textScales?: readonly TechnicalRasterExportTextScaleItem[];
   /** Corrective batch section 7 — WHERE the legend is drawn. Omitted resolves to today's existing "separate-page" behavior via resolveEffectiveLegendPlacement. A "source-legend-area" region targeting a page OTHER than `input.page` has no effect in this single-page function (there IS no other page here) — the multi-page function below is what real multi-page exports use. */
   legendPlacement?: TechnicalLegendPlacement;
+  /** The project's actual source-layer ON/OFF state -> the exported PDF's default OCG state (see reconstructOcProperties). Omitted keeps the source PDF's own defaults. */
+  sourceLayerVisibility?: readonly TechnicalRasterExportSourceLayerVisibility[];
 }>;
 
 export type TechnicalRasterVectorExportResult = Readonly<{
@@ -1639,7 +1661,7 @@ export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRaster
   newDoc.addPage(copiedPage);
   disableUnnecessaryAutoNormalizeCtm(copiedPage);
 
-  const ocgDiagnostic = reconstructOcProperties(srcDoc, newDoc, copiedPage);
+  const ocgDiagnostic = reconstructOcProperties(srcDoc, newDoc, copiedPage, input.sourceLayerVisibility);
 
   // Content-stream rewriting happens BEFORE any overlay symbol is drawn (below) — pdf-lib's own
   // page.draw*() calls append fresh operators/streams on top of whatever Contents already holds,
@@ -1752,6 +1774,8 @@ export type TechnicalRasterMultiPageVectorExportInput = Readonly<{
   textScales?: readonly TechnicalRasterExportTextScaleItem[];
   /** Corrective batch section 7 — WHERE the legend is drawn. Omitted resolves to today's existing "separate-page" behavior. */
   legendPlacement?: TechnicalLegendPlacement;
+  /** Same as the single-page input's `sourceLayerVisibility` — applied to every exported page's OCG reconstruction. */
+  sourceLayerVisibility?: readonly TechnicalRasterExportSourceLayerVisibility[];
 }>;
 
 export type TechnicalRasterMultiPageVectorExportResult = Readonly<{
@@ -1814,7 +1838,7 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
     const [copiedPage] = await newDoc.copyPages(srcDoc, [pageInput.page - 1]);
     newDoc.addPage(copiedPage);
     disableUnnecessaryAutoNormalizeCtm(copiedPage);
-    ocgDiagnosticsByPage.push(reconstructOcProperties(srcDoc, newDoc, copiedPage));
+    ocgDiagnosticsByPage.push(reconstructOcProperties(srcDoc, newDoc, copiedPage, input.sourceLayerVisibility));
     whiteModeDiagnosticsByPage.push(
       input.whiteMode
         ? requireVectorWhiteModeApplied(applyVectorWhiteMode(srcDoc, newDoc, copiedPage, Math.min(1, Math.max(0, input.whiteMode.opacity))), pageInput.page)

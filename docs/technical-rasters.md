@@ -239,6 +239,21 @@ Three independent, real-production fixes:
   regardless of the imported quantity (2/3/5), same mechanism cleaning/waste already used. The raw
   imported quantity is untouched; only `requiredPlacementCount` changes.
 
+## CORRECTIVE BATCH — layer export, catalog page breaks, Internet router
+
+- **Source layer OFF survives export.** The export sets each source OCG's *default* state from the
+  project's actual layer switch (`layerVisibility`, via `resolveExportSourceLayerVisibility`). The layer
+  keeps its content and its place in `/OCGs` and `/Order`, so it can be switched back on in
+  Acrobat/Corel. "Nezobrazovat v pracovní verzi" only affects the editor; a working-hidden layer still
+  exports ON. GENERÁTOR DATA, white mode and text scale are independent of this.
+- **Catalog header at the end of a page.** When a stand header is the last row of a page, the page
+  footer and the next page's repeated column header no longer consume the "company row expected" state.
+  An `R:` value that pdf.js merged into the previous text run (`… NÁUŠ R: MAC Praha, …`) is split off.
+- **Router rental** is its own reconciliation variant (`internet:router`) on both sides. It is no longer
+  summed into plain Internet. This affects reconciliation only; markers and cardinality are unchanged.
+- Real-file check: `TECHNICAL_RASTER_BEAUTY_DIR=<folder> npm run test:technical-raster-beauty-real`.
+  It is skip-safe, and the customer files are never committed.
+
 ## PRODUCTION-WORKFLOW BATCH — project management + fast placement
 
 - **Edit project** (`domain/technicalRasterProjectList.ts`) — AKCE has a visible ✎ button (plus

@@ -186,15 +186,44 @@ function classifyRow(row: PdfTextRow): ClassifiedRow {
   return { kind: "unrecognized", text, page: row.page };
 }
 
-/** A "company" row is identified STRUCTURALLY (always the row immediately after a HEADER row — verified against every stand in the real fixture), never by its own content shape, since a company/trade name can be almost any text. Called only when the walker already knows it's expecting one. */
+/** " R: " printed INSIDE another text run — pdf.js sometimes merges the trade-name and R columns into one run (real case: "PIERCING A NASTŘELOVÁNÍ NÁUŠ R: MAC Praha, spol. s r.o."). Uppercase "R:" preceded by whitespace only, so a company name that merely contains the letter r never splits. */
+const EMBEDDED_REALIZATION_PATTERN = /\s+R:\s*/u;
+
+/**
+ * A "company" row is identified STRUCTURALLY (the first CONTENT row after a HEADER row — see the
+ * page-break handling in parseSupplementalCatalogPdf), never by its own content shape, since a
+ * company/trade name can be almost any text. Called only when the walker already knows it's
+ * expecting one. The R column is taken from a run that starts with "R:", or, when pdf.js merged it
+ * into the previous run, split off at the embedded " R: ".
+ */
 function parseCompanyRow(row: PdfTextRow): Extract<ClassifiedRow, { kind: "company" }> {
-  const items = row.items;
-  const realizationItem = items.find((item) => /^r\s*:/iu.test(item.str.trim()));
-  const realizationCompanyRaw = realizationItem ? realizationItem.str.trim().replace(/^r\s*:\s*/iu, "").trim() || undefined : undefined;
-  const remaining = items.filter((item) => item !== realizationItem);
-  const companyName = remaining[0]?.str.trim() || undefined;
-  const tradeName = remaining[1]?.str.trim() || undefined;
-  return { kind: "company", companyName, tradeName, realizationCompanyRaw };
+  const texts = row.items.map((item) => item.str.trim()).filter(Boolean);
+  let realizationCompanyRaw: string | undefined;
+  const standaloneIndex = texts.findIndex((text) => /^r\s*:/iu.test(text));
+  if (standaloneIndex >= 0) {
+    realizationCompanyRaw = texts[standaloneIndex]!.replace(/^r\s*:\s*/iu, "").trim() || undefined;
+    texts.splice(standaloneIndex, 1);
+  } else {
+    const embeddedIndex = texts.findIndex((text) => EMBEDDED_REALIZATION_PATTERN.test(text));
+    if (embeddedIndex >= 0) {
+      const text = texts[embeddedIndex]!;
+      const match = [...text.matchAll(new RegExp(EMBEDDED_REALIZATION_PATTERN, "gu"))].at(-1)!;
+      realizationCompanyRaw = text.slice(match.index! + match[0].length).trim() || undefined;
+      const before = text.slice(0, match.index).trim();
+      if (before) texts[embeddedIndex] = before; else texts.splice(embeddedIndex, 1);
+    }
+  }
+  return { kind: "company", companyName: texts[0] || undefined, tradeName: texts[1] || undefined, realizationCompanyRaw };
+}
+
+/**
+ * Rows that can sit between a stand's HEADER row and its COMPANY row when the header is the last
+ * row of a page: the page footer ("Výtisk sestavil(a) …"), the next page's repeated column header
+ * ("Stánek / Číslo dokladu / Externí číslo") and repeated document preamble. They are page-layout
+ * noise, never the company row, so the pending "company row expected" state survives them.
+ */
+function isPageBreakNoise(classified: ClassifiedRow): boolean {
+  return classified.kind === "footer" || classified.kind === "columnHeader" || classified.kind === "preamble";
 }
 
 // ============================================================================
@@ -226,18 +255,30 @@ export function parseSupplementalCatalogPdf(items: readonly PdfTextItem[]): Pars
   }
 
   for (const row of rows) {
+    const classified = classifyRow(row);
+
     if (expectingCompanyRow) {
-      const company = parseCompanyRow(row);
-      if (current) {
-        current.companyName = company.companyName;
-        current.tradeName = company.tradeName;
-        current.realizationCompanyRaw = company.realizationCompanyRaw;
+      // CORRECTIVE BATCH (real Beauty catalog, page boundaries) — a stand HEADER can be the last
+      // row of page N; the next rows are then that page's footer and page N+1's repeated column
+      // header, and only THEN the company/R row. The pending state must survive that noise
+      // (previously the footer itself was taken as the company row, and the real company/R row fell
+      // through to item parsing as "<company> … R: …" with an unreadable quantity).
+      if (isPageBreakNoise(classified)) continue;
+      // A new HEADER, or the dimensions/area rows, mean this stand simply has no company row —
+      // stop waiting and handle the row normally (never swallow real structure as a company).
+      if (classified.kind !== "header" && classified.kind !== "dimensions" && classified.kind !== "area") {
+        const company = parseCompanyRow(row);
+        if (current) {
+          current.companyName = company.companyName;
+          current.tradeName = company.tradeName;
+          current.realizationCompanyRaw = company.realizationCompanyRaw;
+        }
+        expectingCompanyRow = false;
+        continue;
       }
       expectingCompanyRow = false;
-      continue;
     }
 
-    const classified = classifyRow(row);
     switch (classified.kind) {
       case "header": {
         flushCurrent();
@@ -338,7 +379,11 @@ function classifyCatalogItemCategory(label: string): string | undefined {
   // the same discipline domain/technicalRasterServicePresentation.ts's own patterns already use
   // (e.g. WIFI_PATTERN, FIXED_IP_PATTERN).
   if (/elektrick\p{L}*\s+energi/iu.test(text) || /\d+\s*kw/iu.test(text)) return "electricity";
-  if (/internet/iu.test(text)) return "internet";
+  // Router rental is listed on its own line without the word "internet" ("Router - zapůjčení");
+  // it is internet equipment, so it is reconciled against the report's own router row (as the
+  // separate "internet:router" variant — see resolveCanonicalServiceVariant), never ignored on
+  // one side only.
+  if (/internet|router/iu.test(text)) return "internet";
   if (/(^|[^\p{L}])vod[aouy]([^\p{L}]|$)|přívod\s+vody/iu.test(text)) return "water";
   if (/kontejn|odvoz\s+odpadu|vana\s*\d/iu.test(text)) return "waste";
   if (/úklid/iu.test(text)) return "cleaning";

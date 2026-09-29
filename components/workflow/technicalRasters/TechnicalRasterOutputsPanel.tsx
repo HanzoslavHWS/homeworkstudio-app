@@ -10,6 +10,7 @@ import {
   effectiveLegendPlacement,
   effectiveSourceLayerTextScales,
   effectiveWhiteFillOpacity,
+  resolveExportSourceLayerVisibility,
   type TechnicalRasterProject,
 } from "../../../domain/technicalRaster";
 import { resolveRealizationDisplayState, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
@@ -229,6 +230,9 @@ export function TechnicalRasterOutputsPanel({
         includeRealizationKey: includeRealizations,
         textScales,
         legendPlacement: effectiveLegendPlacement(project.rasterSettings),
+        // Actual source-layer ON/OFF -> the exported PDF's default OCG state. The working-view-only
+        // "Nezobrazovat v pracovní verzi" hide is deliberately not part of this (see the resolver).
+        sourceLayerVisibility: resolveExportSourceLayerVisibility(project),
       });
 
       const blobUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));

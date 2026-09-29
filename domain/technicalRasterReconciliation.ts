@@ -92,6 +92,17 @@ function isAbfWaterWasteConnectionLabel(externalLabel: string): boolean {
   return /voda/u.test(normalized) && /odpad/u.test(normalized);
 }
 
+/**
+ * CORRECTIVE BATCH (real Beauty production, 3A45) — router rental ("Router zapůjčení" in the
+ * internet report, "Router - zapůjčení" in the catalog) is equipment, not another Internet
+ * connection. Without its own variant it fell into the catch-all "internet:plain" and was SUMMED
+ * with the real Internet row (report 2× vs catalog 1×, a false quantity mismatch). Reconciliation
+ * only — placement cardinality, markers and legend never read this.
+ */
+function isRouterRentalLabel(externalLabel: string): boolean {
+  return /router|smerovac/u.test(stripDiacritics(externalLabel));
+}
+
 function normalizeGenericVariant(externalLabel: string): string {
   return externalLabel
     .normalize("NFD")
@@ -157,6 +168,7 @@ export function resolveCanonicalServiceVariant(category: string, externalLabel: 
   if (category === "internet") {
     if (isFixedIpLabel(externalLabel)) return "fixed-ip";
     if (isWifiLabel(externalLabel)) return "wifi";
+    if (isRouterRentalLabel(externalLabel)) return "internet:router";
     return "internet:plain";
   }
   if (category === "cleaning") {
