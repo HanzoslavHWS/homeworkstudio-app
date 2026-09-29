@@ -239,6 +239,23 @@ Three independent, real-production fixes:
   regardless of the imported quantity (2/3/5), same mechanism cleaning/waste already used. The raw
   imported quantity is untouched; only `requiredPlacementCount` changes.
 
+## Incremental report re-import (new version of an already imported report)
+
+- Re-importing a category no longer resets placements. `mergeTechnicalRasterImportWithDiff` pairs old and
+  new service rows per stand by `resolveServiceIdentityKey`. The key is the category plus the same canonical
+  variant reconciliation uses, e.g. `electricity|3kw` or `internet|internet:router`. Unrecognised
+  electricity labels (breakers) also include the label itself.
+- **Unchanged:** the service keeps its id and placements.
+- **Quantity up:** placements are kept; the missing points appear in K UMÍSTĚNÍ via `requiredPlacementCount`.
+- **Quantity down:** the first placements (in creation order) are kept and the surplus is removed.
+- **Added / removed:** new services are unplaced; removed services disappear together with their markers.
+- A service whose identity changes (e.g. 2 kW → 3 kW) is removed and added; its placement is never carried
+  over.
+- The change summary is stored on the new import record (`serviceDiff`), inside the existing `document`
+  JSON, so no migration is needed. It is shown before confirming, after the import ("Report aktualizován"
+  → "Zobrazit změny"), and in the import history.
+- Real-data check: `--reimport` with `TECHNICAL_RASTER_BEAUTY_PREVIOUS_DIR` (older report versions).
+
 ## CORRECTIVE BATCH — layer export, catalog page breaks, Internet router
 
 - **Source layer OFF survives export.** The export sets each source OCG's *default* state from the

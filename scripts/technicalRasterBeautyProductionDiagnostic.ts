@@ -12,6 +12,7 @@
  * Usage:
  *   TECHNICAL_RASTER_BEAUTY_DIR="C:/path/to/FOR_BEAUTY/rastry" node --no-warnings scripts/technicalRasterBeautyProductionDiagnostic.ts
  *   (add --json to print one machine-readable summary line at the end)
+ *   (add --reimport with TECHNICAL_RASTER_BEAUTY_PREVIOUS_DIR=<folder with the OLDER report versions> for the incremental re-import check)
  */
 import * as pdfjsLib from "pdfjs-dist/legacy/build/pdf.mjs";
 import { existsSync, readdirSync } from "node:fs";
@@ -25,8 +26,12 @@ import { resolveTechnicalRealizationGroup } from "../domain/technicalRasterReali
 import {
   buildPrimaryReportMentions,
   createTechnicalRasterProject,
+  effectiveServicePlacements,
   mergeSupplementalCatalogImport,
   mergeTechnicalRasterImport,
+  mergeTechnicalRasterImportWithDiff,
+  placeTechnicalService,
+  requiredPlacementCount,
   withRasterStandLabels,
   type TechnicalRasterProject,
 } from "../domain/technicalRaster.ts";
@@ -207,7 +212,82 @@ async function main(): Promise<void> {
     summary[hall] = { labels: labels.length, catalogRecords: meta.standCount, currentRaster, outsideCurrentRaster: meta.outsideCurrentRasterCount, matched: meta.matchedStandCount, reconciliation: counts, internet3A45: internet3A45.map(describeOutcome) };
   }
 
+  if (process.argv.includes("--reimport")) await runReimportCheck(files.h3!);
   if (wantJson) console.log("\nJSON " + JSON.stringify(summary));
+}
+
+/**
+ * Incremental re-import on real data (H3): import the OLDER report versions from
+ * TECHNICAL_RASTER_BEAUTY_PREVIOUS_DIR, place every required point on every matched stand (simulated
+ * manual work, distinct coordinates), re-import the CURRENT versions, then check every invariant:
+ * unchanged services keep id + placements, removed ones are gone, added ones are unplaced, increased
+ * ones keep their original points, decreased ones keep the first points.
+ */
+async function runReimportCheck(h3Path: string): Promise<void> {
+  const previousDir = process.env.TECHNICAL_RASTER_BEAUTY_PREVIOUS_DIR;
+  section("RE-IMPORT — older report versions -> current versions (H3)");
+  if (!previousDir || !existsSync(previousDir)) { console.log("TECHNICAL_RASTER_BEAUTY_PREVIOUS_DIR not set — skipping."); return; }
+  const pick = (folder: string, pattern: RegExp) => { const name = readdirSync(folder).filter((candidate) => pattern.test(candidate)).sort().at(-1); return name ? path.join(folder, name) : undefined; };
+  const patterns = { electricity: /^Přehled - elektrická energie.*\.pdf$/iu, internet: /^Přehled - internet, WiFi.*\.pdf$/iu, water: /^Přehled - voda, odpad.*\.pdf$/iu, cleaning: /^Přehled - úklid.*\.pdf$/iu } as const;
+  const rasterDoc = await loadPdf(h3Path);
+  let project: TechnicalRasterProject = withRasterStandLabels(createTechnicalRasterProject({ name: "Beauty H3" }, "beauty-h3-reimport"), detectRasterStandLabels(await extractItems(rasterDoc), await getPageSizes(rasterDoc)));
+  const resolver = () => ({ status: "unresolved_product" as const });
+
+  for (const [category, pattern] of Object.entries(patterns)) {
+    const file = pick(previousDir, pattern);
+    if (!file) { console.log(`${category}: no older version found — skipped`); continue; }
+    project = mergeTechnicalRasterImport(project, { ...importRecord(category, path.basename(file)), id: `old-${category}` }, getTechnicalReportParser(category)!.parse(await extractItems(await loadPdf(file))), resolver);
+  }
+  // Simulated manual work: every required point placed.
+  let placedPoints = 0;
+  for (const stand of project.stands) {
+    if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
+    for (const service of stand.services) {
+      for (let index = effectiveServicePlacements(service).length; index < requiredPlacementCount(service); index += 1) {
+        const next = placeTechnicalService(project, stand.id, service.id, { page: 1, xNormalized: 0.001 + (placedPoints % 997) / 1000, yNormalized: 0.5 });
+        if (next !== project) { project = next; placedPoints += 1; }
+      }
+    }
+  }
+  const before = new Map(project.stands.flatMap((stand) => stand.services.map((service) => [service.id, { stand: stand.standNumber, service }] as const)));
+  console.log(`older versions imported; simulated placed points: ${placedPoints}`);
+
+  const violations: string[] = [];
+  for (const [category, pattern] of Object.entries(patterns)) {
+    const file = pick(dir!, pattern);
+    const previous = project.imports.find((record) => record.category === category && !record.supersededByImportId);
+    if (!file || !previous) continue;
+    const result = mergeTechnicalRasterImportWithDiff(project, { ...importRecord(category, path.basename(file)), id: `new-${category}` }, getTechnicalReportParser(category)!.parse(await extractItems(await loadPdf(file))), resolver, previous.id);
+    project = result.project;
+    const diff = result.diff!;
+    console.log(`${category.padEnd(12)} unchanged=${diff.unchanged} added=${diff.added} removed=${diff.removed} qty+=${diff.quantityIncreased} qty-=${diff.quantityDecreased}`);
+    for (const change of diff.changes) console.log(`    ${change.kind.padEnd(17)} ${change.standNumber} "${change.externalLabel}" ${change.previousQuantity}× -> ${change.quantity}×${change.removedPlacementCount ? ` (removed points: ${change.removedPlacementCount})` : ""}`);
+  }
+
+  // Invariants over the final state.
+  const after = new Map(project.stands.flatMap((stand) => stand.services.map((service) => [service.id, service] as const)));
+  const changedIds = new Set(project.imports.flatMap((record) => record.serviceDiff?.changes ?? []).map((change) => change.serviceId).filter(Boolean));
+  let keptWithSamePoints = 0;
+  for (const [id, { stand, service: old }] of before) {
+    const now = after.get(id);
+    if (!now) continue; // removed — checked via diff
+    const oldPoints = effectiveServicePlacements(old);
+    const nowPoints = effectiveServicePlacements(now);
+    if (!changedIds.has(id)) {
+      if (JSON.stringify(oldPoints) !== JSON.stringify(nowPoints)) violations.push(`${stand} "${old.externalLabel}": unchanged service lost/moved placements`);
+      else keptWithSamePoints += 1;
+    } else if (JSON.stringify(nowPoints) !== JSON.stringify(oldPoints.slice(0, nowPoints.length))) {
+      violations.push(`${stand} "${old.externalLabel}": quantity change did not keep the original points as a prefix`);
+    }
+  }
+  for (const record of project.imports) {
+    for (const change of record.serviceDiff?.changes ?? []) {
+      if (change.kind === "added" && change.serviceId && effectiveServicePlacements(after.get(change.serviceId)!).length !== 0) violations.push(`${change.standNumber} "${change.externalLabel}": added service is not unplaced`);
+      if (change.kind === "removed" && [...after.values()].some((service) => before.get(service.id)?.stand === change.standNumber && service.externalLabel === change.externalLabel && service.sourceImportId.startsWith("old-"))) violations.push(`${change.standNumber} "${change.externalLabel}": removed service still present`);
+    }
+  }
+  console.log(`services kept with identical placements: ${keptWithSamePoints}`);
+  console.log(violations.length === 0 ? "INVARIANTS: OK" : `INVARIANT VIOLATIONS (${violations.length}):\n  ${violations.join("\n  ")}`);
 }
 
 await main();

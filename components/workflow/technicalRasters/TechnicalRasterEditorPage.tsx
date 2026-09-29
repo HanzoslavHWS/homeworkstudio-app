@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   assignStandManually,
   clearStandAssignment,
-  mergeTechnicalRasterImport,
+  mergeTechnicalRasterImportWithDiff,
   moveTechnicalServicePlacement,
   nextUnassignedStand,
   placeTechnicalService,
@@ -28,6 +28,7 @@ import {
   withSourceLayerTextScale,
   effectiveSourceLayerTextScales,
   type RasterSettings,
+  type TechnicalImportServiceDiff,
   type TechnicalRasterImport,
   type TechnicalRasterProject,
   type TechnicalRasterProjectRepository,
@@ -61,6 +62,7 @@ import { TechnicalStandBuffer } from "./TechnicalStandBuffer";
 import { TechnicalStandDetailPanel } from "./TechnicalStandDetailPanel";
 import { TechnicalRasterPlacementContextPanel } from "./TechnicalRasterPlacementContextPanel";
 import { TechnicalRasterOutputsPanel } from "./TechnicalRasterOutputsPanel";
+import { TechnicalImportDiffSummary } from "./TechnicalImportDiffSummary";
 
 type TechnicalRasterStep = "raster" | "services" | "assignment" | "outputs";
 const STEPS: readonly Readonly<{ id: TechnicalRasterStep; label: string }>[] = [
@@ -115,6 +117,8 @@ export function TechnicalRasterEditorPage({
   const [selectedStandId, setSelectedStandId] = useState<string | undefined>(undefined);
   const [assignmentActiveStandId, setAssignmentActiveStandId] = useState<string | undefined>(undefined);
   const [pendingImport, setPendingImport] = useState<PendingTechnicalImport | undefined>(undefined);
+  /** "Report aktualizován" — the change summary of the last incremental re-import, until dismissed. */
+  const [lastImportDiff, setLastImportDiff] = useState<Readonly<{ diff: TechnicalImportServiceDiff; category: string; filename: string }> | undefined>(undefined);
   const [isProcessingRaster, setIsProcessingRaster] = useState(false);
   const [rasterError, setRasterError] = useState("");
   const [renderKey, setRenderKey] = useState(0);
@@ -381,6 +385,22 @@ export function TechnicalRasterEditorPage({
     return resolveTechnicalServiceProduct(category, externalLabel, catalogItems).status;
   }
 
+  /** Product resolution for mergeTechnicalRasterImportWithDiff — shared by the real import and its dry-run preview. */
+  function resolveProduct(serviceCategory: string, externalLabel: string) {
+    const resolution = resolveTechnicalServiceProduct(serviceCategory, externalLabel, catalogItems);
+    return resolution.status === "resolved"
+      ? { internalProductId: resolution.internalProductId, internalProductCode: resolution.internalProductCode, status: "resolved" as const }
+      : { status: "unresolved_product" as const };
+  }
+
+  /** Opens a stand in Přiřazení — used by "Zobrazit změny" after a re-import. */
+  function handleShowChangedStand(standNumber: string) {
+    const stand = projectRef.current?.stands.find((candidate) => candidate.standNumber === standNumber);
+    if (!stand) return;
+    setSelectedStandId(stand.id);
+    setStep("assignment");
+  }
+
   async function handleConfirmImport() {
     const current = projectRef.current;
     if (!current || !pendingImport) return;
@@ -401,20 +421,12 @@ export function TechnicalRasterEditorPage({
         servicesFound,
         warnings: report.warnings.map((warning) => ({ ...warning, id: crypto.randomUUID() })),
       };
-      const next = mergeTechnicalRasterImport(
-        current,
-        importRecord,
-        report,
-        (serviceCategory, externalLabel) => {
-          const resolution = resolveTechnicalServiceProduct(serviceCategory, externalLabel, catalogItems);
-          return resolution.status === "resolved"
-            ? { internalProductId: resolution.internalProductId, internalProductCode: resolution.internalProductCode, status: "resolved" }
-            : { status: "unresolved_product" };
-        },
-        replaceImportId,
-      );
+      // Incremental: a re-import of an existing category keeps unchanged services and their placements
+      // (see mergeTechnicalRasterImportWithDiff) and reports what changed.
+      const { project: next, diff } = mergeTechnicalRasterImportWithDiff(current, importRecord, report, resolveProduct, replaceImportId);
       updateProject(next);
       setPendingImport(undefined);
+      setLastImportDiff(diff ? { diff, category, filename: file.name } : undefined);
     } catch (error) {
       setRasterError(error instanceof Error ? error.message : "Import se nepodařilo uložit.");
     }
@@ -838,14 +850,34 @@ export function TechnicalRasterEditorPage({
                   <summary>Zobrazit nalezená data</summary>
                   <TechnicalImportParsedDataList groups={groupParsedReportByStand(pendingImport.report, resolveProductStatus)} />
                 </details>
-                {pendingImport.replaceImportId && <p className="uploadError">Pro tuto kategorii už existuje import — potvrzením nahradíte jeho data (původní záznam zůstane v historii).</p>}
+                {pendingImport.replaceImportId && (() => {
+                  // Dry run of the exact merge the confirm button will perform — the preview can never disagree with the result.
+                  const previewRecord: TechnicalRasterImport = { id: "preview", category: pendingImport.category, filename: pendingImport.file.name, asset: { id: "preview", storageKey: "", originalFileName: pendingImport.file.name, mimeType: "application/pdf", size: 0, createdAt: "", category: "technical-raster-import" }, importedAt: "", parserVersion: "v1", parseStatus: "ok", standsFound: 0, servicesFound: 0, warnings: [] };
+                  const preview = mergeTechnicalRasterImportWithDiff(project, previewRecord, pendingImport.report, resolveProduct, pendingImport.replaceImportId).diff;
+                  return (
+                    <div className="technicalImportUpdateNotice">
+                      <p className="fieldHint">Pro tuto kategorii už existuje import — nový report ho <strong>aktualizuje</strong>. Nezměněné služby si ponechají své umístění v rastru; nové a navýšené kusy se objeví v K UMÍSTĚNÍ. Původní záznam zůstane v historii.</p>
+                      {preview && <TechnicalImportDiffSummary diff={preview} compact />}
+                    </div>
+                  );
+                })()}
                 <div className="printSurfaceCreateFormActions">
-                  <button type="button" className="primaryButton" onClick={() => void handleConfirmImport()}>{pendingImport.replaceImportId ? "Nahradit předchozí data" : "Potvrdit import"}</button>
+                  <button type="button" className="primaryButton" onClick={() => void handleConfirmImport()}>{pendingImport.replaceImportId ? "Aktualizovat report" : "Potvrdit import"}</button>
                   <button type="button" onClick={() => setPendingImport(undefined)}>Zrušit</button>
                 </div>
               </div>
             );
           })()}
+
+          {lastImportDiff && (
+            <div className="workflowCard technicalImportUpdated" role="status">
+              <div className="workflowCardHeader">
+                <div><span>REPORT AKTUALIZOVÁN</span><strong>{technicalServiceCategoryLabel(lastImportDiff.category)} — {lastImportDiff.filename}</strong></div>
+                <button type="button" onClick={() => setLastImportDiff(undefined)}>Zavřít</button>
+              </div>
+              <TechnicalImportDiffSummary diff={lastImportDiff.diff} onShowStand={handleShowChangedStand} />
+            </div>
+          )}
 
           <div className="workflowCard">
             <div className="workflowCardHeader"><div><span>HISTORIE IMPORTŮ</span></div></div>
@@ -863,6 +895,7 @@ export function TechnicalRasterEditorPage({
                       {importRecord.supersededByImportId && <span className="fieldHint">nahrazeno novějším importem</span>}
                     </summary>
                     <div className="technicalRasterImportHistoryDetail">
+                      {importRecord.serviceDiff && <TechnicalImportDiffSummary diff={importRecord.serviceDiff} onShowStand={handleShowChangedStand} compact />}
                       <TechnicalImportParsedDataList groups={groupImportedStandsByImport(project.stands, importRecord.id)} />
                     </div>
                   </details>

@@ -183,6 +183,24 @@ export function resolveCanonicalServiceVariant(category: string, externalLabel: 
   return normalizeGenericVariant(externalLabel);
 }
 
+/**
+ * Stable LOGICAL identity of one service row across re-imports of the same report type (used by
+ * domain/technicalRaster.ts's incremental re-import): `<category>|<canonical variant>` — the SAME
+ * canonical variant reconciliation uses ("electricity" + "3kw", "internet" + "internet:router", …),
+ * never a database/random id. The stand is part of the grouping at the call site (a project is one
+ * hall's raster, and the stand number itself carries the hall prefix).
+ *
+ * One deliberate refinement: "electricity:unrecognized" is a catch-all for labels with no kW value
+ * (e.g. two different breaker types). Treating those as ONE service would let a different
+ * unrecognized label silently inherit another service's placement, so for that catch-all the
+ * normalized label itself is part of the key.
+ */
+export function resolveServiceIdentityKey(category: string, externalLabel: string): string {
+  const variant = resolveCanonicalServiceVariant(category, externalLabel);
+  if (variant === "electricity:unrecognized") return `${category}|${variant}|${normalizeGenericVariant(externalLabel)}`;
+  return `${category}|${variant}`;
+}
+
 type MentionGroup = Readonly<{ standNumber: string; category: string; report: readonly TechnicalReconciliationMention[]; catalog: readonly TechnicalReconciliationMention[] }>;
 
 function groupKey(standNumber: string, category: string): string {

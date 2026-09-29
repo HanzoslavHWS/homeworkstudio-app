@@ -27,7 +27,10 @@ test("WORKSPACE LAYOUT (section 2-4): TECHNICKÉ ZNAČKY renders ABOVE .technica
 });
 
 test("WORKSPACE LAYOUT (section 5): the right panel's priority order is PRÁVĚ UMISŤUJI -> vybraný stánek (detail) -> K umístění/Hotovo (buffer) — TechnicalRasterPlacementContextPanel before TechnicalStandDetailPanel before TechnicalStandBuffer", () => {
-  const sidebarMatch = editorSource.match(/className="technicalRasterSidebar">([\s\S]*?)\n {12}<\/div>/u);
+  // Scoped to the Přiřazení step: the raster step has its own (different) technicalRasterSidebar
+  // earlier in the file, which this regex previously only skipped past by accident.
+  const assignmentStep = editorSource.slice(editorSource.indexOf('{step === "assignment" && ('));
+  const sidebarMatch = assignmentStep.match(/className="technicalRasterSidebar">([\s\S]*?)\n {12}<\/div>/u);
   assert.ok(sidebarMatch, "expected to find the .technicalRasterSidebar JSX block");
   const block = sidebarMatch![1]!;
   const contextIndex = block.indexOf("<TechnicalRasterPlacementContextPanel");

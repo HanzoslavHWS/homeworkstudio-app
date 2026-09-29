@@ -25,7 +25,7 @@ import { matchStandNumberToRasterLabels } from "./technicalRasterMatching.ts";
 import { classifyStandScope } from "./technicalRasterHallScope.ts";
 import { resolveTechnicalServicePresentation } from "./technicalRasterServicePresentation.ts";
 import { DEFAULT_AUTO_LEGEND_PLACEMENT, type TechnicalLegendPlacement } from "./technicalRasterLegendPlacement.ts";
-import type { TechnicalReconciliationMention } from "./technicalRasterReconciliation.ts";
+import { resolveServiceIdentityKey, type TechnicalReconciliationMention } from "./technicalRasterReconciliation.ts";
 import type { ParsedCatalogImport } from "./technicalRasterCatalogImport.ts";
 import { extractTechnicalMentionsFromCatalogStand } from "./technicalRasterCatalogImport.ts";
 
@@ -281,6 +281,33 @@ export type TechnicalRasterImport = Readonly<{
   warnings: readonly TechnicalRasterImportWarning[];
   /** Set when a LATER import of the same category replaced this one (spec section 24) — this row is kept forever for history/audit, never deleted, even though its services/notes are removed from stands[] once superseded. */
   supersededByImportId?: string;
+  /** What this import changed compared with the import it replaced (incremental re-import). Absent for a first import of a category and for imports saved before this existed. */
+  serviceDiff?: TechnicalImportServiceDiff;
+}>;
+
+export type TechnicalServiceChangeKind = "added" | "removed" | "quantityIncreased" | "quantityDecreased";
+
+/** One service row that a re-import changed. `serviceId` is the (kept or new) service for everything except "removed". */
+export type TechnicalServiceChange = Readonly<{
+  kind: TechnicalServiceChangeKind;
+  standNumber: string;
+  category: string;
+  externalLabel: string;
+  serviceId?: string;
+  previousQuantity: number;
+  quantity: number;
+  /** Placements dropped by this change (all of them for "removed", the surplus for "quantityDecreased"). */
+  removedPlacementCount: number;
+}>;
+
+export type TechnicalImportServiceDiff = Readonly<{
+  unchanged: number;
+  added: number;
+  removed: number;
+  quantityIncreased: number;
+  quantityDecreased: number;
+  /** Every non-unchanged row, stand-number order. */
+  changes: readonly TechnicalServiceChange[];
 }>;
 
 // ============================================================================
@@ -1112,10 +1139,47 @@ export function mergeTechnicalRasterImport(
   resolveProduct: (category: string, externalLabel: string) => { internalProductId?: string; internalProductCode?: string; status: TechnicalServiceStatus },
   replaceImportId?: string,
 ): TechnicalRasterProject {
+  return mergeTechnicalRasterImportWithDiff(project, importRecord, report, resolveProduct, replaceImportId).project;
+}
+
+/**
+ * Same as mergeTechnicalRasterImport, plus the change summary of an incremental re-import.
+ *
+ * INCREMENTAL RE-IMPORT (`replaceImportId` given — a new version of an already imported report):
+ * previously every service of the old import was deleted and every row of the new report was
+ * created again with a fresh random id and no placements, so all manual placement work was lost.
+ * Now old and new service rows are PAIRED per stand by their stable logical identity
+ * (resolveServiceIdentityKey: category + the same canonical variant reconciliation uses, e.g.
+ * "electricity|3kw", "internet|internet:router"), in stable order (old: stored order, new: report
+ * order):
+ *   - paired, same quantity  -> "unchanged": same service id, same placements, row data refreshed
+ *   - paired, quantity up    -> "quantityIncreased": placements kept; the missing points show up
+ *                               in K UMÍSTĚNÍ because requiredPlacementCount grew
+ *   - paired, quantity down  -> "quantityDecreased": the first requiredPlacementCount placements
+ *                               (creation order — deterministic) are kept, the surplus removed
+ *   - new row with no partner -> "added": new service, no placement (K UMÍSTĚNÍ)
+ *   - old row with no partner -> "removed": service and its placements removed
+ * A row whose identity changed (e.g. 2 kW -> 3 kW) is therefore removed + added; a placement is
+ * never carried over to a different service. Stand matching/placement, realization and catalog
+ * data are not touched. Without `replaceImportId` (a first import) the behavior is unchanged.
+ */
+export function mergeTechnicalRasterImportWithDiff(
+  project: TechnicalRasterProject,
+  importRecord: TechnicalRasterImport,
+  report: ParsedTechnicalReport,
+  resolveProduct: (category: string, externalLabel: string) => { internalProductId?: string; internalProductCode?: string; status: TechnicalServiceStatus },
+  replaceImportId?: string,
+): Readonly<{ project: TechnicalRasterProject; diff?: TechnicalImportServiceDiff }> {
   let stands = project.stands;
   let imports = project.imports;
 
+  // Old services of the replaced import, per stand, in their stored order — the pool re-import pairs against.
+  const previousByStand = new Map<string, TechnicalService[]>();
   if (replaceImportId) {
+    for (const stand of stands) {
+      const previous = stand.services.filter((service) => service.sourceImportId === replaceImportId);
+      if (previous.length > 0) previousByStand.set(stand.standNumber, [...previous]);
+    }
     imports = imports.map((existing) => (existing.id === replaceImportId ? { ...existing, supersededByImportId: importRecord.id } : existing));
     stands = stands.map((stand) => ({
       ...stand,
@@ -1123,6 +1187,18 @@ export function mergeTechnicalRasterImport(
       notes: stand.notes.filter((note) => note.sourceImportId !== replaceImportId),
       sourceImportIds: stand.sourceImportIds.filter((id) => id !== replaceImportId),
     }));
+  }
+
+  const changes: TechnicalServiceChange[] = [];
+  let unchangedCount = 0;
+
+  /** Takes (and removes from the pool) the first old service on this stand with the same identity. */
+  function takePrevious(standNumber: string, identity: string): TechnicalService | undefined {
+    const pool = previousByStand.get(standNumber);
+    if (!pool) return undefined;
+    const index = pool.findIndex((service) => resolveServiceIdentityKey(service.category, service.externalLabel) === identity);
+    if (index < 0) return undefined;
+    return pool.splice(index, 1)[0];
   }
 
   // PRODUCTION BATCH ("BEZ elektriky" automatic red X) — only the PRIMARY ELECTRICITY report ever
@@ -1136,14 +1212,38 @@ export function mergeTechnicalRasterImport(
     const standNumber = normalizeStandNumber(row.standNumber);
     const services: TechnicalService[] = row.services.map((service) => {
       const resolution = resolveProduct(service.category, service.externalLabel);
-      return {
+      const fresh = {
         ...service,
-        id: crypto.randomUUID(),
         sourceImportId: importRecord.id,
         internalProductId: resolution.internalProductId,
         internalProductCode: resolution.internalProductCode,
         status: resolution.status,
       };
+      const previous = replaceImportId ? takePrevious(standNumber, resolveServiceIdentityKey(service.category, service.externalLabel)) : undefined;
+      if (!previous) {
+        const created: TechnicalService = { ...fresh, id: crypto.randomUUID() };
+        if (replaceImportId) changes.push({ kind: "added", standNumber, category: created.category, externalLabel: created.externalLabel, serviceId: created.id, previousQuantity: 0, quantity: created.quantity, removedPlacementCount: 0 });
+        return created;
+      }
+      const kept: TechnicalService = { ...fresh, id: previous.id };
+      const previousPlacements = effectiveServicePlacements(previous);
+      const keptPlacements = previousPlacements.slice(0, requiredPlacementCount(kept));
+      const updated: TechnicalService = previousPlacements.length > 0 ? { ...kept, placements: keptPlacements } : kept;
+      if (updated.quantity === previous.quantity) {
+        unchangedCount += 1;
+      } else {
+        changes.push({
+          kind: updated.quantity > previous.quantity ? "quantityIncreased" : "quantityDecreased",
+          standNumber,
+          category: updated.category,
+          externalLabel: updated.externalLabel,
+          serviceId: updated.id,
+          previousQuantity: previous.quantity,
+          quantity: updated.quantity,
+          removedPlacementCount: previousPlacements.length - keptPlacements.length,
+        });
+      }
+      return updated;
     });
     const notes: TechnicalNote[] = row.notes.map((note) => ({ ...note, id: crypto.randomUUID(), sourceImportId: importRecord.id }));
     const explicitNoElectricity = isElectricityImport && row.explicitNoServiceAssignment === true;
@@ -1177,13 +1277,31 @@ export function mergeTechnicalRasterImport(
     }
   }
 
+  // Old rows nothing in the new report paired with: removed, together with their placements.
+  for (const [standNumber, pool] of previousByStand) {
+    for (const service of pool) {
+      changes.push({ kind: "removed", standNumber, category: service.category, externalLabel: service.externalLabel, previousQuantity: service.quantity, quantity: 0, removedPlacementCount: effectiveServicePlacements(service).length });
+    }
+  }
+
+  const diff: TechnicalImportServiceDiff | undefined = replaceImportId
+    ? {
+      unchanged: unchangedCount,
+      added: changes.filter((change) => change.kind === "added").length,
+      removed: changes.filter((change) => change.kind === "removed").length,
+      quantityIncreased: changes.filter((change) => change.kind === "quantityIncreased").length,
+      quantityDecreased: changes.filter((change) => change.kind === "quantityDecreased").length,
+      changes: sortStandNumbersNatural(changes, (change) => change.standNumber),
+    }
+    : undefined;
+
   const project2: TechnicalRasterProject = {
     ...project,
-    imports: [...imports, importRecord],
+    imports: [...imports, diff ? { ...importRecord, serviceDiff: diff } : importRecord],
     stands: nextStands,
     updatedAt: new Date().toISOString(),
   };
-  return rematchStands(project2);
+  return { project: rematchStands(project2), diff };
 }
 
 // ============================================================================
