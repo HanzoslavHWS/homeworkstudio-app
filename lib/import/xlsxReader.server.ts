@@ -1,4 +1,5 @@
 import ExcelJS from "exceljs";
+import JSZip from "jszip";
 import type { RawCellValue, RawSheetRow } from "../../domain/priceImport.ts";
 
 /**
@@ -25,6 +26,40 @@ export async function readWorkbookFromBuffer(buffer: Buffer): Promise<ExcelJS.Wo
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   await workbook.xlsx.load(buffer as any);
   return workbook;
+}
+
+/**
+ * Strips legacy VML drawings (form-control checkboxes/buttons in macro workbooks like
+ * _IMPORT/KODY.xlsm) that exceljs mis-parses as cell comments and then rejects with
+ * "unexpected close tag". Only drawing/markup parts are removed — every worksheet's cell data,
+ * shared strings and styles are kept byte-for-byte, so the extracted values are identical.
+ */
+async function stripLegacyVmlDrawings(buffer: Buffer): Promise<Buffer> {
+  const zip = await JSZip.loadAsync(buffer);
+  for (const name of Object.keys(zip.files)) {
+    if (/^xl\/drawings\/vmlDrawing\d+\.vml$/u.test(name)) {
+      zip.remove(name);
+    } else if (/^xl\/worksheets\/_rels\/sheet\d+\.xml\.rels$/u.test(name)) {
+      const xml = await zip.file(name)!.async("string");
+      zip.file(name, xml.replace(/<Relationship [^>]*Target="[^"]*\.vml"[^>]*\/>/gu, ""));
+    } else if (/^xl\/worksheets\/sheet\d+\.xml$/u.test(name)) {
+      const xml = await zip.file(name)!.async("string");
+      zip.file(name, xml.replace(/<legacyDrawing [^>]*\/>/gu, ""));
+    }
+  }
+  return zip.generateAsync({ type: "nodebuffer" });
+}
+
+/**
+ * readWorkbookFromBuffer, retried once without legacy VML drawings if exceljs can't parse them.
+ * Same read-only guarantees: nothing is written back to the source file, macros never run.
+ */
+export async function readWorkbookFromBufferTolerant(buffer: Buffer): Promise<ExcelJS.Workbook> {
+  try {
+    return await readWorkbookFromBuffer(buffer);
+  } catch {
+    return readWorkbookFromBuffer(await stripLegacyVmlDrawings(buffer));
+  }
 }
 
 function cellToRawValue(value: ExcelJS.CellValue): RawCellValue {

@@ -85,7 +85,7 @@ import {
 } from "../domain/planView";
 import { getBounds } from "../geometry/polygons";
 import { getMasterReferenceModel, isVariantAvailable, resolveBoothModelSource } from "../domain/cad3d";
-import { resolveGeneratorBooth, resolveGeneratorVariant, selectGeneratorBooths } from "../domain/generatorBooths";
+import { resolveGeneratorBooth, resolveGeneratorVariant, selectGeneratorBooths, selectSavedProjectBooths } from "../domain/generatorBooths";
 import { selectGeneratorBoothComponents } from "../domain/generatorBoothComponents";
 import { createIndividualBooth } from "../domain/individualBooth";
 import {
@@ -365,6 +365,11 @@ export default function BoothGenerator() {
   const [dbBoothTypes, setDbBoothTypes] = useState<readonly BoothType[] | null>(null);
   const [boothsError, setBoothsError] = useState("");
   const boothTypes = dbBoothTypes ?? [];
+  // Saved-project resolution list: the picker list PLUS archived-but-usable booths, so archiving a
+  // booth never breaks an older project that already uses it (domain/generatorBooths.ts
+  // selectSavedProjectBooths). Never rendered as picker options for a new selection.
+  const [dbSavedProjectBoothTypes, setDbSavedProjectBoothTypes] = useState<readonly BoothType[] | null>(null);
+  const savedProjectBoothTypes = dbSavedProjectBoothTypes ?? boothTypes;
   // Individual-mode Phase 1 picker (kind=booth_component only) — same DB catalog_items list as
   // dbBoothTypes above (one fetch, two filters), never a second/parallel catalog. null = still
   // loading; [] + boothComponentsError = a real fetch failure; [] + no error = genuinely zero
@@ -613,6 +618,7 @@ export default function BoothGenerator() {
           const catalogItems = await catalogItemsAdminRepositoryRef.current.list();
           if (cancelled) return;
           setDbBoothTypes(selectGeneratorBooths(catalogItems));
+          setDbSavedProjectBoothTypes(selectSavedProjectBooths(catalogItems));
           setBoothsError("");
           // Same fetched list, same failure-visibility rule as the booth picker above — a
           // dedicated try/catch so a booth-component adapt error can never silently blank the
@@ -833,7 +839,8 @@ export default function BoothGenerator() {
   // if it stored an internalCode instead of the booth's own id — never a guess, undefined when
   // truly nothing matches (e.g. the booth was archived since the project was saved).
   const selectedBooth =
-    type === "individualni" ? individualBooth : resolveGeneratorBooth(boothTypes, selectedBoothId);
+    type === "individualni" ? individualBooth : resolveGeneratorBooth(savedProjectBoothTypes, selectedBoothId);
+  const selectedBoothIsArchived = type !== "individualni" && selectedBooth?.lifecycleStatus === "archived";
 
   // Section "GENERÁTOR TYPOVEK" (2026-08-19): a booth with declared variants (T04..T25) NEVER
   // falls back to its own parent GLB — resolveBoothModelSource requires the SELECTED variant's
@@ -841,7 +848,7 @@ export default function BoothGenerator() {
   // parent model for every variant. P86 (no variants) is completely unaffected — same
   // getMasterReferenceModel(selectedBooth?.assets) path as always.
   const selectedBoothModelSource = selectedBooth
-    ? resolveBoothModelSource(selectedBooth, boothTypes, selectedVariantId)
+    ? resolveBoothModelSource(selectedBooth, savedProjectBoothTypes, selectedVariantId)
     : undefined;
   const selectedBoothStoredModelAsset = selectedBoothModelSource?.kind === "stored" ? selectedBoothModelSource.asset : undefined;
   const resolvedStoredModelUrl = useAssetUrl(selectedBoothStoredModelAsset, undefined);
@@ -2741,7 +2748,7 @@ export default function BoothGenerator() {
           <ProjectsPage
             projects={savedProjects}
             fairName={(id) => adminEvents.find((event) => event.id === id)?.name ?? id}
-            boothName={(id) => boothTypes.find((booth) => booth.id === id)?.name ?? ""}
+            boothName={(id) => savedProjectBoothTypes.find((booth) => booth.id === id)?.name ?? ""}
             onOpen={openProject}
             onDelete={deleteProject}
             onNew={startNewProject}
@@ -3579,6 +3586,11 @@ export default function BoothGenerator() {
                   {dbBoothTypes !== null && !boothsError && dbBoothTypes.length === 0 && (
                     <p className="workspaceEmpty">Pro tento výběr nejsou dostupné žádné aktivní stánky.</p>
                   )}
+                  {selectedBoothIsArchived && selectedBooth && (
+                    <p className="fieldHint persistenceBanner">
+                      Tento projekt používá archivovaný stánek {selectedBooth.internalCode ?? selectedBooth.name} — v projektu zůstává funkční, pro nové projekty se už nenabízí.
+                    </p>
+                  )}
                   {dbBoothTypes !== null && !boothsError && dbBoothTypes.length > 0 && (
                   <div className="boothTypeGrid">
                     {boothTypes.map(
@@ -3716,7 +3728,7 @@ export default function BoothGenerator() {
                             // source (neither its own modelAsset nor a legacy
                             // assetSourceBoothId) must never present as a ready, pickable
                             // option — see domain/cad3d.ts's isVariantAvailable.
-                            const available = isVariantAvailable(variant, boothTypes);
+                            const available = isVariantAvailable(variant, savedProjectBoothTypes);
 
                             return (
                               <button

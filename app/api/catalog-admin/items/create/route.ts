@@ -1,7 +1,8 @@
 import { NextResponse, type NextRequest } from "next/server.js";
 import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
-import { createCatalogItemAdmin } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
+import { CatalogSchemaNotMigratedError, createCatalogItemAdmin } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
+import { DuplicateAbfCodeError } from "../../../../../domain/catalogItemTypes.ts";
 import {
   InvalidCatalogItemAdminCreateInputError,
   parseCatalogItemAdminCreateInput,
@@ -45,7 +46,8 @@ export async function handleCatalogAdminItemsCreate(
     const created = await create(input);
     return NextResponse.json({ catalogItem: created });
   } catch (error) {
-    if (error instanceof DuplicateInternalCodeError) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof DuplicateInternalCodeError || error instanceof DuplicateAbfCodeError) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof CatalogSchemaNotMigratedError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SupabaseConfigurationError) return NextResponse.json({ error: error.message }, { status: 503 });
     return NextResponse.json({ error: "Katalogovou položku se nepodařilo vytvořit v databázi." }, { status: 502 });
   }

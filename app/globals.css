@@ -7082,3 +7082,39 @@ select:focus {
 .technicalRasterDrawingDraft { pointer-events: none; }
 .technicalRasterViewport.drawingTool-point,
 .technicalRasterViewport.drawingTool-line { cursor: crosshair; }
+
+/* Catalog revision: card types, bulk archive, package contents, KODY import preview */
+.catalogAdminToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
+.catalogAdminFilters { grid-template-columns: minmax(200px, 1fr) repeat(6, minmax(110px, .3fr)) auto; }
+.catalogBulkBar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: -4px 0 12px; }
+.catalogBulkBar .checkboxRow { margin-top: 0; }
+.catalogAdminSelectableRow { display: grid; grid-template-columns: 26px minmax(0, 1fr); align-items: center; padding-left: 10px; border-bottom: 1px solid #ededee; background: white; }
+.catalogAdminSelectableRow:last-child { border-bottom: 0; }
+.catalogAdminSelectableRow > .catalogAdminRow { border-bottom: 0; }
+.catalogAbfCode { color: #8a8e91; font-size: 7px; }
+.catalogCreatePanel, .catalogImportPanel { margin-bottom: 14px; padding: 16px; }
+.catalogTypePicker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 12px; }
+.catalogTypePicker button { display: grid; gap: 4px; padding: 10px; border: 1px solid #dcdedf; border-radius: 8px; background: white; text-align: left; cursor: pointer; }
+.catalogTypePicker button strong { font-size: 10px; color: #2f3335; }
+.catalogTypePicker button small { font-size: 7px; color: #85898c; line-height: 1.4; }
+.catalogTypePicker button.active { border-color: #45634f; background: #f3f6f4; box-shadow: inset 0 0 0 1px #45634f; }
+.catalogAdminEditRow dd select { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
+.catalogPackageSection { grid-column: 1 / -1; }
+.catalogPackageLine { display: grid; grid-template-columns: minmax(0, 2fr) 70px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-top: 8px; font-size: 8px; }
+.catalogPackageLine input, .catalogPackageLine select { min-width: 0; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
+.catalogPackageLine .checkboxRow { margin-top: 0; white-space: nowrap; }
+.catalogImportSummary { margin: 12px 0; }
+.catalogImportRows { display: grid; max-height: 420px; overflow: auto; margin-top: 8px; border: 1px solid #ededee; border-radius: 8px; }
+.catalogImportRow { display: grid; grid-template-columns: 50px 50px minmax(0, 1.4fr) 90px minmax(0, 2fr); align-items: start; gap: 8px; padding: 7px 10px; border-bottom: 1px solid #ededee; font-size: 8px; }
+.catalogImportRow:last-child { border-bottom: 0; }
+.catalogImportRow.conflict { background: #fdf6f5; }
+.catalogImportRow small { color: #6b6f72; overflow-wrap: anywhere; }
+.catalogImportDetails { margin-top: 10px; font-size: 8px; }
+.catalogImportDetails ul { margin: 6px 0 0 16px; }
+.catalogImportResult { margin-top: 12px; padding: 10px; border-radius: 8px; background: #edf5ef; color: #2f5a3c; font-size: 9px; }
+@media (max-width: 900px) {
+  .catalogAdminFilters { grid-template-columns: repeat(2, 1fr); }
+  .catalogTypePicker { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .catalogPackageLine { grid-template-columns: 1fr 70px; }
+  .catalogImportRow { grid-template-columns: 44px 44px minmax(0, 1fr); }
+}

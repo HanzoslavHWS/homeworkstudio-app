@@ -143,6 +143,29 @@ export function selectGeneratorBooths(items: readonly CatalogItemAdmin[]): reado
 }
 
 /**
+ * An ARCHIVED booth that was usable when archived: archival hides it from the new-project picker
+ * (selectGeneratorBooths) but must never break an older saved project that already uses it.
+ * Readiness is evaluated on the item's own data (lifecycle aside) — an archived booth that never
+ * had a usable model stays unresolvable, exactly as it would have been before archival.
+ */
+export function isArchivedButUsableBooth(item: Pick<CatalogItemAdmin, "kind" | "lifecycleStatus" | "document">): boolean {
+  return item.kind === "booth" && item.lifecycleStatus === "archived" && computeReadiness(item).ready;
+}
+
+/**
+ * The booth list SAVED projects resolve against: every production-ready booth (same as the
+ * picker) PLUS archived-but-usable ones. Never offered for new projects — the picker keeps using
+ * selectGeneratorBooths. Same deterministic natural-code order.
+ */
+export function selectSavedProjectBooths(items: readonly CatalogItemAdmin[]): readonly BoothType[] {
+  return items
+    .filter((item) => item.kind === "booth" && (isProductionReadyBooth(item) || isArchivedButUsableBooth(item)))
+    .slice()
+    .sort((a, b) => NATURAL_CODE_COLLATOR.compare(a.internalCode ?? a.displayName, b.internalCode ?? b.displayName))
+    .map(adaptCatalogItemToBoothType);
+}
+
+/**
  * Saved-project compatibility resolution (section 23): a saved project stores booth identity as
  * a plain string (ProjectRecord.boothId) — historically the STATIC data/booths.ts id (e.g. P86's
  * "koje-2x2"). Resolves against the CURRENT DB-backed booth list by trying, in order: exact id

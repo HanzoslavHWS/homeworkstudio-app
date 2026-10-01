@@ -433,6 +433,10 @@ function sortFixtureEntry(overrides: Partial<CatalogItemAdminListEntry>): Catalo
   return {
     id: overrides.internalCode?.toLowerCase() ?? "fixture-id",
     internalCode: null,
+    abfCode: null,
+    itemType: "PRODUCT",
+    itemTypeNeedsReview: false,
+    packageItemCount: 0,
     displayName: "Fixture",
     kind: "furniture",
     category: null,
@@ -1085,7 +1089,7 @@ test("POST /api/catalog-admin/items/create: authenticated + valid -> 200, kind/l
     },
   );
   assert.equal(response.status, 200);
-  assert.deepEqual(capturedInput, { kind: "booth_component", displayName: "Sloupek", category: "Sloupky" });
+  assert.deepEqual(capturedInput, { kind: "booth_component", itemType: "INTERNAL_COMPONENT", displayName: "Sloupek", category: "Sloupky" });
 });
 
 // -----------------------------------------------------------------------------------------
@@ -1119,15 +1123,17 @@ test("ComponentAdminPage.tsx reuses the existing asset upload infrastructure (up
 
 test("UI: list view shows the required columns (section 4)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  for (const label of ["Interní kód", "Název", "Kategorie / Kind", "Stav", "Rozměry", "3D", "Cena", "Generator"]) {
+  for (const label of ["Kód / ABF", "Název", "Typ · kategorie", "Stav", "Rozměry", "3D", "Cena", "Generator"]) {
     assert.match(source, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `missing list column "${label}"`);
   }
 });
 
 test("UI: filters cover search/kind/lifecycle/readiness/asset (section 5)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /Hledat interní kód/u);
-  assert.match(source, /Kategorie: vše/u);
+  assert.match(source, /Hledat interní kód, ABF kód/u);
+  assert.match(source, /Typ: vše/u);
+  assert.match(source, /Druh \(kind\): vše/u);
+  assert.match(source, /Jen archivované/u);
   assert.match(source, /Stav: vše/u);
   assert.match(source, /Readiness: vše/u);
   assert.match(source, /Asset: vše/u);
@@ -1169,9 +1175,10 @@ test("UI: a furniture item (e.g. a chair) is allowed to show the source-file sec
   assert.match(constMatch, /"furniture"/u);
 });
 
-test("UI: internalCode is rendered read-only (span), never as an editable input (section 7)", () => {
+test("UI: an existing internalCode is rendered read-only (span); an input is offered only to FILL a missing one (section 7, catalog revision)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /Interní kód"><span className="readOnlyField">\{item\.internalCode/u);
+  assert.match(source, /\{item\.internalCode \? \(\s*<span className="readOnlyField"[^>]*>\{item\.internalCode\}<\/span>/u);
+  assert.match(source, /if \(!item\.internalCode && internalCodeDraft\.trim\(\)\) edit\.fillInternalCode/u);
 });
 
 test("UI: 'Upravit ceny' hands off to the existing Pricing Administration via onOpenPricing — no second price editor is defined in this file", () => {
@@ -1315,16 +1322,11 @@ test("booth_component is a real CatalogItemKind with its own Czech label, never 
 // visible in BOTH (unchanged, intentional dual-visibility).
 // =========================================================================================
 
-test("ComponentAdminPage.tsx excludes kind=booth items from its list — type-booths are never editable from the generic Admin → Komponenty screen", () => {
+test("Catalog revision: ComponentAdminPage.tsx lists ALL catalog card types (incl. Stánek) and filters them by type", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /const nonBoothItems = useMemo/u);
-  assert.match(source, /item\.kind !== "booth"/u);
-  assert.match(source, /const listEntries = useMemo\(\(\) => nonBoothItems\.map\(buildCatalogItemListEntry\)/u);
-});
-
-test("ComponentAdminFilters' kind dropdown never offers 'booth' as an option (it can never appear in this list, so selecting it would always show zero results)", () => {
-  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /CATALOG_ITEM_KINDS\.filter\(\(kind\) => kind !== "booth"\)\.map/u);
+  assert.match(source, /const listEntries = useMemo\(\(\) => allItems\.map\(buildCatalogItemListEntry\)/u);
+  assert.match(source, /CATALOG_ITEM_TYPES\.map\(\(itemType\) =>/u);
+  assert.doesNotMatch(source, /item\.kind !== "booth"/u);
 });
 
 test("BoothAdminPage.tsx's 'Typové stánky' tab is UNAFFECTED by the Admin-Komponenty exclusion — it filters its OWN independently-fetched items by kind, not ComponentAdminPage's list", () => {
@@ -1865,9 +1867,9 @@ test("selecting a category persists the exact canonical DB value (label is displ
   assert.equal(saved.document.category, "Octanorm");
 });
 
-test("category change never mutates kind — kind is not part of the editable whitelist at all", async () => {
-  const edit = parseCatalogItemAdminEdit({ category: "Stavba", kind: "booth" });
-  assert.equal("kind" in edit, false, "kind can never be smuggled through the edit whitelist, even alongside a legitimate category change");
+test("category change never mutates kind — kind changes only through an explicit, validated kind/type edit", async () => {
+  assert.throws(() => parseCatalogItemAdminEdit({ category: "Stavba", kind: "not-a-kind" }), "an unknown kind is rejected, never stored");
+  assert.equal("kind" in parseCatalogItemAdminEdit({ category: "Stavba" }), false);
   const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
   const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { category: "Stavba" }, "2026-08-14T19:16:38.000000+00:00");
   assert.equal(saved.kind, "furniture", "kind column must be completely unaffected by a category edit");
@@ -2330,7 +2332,7 @@ test("ARCHIVE UI: ComponentAdminDetail shows 'Archivovat' for any non-archived i
   assert.match(source, /onClick=\{handleArchive\}/u);
   assert.match(source, /onClick=\{handleRestore\}/u);
   assert.match(source, /lifecycleStatus: "archived"/u);
-  assert.match(source, /lifecycleStatus: "needs_review"/u);
+  assert.match(source, /onSave\(\{ restoreFromArchive: true \}\)/u);
 });
 
 test("ARCHIVE UI: the 'Aktivovat' button is hidden for an archived item — direct archived->active is never offered in the UI, only Restore then a separate Activate", () => {
@@ -2341,6 +2343,7 @@ test("ARCHIVE UI: the 'Aktivovat' button is hidden for an archived item — dire
 test("ARCHIVE UI: 'Zobrazit archivované' checkbox exists in both the generic Admin filters and BoothAdminPage's filter bar", () => {
   const componentAdminSource = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
   const boothAdminSource = readFileSync(new URL("../components/workflow/BoothAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(componentAdminSource, /Zobrazit archivované/u);
+  assert.match(componentAdminSource, /Jen archivované/u);
+  assert.match(componentAdminSource, /Vše včetně archivu/u);
   assert.match(boothAdminSource, /Zobrazit archivované/u);
 });

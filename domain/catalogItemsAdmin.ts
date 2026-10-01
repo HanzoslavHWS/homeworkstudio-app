@@ -8,8 +8,17 @@
  * domain/catalogReadiness.ts's evaluateCatalogReadiness()/isGeneratorEligible(), the exact
  * same functions the rest of the app already trusts. No parallel readiness logic.
  */
-import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type ComponentDefinition, type PricingEntry } from "./models.ts";
+import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type CatalogItemType, type ComponentDefinition, type PricingEntry } from "./models.ts";
 import { evaluateCatalogReadiness, isGeneratorEligible, isValidCatalogItemStatus, type ReadinessResult } from "./catalogReadiness.ts";
+import {
+  defaultItemTypeForKind,
+  defaultKindForItemType,
+  isCatalogItemType,
+  isKindCompatibleWithItemType,
+  normalizeAbfCode,
+  normalizeInternalCode,
+} from "./catalogItemTypes.ts";
+import type { CatalogPackageItem } from "./catalogPackages.ts";
 import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
 import { SOURCE_ASSET_KINDS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "./assets.ts";
@@ -72,6 +81,15 @@ export type CatalogItemAdminDocument = Record<string, unknown>;
 export type CatalogItemAdmin = Readonly<{
   id: string;
   internalCode: string | null;
+  /**
+   * ABF price-list code (catalog_items.abf_code) — deliberately separate from internalCode. The
+   * repository always fills abfCode/itemType; they are optional on the type only so rows read
+   * before the 20261001120000 migration (and older test fixtures) stay valid — read them through
+   * itemTypeOf()/abfCodeOf(), never directly.
+   */
+  abfCode?: string | null;
+  /** Catalog card type (catalog_items.item_type). See itemTypeOf(). */
+  itemType?: CatalogItemType;
   kind: CatalogItemKind;
   lifecycleStatus: CatalogItemStatus;
   displayName: string;
@@ -81,7 +99,94 @@ export type CatalogItemAdmin = Readonly<{
   document: CatalogItemAdminDocument;
   createdAt: string;
   updatedAt: string;
+  /** BOOTH package contents (catalog_item_package_items where package_item_id = id). Empty/absent for every other type. */
+  packageItems?: readonly CatalogPackageItem[];
 }>;
+
+export function itemTypeOf(item: Pick<CatalogItemAdmin, "itemType" | "kind">): CatalogItemType {
+  return item.itemType ?? defaultItemTypeForKind(item.kind);
+}
+
+export function abfCodeOf(item: Pick<CatalogItemAdmin, "abfCode">): string | null {
+  return item.abfCode ?? null;
+}
+
+/** Free-text admin note ("Poznámka") — internal only, never customer-facing. */
+export function documentNote(document: CatalogItemAdminDocument): string {
+  return typeof document.note === "string" ? document.note : "";
+}
+
+/**
+ * Set by the KODY import when the card type could NOT be safely determined from the data (see
+ * domain/catalogAbfImport.ts classifyAbfCodeItemType) — the admin list offers a "K zařazení"
+ * filter for these. Cleared by any explicit type confirmation in the admin.
+ */
+export function documentItemTypeNeedsReview(document: CatalogItemAdminDocument): boolean {
+  return document.itemTypeNeedsReview === true;
+}
+
+/**
+ * SERVICE technical metadata — deliberately small and open (spec: "nevynucuj komplikovaný
+ * model"): an optional power figure and free key/value parameters. Placement in the technical
+ * raster, marker and icon keep living in the existing `document.technicalRaster` config
+ * (TechnicalRasterSection) — never duplicated here.
+ */
+export type ServiceTechnicalMetadata = Readonly<{
+  powerKw?: number;
+  parameters?: readonly Readonly<{ key: string; value: string }>[];
+}>;
+
+const SERVICE_PARAMETER_KEY_MAX = 40;
+const SERVICE_PARAMETER_VALUE_MAX = 200;
+const SERVICE_PARAMETERS_MAX = 30;
+
+function parseServiceTechnical(value: unknown): ServiceTechnicalMetadata | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  const result: { powerKw?: number; parameters?: { key: string; value: string }[] } = {};
+  if (typeof candidate.powerKw === "number" && Number.isFinite(candidate.powerKw) && candidate.powerKw >= 0) result.powerKw = candidate.powerKw;
+  if (Array.isArray(candidate.parameters)) {
+    const parameters = candidate.parameters
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object")
+      .map((entry) => ({
+        key: typeof entry.key === "string" ? entry.key.trim() : "",
+        value: typeof entry.value === "string" ? entry.value.trim() : "",
+      }))
+      .filter((entry) => entry.key && entry.key.length <= SERVICE_PARAMETER_KEY_MAX && entry.value.length <= SERVICE_PARAMETER_VALUE_MAX && isPlainTextWithoutMarkup(entry.key) && isPlainTextWithoutMarkup(entry.value))
+      .slice(0, SERVICE_PARAMETERS_MAX);
+    if (parameters.length > 0) result.parameters = parameters;
+  }
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+export function documentServiceTechnical(document: CatalogItemAdminDocument): ServiceTechnicalMetadata | undefined {
+  return parseServiceTechnical(document.serviceTechnical);
+}
+
+/** Provenance of the last KODY/ABF import touching this card (read-only in the admin). */
+export type AbfImportProvenance = Readonly<{
+  sourceFile: string;
+  sourceSheet: string;
+  sourceRow: number;
+  abfName: string;
+  abfNameEn: string | null;
+  importedAt: string;
+}>;
+
+export function documentAbfImport(document: CatalogItemAdminDocument): AbfImportProvenance | undefined {
+  const value = document.abfImport;
+  if (!value || typeof value !== "object") return undefined;
+  const candidate = value as Record<string, unknown>;
+  if (typeof candidate.sourceFile !== "string" || typeof candidate.sourceRow !== "number" || typeof candidate.abfName !== "string") return undefined;
+  return {
+    sourceFile: candidate.sourceFile,
+    sourceSheet: typeof candidate.sourceSheet === "string" ? candidate.sourceSheet : "",
+    sourceRow: candidate.sourceRow,
+    abfName: candidate.abfName,
+    abfNameEn: typeof candidate.abfNameEn === "string" ? candidate.abfNameEn : null,
+    importedAt: typeof candidate.importedAt === "string" ? candidate.importedAt : "",
+  };
+}
 
 function readNumber(document: CatalogItemAdminDocument, key: string): number | undefined {
   const value = document[key];
@@ -359,6 +464,10 @@ export function computeGeneratorEligibleLive(item: Pick<CatalogItemAdmin, "docum
 export type CatalogItemAdminListEntry = Readonly<{
   id: string;
   internalCode: string | null;
+  abfCode: string | null;
+  itemType: CatalogItemType;
+  itemTypeNeedsReview: boolean;
+  packageItemCount: number;
   displayName: string;
   kind: CatalogItemKind;
   category: string | null;
@@ -383,6 +492,10 @@ export function buildCatalogItemListEntry(item: CatalogItemAdmin): CatalogItemAd
   return {
     id: item.id,
     internalCode: item.internalCode,
+    abfCode: abfCodeOf(item),
+    itemType: itemTypeOf(item),
+    itemTypeNeedsReview: documentItemTypeNeedsReview(item.document),
+    packageItemCount: item.packageItems?.length ?? 0,
     displayName: item.displayName,
     kind: item.kind,
     category: item.category,
@@ -409,20 +522,28 @@ export function buildCatalogItemListEntry(item: CatalogItemAdmin): CatalogItemAd
 export type CatalogItemAdminFilters = Readonly<{
   query?: string;
   kind?: CatalogItemKind | "";
+  itemType?: CatalogItemType | "";
   lifecycleStatus?: CatalogItemStatus | "";
   readiness?: "ready" | "not-ready" | "";
   asset?: "has-3d" | "missing-3d" | "";
   /** Default false: archived items are hidden from every admin list unless explicitly shown — never deleted, just not cluttering the default view. */
   showArchived?: boolean;
+  /** "Jen archivované" — the archive view; wins over showArchived. */
+  onlyArchived?: boolean;
+  /** "K zařazení" — only cards whose type the import could not safely determine. */
+  needsTypeReview?: boolean;
 }>;
 
 function normalizedText(value: string): string {
   return value.toLocaleLowerCase("cs").normalize("NFD").replace(/\p{Diacritic}/gu, "");
 }
 
-export function matchesCatalogItemAdminSearch(entry: Pick<CatalogItemAdminListEntry, "internalCode" | "displayName" | "category">, query: string): boolean {
+export function matchesCatalogItemAdminSearch(
+  entry: Pick<CatalogItemAdminListEntry, "internalCode" | "displayName" | "category"> & Partial<Pick<CatalogItemAdminListEntry, "abfCode">>,
+  query: string,
+): boolean {
   if (!query.trim()) return true;
-  const haystack = normalizedText(`${entry.internalCode ?? ""} ${entry.displayName} ${entry.category ?? ""}`);
+  const haystack = normalizedText(`${entry.internalCode ?? ""} ${entry.abfCode ?? ""} ${entry.displayName} ${entry.category ?? ""}`);
   return haystack.includes(normalizedText(query));
 }
 
@@ -430,8 +551,12 @@ export function filterCatalogItemsAdmin(entries: readonly CatalogItemAdminListEn
   return entries.filter((entry) => {
     // Archived items are excluded from the default view regardless of any other filter —
     // "Zobrazit archivované" is the one explicit switch that reveals them (section 3).
-    if (entry.lifecycleStatus === "archived" && !filters.showArchived) return false;
+    if (filters.onlyArchived) {
+      if (entry.lifecycleStatus !== "archived") return false;
+    } else if (entry.lifecycleStatus === "archived" && !filters.showArchived) return false;
     if (filters.query && !matchesCatalogItemAdminSearch(entry, filters.query)) return false;
+    if (filters.itemType && entry.itemType !== filters.itemType) return false;
+    if (filters.needsTypeReview && !entry.itemTypeNeedsReview) return false;
     if (filters.kind && entry.kind !== filters.kind) return false;
     if (filters.lifecycleStatus && entry.lifecycleStatus !== filters.lifecycleStatus) return false;
     if (filters.readiness === "ready" && !entry.readiness.ready) return false;
@@ -558,7 +683,49 @@ export type CatalogItemAdminEdit = Readonly<{
    * the override entirely, the resolver then falls through to the central default).
    */
   technicalRaster?: TechnicalRasterComponentConfig | null;
+  /**
+   * ABF code (catalog_items.abf_code) — `undefined` = unchanged, `null` = clear, string = set.
+   * Freely editable (an ABF code may change in future without breaking anything internal: every
+   * internal reference uses the row id / internalCode). Uniqueness is enforced by the repository
+   * and by the DB's partial unique index.
+   */
+  abfCode?: string | null;
+  /**
+   * Fills the internal code of a card that has NONE yet (e.g. an INTERNAL_COMPONENT like
+   * "Sloupek 2500" -> INT-SLOUPEK-2500). Deliberately a separate, explicit field: a plain
+   * `internalCode` key in a request body is still dropped by the whitelist, and an existing
+   * internal code is never rewritten (technical-service pricing and saved projects look items up
+   * by it) — the repository rejects a fill on a card that already has one.
+   */
+  fillInternalCode?: string;
+  /** Catalog card type. If the current kind doesn't fit the new type, kind moves to the type's default kind. */
+  itemType?: CatalogItemType;
+  /** Readiness profile — must be compatible with the (resulting) item type. */
+  kind?: CatalogItemKind;
+  /** "Poznámka" — internal free text. */
+  note?: string;
+  /** SERVICE technical metadata — whole-value replace, `null` = clear. */
+  serviceTechnical?: ServiceTechnicalMetadata | null;
+  /** Explicitly confirms the current card type (clears the import's "K zařazení" flag) without changing it. */
+  confirmItemType?: true;
+  /**
+   * "Obnovit" from the archive — the repository resolves the target status via
+   * resolveRestoreStatus() (previous status, re-checked against readiness), never a client-chosen
+   * status. Takes precedence over lifecycleStatus.
+   */
+  restoreFromArchive?: true;
 }>;
+
+export class InvalidCatalogItemAdminEditError extends Error {
+  readonly field: string;
+  constructor(field: string, message: string) {
+    super(message);
+    this.name = "InvalidCatalogItemAdminEditError";
+    this.field = field;
+  }
+}
+
+const NOTE_MAX_LENGTH = 2000;
 
 const EDITABLE_STRING_KEYS = ["displayName", "name", "category", "unit"] as const;
 const EDITABLE_NUMBER_KEYS = ["widthMm", "depthMm", "heightMm"] as const;
@@ -637,7 +804,78 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
       if (parsed) edit.technicalRaster = parsed;
     }
   }
+  if ("abfCode" in raw) {
+    if (raw.abfCode === null || raw.abfCode === "") edit.abfCode = null;
+    else {
+      const normalized = normalizeAbfCode(raw.abfCode);
+      if (normalized === null) throw new InvalidCatalogItemAdminEditError("abfCode", "ABF kód nesmí obsahovat mezery ani uvozovky a může mít nejvýše 32 znaků.");
+      edit.abfCode = normalized ?? null;
+    }
+  }
+  if (typeof raw.fillInternalCode === "string" && raw.fillInternalCode.trim()) {
+    const normalized = normalizeInternalCode(raw.fillInternalCode);
+    if (!normalized) throw new InvalidCatalogItemAdminEditError("fillInternalCode", "Interní kód nesmí obsahovat mezery ani uvozovky a může mít nejvýše 64 znaků.");
+    edit.fillInternalCode = normalized;
+  }
+  if (raw.itemType !== undefined) {
+    if (!isCatalogItemType(raw.itemType)) throw new InvalidCatalogItemAdminEditError("itemType", "Neplatný typ katalogové karty.");
+    edit.itemType = raw.itemType;
+  }
+  if (raw.kind !== undefined) {
+    if (typeof raw.kind !== "string" || !isKnownCatalogItemKind(raw.kind)) throw new InvalidCatalogItemAdminEditError("kind", "Neplatný druh položky (kind).");
+    edit.kind = raw.kind;
+  }
+  if (typeof raw.note === "string") edit.note = raw.note.slice(0, NOTE_MAX_LENGTH);
+  if ("serviceTechnical" in raw) {
+    edit.serviceTechnical = raw.serviceTechnical === null ? null : (parseServiceTechnical(raw.serviceTechnical) ?? null);
+  }
+  if (raw.confirmItemType === true) edit.confirmItemType = true;
+  if (raw.restoreFromArchive === true) edit.restoreFromArchive = true;
   return edit;
+}
+
+/**
+ * Resolves the item type + kind a save will end with, enforcing compatibility. Pure — the
+ * repository applies the result to the columns. Throws InvalidCatalogItemAdminEditError for an
+ * incompatible explicit kind, or for any kind change on an ACTIVE item (an active item feeds the
+ * live generator; its readiness profile must not silently change under it — deactivate/archive
+ * first).
+ */
+export function resolveTypeAndKindEdit(
+  current: Pick<CatalogItemAdmin, "itemType" | "kind" | "lifecycleStatus">,
+  edit: Pick<CatalogItemAdminEdit, "itemType" | "kind">,
+): Readonly<{ itemType: CatalogItemType; kind: CatalogItemKind }> {
+  const itemType = edit.itemType ?? itemTypeOf(current);
+  let kind = edit.kind ?? current.kind;
+  if (!isKindCompatibleWithItemType(kind, itemType)) {
+    if (edit.kind !== undefined) {
+      throw new InvalidCatalogItemAdminEditError("kind", "Zvolený druh položky (kind) neodpovídá typu karty.");
+    }
+    kind = defaultKindForItemType(itemType);
+  }
+  if (kind !== current.kind && current.lifecycleStatus === "active") {
+    throw new InvalidCatalogItemAdminEditError(
+      "itemType",
+      "Aktivní položce nelze změnit typ/druh — používá ji generátor. Nejdřív ji archivujte nebo převeďte do stavu K doplnění.",
+    );
+  }
+  return { itemType, kind };
+}
+
+/**
+ * "Obnovit" target status: the status the item had before archival (stored as
+ * document.archivedFromStatus by the archive action). A previously-ACTIVE item only returns to
+ * active if it still passes readiness today; otherwise — and for legacy archives without the
+ * stored status — it lands on needs_review, never silently active.
+ */
+export function resolveRestoreStatus(item: Pick<CatalogItemAdmin, "document" | "kind">): CatalogItemStatus {
+  const previous = item.document.archivedFromStatus;
+  if (typeof previous !== "string" || !isValidCatalogItemStatus(previous) || previous === "archived") return "needs_review";
+  if (previous === "active") {
+    const readiness = evaluateCatalogReadiness({ ...item.document, lifecycleStatus: "active" } as ComponentDefinition, item.kind);
+    return readiness.ready ? "active" : "needs_review";
+  }
+  return previous;
 }
 
 /**
@@ -658,6 +896,15 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
   if (edit.lifecycleStatus !== undefined) next.lifecycleStatus = edit.lifecycleStatus;
   if (edit.showIn2D !== undefined) next.showIn2D = edit.showIn2D;
   if (edit.showIn3D !== undefined) next.showIn3D = edit.showIn3D;
+  if (edit.note !== undefined) {
+    if (edit.note.trim()) next.note = edit.note;
+    else delete next.note;
+  }
+  if (edit.serviceTechnical === null) delete next.serviceTechnical;
+  else if (edit.serviceTechnical !== undefined) next.serviceTechnical = edit.serviceTechnical;
+  if (edit.kind !== undefined) next.catalogItemKind = edit.kind;
+  // Any explicit type decision (set or confirm) resolves the import's "K zařazení" flag.
+  if (edit.itemType !== undefined || edit.confirmItemType === true) delete next.itemTypeNeedsReview;
   // "Obnovit výchozí nastavení" (spec batch 11 section 18) — null removes the override entirely,
   // never leaves a stray empty {} object sitting in the document (documentTechnicalRaster/
   // parseTechnicalRasterConfig already treat {} as "nothing configured", but deleting it outright
@@ -730,8 +977,13 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
 
 export type CatalogItemAdminCreateInput = Readonly<{
   kind: CatalogItemKind;
+  /** Card type. Optional for older callers (BoothComponentCreateForm sends kind only) — derived from kind then. */
+  itemType?: CatalogItemType;
   displayName: string;
   internalCode?: string;
+  /** Never required — and for INTERNAL_COMPONENT typically absent. */
+  abfCode?: string;
+  note?: string;
   category: string;
   unit?: string;
   widthMm?: number;
@@ -765,19 +1017,42 @@ export function parseCatalogItemAdminCreateInput(body: unknown): CatalogItemAdmi
   }
   const raw = body as Record<string, unknown>;
 
-  if (typeof raw.kind !== "string" || !isKnownCatalogItemKind(raw.kind)) {
-    throw new InvalidCatalogItemAdminCreateInputError("kind", "Neplatný nebo chybějící druh položky (kind).");
+  if (raw.itemType !== undefined && !isCatalogItemType(raw.itemType)) {
+    throw new InvalidCatalogItemAdminCreateInputError("itemType", "Neplatný typ katalogové karty.");
+  }
+  const requestedItemType = raw.itemType as CatalogItemType | undefined;
+  if (raw.kind !== undefined && (typeof raw.kind !== "string" || !isKnownCatalogItemKind(raw.kind))) {
+    throw new InvalidCatalogItemAdminCreateInputError("kind", "Neplatný druh položky (kind).");
+  }
+  if (raw.kind === undefined && !requestedItemType) {
+    throw new InvalidCatalogItemAdminCreateInputError("itemType", "Vyberte typ položky (Produkt / Služba / Stánek / Interní komponenta).");
+  }
+  const kind = (raw.kind as CatalogItemKind | undefined) ?? defaultKindForItemType(requestedItemType!);
+  const itemType = requestedItemType ?? defaultItemTypeForKind(kind);
+  if (!isKindCompatibleWithItemType(kind, itemType)) {
+    throw new InvalidCatalogItemAdminCreateInputError("kind", "Zvolený druh položky (kind) neodpovídá typu karty.");
   }
   const displayName = requiredNonBlankString(raw, "displayName");
   const category = requiredNonBlankString(raw, "category");
 
   const input: { -readonly [K in keyof CatalogItemAdminCreateInput]?: CatalogItemAdminCreateInput[K] } = {
-    kind: raw.kind,
+    kind,
+    itemType,
     displayName,
     category,
   };
 
-  if (typeof raw.internalCode === "string" && raw.internalCode.trim()) input.internalCode = raw.internalCode.trim();
+  if (typeof raw.internalCode === "string" && raw.internalCode.trim()) {
+    const normalized = normalizeInternalCode(raw.internalCode);
+    if (!normalized) throw new InvalidCatalogItemAdminCreateInputError("internalCode", "Interní kód nesmí obsahovat mezery ani uvozovky a může mít nejvýše 64 znaků.");
+    input.internalCode = normalized;
+  }
+  if (typeof raw.abfCode === "string" && raw.abfCode.trim()) {
+    const normalized = normalizeAbfCode(raw.abfCode);
+    if (!normalized) throw new InvalidCatalogItemAdminCreateInputError("abfCode", "ABF kód nesmí obsahovat mezery ani uvozovky a může mít nejvýše 32 znaků.");
+    input.abfCode = normalized;
+  }
+  if (typeof raw.note === "string" && raw.note.trim()) input.note = raw.note.slice(0, NOTE_MAX_LENGTH);
   if (typeof raw.unit === "string" && raw.unit.trim()) input.unit = raw.unit;
   if (typeof raw.widthMm === "number" && Number.isFinite(raw.widthMm)) input.widthMm = raw.widthMm;
   if (typeof raw.depthMm === "number" && Number.isFinite(raw.depthMm)) input.depthMm = raw.depthMm;
@@ -802,6 +1077,7 @@ export function buildCatalogItemCreateDocument(input: CatalogItemAdminCreateInpu
     catalogItemKind: input.kind,
   };
   if (input.unit !== undefined) document.unit = input.unit;
+  if (input.note !== undefined) document.note = input.note;
   if (input.widthMm !== undefined) document.widthMm = input.widthMm;
   if (input.depthMm !== undefined) document.depthMm = input.depthMm;
   if (input.heightMm !== undefined) document.heightMm = input.heightMm;
@@ -812,6 +1088,105 @@ export function buildCatalogItemCreateDocument(input: CatalogItemAdminCreateInpu
   // in the inconsistent "showIn2D=true, no footprint2D" state.
   if (input.showIn2D === true) document.footprint2D = { shape: "rectangle" };
   return document;
+}
+
+// ============================================================================
+// DUPLICATE — "Duplikovat" copies a card's own catalog content (dimensions, assets references,
+// scene flags, technical metadata, package contents) into a NEW needs_review card. Identity and
+// provenance never travel: no internal/ABF code (both unique), no reviewedAt, no import source,
+// no archive bookkeeping, no base pricing entries (prices live per PriceList and must be set for
+// the new card explicitly — never silently inherited).
+// ============================================================================
+
+const DUPLICATE_DROPPED_DOCUMENT_KEYS = [
+  "id",
+  "internalCode",
+  "code",
+  "reviewedAt",
+  "sourceSystem",
+  "sourceKey",
+  "abfImport",
+  "archivedFromStatus",
+  "archivedAt",
+  "itemTypeNeedsReview",
+  "pricingEntries",
+  "lifecycleStatus",
+  "boothAsset",
+] as const;
+
+export function buildCatalogItemDuplicateDocument(source: Pick<CatalogItemAdmin, "document" | "displayName">, newDisplayName: string): CatalogItemAdminDocument {
+  const document: CatalogItemAdminDocument = { ...source.document };
+  for (const key of DUPLICATE_DROPPED_DOCUMENT_KEYS) delete document[key];
+  document.displayName = newDisplayName;
+  document.name = newDisplayName;
+  document.duplicatedFromDisplayName = source.displayName;
+  return document;
+}
+
+export function duplicateDisplayName(displayName: string): string {
+  return `${displayName} (kopie)`;
+}
+
+// ============================================================================
+// ARCHIVE BOOKKEEPING — archive remembers the previous status so "Obnovit" can return to it.
+// ============================================================================
+
+export function withArchiveBookkeeping(document: CatalogItemAdminDocument, previousStatus: CatalogItemStatus, archivedAt: string): CatalogItemAdminDocument {
+  return { ...document, archivedFromStatus: previousStatus, archivedAt };
+}
+
+export function withoutArchiveBookkeeping(document: CatalogItemAdminDocument): CatalogItemAdminDocument {
+  const { archivedFromStatus: _status, archivedAt: _at, ...rest } = document;
+  return rest;
+}
+
+export type BulkLifecycleAction = "archive" | "restore";
+
+export type BulkLifecycleRequest = Readonly<{
+  ids: readonly string[];
+  action: BulkLifecycleAction;
+  /** Bulk archive skips ACTIVE items unless this is explicitly true (they feed the live generator). */
+  includeActive?: boolean;
+}>;
+
+const BULK_LIFECYCLE_MAX_IDS = 500;
+
+export function parseBulkLifecycleRequest(body: unknown): BulkLifecycleRequest {
+  if (!body || typeof body !== "object") throw new InvalidCatalogItemAdminEditError("body", "Chybí data hromadné akce.");
+  const raw = body as Record<string, unknown>;
+  if (raw.action !== "archive" && raw.action !== "restore") throw new InvalidCatalogItemAdminEditError("action", "Neplatná hromadná akce.");
+  if (!Array.isArray(raw.ids) || raw.ids.length === 0 || !raw.ids.every((id) => typeof id === "string" && id)) {
+    throw new InvalidCatalogItemAdminEditError("ids", "Vyberte alespoň jednu položku.");
+  }
+  if (raw.ids.length > BULK_LIFECYCLE_MAX_IDS) throw new InvalidCatalogItemAdminEditError("ids", `Najednou lze zpracovat nejvýše ${BULK_LIFECYCLE_MAX_IDS} položek.`);
+  return { ids: [...new Set(raw.ids as string[])], action: raw.action, includeActive: raw.includeActive === true };
+}
+
+export type BulkLifecycleOutcome = Readonly<{
+  id: string;
+  result: "archived" | "restored" | "skipped";
+  /** Why it was skipped / what it was restored to. */
+  detail: string;
+}>;
+
+/**
+ * Pure per-item decision for a bulk archive/restore — the repository then applies it. Archiving
+ * an already-archived item or restoring a non-archived one is a no-op "skipped", never an error;
+ * an ACTIVE item is skipped by bulk archive unless includeActive (explicit confirmation).
+ */
+export function planBulkLifecycle(
+  item: Pick<CatalogItemAdmin, "id" | "lifecycleStatus" | "document" | "kind">,
+  request: Pick<BulkLifecycleRequest, "action" | "includeActive">,
+): Readonly<{ skip: true; detail: string } | { skip: false; targetStatus: CatalogItemStatus }> {
+  if (request.action === "archive") {
+    if (item.lifecycleStatus === "archived") return { skip: true, detail: "Už je archivováno." };
+    if (item.lifecycleStatus === "active" && !request.includeActive) {
+      return { skip: true, detail: "Aktivní položka (používá ji generátor) — přeskočeno, archivujte ji jednotlivě nebo potvrďte zahrnutí aktivních." };
+    }
+    return { skip: false, targetStatus: "archived" };
+  }
+  if (item.lifecycleStatus !== "archived") return { skip: true, detail: "Není archivováno." };
+  return { skip: false, targetStatus: resolveRestoreStatus(item) };
 }
 
 export class CatalogItemAdminNotFoundError extends Error {

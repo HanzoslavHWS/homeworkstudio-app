@@ -54,6 +54,14 @@ export const CATALOG_ITEM_KINDS = [
 ] as const;
 export type CatalogItemKind = (typeof CATALOG_ITEM_KINDS)[number];
 
+/**
+ * Catalog CARD type — the coarse, user-facing system property (catalog_items.item_type). Each
+ * type admits a small set of compatible `kind`s (see domain/catalogItemTypes.ts); `kind` stays
+ * the finer readiness/generator profile. Category is a separate, user-managed property.
+ */
+export const CATALOG_ITEM_TYPES = ["PRODUCT", "SERVICE", "BOOTH", "INTERNAL_COMPONENT"] as const;
+export type CatalogItemType = (typeof CATALOG_ITEM_TYPES)[number];
+
 export type MaterialRole =
   | "OCTANORM_WHITE"
   | "OCTANORM_BLACK"

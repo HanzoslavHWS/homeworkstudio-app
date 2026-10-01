@@ -1,6 +1,7 @@
 "use client";
 
-import type { CatalogItemAdmin, CatalogItemAdminCreateInput, CatalogItemAdminEdit } from "../../domain/catalogItemsAdmin.ts";
+import type { BulkLifecycleOutcome, BulkLifecycleRequest, CatalogItemAdmin, CatalogItemAdminCreateInput, CatalogItemAdminEdit } from "../../domain/catalogItemsAdmin.ts";
+import type { CatalogPackageItem, CatalogPackageItemInput } from "../../domain/catalogPackages.ts";
 import { ConcurrencyConflictError } from "./concurrency.ts";
 import { RemoteApiUnavailableError } from "./projectRepository.remoteApi.client.ts";
 
@@ -47,9 +48,67 @@ export class RemoteApiCatalogItemsAdminRepository {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, edit, expectedUpdatedAt }),
     });
-    if (response.status === 409) throw new ConcurrencyConflictError("catalog_item", id);
+    if (response.status === 409) {
+      // 409 is either a concurrency conflict or a domain conflict (duplicate ABF/internal code,
+      // schema not migrated) — only the former has no specific server message worth showing.
+      let message: string | undefined;
+      try {
+        message = ((await response.clone().json()) as { error?: string }).error;
+      } catch {
+        message = undefined;
+      }
+      if (message && !message.startsWith("Data byla mezitím změněna")) throw new RemoteApiUnavailableError(409, message);
+      throw new ConcurrencyConflictError("catalog_item", id);
+    }
     if (!response.ok) await throwForFailedResponse(response, "Uložení katalogové položky do databáze selhalo.");
     const body = (await response.json()) as { catalogItem: CatalogItemAdmin };
     return body.catalogItem;
+  }
+
+  async duplicate(id: string): Promise<CatalogItemAdmin> {
+    const response = await fetch("/api/catalog-admin/items/duplicate", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    if (!response.ok) await throwForFailedResponse(response, "Duplikace katalogové položky selhala.");
+    const body = (await response.json()) as { catalogItem: CatalogItemAdmin };
+    return body.catalogItem;
+  }
+
+  async bulkLifecycle(request: BulkLifecycleRequest): Promise<Readonly<{ outcomes: readonly BulkLifecycleOutcome[]; items: readonly CatalogItemAdmin[] }>> {
+    const response = await fetch("/api/catalog-admin/items/lifecycle", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+    });
+    if (!response.ok) await throwForFailedResponse(response, "Hromadná akce selhala.");
+    return (await response.json()) as { outcomes: readonly BulkLifecycleOutcome[]; items: readonly CatalogItemAdmin[] };
+  }
+
+  async savePackage(packageItemId: string, items: readonly CatalogPackageItemInput[]): Promise<readonly CatalogPackageItem[]> {
+    const response = await fetch("/api/catalog-admin/items/package", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ packageItemId, items }),
+    });
+    if (!response.ok) await throwForFailedResponse(response, "Uložení obsahu stánku selhalo.");
+    const body = (await response.json()) as { packageItems: readonly CatalogPackageItem[] };
+    return body.packageItems;
+  }
+
+  /** KODY.xlsm import — mode "preview" never writes; "apply" re-plans on the server and writes. */
+  async abfImport<T>(file: File, mode: "preview" | "apply", linkConfirmations: Readonly<Record<string, string>>): Promise<T> {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("mode", mode);
+    form.append("linkConfirmations", JSON.stringify(linkConfirmations));
+    const response = await fetch("/api/catalog-admin/abf-import", { method: "POST", credentials: "same-origin", body: form });
+    if (!response.ok) await throwForFailedResponse(response, mode === "preview" ? "Náhled importu selhal." : "Import selhal.");
+    const body = (await response.json()) as { preview?: T; result?: T };
+    return (mode === "preview" ? body.preview : body.result) as T;
   }
 }

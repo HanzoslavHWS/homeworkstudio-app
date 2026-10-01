@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   buildCatalogItemListEntry,
   categoryLabelCs,
@@ -18,6 +18,10 @@ import {
   documentSourceTraceability,
   documentTechnicalRaster,
   documentVariants,
+  documentAbfImport,
+  documentItemTypeNeedsReview,
+  documentNote,
+  itemTypeOf,
   variantHas3DAsset,
   variantHasSketchupSource,
   filterCatalogItemsAdmin,
@@ -28,9 +32,13 @@ import {
   type CatalogItemAdminEdit,
   type CatalogItemAdminFilters,
   type CatalogItemAdminListEntry,
+  type BulkLifecycleAction,
 } from "../../domain/catalogItemsAdmin";
+import { CATALOG_ITEM_KINDS_BY_TYPE, CATALOG_ITEM_TYPE_HINTS_CS, CATALOG_ITEM_TYPE_LABELS_CS, itemTypeExpectsAbfCode } from "../../domain/catalogItemTypes";
+import type { CatalogPackageItemInput } from "../../domain/catalogPackages";
+import { AbfImportPanel, CatalogItemCreateForm, PackageContentsSection, ServiceTechnicalSection } from "./CatalogAdminPanels";
 import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../domain/catalogReadiness";
-import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus } from "../../domain/models";
+import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, CATALOG_ITEM_TYPES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type CatalogItemType } from "../../domain/models";
 import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "../../domain/assets";
 import type { TechnicalRasterComponentConfig } from "../../domain/technicalRasterComponentPresentation";
 import type { TechnicalServicePlacementBehavior } from "../../domain/technicalRasterServicePresentation";
@@ -74,10 +82,12 @@ function hasAllowedExtension(fileName: string, allowed: readonly string[]): bool
 }
 
 /**
- * Component Administration ("Administrace → Komponenty"), switched from the static
- * data/components.ts seed to the real remote catalog_items table. Deliberately does NOT touch
- * ComponentLibrary.tsx (the generator's component picker) — that stays on the static seed
- * until each imported item is individually reviewed and made generator-eligible.
+ * Catalog administration ("Administrace → Komponenty" = Katalog komponent) over the real remote
+ * catalog_items table — all four card types (Produkt / Služba / Stánek / Interní komponenta).
+ * Type-booths are also still managed from "Knihovna stánků" (BoothAdminPage.tsx), which reuses
+ * the same list/detail components. Deliberately does NOT touch ComponentLibrary.tsx (the
+ * generator's furniture picker) — that stays on the static seed until each imported item is
+ * individually reviewed and made generator-eligible.
  */
 export function ComponentAdminPage({
   repository,
@@ -91,6 +101,20 @@ export function ComponentAdminPage({
   const [loadError, setLoadError] = useState("");
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [filters, setFilters] = useState<CatalogItemAdminFilters>({});
+  const [panel, setPanel] = useState<"none" | "create" | "import">("none");
+  const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMessage, setBulkMessage] = useState("");
+
+  const reload = useCallback(async () => {
+    try {
+      const loaded = await repository.list();
+      setItems(loaded);
+      setLoadError("");
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "Katalogové položky se nepodařilo načíst z databáze.");
+    }
+  }, [repository]);
 
   useEffect(() => {
     let cancelled = false;
@@ -110,13 +134,8 @@ export function ComponentAdminPage({
     };
   }, [repository]);
 
-  // Complete type-booths (kind="booth" — P86, P87, T04..T25) live exclusively under "Knihovna
-  // stánků → Typové stánky" (BoothAdminPage.tsx) now — this generic admin view never lists them,
-  // so an operator can't accidentally edit a type-booth from the wrong screen. booth_component
-  // stays visible here too (it's still a legitimate global-catalog kind), and also has its own
-  // "Komponenty stánku" tab in BoothAdminPage.tsx — that intentional dual-visibility is unchanged.
-  const nonBoothItems = useMemo(() => (items ?? []).filter((item) => item.kind !== "booth"), [items]);
-  const listEntries = useMemo(() => nonBoothItems.map(buildCatalogItemListEntry), [nonBoothItems]);
+  const allItems = items ?? [];
+  const listEntries = useMemo(() => allItems.map(buildCatalogItemListEntry), [allItems]);
   // Filter first, then sort the (smaller) result — never the DB/API return order. See
   // domain/catalogItemsAdmin.ts's sortCatalogItemsAdminByName: active items first, then A-Z
   // (cs locale) within each lifecycle group.
@@ -124,12 +143,88 @@ export function ComponentAdminPage({
     () => sortCatalogItemsAdminByName(filterCatalogItemsAdmin(listEntries, filters)),
     [listEntries, filters],
   );
-  const selected = nonBoothItems.find((item) => item.id === selectedId);
+  const selected = allItems.find((item) => item.id === selectedId);
+  const visibleCheckedIds = filteredEntries.filter((entry) => checkedIds.has(entry.id)).map((entry) => entry.id);
+  const needsTypeReviewCount = listEntries.filter((entry) => entry.itemTypeNeedsReview && entry.lifecycleStatus !== "archived").length;
+
+  function replaceItem(saved: CatalogItemAdmin) {
+    setItems((current) => (current ?? []).map((item) => (item.id === saved.id ? saved : item)));
+  }
 
   async function handleSave(edit: CatalogItemAdminEdit): Promise<void> {
     if (!selected) return;
-    const saved = await repository.save(selected.id, edit, selected.updatedAt);
-    setItems((current) => (current ?? []).map((item) => (item.id === saved.id ? saved : item)));
+    replaceItem(await repository.save(selected.id, edit, selected.updatedAt));
+  }
+
+  async function handleSavePackage(lines: readonly CatalogPackageItemInput[]): Promise<void> {
+    if (!selected) return;
+    const packageItems = await repository.savePackage(selected.id, lines);
+    setItems((current) => (current ?? []).map((item) => (item.id === selected.id ? { ...item, packageItems } : item)));
+  }
+
+  async function handleDuplicate(): Promise<void> {
+    if (!selected) return;
+    const created = await repository.duplicate(selected.id);
+    setItems((current) => [...(current ?? []), created]);
+    setSelectedId(created.id);
+  }
+
+  function handleCreated(created: CatalogItemAdmin) {
+    setItems((current) => [...(current ?? []), created]);
+    setSelectedId(created.id);
+    setPanel("none");
+  }
+
+  function toggleChecked(id: string) {
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAllVisible(checked: boolean) {
+    setCheckedIds((current) => {
+      const next = new Set(current);
+      for (const entry of filteredEntries) {
+        if (checked) next.add(entry.id);
+        else next.delete(entry.id);
+      }
+      return next;
+    });
+  }
+
+  async function handleBulk(action: BulkLifecycleAction) {
+    if (visibleCheckedIds.length === 0) return;
+    const activeChecked = filteredEntries.filter((entry) => checkedIds.has(entry.id) && entry.lifecycleStatus === "active");
+    let includeActive = false;
+    if (action === "archive" && activeChecked.length > 0) {
+      // Active items feed the live generator — they are skipped unless the admin explicitly
+      // confirms them here (the server enforces the same rule: includeActive defaults to false).
+      includeActive = window.confirm(
+        `Mezi označenými je ${activeChecked.length} aktivních položek, které používá generátor:\n` +
+          activeChecked.map((entry) => `• ${entry.internalCode ?? entry.abfCode ?? ""} ${entry.displayName}`).join("\n") +
+          "\n\nOK = archivovat i je, Zrušit = aktivní přeskočit.",
+      );
+    }
+    setBulkBusy(true);
+    setBulkMessage("");
+    try {
+      const result = await repository.bulkLifecycle({ ids: visibleCheckedIds, action, includeActive });
+      setItems((current) => {
+        const byId = new Map(result.items.map((item) => [item.id, item]));
+        return (current ?? []).map((item) => byId.get(item.id) ?? item);
+      });
+      const done = result.outcomes.filter((outcome) => outcome.result !== "skipped").length;
+      const skipped = result.outcomes.filter((outcome) => outcome.result === "skipped").length;
+      setBulkMessage(`${action === "archive" ? "Archivováno" : "Obnoveno"}: ${done}${skipped ? `, přeskočeno: ${skipped}` : ""}.`);
+      setCheckedIds(new Set());
+    } catch (error) {
+      setBulkMessage(error instanceof Error ? error.message : "Hromadná akce selhala.");
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   return (
@@ -137,9 +232,9 @@ export function ComponentAdminPage({
       <div className="workspacePageHeader">
         <div>
           <span className="eyebrow">ADMINISTRACE</span>
-          <h1>Komponenty</h1>
+          <h1>Katalog komponent</h1>
         </div>
-        {items && <span className="catalogAdminCount">{filteredEntries.length} / {nonBoothItems.length} položek</span>}
+        {items && <span className="catalogAdminCount">{filteredEntries.length} / {allItems.length} položek</span>}
       </div>
 
       {loadError && <p className="uploadError persistenceBanner">Katalog se nepodařilo načíst z databáze: {loadError}</p>}
@@ -147,18 +242,59 @@ export function ComponentAdminPage({
 
       {items && (
         <>
+          <div className="catalogAdminToolbar">
+            <button type="button" className="primaryButton" onClick={() => { setPanel(panel === "create" ? "none" : "create"); setSelectedId(undefined); }}>
+              + Nová položka
+            </button>
+            <button type="button" className="secondaryButton" onClick={() => setPanel(panel === "import" ? "none" : "import")}>
+              Import ABF kódů (KODY.xlsm)
+            </button>
+            {needsTypeReviewCount > 0 && (
+              <button type="button" className="secondaryButton" onClick={() => setFilters({ ...filters, needsTypeReview: true, onlyArchived: false })}>
+                K zařazení: {needsTypeReviewCount}
+              </button>
+            )}
+          </div>
+
+          {panel === "create" && <CatalogItemCreateForm repository={repository} onCancel={() => setPanel("none")} onCreated={handleCreated} />}
+          {panel === "import" && <AbfImportPanel repository={repository} onClose={() => setPanel("none")} onApplied={() => void reload()} />}
+
           <ComponentAdminFilters filters={filters} onChange={setFilters} />
+
+          <div className="catalogBulkBar">
+            <label className="checkboxRow">
+              <input
+                type="checkbox"
+                checked={filteredEntries.length > 0 && visibleCheckedIds.length === filteredEntries.length}
+                onChange={(event) => toggleAllVisible(event.target.checked)}
+              />
+              Označit vše ({visibleCheckedIds.length} označeno)
+            </label>
+            <button type="button" className="dangerText" disabled={bulkBusy || visibleCheckedIds.length === 0} onClick={() => void handleBulk("archive")}>
+              Hromadně archivovat
+            </button>
+            <button type="button" className="secondaryButton" disabled={bulkBusy || visibleCheckedIds.length === 0} onClick={() => void handleBulk("restore")}>
+              Hromadně obnovit
+            </button>
+            {bulkMessage && <small className="fieldHint">{bulkMessage}</small>}
+          </div>
+
           <div className="adminSplit">
             <ComponentAdminList
               entries={filteredEntries}
               selectedId={selectedId}
-              onSelect={setSelectedId}
+              onSelect={(id) => { setSelectedId(id); setPanel("none"); }}
+              checkedIds={checkedIds}
+              onToggleChecked={toggleChecked}
             />
             {selected && (
               <ComponentAdminDetail
                 key={selected.id}
                 item={selected}
+                allItems={allItems}
                 onSave={handleSave}
+                onSavePackage={handleSavePackage}
+                onDuplicate={handleDuplicate}
                 onOpenPricing={() => onOpenPricing(selected.id)}
               />
             )}
@@ -169,21 +305,45 @@ export function ComponentAdminPage({
   );
 }
 
-/** Renders the shared filter bar for ComponentAdminPage's list (kind=booth is never an option here — type-booths live exclusively in BoothAdminPage.tsx's "Typové stánky" tab). */
+type ArchiveView = "current" | "archived" | "all";
+
+function archiveViewOf(filters: CatalogItemAdminFilters): ArchiveView {
+  if (filters.onlyArchived) return "archived";
+  return filters.showArchived ? "all" : "current";
+}
+
+/** Shared filter bar: card type, archive view (aktivní / archivované / vše), status, readiness, asset, "K zařazení". */
 export function ComponentAdminFilters({ filters, onChange }: { filters: CatalogItemAdminFilters; onChange: (filters: CatalogItemAdminFilters) => void }) {
   return (
-    <div className="adminFilters">
-      <input value={filters.query ?? ""} onChange={(event) => onChange({ ...filters, query: event.target.value })} placeholder="Hledat interní kód nebo název…" />
-      <select value={filters.kind ?? ""} onChange={(event) => onChange({ ...filters, kind: event.target.value as CatalogItemKind | "" })}>
-        <option value="">Kategorie: vše</option>
-        {CATALOG_ITEM_KINDS.filter((kind) => kind !== "booth").map((kind) => (
-          <option key={kind} value={kind}>{CATALOG_ITEM_KIND_LABELS_CS[kind]}</option>
+    <div className="adminFilters catalogAdminFilters">
+      <input value={filters.query ?? ""} onChange={(event) => onChange({ ...filters, query: event.target.value })} placeholder="Hledat interní kód, ABF kód nebo název…" />
+      <select value={filters.itemType ?? ""} onChange={(event) => onChange({ ...filters, itemType: event.target.value as CatalogItemType | "" })}>
+        <option value="">Typ: vše</option>
+        {CATALOG_ITEM_TYPES.map((itemType) => (
+          <option key={itemType} value={itemType}>{CATALOG_ITEM_TYPE_LABELS_CS[itemType]}</option>
         ))}
+      </select>
+      <select
+        value={archiveViewOf(filters)}
+        onChange={(event) => {
+          const view = event.target.value as ArchiveView;
+          onChange({ ...filters, onlyArchived: view === "archived", showArchived: view === "all" });
+        }}
+      >
+        <option value="current">Katalog bez archivu</option>
+        <option value="archived">Jen archivované</option>
+        <option value="all">Vše včetně archivu</option>
       </select>
       <select value={filters.lifecycleStatus ?? ""} onChange={(event) => onChange({ ...filters, lifecycleStatus: event.target.value as CatalogItemStatus | "" })}>
         <option value="">Stav: vše</option>
         {CATALOG_ITEM_STATUSES.map((status) => (
           <option key={status} value={status}>{CATALOG_ITEM_STATUS_LABELS_CS[status]}</option>
+        ))}
+      </select>
+      <select value={filters.kind ?? ""} onChange={(event) => onChange({ ...filters, kind: event.target.value as CatalogItemKind | "" })}>
+        <option value="">Druh (kind): vše</option>
+        {CATALOG_ITEM_KINDS.map((kind) => (
+          <option key={kind} value={kind}>{CATALOG_ITEM_KIND_LABELS_CS[kind]}</option>
         ))}
       </select>
       <select value={filters.readiness ?? ""} onChange={(event) => onChange({ ...filters, readiness: event.target.value as CatalogItemAdminFilters["readiness"] })}>
@@ -197,50 +357,78 @@ export function ComponentAdminFilters({ filters, onChange }: { filters: CatalogI
         <option value="missing-3d">Chybí 3D</option>
       </select>
       <label className="checkboxRow adminFiltersArchivedToggle">
-        <input type="checkbox" checked={Boolean(filters.showArchived)} onChange={(event) => onChange({ ...filters, showArchived: event.target.checked })} />
-        Zobrazit archivované
+        <input type="checkbox" checked={Boolean(filters.needsTypeReview)} onChange={(event) => onChange({ ...filters, needsTypeReview: event.target.checked })} />
+        Jen k zařazení
       </label>
     </div>
   );
 }
 
-/** Exported so BoothAdminPage.tsx can reuse the exact same list rendering. */
+function wrapHeader(selectable: boolean, header: ReactNode): ReactNode {
+  return selectable ? <div className="catalogAdminSelectableRow"><span />{header}</div> : header;
+}
+
+/** Exported so BoothAdminPage.tsx can reuse the exact same list rendering. checkedIds/onToggleChecked enable bulk selection. */
 export function ComponentAdminList({
   entries,
   selectedId,
   onSelect,
+  checkedIds,
+  onToggleChecked,
 }: {
   entries: readonly CatalogItemAdminListEntry[];
   selectedId: string | undefined;
   onSelect: (id: string) => void;
+  checkedIds?: ReadonlySet<string>;
+  onToggleChecked?: (id: string) => void;
 }) {
+  const selectable = Boolean(checkedIds && onToggleChecked);
   return (
     <div className="adminList catalogAdminTable">
-      <div className="catalogAdminRow catalogAdminHeaderRow">
-        <span>Náhled</span>
-        <span>Interní kód</span>
-        <span>Název</span>
-        <span>Kategorie / Kind</span>
-        <span>Stav</span>
-        <span>Rozměry</span>
-        <span>3D</span>
-        <span>Cena</span>
-        <span>Generator</span>
-      </div>
+      {wrapHeader(selectable,
+        <div className="catalogAdminRow catalogAdminHeaderRow">
+          <span>Náhled</span>
+          <span>Kód / ABF</span>
+          <span>Název</span>
+          <span>Typ · kategorie</span>
+          <span>Stav</span>
+          <span>Rozměry</span>
+          <span>3D</span>
+          <span>Cena</span>
+          <span>Generator</span>
+        </div>,
+      )}
       {entries.length === 0 && <p className="workspaceEmpty">Filtrům neodpovídá žádná položka.</p>}
-      {entries.map((entry) => (
-        <button key={entry.id} type="button" className={`catalogAdminRow ${entry.id === selectedId ? "active" : ""}`} onClick={() => onSelect(entry.id)}>
-          <ThumbnailCell photoAsset={entry.photoAsset} photoUrl={entry.photoUrl} label={entry.displayName} />
-          <span>{entry.internalCode ?? "—"}</span>
-          <span>{entry.displayName}</span>
-          <span>{CATALOG_ITEM_KIND_LABELS_CS[entry.kind]}{entry.category ? ` · ${categoryLabelCs(entry.category)}` : ""}</span>
-          <span className={`lifecycleBadge ${entry.lifecycleStatus}`}>{CATALOG_ITEM_STATUS_LABELS_CS[entry.lifecycleStatus]}</span>
-          <span>{entry.hasDimensions ? `${entry.widthMm} × ${entry.depthMm}${entry.heightMm ? ` × ${entry.heightMm}` : ""} mm` : "Chybí rozměry"}</span>
-          <span>{entry.has3DAsset ? "3D ano" : "3D chybí"}</span>
-          <span>{entry.basePriceCzk !== null ? `${entry.basePriceCzk.toLocaleString("cs-CZ")} Kč` : "Cena neuvedena"}</span>
-          <span className={`readinessBadge ${entry.readiness.ready ? "ready" : "blocked"}`}>{entry.readiness.ready ? "Připraveno" : "Nepřipraveno"}</span>
-        </button>
-      ))}
+      {entries.map((entry) => {
+        const row = (
+          <button key={entry.id} type="button" className={`catalogAdminRow ${entry.id === selectedId ? "active" : ""}`} onClick={() => onSelect(entry.id)}>
+            <ThumbnailCell photoAsset={entry.photoAsset} photoUrl={entry.photoUrl} label={entry.displayName} />
+            <span title={`Interní kód: ${entry.internalCode ?? "—"} · ABF kód: ${entry.abfCode ?? "—"}`}>
+              {entry.internalCode ?? "—"}
+              {entry.abfCode && entry.abfCode !== entry.internalCode ? <small className="catalogAbfCode"> ABF {entry.abfCode}</small> : null}
+            </span>
+            <span>{entry.displayName}</span>
+            <span>
+              {CATALOG_ITEM_TYPE_LABELS_CS[entry.itemType]}
+              {entry.category ? ` · ${categoryLabelCs(entry.category)}` : ""}
+              {entry.itemTypeNeedsReview ? " · k zařazení" : ""}
+              {entry.itemType === "BOOTH" && entry.packageItemCount > 0 ? ` · ${entry.packageItemCount} pol.` : ""}
+            </span>
+            <span className={`lifecycleBadge ${entry.lifecycleStatus}`}>{CATALOG_ITEM_STATUS_LABELS_CS[entry.lifecycleStatus]}</span>
+            <span>{entry.hasDimensions ? `${entry.widthMm} × ${entry.depthMm}${entry.heightMm ? ` × ${entry.heightMm}` : ""} mm` : "Chybí rozměry"}</span>
+            <span>{entry.has3DAsset ? "3D ano" : "3D chybí"}</span>
+            <span>{entry.basePriceCzk !== null ? `${entry.basePriceCzk.toLocaleString("cs-CZ")} Kč` : "Cena neuvedena"}</span>
+            <span className={`readinessBadge ${entry.readiness.ready ? "ready" : "blocked"}`}>{entry.readiness.ready ? "Připraveno" : "Nepřipraveno"}</span>
+          </button>
+        );
+        if (!selectable) return row;
+        return (
+          <div key={entry.id} className="catalogAdminSelectableRow">
+            <input type="checkbox" aria-label={`Označit ${entry.displayName}`} checked={checkedIds!.has(entry.id)} onChange={() => onToggleChecked!(entry.id)} />
+            {row}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -258,14 +446,23 @@ function ThumbnailCell({ photoAsset, photoUrl, label }: { photoAsset: StoredAsse
 /** Exported so BoothAdminPage.tsx renders the SAME detail view (Foto/GLB/SKP/source files/readiness/reviewed/activation) for type-booths and booth components — never a second, parallel detail UI. */
 export function ComponentAdminDetail({
   item,
+  allItems,
   onSave,
+  onSavePackage,
+  onDuplicate,
   onOpenPricing,
 }: {
   item: CatalogItemAdmin;
+  /** Whole catalog — needed for the BOOTH package editor (child item picker). */
+  allItems?: readonly CatalogItemAdmin[];
   onSave: (edit: CatalogItemAdminEdit) => Promise<void>;
+  onSavePackage?: (lines: readonly CatalogPackageItemInput[]) => Promise<void>;
+  onDuplicate?: () => Promise<void>;
   onOpenPricing: () => void;
 }) {
   const itemDocument = item.document;
+  const currentItemType = itemTypeOf(item);
+  const abfImport = documentAbfImport(itemDocument);
   const initialName = typeof itemDocument.name === "string" ? itemDocument.name : item.displayName;
   const dims = documentDimensions(itemDocument);
   const pricing = documentBasePricing(itemDocument);
@@ -437,7 +634,9 @@ export function ComponentAdminDetail({
     setArchiveBusy(true);
     setArchiveError("");
     try {
-      await onSave({ lifecycleStatus: "needs_review" });
+      // Server resolves the target: the pre-archive status, re-checked against readiness
+      // (domain/catalogItemsAdmin.ts resolveRestoreStatus) — never blindly active.
+      await onSave({ restoreFromArchive: true });
     } catch (restoreErr) {
       setArchiveError(restoreErr instanceof Error ? restoreErr.message : "Obnovení selhalo.");
     } finally {
@@ -461,6 +660,12 @@ export function ComponentAdminDetail({
   const [heightMm, setHeightMm] = useState(initialHeight);
   const [showIn2D, setShowIn2D] = useState(initialShowIn2D);
   const [showIn3D, setShowIn3D] = useState(initialShowIn3D);
+  const [abfCode, setAbfCode] = useState(item.abfCode ?? "");
+  const [internalCodeDraft, setInternalCodeDraft] = useState("");
+  const [itemType, setItemType] = useState<CatalogItemType>(currentItemType);
+  const [kind, setKind] = useState<CatalogItemKind>(item.kind);
+  const [note, setNote] = useState(documentNote(itemDocument));
+  const [duplicateBusy, setDuplicateBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState<"idle" | "saving" | "activating">("idle");
   const [error, setError] = useState("");
@@ -485,7 +690,41 @@ export function ComponentAdminDetail({
     }
     if (showIn2D !== initialShowIn2D) edit.showIn2D = showIn2D;
     if (showIn3D !== initialShowIn3D) edit.showIn3D = showIn3D;
+    if (abfCode.trim() !== (item.abfCode ?? "")) edit.abfCode = abfCode.trim() ? abfCode.trim() : null;
+    if (!item.internalCode && internalCodeDraft.trim()) edit.fillInternalCode = internalCodeDraft.trim();
+    if (itemType !== currentItemType) edit.itemType = itemType;
+    if (kind !== item.kind) edit.kind = kind;
+    if (note !== documentNote(itemDocument)) edit.note = note;
     return edit;
+  }
+
+  function handleItemTypeChange(next: CatalogItemType) {
+    setItemType(next);
+    // Keep the kind valid for the new type (default kind of that type) — mirrors the server rule.
+    if (!CATALOG_ITEM_KINDS_BY_TYPE[next].includes(kind)) setKind(CATALOG_ITEM_KINDS_BY_TYPE[next][0]!);
+    setDirty(true);
+  }
+
+  async function handleDuplicateClick() {
+    if (!onDuplicate) return;
+    setDuplicateBusy(true);
+    setError("");
+    try {
+      await onDuplicate();
+    } catch (duplicateError) {
+      setError(duplicateError instanceof Error ? duplicateError.message : "Duplikace selhala.");
+    } finally {
+      setDuplicateBusy(false);
+    }
+  }
+
+  async function handleConfirmType() {
+    setError("");
+    try {
+      await onSave({ confirmItemType: true });
+    } catch (confirmError) {
+      setError(confirmError instanceof Error ? confirmError.message : "Potvrzení typu selhalo.");
+    }
   }
 
   async function handleSaveClick() {
@@ -531,7 +770,10 @@ export function ComponentAdminDetail({
   return (
     <div className="adminDetail catalogAdminDetail">
       <header className="catalogDetailHeader">
-        <span>{item.internalCode ?? "Bez interního kódu"}</span>
+        <span>
+          {CATALOG_ITEM_TYPE_LABELS_CS[currentItemType]} · {item.internalCode ?? "Bez interního kódu"}
+          {item.abfCode ? ` · ABF ${item.abfCode}` : ""}
+        </span>
         <h2>{item.displayName}</h2>
         <span className={`lifecycleBadge ${item.lifecycleStatus}`}>{CATALOG_ITEM_STATUS_LABELS_CS[item.lifecycleStatus]}</span>
       </header>
@@ -548,7 +790,30 @@ export function ComponentAdminDetail({
         <section className="catalogDetailSection">
           <h3>Identita</h3>
           <dl>
-            <EditRow label="Interní kód"><span className="readOnlyField">{item.internalCode ?? "— (bez potvrzeného kódu)"}</span></EditRow>
+            <EditRow label="Interní kód">
+              {item.internalCode ? (
+                <span className="readOnlyField" title="Stabilní interní identita — nelze měnit.">{item.internalCode}</span>
+              ) : (
+                <input value={internalCodeDraft} onChange={(event) => { setInternalCodeDraft(event.target.value); setDirty(true); }} placeholder="Doplnit (např. INT-PANEL-950)" />
+              )}
+            </EditRow>
+            <EditRow label="ABF kód">
+              <input
+                value={abfCode}
+                onChange={(event) => { setAbfCode(event.target.value); setDirty(true); }}
+                placeholder={itemTypeExpectsAbfCode(itemType) ? "Bez ABF kódu" : "Interní komponenta — ABF kód není potřeba"}
+              />
+            </EditRow>
+            <EditRow label="Typ karty">
+              <select
+                value={itemType}
+                onChange={(event) => handleItemTypeChange(event.target.value as CatalogItemType)}
+                disabled={item.lifecycleStatus === "active"}
+                title={item.lifecycleStatus === "active" ? "Aktivní položce nelze měnit typ — používá ji generátor." : undefined}
+              >
+                {CATALOG_ITEM_TYPES.map((value) => <option key={value} value={value}>{CATALOG_ITEM_TYPE_LABELS_CS[value]}</option>)}
+              </select>
+            </EditRow>
             <EditRow label="Zobrazovaný název">
               <input value={displayName} onChange={(event) => { setDisplayName(event.target.value); setDirty(true); }} />
             </EditRow>
@@ -556,7 +821,11 @@ export function ComponentAdminDetail({
               <input value={name} onChange={(event) => { setName(event.target.value); setDirty(true); }} />
             </EditRow>
             <EditRow label="EN název"><span className="readOnlyField">Model zatím nepodporuje samostatný anglický název.</span></EditRow>
-            <EditRow label="Kind"><span className="readOnlyField">{CATALOG_ITEM_KIND_LABELS_CS[item.kind]}</span></EditRow>
+            <EditRow label="Druh (pravidla readiness)">
+              <select value={kind} onChange={(event) => { setKind(event.target.value as CatalogItemKind); setDirty(true); }} disabled={item.lifecycleStatus === "active"}>
+                {CATALOG_ITEM_KINDS_BY_TYPE[itemType].map((value) => <option key={value} value={value}>{CATALOG_ITEM_KIND_LABELS_CS[value]}</option>)}
+              </select>
+            </EditRow>
             <EditRow label="Kategorie">
               <select value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
                 {category && !CATALOG_ITEM_CATEGORY_OPTIONS.some((option) => option.value === category) && (
@@ -571,8 +840,21 @@ export function ComponentAdminDetail({
             <EditRow label="Jednotka">
               <input value={unit} onChange={(event) => { setUnit(event.target.value); setDirty(true); }} />
             </EditRow>
+            <EditRow label="Poznámka">
+              <input value={note} onChange={(event) => { setNote(event.target.value); setDirty(true); }} placeholder="Interní poznámka" />
+            </EditRow>
             <Row label="Zdroj (traceability)" value={trace.sourceSystem ? `${trace.sourceSystem} · ${trace.sourceKey ?? "—"}` : "—"} />
+            <Row label="Import ABF" value={abfImport ? `${abfImport.sourceFile} · ř. ${abfImport.sourceRow} · „${abfImport.abfName}“` : "—"} />
           </dl>
+          <p className="fieldHint">{CATALOG_ITEM_TYPE_HINTS_CS[itemType]}</p>
+          {documentItemTypeNeedsReview(itemDocument) && (
+            <div className="readinessIssues">
+              <strong>K zařazení:</strong> typ karty nešel při importu z dat bezpečně určit. Zkontrolujte typ (a druh) a uložte, nebo potvrďte současný.
+              <div className="assetActions">
+                <button type="button" className="secondaryButton" onClick={() => void handleConfirmType()}>Potvrdit typ „{CATALOG_ITEM_TYPE_LABELS_CS[currentItemType]}“</button>
+              </div>
+            </div>
+          )}
         </section>
 
         <section className="catalogDetailSection">
@@ -648,8 +930,13 @@ export function ComponentAdminDetail({
                 {busy === "activating" ? "Aktivuji…" : "Aktivovat"}
               </button>
             )}
+            {onDuplicate && (
+              <button type="button" className="secondaryButton" onClick={() => void handleDuplicateClick()} disabled={duplicateBusy} title="Vytvoří novou kartu (K doplnění) se stejným obsahem — bez kódů, cen a provenance.">
+                {duplicateBusy ? "Duplikuji…" : "Duplikovat"}
+              </button>
+            )}
             {item.lifecycleStatus === "archived" ? (
-              <button type="button" className="secondaryButton" onClick={handleRestore} disabled={archiveBusy} title="Vrátí položku do stavu K doplnění — nikdy rovnou Aktivní.">
+              <button type="button" className="secondaryButton" onClick={handleRestore} disabled={archiveBusy} title="Vrátí položku do stavu před archivací; dříve aktivní položka se vrátí jako aktivní jen pokud stále splňuje readiness, jinak K doplnění.">
                 {archiveBusy ? "Obnovuji…" : "Obnovit"}
               </button>
             ) : (
@@ -815,6 +1102,10 @@ export function ComponentAdminDetail({
           <button type="button" className="secondaryButton" onClick={onOpenPricing}>Upravit ceny</button>
         </section>
 
+        {currentItemType === "SERVICE" && <ServiceTechnicalSection item={item} onSave={onSave} />}
+        {currentItemType === "BOOTH" && onSavePackage && allItems && (
+          <PackageContentsSection item={item} allItems={allItems} onSavePackage={onSavePackage} />
+        )}
         <TechnicalRasterSection item={item} ownerId={ownerId} onSave={onSave} />
       </div>
     </div>

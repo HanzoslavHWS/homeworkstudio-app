@@ -1,10 +1,17 @@
 import { NextResponse, type NextRequest } from "next/server.js";
 import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
-import { saveCatalogItemAdmin } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
+import { CatalogSchemaNotMigratedError, saveCatalogItemAdmin } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import { ConcurrencyConflictError } from "../../../../../lib/db/concurrency.ts";
-import { CatalogItemAdminNotFoundError, parseCatalogItemAdminEdit, type CatalogItemAdmin, type CatalogItemAdminEdit } from "../../../../../domain/catalogItemsAdmin.ts";
-import { CatalogReadinessError } from "../../../../../domain/catalogReadiness.ts";
+import {
+  CatalogItemAdminNotFoundError,
+  InvalidCatalogItemAdminEditError,
+  parseCatalogItemAdminEdit,
+  type CatalogItemAdmin,
+  type CatalogItemAdminEdit,
+} from "../../../../../domain/catalogItemsAdmin.ts";
+import { CatalogReadinessError, DuplicateInternalCodeError } from "../../../../../domain/catalogReadiness.ts";
+import { DuplicateAbfCodeError } from "../../../../../domain/catalogItemTypes.ts";
 
 type SaveBody = Readonly<{ id?: unknown; edit?: unknown; expectedUpdatedAt?: unknown }>;
 
@@ -25,13 +32,22 @@ export async function handleCatalogAdminItemsSave(
   }
   if (typeof body.id !== "string" || !body.id) return NextResponse.json({ error: "Chybí id katalogové položky." }, { status: 400 });
   const expectedUpdatedAt = typeof body.expectedUpdatedAt === "string" ? body.expectedUpdatedAt : null;
-  const edit = parseCatalogItemAdminEdit(body.edit);
+  let edit: CatalogItemAdminEdit;
+  try {
+    edit = parseCatalogItemAdminEdit(body.edit);
+  } catch (parseError) {
+    if (parseError instanceof InvalidCatalogItemAdminEditError) return NextResponse.json({ error: parseError.message }, { status: 400 });
+    return NextResponse.json({ error: "Neplatná data pro uložení položky." }, { status: 400 });
+  }
   try {
     const saved = await save(body.id, edit, expectedUpdatedAt);
     return NextResponse.json({ catalogItem: saved });
   } catch (error) {
     if (error instanceof ConcurrencyConflictError) return NextResponse.json({ error: "Data byla mezitím změněna jinde. Obnovte stránku před uložením." }, { status: 409 });
     if (error instanceof CatalogReadinessError) return NextResponse.json({ error: error.message, issues: error.issues }, { status: 400 });
+    if (error instanceof InvalidCatalogItemAdminEditError) return NextResponse.json({ error: error.message }, { status: 400 });
+    if (error instanceof DuplicateAbfCodeError || error instanceof DuplicateInternalCodeError) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof CatalogSchemaNotMigratedError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof CatalogItemAdminNotFoundError) return NextResponse.json({ error: error.message }, { status: 404 });
     if (error instanceof SupabaseConfigurationError) return NextResponse.json({ error: error.message }, { status: 503 });
     return NextResponse.json({ error: "Katalogovou položku se nepodařilo uložit do databáze." }, { status: 502 });

@@ -13,6 +13,7 @@ import {
   type CatalogItemAdminFilters,
 } from "../../domain/catalogItemsAdmin";
 import type { CatalogItemKind } from "../../domain/models";
+import type { CatalogPackageItemInput } from "../../domain/catalogPackages";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
 import { ComponentAdminDetail, ComponentAdminList } from "./ComponentAdminPage";
 
@@ -81,6 +82,19 @@ export function BoothAdminPage({
     setItems((current) => (current ?? []).map((item) => (item.id === saved.id ? saved : item)));
   }
 
+  async function handleSavePackage(lines: readonly CatalogPackageItemInput[]): Promise<void> {
+    if (!selected) return;
+    const packageItems = await repository.savePackage(selected.id, lines);
+    setItems((current) => (current ?? []).map((item) => (item.id === selected.id ? { ...item, packageItems } : item)));
+  }
+
+  async function handleDuplicate(): Promise<void> {
+    if (!selected) return;
+    const created = await repository.duplicate(selected.id);
+    setItems((current) => [...(current ?? []), created]);
+    setSelectedId(created.id);
+  }
+
   function selectTab(kind: CatalogItemKind) {
     setActiveKind(kind);
     setSelectedId(undefined);
@@ -144,7 +158,10 @@ export function BoothAdminPage({
               <ComponentAdminDetail
                 key={selected.id}
                 item={selected}
+                allItems={items}
                 onSave={handleSave}
+                onSavePackage={handleSavePackage}
+                onDuplicate={handleDuplicate}
                 onOpenPricing={() => onOpenPricing(selected.id)}
               />
             )}

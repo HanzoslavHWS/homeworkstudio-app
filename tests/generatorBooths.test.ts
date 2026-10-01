@@ -481,5 +481,8 @@ test("BoothGenerator.tsx's variant card thumbnail falls back variant.photoAsset 
 
 test("BoothGenerator.tsx's selectedBooth lookup uses resolveGeneratorBooth (id-or-internalCode compatibility), not a plain .find — still true for typovka now that individualni resolves via createIndividualBooth instead", () => {
   const source = readFileSync(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
-  assert.match(source, /const selectedBooth =\s*\n?\s*type === "individualni" \? individualBooth : resolveGeneratorBooth\(boothTypes, selectedBoothId\);/u);
+  // Resolves against savedProjectBoothTypes (picker list + archived-but-usable booths) so an
+  // archived booth never breaks an older project; the picker itself still renders boothTypes.
+  assert.match(source, /const selectedBooth =\s*\n?\s*type === "individualni" \? individualBooth : resolveGeneratorBooth\(savedProjectBoothTypes, selectedBoothId\);/u);
+  assert.match(source, /setDbSavedProjectBoothTypes\(selectSavedProjectBooths\(catalogItems\)\)/u);
 });
