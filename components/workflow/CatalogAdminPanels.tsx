@@ -4,6 +4,11 @@ import { useMemo, useState, type ReactNode } from "react";
 import {
   CATALOG_ITEM_CATEGORY_OPTIONS,
   CATALOG_ITEM_KIND_LABELS_CS,
+  CATALOG_PUBLICATION_DESCRIPTION_MAX,
+  CATALOG_PUBLICATION_NAME_MAX,
+  documentCatalogPublication,
+  documentPhotoAsset,
+  documentPhotoUrl,
   documentServiceTechnical,
   itemTypeOf,
   type CatalogItemAdmin,
@@ -21,6 +26,9 @@ import type { CatalogPackageItemInput } from "../../domain/catalogPackages";
 import type { AbfImportPlan, AbfImportPlanRow } from "../../domain/catalogAbfImport";
 import type { AbfImportApplyResult } from "../../lib/db/catalogAbfImport.supabase";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
+import { canPublishInCustomerCatalog } from "../../domain/customerCatalog";
+import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
+import { useAssetUrl } from "../../hooks/useAssetUrl";
 
 /** Types whose cards physically exist (dimensions make sense). SERVICE never needs them. */
 const TYPES_WITH_DIMENSIONS: readonly CatalogItemType[] = ["PRODUCT", "BOOTH", "INTERNAL_COMPONENT"];
@@ -342,6 +350,134 @@ export function ServiceTechnicalSection({ item, onSave }: { item: CatalogItemAdm
         <button type="button" className="primaryButton" onClick={() => void handleSave()} disabled={!dirty || busy}>{busy ? "Ukládám…" : "Uložit metadata"}</button>
       </div>
       <p className="fieldHint">Umístění v technickém rastru, značka a ikona se nastavují v sekci „Technické rastry“.</p>
+      {error && <small className="uploadError">{error}</small>}
+    </section>
+  );
+}
+
+// ============================================================================
+// PUBLIKACE V KATALOGU — presentation metadata for the customer-facing "Katalog" module.
+// Self-contained and independently saved, like the sections above; codes, type, dimensions
+// and prices stay in their own sections.
+// ============================================================================
+
+const CATALOG_IMAGE_ACCEPT = "image/jpeg,image/png,image/webp";
+const CATALOG_IMAGE_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
+
+export function CatalogPublicationSection({ item, ownerId, onSave }: { item: CatalogItemAdmin; ownerId: string; onSave: (edit: CatalogItemAdminEdit) => Promise<void> }) {
+  const publication = documentCatalogPublication(item.document);
+  const publishable = canPublishInCustomerCatalog(item);
+  const [visible, setVisible] = useState(publication.visible);
+  const [name, setName] = useState(publication.name ?? "");
+  const [shortDescription, setShortDescription] = useState(publication.shortDescription ?? "");
+  const [sortOrder, setSortOrder] = useState(publication.sortOrder !== undefined ? String(publication.sortOrder) : "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [imageProgress, setImageProgress] = useState<UploadProgress | undefined>(undefined);
+  // Preview what the catalog will actually use: the dedicated image, else the item's own photo.
+  const imageResolved = useAssetUrl(publication.image ?? documentPhotoAsset(item.document), documentPhotoUrl(item.document));
+
+  const parsedSortOrder = sortOrder.trim() ? Number(sortOrder) : null;
+  const sortOrderValid = parsedSortOrder === null || (Number.isInteger(parsedSortOrder) && parsedSortOrder >= 0);
+  const dirty =
+    visible !== publication.visible ||
+    name.trim() !== (publication.name ?? "") ||
+    shortDescription.trim() !== (publication.shortDescription ?? "") ||
+    parsedSortOrder !== (publication.sortOrder ?? null);
+
+  async function run(edit: CatalogItemAdminEdit, fallbackMessage: string) {
+    setBusy(true);
+    setError("");
+    try {
+      await onSave(edit);
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : fallbackMessage);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleImageUpload(file: File) {
+    const extension = file.name.toLowerCase().split(".").pop() ?? "";
+    if (file.size === 0 || !CATALOG_IMAGE_EXTENSIONS.includes(extension)) {
+      setError("Podporované formáty: jpg, jpeg, png, webp.");
+      return;
+    }
+    setError("");
+    try {
+      const asset = await uploadAsset(file, { category: "catalog-photo", ownerId }, setImageProgress);
+      await onSave({ catalogPublication: { image: asset } });
+    } catch (uploadError) {
+      setError(uploadError instanceof Error ? uploadError.message : "Nahrání obrázku selhalo.");
+    }
+  }
+
+  if (!publishable) {
+    return (
+      <section className="catalogDetailSection">
+        <h3>Publikace v katalogu</h3>
+        <p className="fieldHint">Interní komponenta se do zákaznického katalogu nenabízí.</p>
+      </section>
+    );
+  }
+
+  return (
+    <section className="catalogDetailSection">
+      <h3>Publikace v katalogu</h3>
+      <label className="checkboxRow">
+        <input type="checkbox" checked={visible} onChange={(event) => setVisible(event.target.checked)} />
+        Zobrazovat v katalogu
+      </label>
+      {visible && item.lifecycleStatus === "archived" && <p className="fieldHint">Položka je archivovaná — v katalogu se neobjeví, dokud ji neobnovíte.</p>}
+      <dl>
+        <Field label="Katalogový název">
+          <input value={name} maxLength={CATALOG_PUBLICATION_NAME_MAX} onChange={(event) => setName(event.target.value)} placeholder={item.displayName} />
+        </Field>
+        <Field label="Krátký popis">
+          <textarea value={shortDescription} maxLength={CATALOG_PUBLICATION_DESCRIPTION_MAX} rows={3} onChange={(event) => setShortDescription(event.target.value)} placeholder="Text pro zákazníka" />
+        </Field>
+        <Field label="Pořadí">
+          <input inputMode="numeric" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} placeholder="Podle názvu" />
+        </Field>
+      </dl>
+      {imageResolved.url && <img className="catalogPhotoPreview" src={imageResolved.url} alt={`Katalogový obrázek ${item.displayName}`} />}
+      <div className="assetActions">
+        <label className="smallUploadButton">
+          {publication.image ? "Nahradit obrázek" : "Nahrát katalogový obrázek"}
+          <input
+            type="file"
+            accept={CATALOG_IMAGE_ACCEPT}
+            onChange={(event) => {
+              const file = event.target.files?.[0];
+              event.target.value = "";
+              if (file) void handleImageUpload(file);
+            }}
+          />
+        </label>
+        {publication.image && (
+          <button type="button" className="dangerText" disabled={busy} onClick={() => void run({ catalogPublication: { image: null } }, "Odebrání obrázku selhalo.")}>
+            Odebrat obrázek
+          </button>
+        )}
+        <button
+          type="button"
+          className="primaryButton"
+          disabled={!dirty || !sortOrderValid || busy}
+          onClick={() => void run({ catalogPublication: { visible, name: name.trim() || null, shortDescription: shortDescription.trim() || null, sortOrder: parsedSortOrder } }, "Uložení selhalo.")}
+        >
+          {busy ? "Ukládám…" : "Uložit publikaci"}
+        </button>
+      </div>
+      {imageProgress?.state === "uploading" && (
+        <div className="assetUploadState uploading">
+          <progress max="100" value={imageProgress.percent} />
+          <span>Nahrávám {imageProgress.percent} %</span>
+        </div>
+      )}
+      <p className="fieldHint">
+        {publication.image ? "Katalog použije tento obrázek." : "Bez vlastního obrázku použije katalog fotografii položky."} Bez katalogového názvu se zobrazí „{item.displayName}“.
+      </p>
+      {!sortOrderValid && <small className="uploadError">Pořadí musí být celé nezáporné číslo.</small>}
       {error && <small className="uploadError">{error}</small>}
     </section>
   );

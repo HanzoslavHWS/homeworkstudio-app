@@ -61,6 +61,27 @@ export function computeGeneratorEligible(document: ComponentDefinition, lifecycl
 }
 
 /**
+ * DB pricing rows of ONE catalog item in the PricingEntry shape selectPricingEntry()
+ * (domain/catalog.ts) resolves — each keeps its own priceListId/exhibitionId/currency exactly as
+ * stored. Shared by technical-service pricing below and the customer catalog
+ * (domain/customerCatalog.ts), so both answer "which price applies" the same way.
+ */
+export function pricingEntriesForCatalogItem(catalogItemId: string, entries: readonly PricingEntrySummary[]): readonly PricingEntry[] {
+  return entries
+    .filter((entry) => entry.catalogItemId === catalogItemId)
+    .map((entry) => ({
+      id: entry.id,
+      itemId: catalogItemId,
+      exhibitionId: entry.eventId,
+      realizationCompanyId: entry.realizationCompanyId ?? undefined,
+      priceListId: entry.priceListId,
+      currency: entry.currency,
+      salePrice: entry.salePrice ?? undefined,
+      priceMode: entry.priceMode,
+    }));
+}
+
+/**
  * Builds the minimal ComponentDefinition shape domain/technicalServices.ts's pricing
  * functions (priceCleaning/priceElectricity/priceGraphics) and
  * domain/calculationExport.ts already know how to price — never placed in a scene, never fed
@@ -70,18 +91,7 @@ export function computeGeneratorEligible(document: ComponentDefinition, lifecycl
  * for every other catalog item in the app.
  */
 export function toTechnicalServiceComponentDefinition(item: CatalogItemSummary, entries: readonly PricingEntrySummary[]): ComponentDefinition {
-  const pricingEntries: readonly PricingEntry[] = entries
-    .filter((entry) => entry.catalogItemId === item.id)
-    .map((entry) => ({
-      id: entry.id,
-      itemId: item.id,
-      exhibitionId: entry.eventId,
-      realizationCompanyId: entry.realizationCompanyId ?? undefined,
-      priceListId: entry.priceListId,
-      currency: entry.currency,
-      salePrice: entry.salePrice ?? undefined,
-      priceMode: entry.priceMode,
-    }));
+  const pricingEntries = pricingEntriesForCatalogItem(item.id, entries);
   return {
     id: item.id,
     internalCode: item.internalCode ?? undefined,

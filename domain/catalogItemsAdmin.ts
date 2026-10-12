@@ -163,6 +163,104 @@ export function documentServiceTechnical(document: CatalogItemAdminDocument): Se
   return parseServiceTechnical(document.serviceTechnical);
 }
 
+// ============================================================================
+// PUBLIKACE V KATALOGU — presentation metadata for the customer-facing "Katalog" module
+// (domain/customerCatalog.ts). A separate JSON section (document.catalogPublication), never a
+// second catalog: codes, type, category, dimensions, archival and prices stay where they are.
+// ============================================================================
+
+export type CatalogPublication = Readonly<{
+  /** "Zobrazovat v katalogu". Absent section = false — a new card is never published implicitly. */
+  visible: boolean;
+  /** Customer-facing name; the technical displayName is only the fallback. */
+  name?: string;
+  shortDescription?: string;
+  /** Dedicated catalog image; the item's own photo is the fallback. */
+  image?: StoredAsset;
+  /** Order inside the category (ascending); unset items follow, sorted by name. */
+  sortOrder?: number;
+}>;
+
+/** Merge patch: an omitted field stays unchanged, `null` clears it. */
+export type CatalogPublicationEdit = Readonly<{
+  visible?: boolean;
+  name?: string | null;
+  shortDescription?: string | null;
+  image?: StoredAsset | null;
+  sortOrder?: number | null;
+}>;
+
+export const CATALOG_PUBLICATION_NAME_MAX = 120;
+export const CATALOG_PUBLICATION_DESCRIPTION_MAX = 400;
+const CATALOG_PUBLICATION_SORT_ORDER_MAX = 99999;
+
+function isValidCatalogSortOrder(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= CATALOG_PUBLICATION_SORT_ORDER_MAX;
+}
+
+/** Never trusts the JSONB blob — every field is re-validated, a malformed one is dropped. */
+export function documentCatalogPublication(document: CatalogItemAdminDocument): CatalogPublication {
+  const value = document.catalogPublication;
+  if (!value || typeof value !== "object") return { visible: false };
+  const candidate = value as Record<string, unknown>;
+  const name = sanitizeShortLabel(candidate.name, CATALOG_PUBLICATION_NAME_MAX);
+  const shortDescription = sanitizeShortLabel(candidate.shortDescription, CATALOG_PUBLICATION_DESCRIPTION_MAX);
+  return {
+    visible: candidate.visible === true,
+    ...(name !== undefined ? { name } : {}),
+    ...(shortDescription !== undefined ? { shortDescription } : {}),
+    ...(isStoredAssetShape(candidate.image) ? { image: candidate.image } : {}),
+    ...(isValidCatalogSortOrder(candidate.sortOrder) ? { sortOrder: candidate.sortOrder } : {}),
+  };
+}
+
+function parseCatalogPublicationText(raw: unknown, field: string, label: string, maxLength: number): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== "string") throw new InvalidCatalogItemAdminEditError(field, `${label}: neplatná hodnota.`);
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  if (trimmed.length > maxLength) throw new InvalidCatalogItemAdminEditError(field, `${label} může mít nejvýše ${maxLength} znaků.`);
+  if (!isPlainTextWithoutMarkup(trimmed)) throw new InvalidCatalogItemAdminEditError(field, `${label} nesmí obsahovat znaky < a >.`);
+  return trimmed;
+}
+
+function parseCatalogPublicationEdit(raw: unknown): CatalogPublicationEdit {
+  if (!raw || typeof raw !== "object") throw new InvalidCatalogItemAdminEditError("catalogPublication", "Neplatná data publikace v katalogu.");
+  const candidate = raw as Record<string, unknown>;
+  const edit: { -readonly [K in keyof CatalogPublicationEdit]?: CatalogPublicationEdit[K] } = {};
+  if (typeof candidate.visible === "boolean") edit.visible = candidate.visible;
+  const name = parseCatalogPublicationText(candidate.name, "catalogPublication.name", "Katalogový název", CATALOG_PUBLICATION_NAME_MAX);
+  if (name !== undefined) edit.name = name;
+  const shortDescription = parseCatalogPublicationText(candidate.shortDescription, "catalogPublication.shortDescription", "Krátký popis", CATALOG_PUBLICATION_DESCRIPTION_MAX);
+  if (shortDescription !== undefined) edit.shortDescription = shortDescription;
+  if ("image" in candidate) {
+    if (candidate.image === null) edit.image = null;
+    else if (isStoredAssetShape(candidate.image)) edit.image = candidate.image;
+  }
+  if ("sortOrder" in candidate && candidate.sortOrder !== undefined) {
+    if (candidate.sortOrder === null) edit.sortOrder = null;
+    else if (isValidCatalogSortOrder(candidate.sortOrder)) edit.sortOrder = candidate.sortOrder;
+    else throw new InvalidCatalogItemAdminEditError("catalogPublication.sortOrder", `Pořadí musí být celé číslo 0–${CATALOG_PUBLICATION_SORT_ORDER_MAX}.`);
+  }
+  return edit;
+}
+
+function applyCatalogPublicationEdit(current: CatalogPublication, edit: CatalogPublicationEdit): CatalogPublication {
+  const pick = <T,>(next: T | null | undefined, previous: T | undefined): T | undefined => (next === undefined ? previous : next ?? undefined);
+  const name = pick(edit.name, current.name);
+  const shortDescription = pick(edit.shortDescription, current.shortDescription);
+  const image = pick(edit.image, current.image);
+  const sortOrder = pick(edit.sortOrder, current.sortOrder);
+  return {
+    visible: edit.visible ?? current.visible,
+    ...(name !== undefined ? { name } : {}),
+    ...(shortDescription !== undefined ? { shortDescription } : {}),
+    ...(image !== undefined ? { image } : {}),
+    ...(sortOrder !== undefined ? { sortOrder } : {}),
+  };
+}
+
 /** Provenance of the last KODY/ABF import touching this card (read-only in the admin). */
 export type AbfImportProvenance = Readonly<{
   sourceFile: string;
@@ -706,6 +804,8 @@ export type CatalogItemAdminEdit = Readonly<{
   note?: string;
   /** SERVICE technical metadata — whole-value replace, `null` = clear. */
   serviceTechnical?: ServiceTechnicalMetadata | null;
+  /** "Publikace v katalogu" — merge patch into document.catalogPublication; `null` resets the whole section (unpublishes). */
+  catalogPublication?: CatalogPublicationEdit | null;
   /** Explicitly confirms the current card type (clears the import's "K zařazení" flag) without changing it. */
   confirmItemType?: true;
   /**
@@ -829,6 +929,9 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
   if ("serviceTechnical" in raw) {
     edit.serviceTechnical = raw.serviceTechnical === null ? null : (parseServiceTechnical(raw.serviceTechnical) ?? null);
   }
+  if ("catalogPublication" in raw && raw.catalogPublication !== undefined) {
+    edit.catalogPublication = raw.catalogPublication === null ? null : parseCatalogPublicationEdit(raw.catalogPublication);
+  }
   if (raw.confirmItemType === true) edit.confirmItemType = true;
   if (raw.restoreFromArchive === true) edit.restoreFromArchive = true;
   return edit;
@@ -902,6 +1005,10 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
   }
   if (edit.serviceTechnical === null) delete next.serviceTechnical;
   else if (edit.serviceTechnical !== undefined) next.serviceTechnical = edit.serviceTechnical;
+  if (edit.catalogPublication === null) delete next.catalogPublication;
+  else if (edit.catalogPublication !== undefined) {
+    next.catalogPublication = applyCatalogPublicationEdit(documentCatalogPublication(document), edit.catalogPublication);
+  }
   if (edit.kind !== undefined) next.catalogItemKind = edit.kind;
   // Any explicit type decision (set or confirm) resolves the import's "K zařazení" flag.
   if (edit.itemType !== undefined || edit.confirmItemType === true) delete next.itemTypeNeedsReview;
@@ -1112,6 +1219,8 @@ const DUPLICATE_DROPPED_DOCUMENT_KEYS = [
   "pricingEntries",
   "lifecycleStatus",
   "boothAsset",
+  // A copy is a new, unreviewed card — it must be published in the customer catalog explicitly.
+  "catalogPublication",
 ] as const;
 
 export function buildCatalogItemDuplicateDocument(source: Pick<CatalogItemAdmin, "document" | "displayName">, newDisplayName: string): CatalogItemAdminDocument {

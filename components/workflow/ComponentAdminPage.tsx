@@ -36,7 +36,7 @@ import {
 } from "../../domain/catalogItemsAdmin";
 import { CATALOG_ITEM_KINDS_BY_TYPE, CATALOG_ITEM_TYPE_HINTS_CS, CATALOG_ITEM_TYPE_LABELS_CS, itemTypeExpectsAbfCode } from "../../domain/catalogItemTypes";
 import type { CatalogPackageItemInput } from "../../domain/catalogPackages";
-import { AbfImportPanel, CatalogItemCreateForm, PackageContentsSection, ServiceTechnicalSection } from "./CatalogAdminPanels";
+import { AbfImportPanel, CatalogItemCreateForm, CatalogPublicationSection, PackageContentsSection, ServiceTechnicalSection } from "./CatalogAdminPanels";
 import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../domain/catalogReadiness";
 import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, CATALOG_ITEM_TYPES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type CatalogItemType } from "../../domain/models";
 import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "../../domain/assets";
@@ -1102,6 +1102,7 @@ export function ComponentAdminDetail({
           <button type="button" className="secondaryButton" onClick={onOpenPricing}>Upravit ceny</button>
         </section>
 
+        <CatalogPublicationSection item={item} ownerId={ownerId} onSave={onSave} />
         {currentItemType === "SERVICE" && <ServiceTechnicalSection item={item} onSave={onSave} />}
         {currentItemType === "BOOTH" && onSavePackage && allItems && (
           <PackageContentsSection item={item} allItems={allItems} onSavePackage={onSavePackage} />

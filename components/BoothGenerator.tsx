@@ -222,6 +222,8 @@ import { RemoteApiPrintSurfacePresetRepository } from "../lib/db/printSurfacePre
 import { RemoteApiPrintSurfaceProductionDimensionRepository } from "../lib/db/printSurfaceProductionDimensionRepository.remoteApi.client";
 import { RemoteApiPrintSurfaceExportRepository } from "../lib/db/printSurfaceExportRepository.remoteApi.client";
 import { TechnicalRastersPage } from "./workflow/TechnicalRastersPage";
+import { CustomerCatalogPage } from "./workflow/CustomerCatalogPage";
+import { RemoteApiCustomerCatalogPresetRepository } from "../lib/db/customerCatalogPresetRepository.remoteApi.client";
 import { RemoteApiTechnicalRasterProjectRepository } from "../lib/db/technicalRasterProjectRepository.remoteApi.client";
 import { RemoteApiTaskClient } from "../lib/db/taskRepository.remoteApi.client";
 import { computeTaskCounts, localIsoDate, taskInputFromContext, taskToInput, type Task, type TaskContext, type TaskInput } from "../domain/tasks";
@@ -310,6 +312,7 @@ export default function BoothGenerator() {
   // project's own event/realizačka (see domain/printSurfacePricing.ts's pricing-reuse doc).
   const printSurfacePriceListRepositoryRef = useRef(new RemoteApiPriceListRepository());
   const printSurfaceCatalogPricingRepositoryRef = useRef(new RemoteApiCatalogPricingRepository());
+  const customerCatalogPresetRepositoryRef = useRef(new RemoteApiCustomerCatalogPresetRepository());
   // Technické rastry — a NEW, standalone module (own project repository, no shared state with
   // print surfaces or the main booth generator). Reuses the SAME general-purpose catalog-pricing
   // repository instance as print surfaces above (catalog items are global, not scoped to either
@@ -346,7 +349,7 @@ export default function BoothGenerator() {
     navigateWorkspace("printSurfaces", { printSurfaceProjectId: projectId });
   }
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "tasks" | "booths" | "components" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters"
+    "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters"
   >("project");
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
@@ -2777,6 +2780,16 @@ export default function BoothGenerator() {
           <ComponentAdminPage
             repository={catalogItemsAdminRepositoryRef.current}
             onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
+          />
+        )}
+
+        {workspaceSection === "customerCatalog" && (
+          <CustomerCatalogPage
+            catalogRepository={catalogItemsAdminRepositoryRef.current}
+            pricingRepository={printSurfaceCatalogPricingRepositoryRef.current}
+            presetRepository={customerCatalogPresetRepositoryRef.current}
+            events={adminEvents}
+            priceLists={adminPriceLists}
           />
         )}
 

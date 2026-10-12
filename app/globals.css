@@ -7118,3 +7118,91 @@ select:focus {
   .catalogPackageLine { grid-template-columns: 1fr 70px; }
   .catalogImportRow { grid-template-columns: 44px 44px minmax(0, 1fr); }
 }
+
+/* ================================================= */
+/* KATALOG — zákaznický výstup                       */
+/* ================================================= */
+
+.customerCatalogContext { display: grid; grid-template-columns: minmax(200px, 1.3fr) 110px minmax(180px, 1fr) minmax(200px, 1.2fr); gap: 10px; margin-bottom: 12px; }
+.customerCatalogContext label { display: grid; gap: 4px; min-width: 0; }
+.customerCatalogContext label > span { color: #929598; font-size: 7px; font-weight: 800; letter-spacing: 1px; text-transform: uppercase; }
+.customerCatalogContext select,
+.customerCatalogContext input { height: 38px; font-size: 9px; }
+.customerCatalogPresets { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 16px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.customerCatalogPresets select { width: 220px; height: 34px; font-size: 9px; }
+.customerCatalogPresets input { flex: 1 1 260px; min-width: 0; height: 34px; font-size: 9px; }
+.customerCatalogPresets button { font-size: 9px; }
+.customerCatalogPresets .fieldHint { margin-top: 0; }
+.customerCatalogSplit { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.15fr); gap: 20px; align-items: start; }
+.customerCatalogPicker { min-width: 0; }
+.customerCatalogFilters { grid-template-columns: minmax(160px, 1fr) repeat(2, minmax(110px, .5fr)); }
+.customerCatalogGroup { overflow: hidden; margin-bottom: 10px; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.customerCatalogGroupHeader { margin-top: 0; padding: 9px 12px; background: #fafafa; border-bottom: 1px solid #ededee; cursor: pointer; }
+.customerCatalogGroupHeader strong { flex: 1; font-size: 8px; letter-spacing: .08em; text-transform: uppercase; }
+.customerCatalogGroupHeader span { color: #96999c; font-size: 7px; }
+.customerCatalogRow { display: grid; grid-template-columns: 16px 36px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 7px 12px; border-bottom: 1px solid #ededee; cursor: pointer; }
+.customerCatalogRow:last-child { border-bottom: 0; }
+.customerCatalogRow.selected { background: #f3f6f4; }
+.customerCatalogRow input { width: auto; height: auto; }
+.customerCatalogRowName { display: grid; gap: 2px; min-width: 0; }
+.customerCatalogRowName strong { overflow: hidden; font-size: 9px; text-overflow: ellipsis; white-space: nowrap; }
+.customerCatalogRowName small { overflow: hidden; color: #96999c; font-size: 7px; text-overflow: ellipsis; white-space: nowrap; }
+.customerCatalogRowPrice { font-size: 9px; font-weight: 700; white-space: nowrap; }
+.customerCatalogRowPrice.missing { color: #8a6d2f; font-weight: 500; }
+.customerCatalogOutput { display: grid; gap: 12px; min-width: 0; }
+.customerCatalogOptions { padding: 13px; border: 1px solid var(--border); border-radius: 10px; background: white; }
+.customerCatalogOptions h3,
+.customerCatalogPreviewTitle { margin-bottom: 4px; color: #686c6f; font-size: 8px; letter-spacing: 1.2px; text-transform: uppercase; }
+.customerCatalogOptionGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0 12px; }
+.customerCatalogOrderRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; align-items: center; gap: 8px; padding: 5px 0; border-bottom: 1px solid #eceeef; font-size: 8px; }
+.customerCatalogOrderRow button { width: 26px; height: 22px; border: 1px solid #dcdedf; border-radius: 4px; background: white; }
+.customerCatalogOrderRow button:disabled { opacity: .35; cursor: not-allowed; }
+.customerCatalogWarning { display: grid; gap: 4px; padding: 11px 13px; border: 1px solid #ecdcb6; border-radius: 10px; background: #fdf8ec; color: #6f5822; font-size: 8px; }
+.customerCatalogWarning strong { font-size: 9px; }
+.customerCatalogWarning .secondaryButton { padding: 5px 9px; border: 1px solid #dccb9f; border-radius: 5px; background: white; color: #6f5822; font-size: 8px; }
+.customerCatalogExportBar { display: flex; align-items: center; gap: 14px; }
+.customerCatalogExportBar .fieldHint { margin-top: 0; }
+
+.customerCatalogPreview { display: grid; gap: 14px; padding: 16px; border-radius: 10px; background: #e9eaeb; color: #151515; }
+.ccSheet { padding: 28px 26px; background: white; box-shadow: 0 1px 4px rgba(0, 0, 0, .12); }
+.ccCover { display: grid; grid-template-rows: 90px 1fr auto; aspect-ratio: 210 / 297; }
+.ccCoverLogo { max-width: 42%; max-height: 80px; object-fit: contain; object-position: left top; }
+.ccCoverTitle { display: grid; align-content: center; gap: 10px; grid-row: 2; }
+.ccCoverAccent { width: 70px; height: 4px; background: #151515; }
+.ccCoverTitle h2 { font-size: 34px; line-height: 1.12; letter-spacing: -.5px; }
+.ccCoverTitle strong { font-size: 19px; }
+.ccCoverTitle > span:last-child { color: #8c8e91; font-size: 12px; }
+.ccCoverFooter { display: flex; justify-content: space-between; grid-row: 3; padding-top: 10px; border-top: 1.5px solid #151515; font-size: 10px; }
+.ccCoverFooter span { color: #8c8e91; }
+.ccSection + .ccSection { margin-top: 26px; }
+.ccSection h3 { margin-bottom: 14px; padding-bottom: 7px; border-bottom: 1.5px solid #151515; font-size: 15px; letter-spacing: .02em; text-transform: uppercase; }
+.ccGrid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+.ccCard { display: flex; flex-direction: column; min-width: 0; border: 1px solid #dee0e2; }
+.ccCardImage { display: grid; place-items: center; background: #f6f6f5; }
+.ccCardImage img { max-width: 100%; max-height: 100%; object-fit: contain; }
+.ccImagePlaceholder { color: #a0a2a5; font-size: 9px; }
+.ccCard-product .ccCardImage { height: 150px; padding: 8px; }
+.ccCardBody { display: flex; flex: 1; flex-direction: column; gap: 4px; min-width: 0; padding: 11px; }
+.ccCardBody h4 { font-size: 13px; line-height: 1.25; overflow-wrap: anywhere; }
+.ccCardBody p { color: #46484b; font-size: 10px; line-height: 1.4; overflow-wrap: anywhere; }
+.ccCode { color: #8c8e91; font-size: 9px; }
+.ccCardBody .ccPrice { margin-top: auto; padding-top: 6px; color: #151515; font-size: 13px; font-weight: 700; }
+.ccCardBody .ccPriceMissing { margin-top: auto; padding: 3px 6px; border: 1px dashed #dccb9f; color: #8a6d2f; font-size: 9px; }
+.ccCard-service { flex-direction: row-reverse; border-left: 4px solid #151515; }
+.ccCard-service .ccCardImage { flex: 0 0 64px; align-self: flex-start; width: 64px; height: 64px; margin: 11px 11px 0 0; background: transparent; }
+.ccCard-booth { grid-column: 1 / -1; flex-direction: row; border-top: 3px solid #151515; }
+.ccCard-booth .ccCardImage { flex: 0 0 46%; min-height: 190px; padding: 8px; }
+.ccCard-booth .ccCardBody { padding: 16px; }
+.ccCard-booth .ccCardBody h4 { font-size: 19px; }
+.ccCard-booth .ccCardBody .ccPrice { font-size: 16px; }
+.ccCardBody .ccBoothSize { color: #151515; font-size: 11px; font-weight: 700; }
+.ccContents { margin-top: 4px; font-size: 10px; }
+.ccContents ul { margin-top: 3px; padding-left: 14px; color: #46484b; list-style: "–  "; line-height: 1.5; }
+.ccFootnote { margin-top: 22px; color: #8c8e91; font-size: 9px; }
+.catalogAdminEditRow dd textarea { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font: inherit; font-size: 8px; resize: vertical; }
+
+@media (max-width: 1100px) {
+  .customerCatalogContext { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .customerCatalogSplit { grid-template-columns: 1fr; }
+  .customerCatalogOptionGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
