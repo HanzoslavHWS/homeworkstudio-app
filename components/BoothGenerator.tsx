@@ -222,6 +222,7 @@ import { RemoteApiPrintSurfacePresetRepository } from "../lib/db/printSurfacePre
 import { RemoteApiPrintSurfaceProductionDimensionRepository } from "../lib/db/printSurfaceProductionDimensionRepository.remoteApi.client";
 import { RemoteApiPrintSurfaceExportRepository } from "../lib/db/printSurfaceExportRepository.remoteApi.client";
 import { TechnicalRastersPage } from "./workflow/TechnicalRastersPage";
+import { SettlementChecksPage } from "./workflow/settlement/SettlementChecksPage";
 import { CustomerCatalogPage } from "./workflow/CustomerCatalogPage";
 import { RemoteApiCustomerCatalogPresetRepository } from "../lib/db/customerCatalogPresetRepository.remoteApi.client";
 import { RemoteApiTechnicalRasterProjectRepository } from "../lib/db/technicalRasterProjectRepository.remoteApi.client";
@@ -349,7 +350,7 @@ export default function BoothGenerator() {
     navigateWorkspace("printSurfaces", { printSurfaceProjectId: projectId });
   }
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters"
+    "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks"
   >("project");
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
@@ -2872,6 +2873,10 @@ export default function BoothGenerator() {
             events={adminEvents}
             initialProjectId={technicalRasterProjectPreselect}
           />
+        )}
+
+        {workspaceSection === "settlementChecks" && (
+          <SettlementChecksPage events={adminEvents} actorName={taskStore.actorName} />
         )}
 
         {taskDetail && (
