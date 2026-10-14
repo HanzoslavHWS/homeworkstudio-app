@@ -10,8 +10,8 @@ Stav k 14. 10. 2026 (batch B-DEV-01). Dokument neobsahuje žádná hesla, klíč
 |---|---|---|
 | Web | Vercel, produkční deployment | lokálně `npm run dev` (http://localhost:3000) |
 | Git větev | `master` | `develop` |
-| Supabase projekt | ref **`fwchkogtaqaunaxmchtu`** (název „HomeworkStudio“) | `homeworkstudio-dev` — **ref zatím nedoplněn** |
-| R2 bucket | produkční bucket | **zatím stejný jako PROD** — viz bod 5 úkolů |
+| Supabase projekt | ref **`fwchkogtaqaunaxmchtu`** (název „HomeworkStudio“) | ref **`wpbivmobbqcqmyehunog`** (`homeworkstudio-dev`) |
+| R2 bucket | produkční bucket | **vypnuto**, dokud nebude DEV bucket (`R2_EXPECTED_BUCKET`) |
 | `NEXT_PUBLIC_APP_ENV` | nenastaveno (= production) | `development` |
 
 Prostředí se rozlišují podle **project ref** (subdoména `https://<ref>.supabase.co`), nikdy podle názvu projektu. Produkční ref je zapsaný v `lib/env/supabaseEnvironment.ts` (`KNOWN_PRODUCTION_SUPABASE_REFS`) a všude mimo produkci se odmítá.
@@ -44,6 +44,14 @@ Prostředí se rozlišují podle **project ref** (subdoména `https://<ref>.supa
 - Stav migrací v **produkci jsem neověřoval** (vyžaduje heslo produkční DB; tento batch do produkce nesahá). Migrace `20261013120000` v produkci aplikovaná není.
 
 ## 3. Co je hotové
+
+**Krok 2 (14. 10. 2026)**
+- Původní produkční `.env.local` je zálohovaný **mimo projekt** v `C:\Users\Hanz\Documents\HomeworkStudio_env_backup\` (shoda SHA-256 ověřena, přístup jen pro účet Windows `Hanz`). Tamtéž je odložený produkční link Supabase CLI (dřívější `supabase/.temp`) — CLI v projektu už na produkci napojené není.
+- Nové `.env.local` obsahuje DEV hodnoty: `NEXT_PUBLIC_APP_ENV=development`, `SUPABASE_URL` a `SUPABASE_EXPECTED_PROJECT_REF` pro `wpbivmobbqcqmyehunog` a nový `APP_SESSION_SECRET`. `SUPABASE_SECRET_KEY` a `SUPABASE_DEV_DB_URL` čekají na doplnění. R2 proměnné v něm nejsou.
+- **R2 je ve vývoji vypnuté** (`lib/storage/r2Config.ts`): mimo produkci úložiště funguje jen tehdy, když `R2_EXPECTED_BUCKET` výslovně jmenuje nastavený bucket; jinak upload i download vrátí 503. Produkce beze změny.
+- `npm run db:dev:check` navíc čtecím voláním API ověří, že `SUPABASE_SECRET_KEY` patří DEV projektu.
+
+**Krok 1**
 
 - Bod obnovy a větev `develop` s veškerou dosavadní prací (lokálně).
 - **Ochrana databáze** (`lib/env/supabaseEnvironment.ts`, `lib/db/supabase.server.ts`): mimo produkci server odmítne
