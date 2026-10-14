@@ -2,7 +2,12 @@ node_modules
 .next
 .env
 .env.local
+# every local env variant (.env.development.local, .env.prod.local.bak, …) — only the example is tracked
+.env*
+!.env.example
 private-imports/
+# agent worktrees are local scratch checkouts, never part of the repository
+.claude/worktrees/
 _IMPORT/
 
 supabase/.temp/
