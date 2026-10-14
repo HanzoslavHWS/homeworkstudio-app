@@ -119,6 +119,9 @@ export function createCloudflareR2StorageProvider(environment: R2Environment = {
   R2_SECRET_ACCESS_KEY: process.env.R2_SECRET_ACCESS_KEY,
   R2_BUCKET_NAME: process.env.R2_BUCKET_NAME,
   R2_ENDPOINT: process.env.R2_ENDPOINT,
+  R2_EXPECTED_BUCKET: process.env.R2_EXPECTED_BUCKET,
+  NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV,
+  NODE_ENV: process.env.NODE_ENV,
 }): CloudflareR2StorageProvider {
   return new CloudflareR2StorageProvider(readR2Config(environment));
 }

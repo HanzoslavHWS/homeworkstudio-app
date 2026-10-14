@@ -54,6 +54,15 @@ console.log(`Produkční projekty blokované: ${KNOWN_PRODUCTION_SUPABASE_REFS.j
 console.log(`Lokálních migrací: ${migrations.length} (${migrations[0]} … ${migrations[migrations.length - 1]})`);
 console.log(`Režim: ${mode === "check" ? "kontrola (db push --dry-run, nic se nezapíše)" : mode === "list" ? "výpis stavu migrací" : "ZÁPIS do DEV (db push)"}\n`);
 
+// Read-only API probe: the secret key must belong to the DEV project (a key of another project gets 401).
+if (mode === "check") {
+  const secretKey = process.env.SUPABASE_SECRET_KEY?.trim();
+  if (!secretKey) fail("Chybí SUPABASE_SECRET_KEY (secret key DEV projektu) v .env.local.");
+  const response = await fetch(`${process.env.SUPABASE_URL!.trim().replace(/\/$/u, "")}/rest/v1/`, { headers: { apikey: secretKey, Accept: "application/openapi+json" } });
+  if (!response.ok) fail(`API DEV projektu odmítlo SUPABASE_SECRET_KEY (HTTP ${response.status}) — klíč nepatří projektu ${expectedRef} nebo je neplatný.`);
+  console.log(`API: SUPABASE_SECRET_KEY platí pro projekt ${expectedRef} (HTTP ${response.status}, jen čtení).\n`);
+}
+
 const cli = `${root}node_modules/supabase/dist/supabase.js`;
 if (!existsSync(cli)) fail("Supabase CLI není nainstalované — spusťte npm install.");
 const args = mode === "list" ? ["migration", "list", "--db-url", dbUrl] : ["db", "push", "--db-url", dbUrl, ...(mode === "check" ? ["--dry-run"] : [])];

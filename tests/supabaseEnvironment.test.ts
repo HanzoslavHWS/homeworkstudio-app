@@ -62,6 +62,17 @@ test("server klient: v DEV odmítne produkční databázi chybou konfigurace (AP
   assert.ok(createSupabaseServerClient({ SUPABASE_URL: `https://${PROD}.supabase.co`, SUPABASE_SECRET_KEY: "x", NODE_ENV: "production" }), "produkce beze změny");
 });
 
+test("R2: mimo produkci je úložiště vypnuté, dokud R2_EXPECTED_BUCKET výslovně nepotvrdí DEV bucket; produkce beze změny", async () => {
+  const { readR2Config, R2ConfigurationError } = await import("../lib/storage/r2Config.ts");
+  const full = { R2_ACCOUNT_ID: "a", R2_ACCESS_KEY_ID: "k", R2_SECRET_ACCESS_KEY: "SECRET_DO_NOT_LEAK", R2_BUCKET_NAME: "homeworkstudio-prod", R2_ENDPOINT: "https://endpoint.example" };
+  for (const environment of [{ ...full, NODE_ENV: "development" }, { ...full, NEXT_PUBLIC_APP_ENV: "development", R2_EXPECTED_BUCKET: "homeworkstudio-dev" }, { NEXT_PUBLIC_APP_ENV: "development" }]) {
+    assert.throws(() => readR2Config(environment), (error) => error instanceof R2ConfigurationError && /vypnuté/u.test(error.message) && !error.message.includes("SECRET_DO_NOT_LEAK"));
+  }
+  assert.equal(readR2Config({ ...full, R2_BUCKET_NAME: "homeworkstudio-dev", NEXT_PUBLIC_APP_ENV: "development", R2_EXPECTED_BUCKET: "homeworkstudio-dev" }).bucketName, "homeworkstudio-dev");
+  assert.equal(readR2Config({ ...full, NODE_ENV: "production" }).bucketName, "homeworkstudio-prod");
+  assert.equal(readR2Config(full).bucketName, "homeworkstudio-prod", "bez proměnných prostředí = produkce, jako dosud");
+});
+
 test("ochrany: develop se na Vercelu nenasazuje; migrační skript vždy cílí přes --db-url a blokuje produkci", async () => {
   const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8")) as { git?: { deploymentEnabled?: Record<string, boolean> } };
   assert.equal(vercel.git?.deploymentEnabled?.develop, false);
