@@ -7,8 +7,8 @@ import { importPrintSurfaceExcel, PRINT_SURFACE_EXCEL_SHEET_NAME } from "../../.
  * Parses an uploaded "Tiskové plochy" catalog XLSX and returns the structured import result
  * (companies/presets/productionDimensions + validation issues) — it never persists anything.
  * exceljs needs Node's Buffer, so this parsing can only happen server-side (see
- * lib/import/xlsxReader.server.ts); the caller applies the result client-side by writing it into
- * the three catalog repositories (see components/workflow/printSurfaces/PrintSurfaceCatalogImportPanel.tsx).
+ * lib/import/xlsxReader.server.ts); the caller sends the result to app/api/print-surfaces/catalog/sync
+ * for a preview and the non-destructive apply (see components/workflow/printSurfaces/PrintSurfaceCatalogImportPanel.tsx).
  */
 export async function handlePrintSurfaceExcelImport(request: NextRequest): Promise<NextResponse> {
   if (!(await isSessionRequestAuthorized(request))) {

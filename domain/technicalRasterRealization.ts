@@ -16,6 +16,8 @@
  * Deliberately NOT wired to any pricing/catalog product data (spec section 11: "ceny nepoužívat").
  */
 
+import { normalizeCompanyName } from "./realizationCompanyIdentity.ts";
+
 export type TechnicalRealizationGroup = "gendai" | "creativExpo" | "macPraha" | "ostatni";
 
 export type TechnicalRealizationGroupInfo = Readonly<{
@@ -36,16 +38,8 @@ export function technicalRealizationGroupInfo(group: TechnicalRealizationGroup):
   return TECHNICAL_REALIZATION_GROUPS.find((entry) => entry.id === group)!;
 }
 
-/** Strips diacritics/legal-form suffixes/punctuation/whitespace variance so "CREATIV EXPO, s.r.o." and "Creative Expo s.r.o." (spec's own two example spellings) normalize to the SAME comparable key — never a fragile exact-string match. */
-function normalizeForMatching(raw: string): string {
-  return raw
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/gu, "")
-    .toLowerCase()
-    .replace(/\bs\.?\s*r\.?\s*o\.?\b/gu, "") // s.r.o. / s r o / spol s r o's trailing "s r o"
-    .replace(/\bspol\.?\b/gu, "")
-    .replace(/[^a-z0-9]+/gu, "");
-}
+/** Strips diacritics/legal-form suffixes/punctuation/whitespace variance so "CREATIV EXPO, s.r.o." and "Creative Expo s.r.o." (spec's own two example spellings) normalize to the SAME comparable key — never a fragile exact-string match. Shared with the realization-company register (domain/realizationCompanyIdentity.ts). */
+const normalizeForMatching = normalizeCompanyName;
 
 /**
  * Alias lists deliberately spelled out (spec's own two "CREATIV EXPO" variants: "CREATIV EXPO,

@@ -4,20 +4,16 @@ import { createSupabaseServerClient, SupabaseConfigurationError } from "../../..
 import { SupabaseRealizationCompanyRepository } from "../../../../lib/db/realizationCompanyRepository.supabase.ts";
 import { SupabasePrintSurfacePresetRepository } from "../../../../lib/db/printSurfacePresetRepository.supabase.ts";
 import { SupabasePrintSurfaceProductionDimensionRepository } from "../../../../lib/db/printSurfaceProductionDimensionRepository.supabase.ts";
-import type { RealizationCompany, RealizationCompanyRepository } from "../../../../domain/realizationCompany.ts";
-import type { PrintSurfacePreset, PrintSurfacePresetRepository } from "../../../../domain/printSurfacePreset.ts";
-import type {
-  PrintSurfaceProductionDimension,
-  PrintSurfaceProductionDimensionRepository,
-} from "../../../../domain/printSurfaceProductionDimension.ts";
+import type { RealizationCompanyRepository } from "../../../../domain/realizationCompany.ts";
+import type { PrintSurfacePresetRepository } from "../../../../domain/printSurfacePreset.ts";
+import type { PrintSurfaceProductionDimensionRepository } from "../../../../domain/printSurfaceProductionDimension.ts";
 
 /**
- * Realization companies / presets / production dimensions are always imported and replaced
- * together (one Excel import produces all three at once — see domain/printSurfaceExcelImport.ts
- * and PrintSurfaceCatalogImportPanel), so they share this one route rather than three near-
- * identical ones: GET returns the full catalog, POST replaces whichever of
- * companies/presets/productionDimensions is present in the body (each independently — a caller
- * sending only `{ companies }` leaves presets/productionDimensions untouched).
+ * Read side of the print-surface catalog (realization companies / presets / production
+ * dimensions) — GET returns all three at once. Writing goes only through the non-destructive,
+ * transactional sync in app/api/print-surfaces/catalog/sync/route.ts (V1-DATA-02, B1); the old
+ * POST that deleted and re-inserted the whole catalog is gone. Firm cards are edited in
+ * app/api/realization-companies.
  */
 export type PrintSurfaceCatalogRepositories = Readonly<{
   companies: RealizationCompanyRepository;
@@ -55,41 +51,6 @@ export async function handlePrintSurfaceCatalogGet(
   }
 }
 
-type CatalogReplaceBody = Readonly<{
-  companies?: readonly RealizationCompany[];
-  presets?: readonly PrintSurfacePreset[];
-  productionDimensions?: readonly PrintSurfaceProductionDimension[];
-}>;
-
-export async function handlePrintSurfaceCatalogReplace(
-  request: NextRequest,
-  repositoryFactory: () => PrintSurfaceCatalogRepositories = defaultRepositoryFactory,
-): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro úpravu katalogu tiskových ploch je vyžadováno přihlášení." }, { status: 401 });
-  }
-  let body: CatalogReplaceBody;
-  try {
-    body = (await request.json()) as CatalogReplaceBody;
-  } catch {
-    return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 });
-  }
-  try {
-    const repositories = repositoryFactory();
-    if (body.companies) await repositories.companies.replaceAll(body.companies);
-    if (body.presets) await repositories.presets.replaceAll(body.presets);
-    if (body.productionDimensions) await repositories.productionDimensions.replaceAll(body.productionDimensions);
-    return NextResponse.json({ ok: true });
-  } catch (error) {
-    if (error instanceof SupabaseConfigurationError) return NextResponse.json({ error: error.message }, { status: 503 });
-    return NextResponse.json({ error: "Uložení katalogu tiskových ploch selhalo." }, { status: 502 });
-  }
-}
-
 export async function GET(request: NextRequest) {
   return handlePrintSurfaceCatalogGet(request);
-}
-
-export async function POST(request: NextRequest) {
-  return handlePrintSurfaceCatalogReplace(request);
 }

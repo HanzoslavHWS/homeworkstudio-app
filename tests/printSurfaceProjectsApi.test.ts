@@ -5,7 +5,8 @@ import { handlePrintSurfaceProjectsList } from "../app/api/print-surfaces/projec
 import { handlePrintSurfaceProjectGet } from "../app/api/print-surfaces/projects/get/route.ts";
 import { handlePrintSurfaceProjectSave } from "../app/api/print-surfaces/projects/save/route.ts";
 import { handlePrintSurfaceProjectDelete } from "../app/api/print-surfaces/projects/delete/route.ts";
-import { handlePrintSurfaceCatalogGet, handlePrintSurfaceCatalogReplace, type PrintSurfaceCatalogRepositories } from "../app/api/print-surfaces/catalog/route.ts";
+import * as catalogRoute from "../app/api/print-surfaces/catalog/route.ts";
+import { handlePrintSurfaceCatalogGet, type PrintSurfaceCatalogRepositories } from "../app/api/print-surfaces/catalog/route.ts";
 import { createSessionToken } from "../lib/auth/session.ts";
 import {
   createPrintSurfaceProject,
@@ -131,32 +132,34 @@ test("DELETE: odstraní projekt z repository", async () => {
   assert.equal(await repository.get("ps-delete"), undefined);
 });
 
-function fakeCatalogRepositories(): PrintSurfaceCatalogRepositories {
-  let companies: Parameters<RealizationCompanyRepository["replaceAll"]>[0] = [];
-  let presets: Parameters<PrintSurfacePresetRepository["replaceAll"]>[0] = [];
-  let productionDimensions: Parameters<PrintSurfaceProductionDimensionRepository["replaceAll"]>[0] = [];
+function fakeCatalogRepositories(
+  companies: Awaited<ReturnType<RealizationCompanyRepository["list"]>> = [],
+  presets: Awaited<ReturnType<PrintSurfacePresetRepository["list"]>> = [],
+  productionDimensions: Awaited<ReturnType<PrintSurfaceProductionDimensionRepository["list"]>> = [],
+): PrintSurfaceCatalogRepositories {
   return {
-    companies: { async list() { return companies; }, async replaceAll(next) { companies = next; } },
-    presets: { async list() { return presets; }, async replaceAll(next) { presets = next; } },
-    productionDimensions: { async list() { return productionDimensions; }, async replaceAll(next) { productionDimensions = next; } },
+    companies: { async list() { return companies; } },
+    presets: { async list() { return presets; } },
+    productionDimensions: { async list() { return productionDimensions; } },
   };
 }
 
-test("CATALOG POST: nahradí jen zaslanou entitu, ostatní zůstanou beze změny", async () => {
+test("CATALOG GET: vrátí firmy, presety i rozměry najednou", async () => {
   const token = await createSessionToken(SECRET);
-  const repositories = fakeCatalogRepositories();
-  await repositories.presets.replaceAll([{ id: "Panel_S_100", typeId: "panel", name: "Panel", isActive: true }]);
-
-  const response = await handlePrintSurfaceCatalogReplace(
-    authenticatedRequest(token, "http://localhost/api/print-surfaces/catalog", { method: "POST", body: { companies: [{ id: "creativ-expo", name: "Creativ Expo", isActive: true }] } }),
-    () => repositories,
+  const repositories = fakeCatalogRepositories(
+    [{ id: "creativ-expo", name: "Creativ Expo", isActive: true }],
+    [{ id: "Panel_S_100", typeId: "panel", name: "Panel", isActive: true }],
   );
-  assert.equal(response.status, 200);
-
   const getResponse = await handlePrintSurfaceCatalogGet(authenticatedRequest(token, "http://localhost/api/print-surfaces/catalog"), () => repositories);
-  const body = await getResponse.json() as { companies: unknown[]; presets: unknown[] };
+  const body = await getResponse.json() as { companies: unknown[]; presets: unknown[]; productionDimensions: unknown[] };
   assert.equal(body.companies.length, 1);
-  assert.equal(body.presets.length, 1, "presets odeslané v předchozím requestu nesmí zmizet, když POST pošle jen companies");
+  assert.equal(body.presets.length, 1);
+  assert.equal(body.productionDimensions.length, 0);
+});
+
+test("CATALOG: route už nemá destruktivní POST (zápis jde jen přes /catalog/sync, V1-DATA-02)", () => {
+  assert.equal("POST" in catalogRoute, false);
+  assert.equal("handlePrintSurfaceCatalogReplace" in catalogRoute, false);
 });
 
 test("CATALOG GET: bez přihlášení vrátí 401", async () => {

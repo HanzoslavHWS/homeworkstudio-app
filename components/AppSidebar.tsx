@@ -2,8 +2,8 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onStartNewProject: () => void;
-  activeSection?: "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks";
-  onNavigate?: (section: "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks") => void;
+  activeSection?: "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies";
+  onNavigate?: (section: "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies") => void;
   /** Úkoly badge: overdue + today's open tasks (domain/tasks.ts computeTaskCounts().attention). 0/undefined hides it. */
   taskBadge?: number;
 };
@@ -87,6 +87,10 @@ export function AppSidebar({
         <button type="button" className={activeSection === "settlementChecks" ? "navItem active" : "navItem"} title="Kontrola vyúčtování realizaček" onClick={() => onNavigate?.("settlementChecks")}>
           <span className="navIcon">⇄</span>
           <span className="navLabel">Kontrola vyúčtování</span>
+        </button>
+        <button type="button" className={activeSection === "realizationCompanies" ? "navItem active" : "navItem"} title="Realizační firmy" onClick={() => onNavigate?.("realizationCompanies")}>
+          <span className="navIcon">⌂</span>
+          <span className="navLabel">Realizační firmy</span>
         </button>
       </nav>
 

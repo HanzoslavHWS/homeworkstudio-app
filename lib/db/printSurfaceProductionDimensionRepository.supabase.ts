@@ -39,23 +39,4 @@ export class SupabasePrintSurfaceProductionDimensionRepository implements PrintS
     if (error) throw error;
     return ((data ?? []) as PrintSurfaceProductionDimensionRow[]).map(rowToDimension);
   }
-
-  /** Full atomic replace — how a fresh Excel import applies its result. */
-  async replaceAll(dimensions: readonly PrintSurfaceProductionDimension[]): Promise<void> {
-    const { error: deleteError } = await this.client.from("print_surface_production_dimensions").delete().not("preset_id", "is", null);
-    if (deleteError) throw deleteError;
-    if (dimensions.length === 0) return;
-
-    const { error: insertError } = await this.client.from("print_surface_production_dimensions").insert(
-      dimensions.map((dimension) => ({
-        realization_company_id: dimension.realizationCompanyId,
-        preset_id: dimension.presetId,
-        status: dimension.status,
-        width_mm: dimension.status === "available" ? dimension.widthMm : null,
-        height_mm: dimension.status === "available" ? dimension.heightMm : null,
-        note: dimension.note ?? null,
-      })),
-    );
-    if (insertError) throw insertError;
-  }
 }

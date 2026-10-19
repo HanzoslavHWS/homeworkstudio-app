@@ -22,14 +22,4 @@ export class RemoteApiPrintSurfacePresetRepository implements PrintSurfacePreset
     const body = (await response.json()) as { presets: readonly PrintSurfacePreset[] };
     return body.presets;
   }
-
-  async replaceAll(presets: readonly PrintSurfacePreset[]): Promise<void> {
-    const response = await fetch("/api/print-surfaces/catalog", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ presets }),
-    });
-    if (!response.ok) await throwForFailedResponse(response, "Uložení presetů tiskových ploch selhalo.");
-  }
 }

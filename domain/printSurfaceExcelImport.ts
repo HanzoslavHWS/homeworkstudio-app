@@ -14,8 +14,8 @@
  *
  * Pipeline: parsePrintSurfaceExcelSheet (parse) → resolveCompanyDimensionOutcome / isGroupRow /
  * mapExcelRowToPrintSurfaceType (normalize+map, per row) → importPrintSurfaceExcel (validate +
- * assemble). "apply" (persisting the result) is NOT here — that's the caller's job (writing the
- * returned arrays into the three catalog repositories' replaceAll()).
+ * assemble). "apply" (persisting the result) is NOT here — the result is planned against the current
+ * database by domain/printSurfaceCatalogSync.ts and written by its non-destructive sync.
  */
 
 import type { RawCellValue, RawSheetRow } from "./priceImport.ts";

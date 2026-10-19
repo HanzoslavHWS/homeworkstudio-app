@@ -30,8 +30,6 @@ export type PrintSurfacePreset = Readonly<{
 
 export interface PrintSurfacePresetRepository {
   list(): Promise<readonly PrintSurfacePreset[]>;
-  /** Full atomic replace — how a fresh Excel import applies its result (see domain/printSurfaceExcelImport.ts). */
-  replaceAll(presets: readonly PrintSurfacePreset[]): Promise<void>;
 }
 
 /** Active presets belonging to the given type — what a "Preset" dropdown under a chosen "Typ plochy" should offer. */

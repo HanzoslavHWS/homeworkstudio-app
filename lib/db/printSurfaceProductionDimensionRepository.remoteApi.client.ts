@@ -25,14 +25,4 @@ export class RemoteApiPrintSurfaceProductionDimensionRepository implements Print
     const body = (await response.json()) as { productionDimensions: readonly PrintSurfaceProductionDimension[] };
     return body.productionDimensions;
   }
-
-  async replaceAll(dimensions: readonly PrintSurfaceProductionDimension[]): Promise<void> {
-    const response = await fetch("/api/print-surfaces/catalog", {
-      method: "POST",
-      credentials: "same-origin",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ productionDimensions: dimensions }),
-    });
-    if (!response.ok) await throwForFailedResponse(response, "Uložení výrobních rozměrů selhalo.");
-  }
 }

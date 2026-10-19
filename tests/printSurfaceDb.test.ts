@@ -131,29 +131,55 @@ function createFakeSupabaseClient() {
   return { from };
 }
 
-test("SupabaseRealizationCompanyRepository: replaceAll je plná atomická náhrada, list() vrátí seřazeně podle jména", async () => {
+test("SupabaseRealizationCompanyRepository: list() čte i řádek bez sloupců karty (DB před migrací V1-DATA-02) a řadí podle jména", async () => {
   const client = createFakeSupabaseClient();
-  const repository = new SupabaseRealizationCompanyRepository(client as never);
-  await repository.replaceAll([
-    { id: "gendai", name: "Gendai", isActive: true },
-    { id: "creativ-expo", name: "Creativ Expo", isActive: true },
+  await client.from("print_surface_realization_companies").insert([
+    { id: "gendai", name: "Gendai", is_active: true, note: null },
+    { id: "creativ-expo", name: "Creativ Expo", is_active: true, note: null },
   ]);
+  const repository = new SupabaseRealizationCompanyRepository(client as never);
   const list = await repository.list();
   assert.deepEqual(list.map((c) => c.name), ["Creativ Expo", "Gendai"]);
+  assert.equal(list[0]?.source, undefined);
+  assert.equal(list[0]?.contacts, undefined);
+});
 
-  // a second import fully replaces the first — no leftover rows from the previous import
-  await repository.replaceAll([{ id: "macik", name: "Macík", isActive: true }]);
-  const replaced = await repository.list();
-  assert.deepEqual(replaced.map((c) => c.id), ["macik"]);
+test("SupabaseRealizationCompanyRepository: karta firmy (právní název, ABRA, IČO, DIČ, kontakty, poznámka) přežije create/update", async () => {
+  const client = createFakeSupabaseClient();
+  const repository = new SupabaseRealizationCompanyRepository(client as never);
+  const created = await repository.create({
+    id: "nova-firma", name: "Nová firma", legalName: "Nová firma, s.r.o.", abraName: "NOVA FIRMA", ico: "12345678", dic: "CZ12345678",
+    contacts: [{ id: "c1", name: "Jan", email: "jan@example.cz" }], note: "interní", isActive: true, source: "manual",
+  });
+  assert.equal(created.source, "manual");
+  assert.equal(created.legalName, "Nová firma, s.r.o.");
+  assert.deepEqual(created.contacts, [{ id: "c1", name: "Jan", email: "jan@example.cz" }]);
+
+  const updated = await repository.update({ ...created, abraName: undefined, isActive: false });
+  assert.equal(updated.abraName, undefined);
+  assert.equal(updated.isActive, false);
+  assert.equal(updated.id, "nova-firma");
+  assert.equal(updated.source, "manual", "update nikdy nemění zdroj firmy");
+});
+
+test("SupabaseRealizationCompanyRepository: saveAliases nové vloží a odebrané jen deaktivuje (nikdy nemaže)", async () => {
+  const client = createFakeSupabaseClient();
+  const repository = new SupabaseRealizationCompanyRepository(client as never);
+  await repository.saveAliases({ insert: [{ realizationCompanyId: "creativ-expo", alias: "CREATIV EXPO, s.r.o.", normalizedAlias: "creativexpo", kind: "alternative", isActive: true }], deactivateIds: [] });
+  const [first] = await repository.listAliases();
+  await repository.saveAliases({ insert: [], deactivateIds: [first!.id] });
+  const aliases = await repository.listAliases();
+  assert.equal(aliases.length, 1, "řádek zůstal");
+  assert.equal(aliases[0]?.isActive, false);
 });
 
 test("SupabasePrintSurfacePresetRepository: parentId/parentName přežijí DB round-trip", async () => {
   const client = createFakeSupabaseClient();
-  const repository = new SupabasePrintSurfacePresetRepository(client as never);
-  await repository.replaceAll([
-    { id: "Pult_100x50_v_Celo", typeId: "counter_front", name: "Čelo", isActive: true, parentId: "Pult_100x50_v", parentName: "Pult 1 x 0,5 x 1,1 m" },
-    { id: "Panel_S_100", typeId: "panel", name: "Panel stěnový 1 x 2,5 m", isActive: true },
+  await client.from("print_surface_presets").insert([
+    { id: "Pult_100x50_v_Celo", type_id: "counter_front", name: "Čelo", description: null, is_active: true, parent_id: "Pult_100x50_v", parent_name: "Pult 1 x 0,5 x 1,1 m" },
+    { id: "Panel_S_100", type_id: "panel", name: "Panel stěnový 1 x 2,5 m", description: null, is_active: true, parent_id: null, parent_name: null },
   ]);
+  const repository = new SupabasePrintSurfacePresetRepository(client as never);
   const list = await repository.list();
   const celo = list.find((p) => p.id === "Pult_100x50_v_Celo");
   assert.equal(celo?.parentId, "Pult_100x50_v");
@@ -164,11 +190,11 @@ test("SupabasePrintSurfacePresetRepository: parentId/parentName přežijí DB ro
 
 test("SupabasePrintSurfaceProductionDimensionRepository: available a unavailable stavy přežijí DB round-trip (nikdy 0x0)", async () => {
   const client = createFakeSupabaseClient();
-  const repository = new SupabasePrintSurfaceProductionDimensionRepository(client as never);
-  await repository.replaceAll([
-    { realizationCompanyId: "creativ-expo", presetId: "Panel_S_100", status: "available", widthMm: 950, heightMm: 2340 },
-    { realizationCompanyId: "macik", presetId: "Pult_Vit_100x50_Celo", status: "unavailable" },
+  await client.from("print_surface_production_dimensions").insert([
+    { realization_company_id: "creativ-expo", preset_id: "Panel_S_100", status: "available", width_mm: 950, height_mm: 2340, note: null },
+    { realization_company_id: "macik", preset_id: "Pult_Vit_100x50_Celo", status: "unavailable", width_mm: null, height_mm: null, note: null },
   ]);
+  const repository = new SupabasePrintSurfaceProductionDimensionRepository(client as never);
   const list = await repository.list();
   const available = list.find((d) => d.presetId === "Panel_S_100");
   assert.equal(available?.status, "available");

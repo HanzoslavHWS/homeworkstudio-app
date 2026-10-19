@@ -204,13 +204,7 @@ export function PrintSurfaceProjectListPage({
           Realizačky: {companies.length} · Presety: {presets.length} · Výrobní rozměry: {productionDimensions.length}
           {presets.length === 0 && " — Rozměry tiskových ploch zatím nejsou importovány."}
         </p>
-        <PrintSurfaceCatalogImportPanel
-          companyRepository={companyRepository}
-          presetRepository={presetRepository}
-          productionDimensionRepository={productionDimensionRepository}
-          hasExistingData={companies.length > 0 || presets.length > 0}
-          onImported={reloadCatalog}
-        />
+        <PrintSurfaceCatalogImportPanel onImported={reloadCatalog} />
       </div>
 
       <div className="adminFilters printSurfaceProjectFilters">

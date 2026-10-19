@@ -33,8 +33,6 @@ export type PrintSurfaceProductionDimension =
 
 export interface PrintSurfaceProductionDimensionRepository {
   list(): Promise<readonly PrintSurfaceProductionDimension[]>;
-  /** Full atomic replace — how a fresh Excel import applies its result (see domain/printSurfaceExcelImport.ts). */
-  replaceAll(dimensions: readonly PrintSurfaceProductionDimension[]): Promise<void>;
 }
 
 export type ProductionDimensionResolution =
