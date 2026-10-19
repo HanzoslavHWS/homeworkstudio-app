@@ -27,6 +27,9 @@ import {
 import { CatalogItemConflictError, type ExistingCatalogItemRow } from "../domain/importBatch2a.ts";
 import { applyBatch2bPlan, readExistingCatalogItemsSafely, TransientReadError } from "../lib/db/importBatch2b.supabase.ts";
 import { boothTypes } from "../data/booths.ts";
+import { createScriptSupabaseClient } from "../lib/db/scriptSupabase.server.ts";
+
+const FAKE_DEV_DATABASE = { NEXT_PUBLIC_APP_ENV: "development", SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co", SUPABASE_EXPECTED_PROJECT_REF: "abcdefghijklmnopqrst", SUPABASE_SECRET_KEY: "fake" } as const;
 
 // ---------------------------------------------------------------------------------------
 // Small, realistic in-memory fixtures — NOT the real (gitignored) private-imports files, so
@@ -435,7 +438,9 @@ function createFakeSupabaseClient() {
     return builder;
   }
 
-  return { from, _tables: tables };
+  // Fake writers must pass the same script target check as a real run (fake DEV project).
+  const fake = { from, _tables: tables };
+  return createScriptSupabaseClient({ environment: FAKE_DEV_DATABASE, createClient: () => fake as never }) as unknown as typeof fake;
 }
 
 test("writer default je dry-run: previewBatch2bApply je čistá funkce, nikdy nepřijímá Supabase klienta", () => {

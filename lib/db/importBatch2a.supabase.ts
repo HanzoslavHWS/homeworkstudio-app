@@ -16,6 +16,7 @@ import {
   type PricingConflictReport,
 } from "../../domain/importBatch2a.ts";
 import type { PricingEntrySource } from "../../domain/pricingAdmin.ts";
+import { assertScriptDatabaseClient } from "./scriptSupabase.server.ts";
 
 /**
  * NEVER CALLED against real Supabase in this session — code-complete for review, gated
@@ -158,6 +159,7 @@ export async function applyBatch2aPlan(
   plan: Batch2aPlan,
   meta: Readonly<{ sourceFileName: string; sourceFingerprint: string; sourceVersion?: string }>,
 ): Promise<Batch2aApplyResult> {
+  assertScriptDatabaseClient(client);
   const existingCatalogItems = await readExistingCatalogItemsFull(client);
   const preflight = runBatch2aPreflight(plan, existingCatalogItems);
   if (!preflight.ok) throw new Batch2aPreflightError(preflight.issues);

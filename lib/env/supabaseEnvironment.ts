@@ -76,3 +76,40 @@ export function checkSupabaseTarget(environment: SupabaseTargetEnvironment): Sup
   if (expected !== projectRef) return fail(`SUPABASE_URL míří na projekt ${projectRef}, ale SUPABASE_EXPECTED_PROJECT_REF je ${expected}. Sjednoťte .env.local.`);
   return { ok: true, environment: appEnvironment, projectRef };
 }
+
+export type ScriptDatabaseEnvironment = Readonly<{
+  NEXT_PUBLIC_APP_ENV?: string;
+  SUPABASE_URL?: string;
+  SUPABASE_SECRET_KEY?: string;
+  SUPABASE_EXPECTED_PROJECT_REF?: string;
+}>;
+
+export type ScriptDatabaseTargetCheck = Readonly<{ ok: true; projectRef: string }> | Readonly<{ ok: false; message: string }>;
+
+const PROJECT_REF_PATTERN = /^[a-z0-9]{20}$/u;
+
+/**
+ * Stricter sibling of checkSupabaseTarget for the scripts in scripts/ (imports, canonicalization,
+ * repairs). Unlike the app it has NO production branch: a script never writes to a production
+ * project, whatever NEXT_PUBLIC_APP_ENV, NODE_ENV or command-line flags say. Everything must be
+ * stated explicitly — a missing or unreadable value is a refusal, never a default.
+ * Never includes the secret key in a message.
+ */
+export function checkScriptDatabaseTarget(environment: ScriptDatabaseEnvironment): ScriptDatabaseTargetCheck {
+  const fail = (message: string): ScriptDatabaseTargetCheck => ({ ok: false, message: `Skript odmítl připojení k databázi: ${message}` });
+  const appEnvironment = environment.NEXT_PUBLIC_APP_ENV?.trim().toLowerCase();
+  if (appEnvironment !== "development" && appEnvironment !== "preview") {
+    return fail(`NEXT_PUBLIC_APP_ENV musí být výslovně „development“ nebo „preview“ (je „${environment.NEXT_PUBLIC_APP_ENV?.trim() ?? ""}“). Skripty do produkce nezapisují.`);
+  }
+  const expected = environment.SUPABASE_EXPECTED_PROJECT_REF?.trim();
+  if (!expected) return fail("chybí SUPABASE_EXPECTED_PROJECT_REF (ref DEV projektu).");
+  if (!PROJECT_REF_PATTERN.test(expected)) return fail(`SUPABASE_EXPECTED_PROJECT_REF „${expected}“ není platný project ref (20 znaků a–z, 0–9).`);
+  if (KNOWN_PRODUCTION_SUPABASE_REFS.includes(expected)) return fail(`SUPABASE_EXPECTED_PROJECT_REF je PRODUKČNÍ projekt ${expected}.`);
+  if (!environment.SUPABASE_URL?.trim()) return fail("chybí SUPABASE_URL.");
+  const projectRef = supabaseProjectRef(environment.SUPABASE_URL);
+  if (!projectRef || projectRef === "local") return fail("SUPABASE_URL není adresa Supabase projektu (https://<ref>.supabase.co) — nelze ověřit cíl.");
+  if (KNOWN_PRODUCTION_SUPABASE_REFS.includes(projectRef)) return fail(`SUPABASE_URL míří na PRODUKČNÍ projekt ${projectRef}.`);
+  if (projectRef !== expected) return fail(`SUPABASE_URL míří na projekt ${projectRef}, ale SUPABASE_EXPECTED_PROJECT_REF je ${expected}.`);
+  if (!environment.SUPABASE_SECRET_KEY?.trim()) return fail("chybí SUPABASE_SECRET_KEY.");
+  return { ok: true, projectRef };
+}

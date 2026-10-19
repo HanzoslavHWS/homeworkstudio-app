@@ -29,7 +29,7 @@ import {
   type ExistingPricingEntryRow,
 } from "../domain/importBatch2a.ts";
 import { extractSheetGrid, readWorkbookSheets } from "../lib/import/xlsxReader.server.ts";
-import { createSupabaseServerClient, SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
+import { createScriptSupabaseClient } from "../lib/db/scriptSupabase.server.ts";
 import {
   applyBatch2aPlan,
   readExistingCatalogItemsFull,
@@ -67,13 +67,13 @@ function loadAbfTechnicalServiceMatches(): ReadonlyMap<string, AbfTechnicalServi
   return map;
 }
 
-async function readExistingEvents(client: ReturnType<typeof createSupabaseServerClient>): Promise<readonly ExistingEventRow2A[]> {
+async function readExistingEvents(client: ReturnType<typeof createScriptSupabaseClient>): Promise<readonly ExistingEventRow2A[]> {
   const { data, error } = await client.from("events").select("id, source_key, year");
   if (error) throw error;
   return (data ?? []).map((row: { id: string; source_key: string; year: number }) => ({ id: row.id, sourceKey: row.source_key, year: row.year }));
 }
 
-async function readExistingPriceLists(client: ReturnType<typeof createSupabaseServerClient>): Promise<readonly ExistingPriceListRow2A[]> {
+async function readExistingPriceLists(client: ReturnType<typeof createScriptSupabaseClient>): Promise<readonly ExistingPriceListRow2A[]> {
   const { data, error } = await client.from("price_lists").select("id, code, currency, event_id");
   if (error) throw error;
   return (data ?? []).map((row: { id: string; code: string; currency: "CZK" | "EUR"; event_id: string | null }) => ({ id: row.id, code: row.code, currency: row.currency, eventId: row.event_id }));
@@ -82,6 +82,8 @@ async function readExistingPriceLists(client: ReturnType<typeof createSupabaseSe
 async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes("--apply");
+  // --apply: the database target is verified before anything else happens (scripts never write to production).
+  const writeClient = apply ? createScriptSupabaseClient() : undefined;
   const filePath = args.find((arg) => !arg.startsWith("--")) ?? path.resolve(process.cwd(), "private-imports", "Ultimátní kalkulace V6.6.xlsm");
 
   const bytes = readFileSync(filePath);
@@ -109,7 +111,7 @@ async function main() {
   let existingCatalogMappings: readonly ExistingCatalogMappingRow[] = [];
   let dbStateSource = "unavailable (Supabase not reachable/configured) — treating as empty, all rows classified as insert";
   try {
-    const client = createSupabaseServerClient();
+    const client = writeClient ?? createScriptSupabaseClient();
     [existingCatalogItems, existingEvents, existingPriceLists, existingCatalogMappings] = await Promise.all([
       readExistingCatalogItemsFull(client),
       readExistingEvents(client),
@@ -118,7 +120,8 @@ async function main() {
     ]);
     dbStateSource = `read live from Supabase (read-only SELECT): ${existingCatalogItems.length} catalog_items, ${existingEvents.length} events, ${existingPriceLists.length} price_lists, ${existingCatalogMappings.length} catalog_mappings`;
   } catch (error) {
-    if (!(error instanceof SupabaseConfigurationError)) console.error("Warning: could not read existing DB state:", error instanceof Error ? error.message : error);
+    if (writeClient) throw error;
+    console.error("Warning: could not read existing DB state:", error instanceof Error ? error.message : error);
   }
   console.log("existing DB state:", dbStateSource);
   console.log();
@@ -190,7 +193,7 @@ async function main() {
   const catalogItemIdsForPricingPreview = existingCatalogItems.map((row) => row.id);
   const existingPricingEntries: readonly ExistingPricingEntryRow[] = await (async () => {
     try {
-      const client = createSupabaseServerClient();
+      const client = writeClient ?? createScriptSupabaseClient();
       return await readExistingPricingEntriesForCatalogItems(client, catalogItemIdsForPricingPreview);
     } catch {
       return [];
@@ -240,7 +243,7 @@ async function main() {
 
   console.log();
   console.log("=== APPLYING ===");
-  const client = createSupabaseServerClient();
+  const client = writeClient!;
   const result = await applyBatch2aPlan(client, plan, { sourceFileName: fileName, sourceFingerprint: fingerprint, sourceVersion: "V6.6" });
   console.log("import_batches id:", result.batchId);
   console.log("catalog_items:", JSON.stringify(result.catalogItems));

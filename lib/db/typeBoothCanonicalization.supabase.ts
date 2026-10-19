@@ -1,5 +1,6 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { CanonicalPlanEntry, ExistingCatalogItemRow } from "../../domain/typeBoothCanonicalization.ts";
+import { assertScriptDatabaseClient } from "./scriptSupabase.server.ts";
 
 const COLUMNS = "id, internal_code, kind, lifecycle_status, display_name, official_name, category, unit, document, created_at, updated_at";
 
@@ -35,6 +36,7 @@ export async function readExistingTypeBoothRows(client: SupabaseClient): Promise
  * a conditional `updated_at` compare-and-swap so a concurrent edit is never silently overwritten.
  */
 export async function applyCanonicalPlanEntry(client: SupabaseClient, entry: CanonicalPlanEntry): Promise<void> {
+  assertScriptDatabaseClient(client);
   if (entry.action === "noop") return;
 
   if (entry.action === "create") {

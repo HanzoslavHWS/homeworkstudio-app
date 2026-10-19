@@ -15,7 +15,7 @@ import { componentCatalogItems } from "../data/components.ts";
 import { buildImportPreview, fingerprintBytes } from "../domain/importBatch.ts";
 import { buildBatch1Plan, summarizeBatch1Plan, type MappingDecision } from "../domain/importBatch1.ts";
 import { extractSheetGrid, readWorkbookSheets } from "../lib/import/xlsxReader.server.ts";
-import { createSupabaseServerClient, SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
+import { createScriptSupabaseClient } from "../lib/db/scriptSupabase.server.ts";
 import { readExistingEvents, readExistingPriceLists, applyBatch1Plan } from "../lib/db/importBatch1.supabase.ts";
 
 function detectSourceVersion(fileName: string): string {
@@ -42,6 +42,8 @@ const BATCH1_MAPPING_DECISIONS: readonly MappingDecision[] = [
 async function main() {
   const args = process.argv.slice(2);
   const apply = args.includes("--apply");
+  // --apply: the database target is verified before anything else happens (scripts never write to production).
+  const writeClient = apply ? createScriptSupabaseClient() : undefined;
   const filePath = args.find((arg) => !arg.startsWith("--")) ?? path.resolve(process.cwd(), "private-imports", "Ultimátní kalkulace V6.6.xlsm");
 
   const bytes = readFileSync(filePath);
@@ -72,11 +74,12 @@ async function main() {
   let existingPriceLists: Awaited<ReturnType<typeof readExistingPriceLists>> = [];
   let dbStateSource = "unavailable (Supabase not reachable/configured) — treating as empty, all rows classified as insert";
   try {
-    const client = createSupabaseServerClient();
+    const client = writeClient ?? createScriptSupabaseClient();
     [existingEvents, existingPriceLists] = await Promise.all([readExistingEvents(client), readExistingPriceLists(client)]);
     dbStateSource = `read live from Supabase (read-only SELECT): ${existingEvents.length} existing events, ${existingPriceLists.length} existing price lists`;
   } catch (error) {
-    if (!(error instanceof SupabaseConfigurationError)) console.error("Warning: could not read existing DB state:", error instanceof Error ? error.message : error);
+    if (writeClient) throw error;
+    console.error("Warning: could not read existing DB state:", error instanceof Error ? error.message : error);
   }
   console.log("existing DB state:", dbStateSource);
   console.log();
@@ -127,7 +130,7 @@ async function main() {
 
   console.log();
   console.log("=== APPLYING ===");
-  const client = createSupabaseServerClient();
+  const client = writeClient!;
   const result = await applyBatch1Plan(client, plan, { sourceFileName: fileName, sourceFingerprint: fingerprint, sourceVersion });
   console.log("import_batches id:", result.batchId);
   console.log("events written:", result.eventsWritten);

@@ -8,6 +8,7 @@ import {
 } from "../../domain/importBatch1.ts";
 import type { ImportRow } from "../../domain/importBatch.ts";
 import type { Currency } from "../../domain/models.ts";
+import { assertScriptDatabaseClient } from "./scriptSupabase.server.ts";
 
 /** READ-ONLY. Safe to call during --dry-run — never writes anything. */
 export async function readExistingEvents(client: SupabaseClient): Promise<readonly ExistingEventRow[]> {
@@ -54,6 +55,7 @@ export async function applyBatch1Plan(
   plan: Batch1Plan,
   meta: Readonly<{ sourceFileName: string; sourceFingerprint: string; sourceVersion: string }>,
 ): Promise<Batch1ApplyResult> {
+  assertScriptDatabaseClient(client);
   const { data: batchRow, error: batchError } = await client
     .from("import_batches")
     .insert({ source_file_name: meta.sourceFileName, source_fingerprint: meta.sourceFingerprint, source_version: meta.sourceVersion, status: "dry_run" })

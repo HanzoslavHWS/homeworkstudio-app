@@ -29,6 +29,9 @@ import { normalizeExhibition, resolveEventPriceListForCurrency, type PriceList }
 import { selectPricingEntry, resolvePricingAvailability } from "../domain/catalog.ts";
 import type { PricingEntry } from "../domain/models.ts";
 import { createProjectRecord } from "../domain/project.ts";
+import { createScriptSupabaseClient } from "../lib/db/scriptSupabase.server.ts";
+
+const FAKE_DEV_DATABASE = { NEXT_PUBLIC_APP_ENV: "development", SUPABASE_URL: "https://abcdefghijklmnopqrst.supabase.co", SUPABASE_EXPECTED_PROJECT_REF: "abcdefghijklmnopqrst", SUPABASE_SECRET_KEY: "fake" } as const;
 
 const DECISIONS: readonly MappingDecision[] = [
   { identity: { sourceSheet: "PRICELIST", category: "Nábytek", rawName: "Židle čalouněná" }, decision: "confirmed", targetInternalCode: "M57" },
@@ -577,7 +580,9 @@ function createFakeSupabaseClient() {
     return builder;
   }
 
-  return { from, _tables: tables };
+  // Fake writers must pass the same script target check as a real run (fake DEV project).
+  const fake = { from, _tables: tables };
+  return createScriptSupabaseClient({ environment: FAKE_DEV_DATABASE, createClient: () => fake as never }) as unknown as typeof fake;
 }
 
 /** 19 EXACT_SAFE + 2 REVIEW + 1 NO_MATCH among the 22 non-L02 rows — mirrors the real ABF matching report's proportions exactly (see final report from the previous session). */

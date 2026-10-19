@@ -17,7 +17,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { boothTypes } from "../data/booths.ts";
 import { fingerprintBytes } from "../domain/importBatch.ts";
-import { createSupabaseServerClient } from "../lib/db/supabase.server.ts";
+import { createScriptSupabaseClient } from "../lib/db/scriptSupabase.server.ts";
 import { readExistingCatalogMappings } from "../lib/db/importBatch2a.supabase.ts";
 import { applyBatch2bPlan, readExistingCatalogItemsSafely, TransientReadError } from "../lib/db/importBatch2b.supabase.ts";
 import {
@@ -96,7 +96,7 @@ async function main() {
   const reportBytes = readFileSync(REPORT_PATH);
   const fingerprint = fingerprintBytes(new Uint8Array(reportBytes));
 
-  const client = createSupabaseServerClient();
+  const client = createScriptSupabaseClient();
 
   // Section 13: transient-read guard — two reads, compare, STOP (never plan/write) on mismatch.
   let existingCatalogItems;

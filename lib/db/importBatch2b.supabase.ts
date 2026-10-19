@@ -10,6 +10,7 @@ import {
   type Batch2bPlanItem,
 } from "../../domain/importBatch2b.ts";
 import { readExistingCatalogItemsFull, readExistingCatalogMappings } from "./importBatch2a.supabase.ts";
+import { assertScriptDatabaseClient } from "./scriptSupabase.server.ts";
 
 /**
  * NEVER CALLED against real Supabase in this session — code-complete for review, gated behind
@@ -97,6 +98,7 @@ export async function applyBatch2bPlan(
   koje2x2Document: BoothType,
   meta: Readonly<{ sourceFileName: string; sourceFingerprint: string; sourceVersion?: string }>,
 ): Promise<Batch2bApplyResult> {
+  assertScriptDatabaseClient(client);
   const existingCatalogItems = await readExistingCatalogItemsSafely(client);
   const preflight = runBatch2bPreflight(items, existingCatalogItems);
   if (!preflight.ok) throw new Batch2bPreflightError(preflight.issues);

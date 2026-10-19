@@ -10,7 +10,7 @@
  * catalog_mappings, kind, category, or any asset (photoAsset/modelAsset/sourceAssets) — only
  * adds a missing `variants` scaffold to Txx and creates P87 if it is truly absent.
  */
-import { createSupabaseServerClient } from "../lib/db/supabase.server.ts";
+import { createScriptSupabaseClient } from "../lib/db/scriptSupabase.server.ts";
 import { applyCanonicalPlanEntry, readExistingTypeBoothRows } from "../lib/db/typeBoothCanonicalization.supabase.ts";
 import { planTypeBoothCatalog, type CanonicalPlanEntry } from "../domain/typeBoothCanonicalization.ts";
 
@@ -25,7 +25,7 @@ async function main() {
   const apply = args.includes("--apply");
   console.log(`=== TYPE-BOOTH CANONICALIZATION (P86/P87/Txx) — ${apply ? "APPLY" : "DRY-RUN"} ===\n`);
 
-  const client = createSupabaseServerClient();
+  const client = createScriptSupabaseClient();
   const existing = await readExistingTypeBoothRows(client);
   console.log(`Remote DB (read-only SELECT): ${existing.length} catalog_items.\n`);
 

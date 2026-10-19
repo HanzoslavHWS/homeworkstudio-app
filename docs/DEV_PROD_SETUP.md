@@ -59,7 +59,7 @@ Prostředí se rozlišují podle **project ref** (subdoména `https://<ref>.supa
   - jakýkoli projekt, jehož ref se neshoduje se `SUPABASE_EXPECTED_PROJECT_REF`,
   - adresu, ze které nejde ref přečíst.
   
-  API pak vrací 503 s vysvětlením. `next dev` bez `NEXT_PUBLIC_APP_ENV` se bere jako vývoj. V produkci (proměnná nenastavená nebo `production`) se nic nemění. Stejná ochrana platí pro importní skripty v `scripts/` (používají stejného klienta).
+  API pak vrací 503 s vysvětlením. `next dev` bez `NEXT_PUBLIC_APP_ENV` se bere jako vývoj. V produkci (proměnná nenastavená nebo `production`) se nic nemění. Skripty v `scripts/` mají vlastní, přísnější ochranu: používají `createScriptSupabaseClient` (`lib/db/scriptSupabase.server.ts`), který produkční projekt odmítne vždy. Podrobnosti jsou v `docs/DEV_DATA_IMPORT_PLAN.md`, oddíl 2.
 - **Označení DEV** (`app/layout.tsx`): mimo produkci je vpravo dole štítek „DEV · DB &lt;ref&gt;“ a titulek stránky začíná `[DEVELOPMENT]`. Podle refu ve štítku je vždy vidět, ke které databázi je aplikace připojená.
 - **Chráněné migrace** (`scripts/supabaseDevMigrate.ts`, Supabase CLI 2.120.0 jako dev závislost):
   - `npm run db:dev:check` — ověří cíl, vypíše plán, `db push --dry-run`
@@ -107,9 +107,9 @@ npm run dev            # vpravo dole musí být „DEV · DB <dev-ref>“
 - Pokud štítek chybí, ukazuje produkční ref nebo API hlásí „míří na PRODUKČNÍ databázi“, **nepokračujte** a opravte `.env.local`.
 - Migrace: nová migrace do `supabase/migrations/`, pak `npm run db:dev:check` → `npm run db:dev:apply -- --confirm=<dev-ref>`.
 - Nikdy nespouštět `supabase db push`, `db reset` ani `migration repair` bez `--db-url` na DEV.
-- Testovací data do DEV: přes UI aplikace nebo importní skripty (`node --env-file=.env.local scripts/importBatch1.ts …`), které díky ochraně zapisují jen do DEV. Kopírování produkčních dat do DEV je samostatné rozhodnutí (osobní a obchodní údaje).
+- Testovací data do DEV: přes UI aplikace nebo importní skripty (`node --no-warnings scripts/importBatch1.ts …`; `.env.local` si načtou samy), které zapisují jen do DEV. Pořadí a podmínky jsou v `docs/DEV_DATA_IMPORT_PLAN.md`. Kopírování produkčních dat do DEV je samostatné rozhodnutí (osobní a obchodní údaje).
 
-**Přepnutí prostředí:** lokálně existuje jen DEV. Produkce se ovládá výhradně z Vercelu. Pokud by bylo výjimečně nutné spustit skript proti produkci, je to vědomý krok (`NEXT_PUBLIC_APP_ENV=production` jen pro jeden příkaz, s domluvou) — ne přepnutí `.env.local`.
+**Přepnutí prostředí:** lokálně existuje jen DEV. Produkce se ovládá výhradně z Vercelu. Skripty v `scripts/` do produkce zapisovat **nemohou**. Neexistuje přepínač ani proměnná, která by to povolila, a `NEXT_PUBLIC_APP_ENV=production` skript odmítne. Případný import do produkce je samostatný úkol s vlastním návrhem a schválením.
 
 ## 6. Nasazení FINAL V1 do produkce (později)
 

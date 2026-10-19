@@ -12,7 +12,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { readKodyRowsFromBuffer } from "../lib/import/kodyReader.server.ts";
 import { planAbfImport } from "../domain/catalogAbfImport.ts";
-import { createSupabaseServerClient } from "../lib/db/supabase.server.ts";
+import { createScriptSupabaseClient } from "../lib/db/scriptSupabase.server.ts";
 import { catalogAbfSchemaAvailable, readAbfImportExistingItems } from "../lib/db/catalogAbfImport.supabase.ts";
 
 const SOURCE = path.resolve(process.cwd(), "_IMPORT", "KODY.xlsm");
@@ -22,7 +22,7 @@ const rows = await readKodyRowsFromBuffer(readFileSync(SOURCE));
 let existing: Awaited<ReturnType<typeof readAbfImportExistingItems>> = [];
 let schemaReady: boolean | undefined;
 if (againstDb) {
-  const client = createSupabaseServerClient();
+  const client = createScriptSupabaseClient();
   [existing, schemaReady] = await Promise.all([readAbfImportExistingItems(client), catalogAbfSchemaAvailable(client)]);
 }
 const plan = planAbfImport(rows, existing, path.basename(SOURCE));
