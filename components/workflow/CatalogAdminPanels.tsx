@@ -29,6 +29,8 @@ import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogI
 import { canPublishInCustomerCatalog } from "../../domain/customerCatalog";
 import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
 import { useAssetUrl } from "../../hooks/useAssetUrl";
+import { CATALOG_UNITS } from "../../domain/catalogUnits";
+import { catalogTypeHasField } from "../../domain/catalogItemFields";
 
 /** Types whose cards physically exist (dimensions make sense). SERVICE never needs them. */
 const TYPES_WITH_DIMENSIONS: readonly CatalogItemType[] = ["PRODUCT", "BOOTH", "INTERNAL_COMPONENT"];
@@ -61,7 +63,12 @@ export function CatalogItemCreateForm({
   const [internalCode, setInternalCode] = useState("");
   const [abfCode, setAbfCode] = useState("");
   const [category, setCategory] = useState("");
-  const [unit, setUnit] = useState("");
+  const [unitCode, setUnitCode] = useState("");
+  const [codeFromAbf, setCodeFromAbf] = useState(true);
+  const [officialName, setOfficialName] = useState("");
+  const [officialNameEn, setOfficialNameEn] = useState("");
+  const [color, setColor] = useState("");
+  const [material, setMaterial] = useState("");
   const [note, setNote] = useState("");
   const [widthMm, setWidthMm] = useState("");
   const [depthMm, setDepthMm] = useState("");
@@ -87,9 +94,16 @@ export function CatalogItemCreateForm({
         displayName: displayName.trim(),
         category,
       };
-      if (internalCode.trim()) input.internalCode = internalCode.trim();
+      // Decision A8: the generator code defaults to the ABF code — only when the user keeps that choice.
+      const generatorCode = codeFromAbf && abfCode.trim() ? abfCode.trim().toUpperCase() : internalCode.trim();
+      if (generatorCode) input.internalCode = generatorCode;
       if (abfCode.trim()) input.abfCode = abfCode.trim();
-      if (unit.trim()) input.unit = unit.trim();
+      if (unitCode) input.unitCode = unitCode;
+      if (officialName.trim()) input.officialName = officialName.trim();
+      if (officialNameEn.trim()) input.officialNameEn = officialNameEn.trim();
+      if (catalogTypeHasField(itemType, "color") && (color.trim() || material.trim())) {
+        input.attributes = { ...(color.trim() ? { color: color.trim() } : {}), ...(material.trim() ? { material: material.trim() } : {}) };
+      }
       if (note.trim()) input.note = note.trim();
       if (TYPES_WITH_DIMENSIONS.includes(itemType)) {
         const width = Number(widthMm);
@@ -121,15 +135,34 @@ export function CatalogItemCreateForm({
       </div>
       {itemType && (
         <dl>
-          <Field label="Název *">
+          <Field label="Interní název HomeworkStudio *">
             <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
           </Field>
-          <Field label="Interní kód">
-            <input value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder={itemType === "INTERNAL_COMPONENT" ? "např. INT-PANEL-950" : "Ponechte prázdné, pokud kód neznáte"} />
-          </Field>
           <Field label={itemTypeExpectsAbfCode(itemType) ? "ABF kód" : "ABF kód (nepovinný)"}>
-            <input value={abfCode} onChange={(event) => setAbfCode(event.target.value)} placeholder={itemTypeExpectsAbfCode(itemType) ? "např. M57" : "Interní komponenta obvykle ABF kód nemá"} />
+            <input value={abfCode} onChange={(event) => setAbfCode(event.target.value)} placeholder={itemTypeExpectsAbfCode(itemType) ? "např. M57 (podle KODY.xlsm)" : "Interní komponenta obvykle ABF kód nemá"} />
           </Field>
+          <Field label="Generátorový kód">
+            {abfCode.trim() && (
+              <label className="checkboxRow">
+                <input type="checkbox" checked={codeFromAbf} onChange={(event) => setCodeFromAbf(event.target.checked)} /> Stejný jako ABF kód
+              </label>
+            )}
+            {abfCode.trim() && codeFromAbf ? (
+              <input value={abfCode.trim().toUpperCase()} readOnly disabled aria-label="Generátorový kód" />
+            ) : (
+              <input aria-label="Generátorový kód" value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder={itemType === "INTERNAL_COMPONENT" ? "např. INT-PANEL-950" : "Ponechte prázdné, pokud kód neznáte"} />
+            )}
+          </Field>
+          {itemTypeExpectsAbfCode(itemType) && (
+            <>
+              <Field label="Oficiální název ABF (CZ)">
+                <input value={officialName} onChange={(event) => setOfficialName(event.target.value)} placeholder="Podle KODY.xlsm" />
+              </Field>
+              <Field label="Oficiální název ABF (EN)">
+                <input value={officialNameEn} onChange={(event) => setOfficialNameEn(event.target.value)} placeholder="Official ABF name" />
+              </Field>
+            </>
+          )}
           <Field label="Kategorie *">
             <select value={category} onChange={(event) => setCategory(event.target.value)}>
               <option value="">— vyberte —</option>
@@ -147,9 +180,18 @@ export function CatalogItemCreateForm({
               </select>
             </Field>
           )}
-          <Field label="Jednotka">
-            <input value={unit} onChange={(event) => setUnit(event.target.value)} placeholder={itemType === "SERVICE" ? "např. ks, den, m³" : "např. ks, m², bm"} />
+          <Field label="Měrná jednotka">
+            <select aria-label="Měrná jednotka" value={unitCode} onChange={(event) => setUnitCode(event.target.value)}>
+              <option value="">— nevybráno —</option>
+              {CATALOG_UNITS.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol} — {unit.nameCs}</option>)}
+            </select>
           </Field>
+          {catalogTypeHasField(itemType, "color") && (
+            <>
+              <Field label="Barva"><input value={color} onChange={(event) => setColor(event.target.value)} placeholder="např. černá" /></Field>
+              <Field label="Materiál"><input value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="např. lamino" /></Field>
+            </>
+          )}
           {TYPES_WITH_DIMENSIONS.includes(itemType) && (
             <>
               <Field label="Šířka (mm)"><input type="number" value={widthMm} onChange={(event) => setWidthMm(event.target.value)} placeholder="Neznámo" /></Field>
@@ -163,6 +205,7 @@ export function CatalogItemCreateForm({
         </dl>
       )}
       {itemType === "BOOTH" && <p className="fieldHint">Obsah balíčku (typovka, pult, židle, světla…) nastavíte po založení v detailu karty.</p>}
+      {itemType === "KIT" && <p className="fieldHint">Obsah kompletu nastavíte po založení v detailu karty. Náhrady a doplatky přibudou ve V1-DATA-04.</p>}
       {itemType === "SERVICE" && <p className="fieldHint">Technická metadata (výkon, parametry) a prezentaci v technickém rastru nastavíte po založení v detailu karty.</p>}
       <div className="catalogAdminReviewActions">
         <button type="button" className="secondaryButton" onClick={onCancel} disabled={busy}>Zrušit</button>

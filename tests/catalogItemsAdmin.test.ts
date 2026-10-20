@@ -1177,7 +1177,7 @@ test("UI: a furniture item (e.g. a chair) is allowed to show the source-file sec
 
 test("UI: an existing internalCode is rendered read-only (span); an input is offered only to FILL a missing one (section 7, catalog revision)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /\{item\.internalCode \? \(\s*<span className="readOnlyField"[^>]*>\{item\.internalCode\}<\/span>/u);
+  assert.match(source, /\{item\.internalCode \? \(\s*<span className="readOnlyField"[^>]*>\s*\{item\.internalCode\}/u);
   assert.match(source, /if \(!item\.internalCode && internalCodeDraft\.trim\(\)\) edit\.fillInternalCode/u);
 });
 

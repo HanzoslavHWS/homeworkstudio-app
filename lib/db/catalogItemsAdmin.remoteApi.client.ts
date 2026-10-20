@@ -2,8 +2,13 @@
 
 import type { BulkLifecycleOutcome, BulkLifecycleRequest, CatalogItemAdmin, CatalogItemAdminCreateInput, CatalogItemAdminEdit } from "../../domain/catalogItemsAdmin.ts";
 import type { CatalogPackageItem, CatalogPackageItemInput } from "../../domain/catalogPackages.ts";
+import type { CatalogItemAlias, CatalogItemAliasInput } from "../../domain/catalogItemAliases.ts";
+import type { CatalogUnit } from "../../domain/catalogUnits.ts";
+import type { RealizationCompany } from "../../domain/realizationCompany.ts";
 import { ConcurrencyConflictError } from "./concurrency.ts";
 import { RemoteApiUnavailableError } from "./projectRepository.remoteApi.client.ts";
+
+export type CatalogAliasRegister = Readonly<{ aliases: readonly CatalogItemAlias[]; companies: readonly RealizationCompany[]; units: readonly CatalogUnit[] }>;
 
 async function throwForFailedResponse(response: Response, fallbackMessage: string): Promise<never> {
   let message = fallbackMessage;
@@ -98,6 +103,25 @@ export class RemoteApiCatalogItemsAdminRepository {
     if (!response.ok) await throwForFailedResponse(response, "Uložení obsahu stánku selhalo.");
     const body = (await response.json()) as { packageItems: readonly CatalogPackageItem[] };
     return body.packageItems;
+  }
+
+  /** Aliases of every item + the unit register + realization companies (V1-DATA-03). */
+  async loadAliases(): Promise<CatalogAliasRegister> {
+    const response = await fetch("/api/catalog-admin/items/aliases", { method: "GET", credentials: "same-origin" });
+    if (!response.ok) await throwForFailedResponse(response, "Aliasy se nepodařilo načíst.");
+    return (await response.json()) as CatalogAliasRegister;
+  }
+
+  /** Replaces one item's alias list (removed aliases are deactivated, never deleted). */
+  async saveAliases(catalogItemId: string, aliases: readonly CatalogItemAliasInput[]): Promise<readonly CatalogItemAlias[]> {
+    const response = await fetch("/api/catalog-admin/items/aliases", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ catalogItemId, aliases }),
+    });
+    if (!response.ok) await throwForFailedResponse(response, "Aliasy se nepodařilo uložit.");
+    return ((await response.json()) as { aliases: readonly CatalogItemAlias[] }).aliases;
   }
 
   /** KODY.xlsm import — mode "preview" never writes; "apply" re-plans on the server and writes. */

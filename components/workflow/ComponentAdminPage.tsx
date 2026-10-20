@@ -6,6 +6,7 @@ import {
   categoryLabelCs,
   computeGeneratorEligibleLive,
   computeReadiness,
+  documentAttributes,
   documentBasePricing,
   documentDimensions,
   documentFootprint2D,
@@ -43,7 +44,11 @@ import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LAB
 import type { TechnicalRasterComponentConfig } from "../../domain/technicalRasterComponentPresentation";
 import type { TechnicalServicePlacementBehavior } from "../../domain/technicalRasterServicePresentation";
 import { ConcurrencyConflictError } from "../../lib/db/concurrency";
-import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
+import type { CatalogAliasRegister, RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
+import type { CatalogItemAlias, CatalogItemAliasInput } from "../../domain/catalogItemAliases";
+import { CATALOG_UNITS, normalizeCatalogUnit } from "../../domain/catalogUnits";
+import { catalogTypeHasField } from "../../domain/catalogItemFields";
+import { CatalogAliasesSection } from "./CatalogAliasesSection";
 import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
 import { useAssetUrl } from "../../hooks/useAssetUrl";
 
@@ -105,6 +110,17 @@ export function ComponentAdminPage({
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState("");
+  const [aliasRegister, setAliasRegister] = useState<CatalogAliasRegister | null>(null);
+  const [aliasLoadError, setAliasLoadError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    repository
+      .loadAliases()
+      .then((register) => { if (!cancelled) setAliasRegister(register); })
+      .catch((error) => { if (!cancelled) setAliasLoadError(error instanceof Error ? error.message : "Aliasy se nepodařilo načíst."); });
+    return () => { cancelled = true; };
+  }, [repository]);
 
   const reload = useCallback(async () => {
     try {
@@ -154,6 +170,13 @@ export function ComponentAdminPage({
   async function handleSave(edit: CatalogItemAdminEdit): Promise<void> {
     if (!selected) return;
     replaceItem(await repository.save(selected.id, edit, selected.updatedAt));
+  }
+
+  async function handleSaveAliases(inputs: readonly CatalogItemAliasInput[]): Promise<readonly CatalogItemAlias[]> {
+    if (!selected) return [];
+    const stored = await repository.saveAliases(selected.id, inputs);
+    setAliasRegister((current) => current ? { ...current, aliases: [...current.aliases.filter((alias) => alias.catalogItemId !== selected.id), ...stored] } : current);
+    return stored;
   }
 
   async function handleSavePackage(lines: readonly CatalogPackageItemInput[]): Promise<void> {
@@ -294,6 +317,9 @@ export function ComponentAdminPage({
                 allItems={allItems}
                 onSave={handleSave}
                 onSavePackage={handleSavePackage}
+                aliasRegister={aliasRegister}
+                aliasLoadError={aliasLoadError}
+                onSaveAliases={handleSaveAliases}
                 onDuplicate={handleDuplicate}
                 onOpenPricing={() => onOpenPricing(selected.id)}
               />
@@ -403,7 +429,7 @@ export function ComponentAdminList({
         const row = (
           <button key={entry.id} type="button" className={`catalogAdminRow ${entry.id === selectedId ? "active" : ""}`} onClick={() => onSelect(entry.id)}>
             <ThumbnailCell photoAsset={entry.photoAsset} photoUrl={entry.photoUrl} label={entry.displayName} />
-            <span title={`Interní kód: ${entry.internalCode ?? "—"} · ABF kód: ${entry.abfCode ?? "—"}`}>
+            <span title={`Generátorový kód: ${entry.internalCode ?? "—"} · ABF kód: ${entry.abfCode ?? "—"}`}>
               {entry.internalCode ?? "—"}
               {entry.abfCode && entry.abfCode !== entry.internalCode ? <small className="catalogAbfCode"> ABF {entry.abfCode}</small> : null}
             </span>
@@ -449,14 +475,21 @@ export function ComponentAdminDetail({
   allItems,
   onSave,
   onSavePackage,
+  aliasRegister,
+  aliasLoadError,
+  onSaveAliases,
   onDuplicate,
   onOpenPricing,
 }: {
   item: CatalogItemAdmin;
-  /** Whole catalog — needed for the BOOTH package editor (child item picker). */
+  /** Whole catalog — needed for the BOOTH/KIT package editor (child item picker). */
   allItems?: readonly CatalogItemAdmin[];
   onSave: (edit: CatalogItemAdminEdit) => Promise<void>;
   onSavePackage?: (lines: readonly CatalogPackageItemInput[]) => Promise<void>;
+  /** Aliases + units + realization companies (V1-DATA-03). null while loading. */
+  aliasRegister?: CatalogAliasRegister | null;
+  aliasLoadError?: string;
+  onSaveAliases?: (aliases: readonly CatalogItemAliasInput[]) => Promise<readonly CatalogItemAlias[]>;
   onDuplicate?: () => Promise<void>;
   onOpenPricing: () => void;
 }) {
@@ -654,7 +687,15 @@ export function ComponentAdminDetail({
   const [displayName, setDisplayName] = useState(item.displayName);
   const [name, setName] = useState(initialName);
   const [category, setCategory] = useState(item.category ?? "");
-  const [unit, setUnit] = useState(item.unit ?? "");
+  const legacyUnit = normalizeCatalogUnit(item.unit);
+  const initialUnitCode = item.unitCode ?? (legacyUnit.status === "known" ? legacyUnit.code : "");
+  const [unitCode, setUnitCode] = useState(initialUnitCode);
+  const [officialName, setOfficialName] = useState(item.officialName ?? "");
+  const [officialNameEn, setOfficialNameEn] = useState(item.officialNameEn ?? "");
+  const initialAttributes = documentAttributes(itemDocument);
+  const [color, setColor] = useState(initialAttributes.color ?? "");
+  const [material, setMaterial] = useState(initialAttributes.material ?? "");
+  const [extraParams, setExtraParams] = useState<readonly { key: string; value: string }[]>(initialAttributes.extra ?? []);
   const [widthMm, setWidthMm] = useState(initialWidth);
   const [depthMm, setDepthMm] = useState(initialDepth);
   const [heightMm, setHeightMm] = useState(initialHeight);
@@ -675,7 +716,13 @@ export function ComponentAdminDetail({
     if (displayName !== item.displayName) edit.displayName = displayName;
     if (name !== initialName) edit.name = name;
     if (category !== (item.category ?? "")) edit.category = category;
-    if (unit !== (item.unit ?? "")) edit.unit = unit;
+    if (unitCode !== (item.unitCode ?? "")) edit.unitCode = unitCode || null;
+    if (officialName.trim() !== (item.officialName ?? "")) edit.officialName = officialName.trim() || null;
+    if (officialNameEn.trim() !== (item.officialNameEn ?? "")) edit.officialNameEn = officialNameEn.trim() || null;
+    const nextAttributes = { color: color.trim() || undefined, material: material.trim() || undefined, extra: extraParams.filter((param) => param.key.trim() && param.value.trim()) };
+    if (JSON.stringify(nextAttributes) !== JSON.stringify({ color: initialAttributes.color, material: initialAttributes.material, extra: initialAttributes.extra ?? [] })) {
+      edit.attributes = nextAttributes.color || nextAttributes.material || nextAttributes.extra.length ? nextAttributes : null;
+    }
     if (widthMm !== initialWidth) {
       const parsed = Number(widthMm);
       if (Number.isFinite(parsed)) edit.widthMm = parsed;
@@ -790,11 +837,16 @@ export function ComponentAdminDetail({
         <section className="catalogDetailSection">
           <h3>Identita</h3>
           <dl>
-            <EditRow label="Interní kód">
+            <EditRow label="Generátorový kód">
               {item.internalCode ? (
-                <span className="readOnlyField" title="Stabilní interní identita — nelze měnit.">{item.internalCode}</span>
+                <span className="readOnlyField" title="Stabilní identita položky v generátoru a cenách — nelze měnit, lze jen doplnit chybějící.">
+                  {item.internalCode}{item.abfCode && item.abfCode === item.internalCode ? " (= ABF kód)" : ""}
+                </span>
               ) : (
-                <input value={internalCodeDraft} onChange={(event) => { setInternalCodeDraft(event.target.value); setDirty(true); }} placeholder="Doplnit (např. INT-PANEL-950)" />
+                <span className="inlineFieldWithAction">
+                  <input value={internalCodeDraft} onChange={(event) => { setInternalCodeDraft(event.target.value); setDirty(true); }} placeholder="Doplnit (např. INT-PANEL-950)" />
+                  {abfCode.trim() && <button type="button" className="secondaryButton" onClick={() => { setInternalCodeDraft(abfCode.trim().toUpperCase()); setDirty(true); }}>Použít ABF kód</button>}
+                </span>
               )}
             </EditRow>
             <EditRow label="ABF kód">
@@ -814,13 +866,18 @@ export function ComponentAdminDetail({
                 {CATALOG_ITEM_TYPES.map((value) => <option key={value} value={value}>{CATALOG_ITEM_TYPE_LABELS_CS[value]}</option>)}
               </select>
             </EditRow>
-            <EditRow label="Zobrazovaný název">
+            <EditRow label="Oficiální název ABF (CZ)">
+              <input value={officialName} onChange={(event) => { setOfficialName(event.target.value); setDirty(true); }} placeholder={itemTypeExpectsAbfCode(itemType) ? "Podle KODY.xlsm" : "Interní komponenta — obvykle bez ABF názvu"} />
+            </EditRow>
+            <EditRow label="Oficiální název ABF (EN)">
+              <input value={officialNameEn} onChange={(event) => { setOfficialNameEn(event.target.value); setDirty(true); }} placeholder="Official ABF name (KODY.xlsm)" />
+            </EditRow>
+            <EditRow label="Interní název HomeworkStudio">
               <input value={displayName} onChange={(event) => { setDisplayName(event.target.value); setDirty(true); }} />
             </EditRow>
             <EditRow label="CZ název (interní)">
               <input value={name} onChange={(event) => { setName(event.target.value); setDirty(true); }} />
             </EditRow>
-            <EditRow label="EN název"><span className="readOnlyField">Model zatím nepodporuje samostatný anglický název.</span></EditRow>
             <EditRow label="Druh (pravidla readiness)">
               <select value={kind} onChange={(event) => { setKind(event.target.value as CatalogItemKind); setDirty(true); }} disabled={item.lifecycleStatus === "active"}>
                 {CATALOG_ITEM_KINDS_BY_TYPE[itemType].map((value) => <option key={value} value={value}>{CATALOG_ITEM_KIND_LABELS_CS[value]}</option>)}
@@ -837,8 +894,14 @@ export function ComponentAdminDetail({
                 ))}
               </select>
             </EditRow>
-            <EditRow label="Jednotka">
-              <input value={unit} onChange={(event) => { setUnit(event.target.value); setDirty(true); }} />
+            <EditRow label="Měrná jednotka">
+              <select value={unitCode} onChange={(event) => { setUnitCode(event.target.value); setDirty(true); }}>
+                <option value="">— nevybráno —</option>
+                {CATALOG_UNITS.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol} — {unit.nameCs}</option>)}
+              </select>
+              {!item.unitCode && item.unit && legacyUnit.status !== "known" && (
+                <small className="fieldHint">Původní text „{item.unit}“ nebyl převeden: {legacyUnit.status === "empty" ? "" : legacyUnit.message}</small>
+              )}
             </EditRow>
             <EditRow label="Poznámka">
               <input value={note} onChange={(event) => { setNote(event.target.value); setDirty(true); }} placeholder="Interní poznámka" />
@@ -871,6 +934,32 @@ export function ComponentAdminDetail({
             </EditRow>
           </dl>
         </section>
+
+        {(catalogTypeHasField(itemType, "color") || catalogTypeHasField(itemType, "material")) && (
+          <section className="catalogDetailSection">
+            <h3>Parametry</h3>
+            <dl>
+              <EditRow label="Barva">
+                <input value={color} onChange={(event) => { setColor(event.target.value); setDirty(true); }} placeholder="např. černá, RAL 9016" />
+              </EditRow>
+              <EditRow label="Materiál">
+                <input value={material} onChange={(event) => { setMaterial(event.target.value); setDirty(true); }} placeholder="např. lamino, hliník" />
+              </EditRow>
+              {extraParams.map((param, index) => (
+                <EditRow key={index} label={`Parametr ${index + 1}`}>
+                  <span className="inlineFieldWithAction">
+                    <input aria-label="Název parametru" value={param.key} onChange={(event) => { setExtraParams(extraParams.map((entry, entryIndex) => entryIndex === index ? { ...entry, key: event.target.value } : entry)); setDirty(true); }} placeholder="Název" />
+                    <input aria-label="Hodnota parametru" value={param.value} onChange={(event) => { setExtraParams(extraParams.map((entry, entryIndex) => entryIndex === index ? { ...entry, value: event.target.value } : entry)); setDirty(true); }} placeholder="Hodnota" />
+                    <button type="button" className="secondaryButton" onClick={() => { setExtraParams(extraParams.filter((_, entryIndex) => entryIndex !== index)); setDirty(true); }}>Odebrat</button>
+                  </span>
+                </EditRow>
+              ))}
+            </dl>
+            <div className="assetActions">
+              <button type="button" className="secondaryButton" onClick={() => setExtraParams([...extraParams, { key: "", value: "" }])}>+ Další parametr</button>
+            </div>
+          </section>
+        )}
 
         {SCENE_CAPABILITY_KINDS.includes(item.kind) && (
           <section className="catalogDetailSection">
@@ -1104,7 +1193,9 @@ export function ComponentAdminDetail({
 
         <CatalogPublicationSection item={item} ownerId={ownerId} onSave={onSave} />
         {currentItemType === "SERVICE" && <ServiceTechnicalSection item={item} onSave={onSave} />}
-        {currentItemType === "BOOTH" && onSavePackage && allItems && (
+        {aliasRegister && onSaveAliases && <CatalogAliasesSection key={item.id} item={item} register={aliasRegister} onSave={onSaveAliases} />}
+        {!aliasRegister && aliasLoadError && <p className="uploadError">{aliasLoadError}</p>}
+        {(currentItemType === "BOOTH" || currentItemType === "KIT") && onSavePackage && allItems && (
           <PackageContentsSection item={item} allItems={allItems} onSavePackage={onSavePackage} />
         )}
         <TechnicalRasterSection item={item} ownerId={ownerId} onSave={onSave} />

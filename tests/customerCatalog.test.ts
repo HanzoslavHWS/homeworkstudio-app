@@ -53,7 +53,7 @@ const SECRET = "customer-catalog-test-session-secret-32";
 // Fixtures
 // ---------------------------------------------------------------------------------------
 
-const KIND_BY_TYPE: Readonly<Record<CatalogItemType, CatalogItemKind>> = { PRODUCT: "furniture", SERVICE: "service", BOOTH: "booth", INTERNAL_COMPONENT: "booth_component" };
+const KIND_BY_TYPE: Readonly<Record<CatalogItemType, CatalogItemKind>> = { PRODUCT: "furniture", SERVICE: "service", BOOTH: "booth", INTERNAL_COMPONENT: "booth_component", KIT: "other" };
 
 function photo(id: string): StoredAsset {
   return { id, storageKey: `catalog/${id}.jpg`, originalFileName: `${id}.jpg`, mimeType: "image/jpeg", size: 1000, createdAt: "2026-10-01T00:00:00.000Z", category: "catalog-photo" };

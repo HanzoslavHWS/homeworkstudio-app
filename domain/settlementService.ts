@@ -19,6 +19,7 @@ import {
   type ComparisonRow,
   type StandMatchState,
 } from "./settlementComparison.ts";
+import { companyNameAliases, type CatalogItemAlias } from "./catalogItemAliases.ts";
 import { activeOutOfScopeRules, parseSettlementRuleInput, planRuleStatusChange, type SettlementRule, type SettlementRuleInput, type SettlementRuleStatusPatch } from "./settlementRules.ts";
 import {
   canonicalUnit,
@@ -112,6 +113,11 @@ export interface SettlementRepository {
   deleteCatalogName(id: string): Promise<void>;
 
   listMappings(realizationCompanyId: string): Promise<readonly SettlementVendorMapping[]>;
+  /**
+   * Active confirmed aliases from the catalog (catalog_item_aliases, V1-DATA-03). Optional: a
+   * repository without it simply contributes no aliases.
+   */
+  listCatalogItemAliases?(): Promise<readonly CatalogItemAlias[]>;
   upsertMapping(input: SettlementMappingInput): Promise<SettlementVendorMapping>;
   /** Adds entries whose normalized text is not in the dictionary yet; never updates an existing one. */
   insertMissingMappings(entries: readonly SettlementMappingInput[]): Promise<void>;
@@ -396,9 +402,43 @@ export function toComparisonCatalog(items: readonly SettlementCatalogItem[], nam
   }));
 }
 
+/**
+ * Adds catalog aliases (V1-DATA-03) to what the comparison knows. Aliases of THIS company become
+ * confirmed mappings — the same text at another company is never used. General name aliases become
+ * extra names of their item. An existing settlement mapping or name always wins, so nothing the
+ * user decided in the settlement module is overridden.
+ */
+export function withCatalogAliases(
+  realizationCompanyId: string,
+  mappings: readonly SettlementVendorMapping[],
+  catalogNames: readonly CatalogItemName[],
+  aliases: readonly CatalogItemAlias[],
+): Readonly<{ mappings: readonly SettlementVendorMapping[]; catalogNames: readonly CatalogItemName[] }> {
+  const mappedTexts = new Set(mappings.map((mapping) => mapping.normalizedText));
+  const aliasMappings: SettlementVendorMapping[] = companyNameAliases(aliases, realizationCompanyId)
+    .filter((alias) => !mappedTexts.has(alias.normalizedText))
+    .map((alias) => ({
+      id: `catalog-alias:${alias.id}`,
+      realizationCompanyId,
+      sourceText: alias.aliasText,
+      normalizedText: alias.normalizedText,
+      catalogItemId: alias.catalogItemId,
+      unit: alias.unitCode ? canonicalUnit(alias.unitCode) : null,
+      status: "confirmed",
+      origin: "manual",
+      note: "Alias realizačky z katalogu",
+      updatedAt: "",
+    }));
+  const knownNames = new Set(catalogNames.map((name) => name.normalizedName));
+  const aliasNames: CatalogItemName[] = aliases
+    .filter((alias) => alias.isActive && alias.status === "confirmed" && alias.aliasKind === "name" && !alias.realizationCompanyId && !knownNames.has(alias.normalizedText))
+    .map((alias) => ({ id: `catalog-alias:${alias.id}`, catalogItemId: alias.catalogItemId, nameType: "abf_alternative", name: alias.aliasText, normalizedName: alias.normalizedText, createdAt: "" }));
+  return { mappings: [...mappings, ...aliasMappings], catalogNames: [...catalogNames, ...aliasNames] };
+}
+
 export async function recomputeSettlementCheck(repository: SettlementRepository, checkId: unknown): Promise<SettlementCheck> {
   const check = await requireCheck(repository, checkId);
-  const [stands, abfItems, vendorItems, catalogItems, catalogNames, mappings, rules] = await Promise.all([
+  const [stands, abfItems, vendorItems, catalogItems, ownCatalogNames, ownMappings, rules, catalogAliases] = await Promise.all([
     repository.listStands(check.id),
     repository.listAbfItems(check.id),
     repository.listVendorItems(check.id, { comparableOnly: true }),
@@ -406,7 +446,9 @@ export async function recomputeSettlementCheck(repository: SettlementRepository,
     repository.listCatalogNames(),
     repository.listMappings(check.realizationCompanyId),
     repository.listRules(check.realizationCompanyId),
+    repository.listCatalogItemAliases?.() ?? Promise.resolve([] as readonly CatalogItemAlias[]),
   ]);
+  const { mappings, catalogNames } = withCatalogAliases(check.realizationCompanyId, ownMappings, ownCatalogNames, catalogAliases);
   const standById = new Map(stands.map((stand) => [stand.id, stand]));
   const standInfo = (standId: string) => {
     const stand = standById.get(standId);

@@ -1,3 +1,4 @@
+import type { CatalogItemAlias } from "../../domain/catalogItemAliases.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type {
   CatalogItemName,
@@ -374,6 +375,33 @@ export class SupabaseSettlementRepository implements SettlementRepository {
   async deleteCatalogName(id: string): Promise<void> {
     const { error } = await this.client.from("catalog_item_names").delete().eq("id", id);
     if (error) raise(error);
+  }
+
+  /** Active confirmed catalog aliases (V1-DATA-03). Empty on a database without that migration. */
+  async listCatalogItemAliases(): Promise<readonly CatalogItemAlias[]> {
+    const { data, error } = await this.client
+      .from("catalog_item_aliases")
+      .select("id, catalog_item_id, realization_company_id, alias_kind, alias_text, normalized_text, unit_code, source, status, note, is_active")
+      .eq("is_active", true)
+      .eq("status", "confirmed");
+    if (error) {
+      const code = (error as { code?: string }).code;
+      if (code === "42P01" || code === "PGRST205") return [];
+      raise(error);
+    }
+    return ((data ?? []) as Record<string, unknown>[]).map((row) => ({
+      id: String(row.id),
+      catalogItemId: String(row.catalog_item_id),
+      realizationCompanyId: row.realization_company_id ? String(row.realization_company_id) : undefined,
+      aliasKind: row.alias_kind === "code" ? "code" : "name",
+      aliasText: String(row.alias_text),
+      normalizedText: String(row.normalized_text),
+      unitCode: row.unit_code ? String(row.unit_code) : undefined,
+      source: String(row.source) as CatalogItemAlias["source"],
+      status: "confirmed",
+      note: row.note ? String(row.note) : undefined,
+      isActive: true,
+    }));
   }
 
   async listMappings(realizationCompanyId: string): Promise<readonly SettlementVendorMapping[]> {

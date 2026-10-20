@@ -19,6 +19,7 @@ import {
   normalizeInternalCode,
 } from "./catalogItemTypes.ts";
 import type { CatalogPackageItem } from "./catalogPackages.ts";
+import { catalogUnitByCode, normalizeCatalogUnit } from "./catalogUnits.ts";
 import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
 import { SOURCE_ASSET_KINDS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "./assets.ts";
@@ -93,9 +94,15 @@ export type CatalogItemAdmin = Readonly<{
   kind: CatalogItemKind;
   lifecycleStatus: CatalogItemStatus;
   displayName: string;
+  /** Oficiální český název ABF. */
   officialName: string | null;
+  /** Oficiální anglický název ABF (catalog_items.official_name_en, V1-DATA-03). Absent on rows read before that migration. */
+  officialNameEn?: string | null;
   category: string | null;
+  /** Legacy/display unit text. The register unit is unitCode. */
   unit: string | null;
+  /** Unit from the shared register (catalog_units.code). See catalogUnitLabel(). */
+  unitCode?: string | null;
   document: CatalogItemAdminDocument;
   createdAt: string;
   updatedAt: string;
@@ -161,6 +168,65 @@ function parseServiceTechnical(value: unknown): ServiceTechnicalMetadata | undef
 
 export function documentServiceTechnical(document: CatalogItemAdminDocument): ServiceTechnicalMetadata | undefined {
   return parseServiceTechnical(document.serviceTechnical);
+}
+
+// ============================================================================
+// PARAMETRY — colour, material and further properties of a card (V1-DATA-03). Dimensions keep
+// living in widthMm/depthMm/heightMm; these are the remaining descriptive properties.
+// ============================================================================
+
+export type CatalogItemAttributes = Readonly<{
+  color?: string;
+  material?: string;
+  extra?: readonly Readonly<{ key: string; value: string }>[];
+}>;
+
+const ATTRIBUTE_TEXT_MAX = 200;
+const ATTRIBUTE_EXTRA_MAX = 30;
+
+export function parseCatalogItemAttributes(raw: unknown): CatalogItemAttributes | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  const text = (input: unknown) => (typeof input === "string" && input.trim() ? input.trim().slice(0, ATTRIBUTE_TEXT_MAX) : undefined);
+  const extra = Array.isArray(value.extra)
+    ? value.extra
+        .map((entry) => (entry && typeof entry === "object" ? { key: text((entry as Record<string, unknown>).key), value: text((entry as Record<string, unknown>).value) } : undefined))
+        .filter((entry): entry is { key: string; value: string } => Boolean(entry?.key && entry.value))
+        .slice(0, ATTRIBUTE_EXTRA_MAX)
+    : [];
+  const result: { color?: string; material?: string; extra?: readonly { key: string; value: string }[] } = {};
+  const color = text(value.color);
+  const material = text(value.material);
+  if (color) result.color = color;
+  if (material) result.material = material;
+  if (extra.length) result.extra = extra;
+  return Object.keys(result).length ? result : undefined;
+}
+
+export function documentAttributes(document: CatalogItemAdminDocument): CatalogItemAttributes {
+  return parseCatalogItemAttributes(document.attributes) ?? {};
+}
+
+const OFFICIAL_NAME_MAX = 300;
+
+function parseOfficialName(raw: unknown, field: string, makeError: (field: string, message: string) => Error): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  if (typeof raw !== "string") throw makeError(field, "Neplatný název.");
+  const text = raw.replace(/\s+/gu, " ").trim();
+  if (!text) return null;
+  if (text.length > OFFICIAL_NAME_MAX || /[<>]/u.test(text)) throw makeError(field, "Název je příliš dlouhý nebo obsahuje nepovolené znaky.");
+  return text;
+}
+
+function parseUnitCode(raw: unknown, field: string, makeError: (field: string, message: string) => Error): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === "") return null;
+  if (typeof raw !== "string") throw makeError(field, "Neplatná jednotka.");
+  const unit = normalizeCatalogUnit(raw);
+  if (unit.status === "empty") return null;
+  if (unit.status !== "known") throw makeError(field, unit.message);
+  return unit.code;
 }
 
 // ============================================================================
@@ -802,6 +868,14 @@ export type CatalogItemAdminEdit = Readonly<{
   kind?: CatalogItemKind;
   /** "Poznámka" — internal free text. */
   note?: string;
+  /** Oficiální český název ABF — `null` clears. */
+  officialName?: string | null;
+  /** Oficiální anglický název ABF — `null` clears. */
+  officialNameEn?: string | null;
+  /** Unit from the register (catalog_units.code) — `null` clears; the legacy `unit` text follows the register symbol. */
+  unitCode?: string | null;
+  /** Barva, materiál, další parametry — whole-value replace, `null` clears. */
+  attributes?: CatalogItemAttributes | null;
   /** SERVICE technical metadata — whole-value replace, `null` = clear. */
   serviceTechnical?: ServiceTechnicalMetadata | null;
   /** "Publikace v katalogu" — merge patch into document.catalogPublication; `null` resets the whole section (unpublishes). */
@@ -908,13 +982,13 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
     if (raw.abfCode === null || raw.abfCode === "") edit.abfCode = null;
     else {
       const normalized = normalizeAbfCode(raw.abfCode);
-      if (normalized === null) throw new InvalidCatalogItemAdminEditError("abfCode", "ABF kód nesmí obsahovat mezery ani uvozovky a může mít nejvýše 32 znaků.");
+      if (normalized === null) throw new InvalidCatalogItemAdminEditError("abfCode", "ABF kód smí obsahovat jen písmena, číslice a . _ / + - (bez mezer a uvozovek), nejvýše 32 znaků.");
       edit.abfCode = normalized ?? null;
     }
   }
   if (typeof raw.fillInternalCode === "string" && raw.fillInternalCode.trim()) {
     const normalized = normalizeInternalCode(raw.fillInternalCode);
-    if (!normalized) throw new InvalidCatalogItemAdminEditError("fillInternalCode", "Interní kód nesmí obsahovat mezery ani uvozovky a může mít nejvýše 64 znaků.");
+    if (!normalized) throw new InvalidCatalogItemAdminEditError("fillInternalCode", "Generátorový kód smí obsahovat jen písmena, číslice a . _ / + - (bez mezer a uvozovek), nejvýše 64 znaků.");
     edit.fillInternalCode = normalized;
   }
   if (raw.itemType !== undefined) {
@@ -926,6 +1000,14 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
     edit.kind = raw.kind;
   }
   if (typeof raw.note === "string") edit.note = raw.note.slice(0, NOTE_MAX_LENGTH);
+  const editError = (field: string, message: string) => new InvalidCatalogItemAdminEditError(field, message);
+  const officialName = parseOfficialName(raw.officialName, "officialName", editError);
+  if (officialName !== undefined) edit.officialName = officialName;
+  const officialNameEn = parseOfficialName(raw.officialNameEn, "officialNameEn", editError);
+  if (officialNameEn !== undefined) edit.officialNameEn = officialNameEn;
+  const unitCode = parseUnitCode(raw.unitCode, "unitCode", editError);
+  if (unitCode !== undefined) edit.unitCode = unitCode;
+  if ("attributes" in raw && raw.attributes !== undefined) edit.attributes = parseCatalogItemAttributes(raw.attributes) ?? null;
   if ("serviceTechnical" in raw) {
     edit.serviceTechnical = raw.serviceTechnical === null ? null : (parseServiceTechnical(raw.serviceTechnical) ?? null);
   }
@@ -1003,6 +1085,10 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
     if (edit.note.trim()) next.note = edit.note;
     else delete next.note;
   }
+  if (edit.unitCode === null) delete next.unit;
+  else if (edit.unitCode !== undefined) next.unit = catalogUnitByCode(edit.unitCode)?.symbol ?? edit.unitCode;
+  if (edit.attributes === null) delete next.attributes;
+  else if (edit.attributes !== undefined) next.attributes = edit.attributes;
   if (edit.serviceTechnical === null) delete next.serviceTechnical;
   else if (edit.serviceTechnical !== undefined) next.serviceTechnical = edit.serviceTechnical;
   if (edit.catalogPublication === null) delete next.catalogPublication;
@@ -1092,7 +1178,12 @@ export type CatalogItemAdminCreateInput = Readonly<{
   abfCode?: string;
   note?: string;
   category: string;
+  /** Legacy free-text unit (older callers). New callers send unitCode. */
   unit?: string;
+  unitCode?: string;
+  officialName?: string;
+  officialNameEn?: string;
+  attributes?: CatalogItemAttributes;
   widthMm?: number;
   depthMm?: number;
   heightMm?: number;
@@ -1151,16 +1242,28 @@ export function parseCatalogItemAdminCreateInput(body: unknown): CatalogItemAdmi
 
   if (typeof raw.internalCode === "string" && raw.internalCode.trim()) {
     const normalized = normalizeInternalCode(raw.internalCode);
-    if (!normalized) throw new InvalidCatalogItemAdminCreateInputError("internalCode", "Interní kód nesmí obsahovat mezery ani uvozovky a může mít nejvýše 64 znaků.");
+    if (!normalized) throw new InvalidCatalogItemAdminCreateInputError("internalCode", "Generátorový kód smí obsahovat jen písmena, číslice a . _ / + - (bez mezer a uvozovek), nejvýše 64 znaků.");
     input.internalCode = normalized;
   }
   if (typeof raw.abfCode === "string" && raw.abfCode.trim()) {
     const normalized = normalizeAbfCode(raw.abfCode);
-    if (!normalized) throw new InvalidCatalogItemAdminCreateInputError("abfCode", "ABF kód nesmí obsahovat mezery ani uvozovky a může mít nejvýše 32 znaků.");
+    if (!normalized) throw new InvalidCatalogItemAdminCreateInputError("abfCode", "ABF kód smí obsahovat jen písmena, číslice a . _ / + - (bez mezer a uvozovek), nejvýše 32 znaků.");
     input.abfCode = normalized;
   }
   if (typeof raw.note === "string" && raw.note.trim()) input.note = raw.note.slice(0, NOTE_MAX_LENGTH);
   if (typeof raw.unit === "string" && raw.unit.trim()) input.unit = raw.unit;
+  const createError = (field: string, message: string) => new InvalidCatalogItemAdminCreateInputError(field, message);
+  const unitCode = parseUnitCode(raw.unitCode, "unitCode", createError);
+  if (unitCode) {
+    input.unitCode = unitCode;
+    input.unit = catalogUnitByCode(unitCode)?.symbol ?? unitCode;
+  }
+  const officialName = parseOfficialName(raw.officialName, "officialName", createError);
+  if (officialName) input.officialName = officialName;
+  const officialNameEn = parseOfficialName(raw.officialNameEn, "officialNameEn", createError);
+  if (officialNameEn) input.officialNameEn = officialNameEn;
+  const attributes = parseCatalogItemAttributes(raw.attributes);
+  if (attributes) input.attributes = attributes;
   if (typeof raw.widthMm === "number" && Number.isFinite(raw.widthMm)) input.widthMm = raw.widthMm;
   if (typeof raw.depthMm === "number" && Number.isFinite(raw.depthMm)) input.depthMm = raw.depthMm;
   if (typeof raw.heightMm === "number" && Number.isFinite(raw.heightMm)) input.heightMm = raw.heightMm;
@@ -1185,6 +1288,7 @@ export function buildCatalogItemCreateDocument(input: CatalogItemAdminCreateInpu
   };
   if (input.unit !== undefined) document.unit = input.unit;
   if (input.note !== undefined) document.note = input.note;
+  if (input.attributes !== undefined) document.attributes = input.attributes;
   if (input.widthMm !== undefined) document.widthMm = input.widthMm;
   if (input.depthMm !== undefined) document.depthMm = input.depthMm;
   if (input.heightMm !== undefined) document.heightMm = input.heightMm;

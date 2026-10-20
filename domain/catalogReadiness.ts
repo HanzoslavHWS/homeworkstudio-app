@@ -323,7 +323,7 @@ export class DuplicateInternalCodeError extends Error {
   readonly internalCode: string;
 
   constructor(internalCode: string) {
-    super(`Interní kód "${internalCode}" už je v katalogu použitý.`);
+    super(`Generátorový kód "${internalCode}" už je v katalogu použitý.`);
     this.name = "DuplicateInternalCodeError";
     this.internalCode = internalCode;
   }

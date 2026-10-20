@@ -1,5 +1,5 @@
 /**
- * Catalog card types (PRODUCT / SERVICE / BOOTH / INTERNAL_COMPONENT) and their relation to the
+ * Catalog card types (PRODUCT / SERVICE / BOOTH / INTERNAL_COMPONENT / KIT) and their relation to the
  * existing `kind` readiness profile. Pure, no I/O.
  *
  * item_type is the coarse system property the admin chooses when founding a card; `kind` keeps
@@ -13,6 +13,7 @@ export const CATALOG_ITEM_TYPE_LABELS_CS: Readonly<Record<CatalogItemType, strin
   SERVICE: "Služba",
   BOOTH: "Stánek",
   INTERNAL_COMPONENT: "Interní komponenta",
+  KIT: "Komplet",
 };
 
 export const CATALOG_ITEM_TYPE_HINTS_CS: Readonly<Record<CatalogItemType, string>> = {
@@ -20,6 +21,7 @@ export const CATALOG_ITEM_TYPE_HINTS_CS: Readonly<Record<CatalogItemType, string
   SERVICE: "Služba (elektřina, internet, voda, odpad, úklid, grafika…). Nemusí mít 3D objekt; může nést technická metadata pro technický rastr.",
   BOOTH: "Typový stánek / balíček. Může obsahovat další katalogové položky (typovka, pult, židle, světla…), zahrnuté v ceně celku.",
   INTERNAL_COMPONENT: "Interní konstrukční / CAD / 3D prvek pro generátor (panel, sloupek, profil, límec…). Není položkou ABF ceníku, ABF kód není povinný.",
+  KIT: "Samostatný komplet bez vlastní geometrie (např. balíček nábytku nebo sada elektro). Obsah, náhrady a doplatky kompletu se doplní ve V1-DATA-04.",
 };
 
 /**
@@ -34,6 +36,7 @@ export const CATALOG_ITEM_KINDS_BY_TYPE: Readonly<Record<CatalogItemType, readon
   SERVICE: ["service", "graphics_service", "technical_point"],
   BOOTH: ["booth"],
   INTERNAL_COMPONENT: ["booth_component", "construction", "other"],
+  KIT: ["other"],
 };
 
 export function isCatalogItemType(value: unknown): value is CatalogItemType {
@@ -64,7 +67,7 @@ export function isKindCompatibleWithItemType(kind: CatalogItemKind, itemType: Ca
   return CATALOG_ITEM_KINDS_BY_TYPE[itemType].includes(kind);
 }
 
-/** ABF code is never mandatory — but for INTERNAL_COMPONENT it is explicitly not expected at all. */
+/** ABF code is never mandatory — but for INTERNAL_COMPONENT it is explicitly not expected at all (and never generated). */
 export function itemTypeExpectsAbfCode(itemType: CatalogItemType): boolean {
   return itemType !== "INTERNAL_COMPONENT";
 }
@@ -81,8 +84,51 @@ function normalizeCode(raw: unknown, maxLength: number): string | null | undefin
   if (raw === null || raw === undefined) return undefined;
   const text = String(raw).trim();
   if (!text) return undefined;
-  if (text.length > maxLength || /\s/u.test(text) || /[<>"']/u.test(text)) return null;
+  if (text.length > maxLength || !CODE_PATTERN.test(text)) return null;
   return text;
+}
+
+/** A code starts with a letter or digit and may contain letters, digits and . _ / + - (no spaces, quotes or brackets). */
+const CODE_PATTERN = /^[\p{L}\p{N}][\p{L}\p{N}._/+-]*$/u;
+
+/** Standard ABF code shape (KODY.xlsm): a family letter + 2 characters (T04, M8A, L02). Other shapes are allowed with a warning. */
+export const STANDARD_ABF_CODE_PATTERN = /^[A-Z][0-9A-Z]{2}$/u;
+
+export function abfCodeWarning(abfCode: string | null | undefined): string | undefined {
+  if (!abfCode || STANDARD_ABF_CODE_PATTERN.test(abfCode)) return undefined;
+  return `ABF kód ${abfCode} nemá standardní tvar (písmeno + 2 znaky). Ověřte ho proti KODY.xlsm.`;
+}
+
+export class CrossCodeCollisionError extends Error {
+  readonly code: string;
+  constructor(code: string, message: string) {
+    super(message);
+    this.name = "CrossCodeCollisionError";
+    this.code = code;
+  }
+}
+
+/**
+ * A generator code may equal its OWN ABF code (decision A8), but never another item's ABF code, and
+ * an ABF code never another item's generator code — otherwise one code would name two items.
+ */
+export function assertNoCrossCodeCollision(
+  existingItems: readonly Readonly<{ id: string; internalCode: string | null; abfCode?: string | null; displayName?: string }>[],
+  candidate: Readonly<{ internalCode?: string | null; abfCode?: string | null }>,
+  exceptId?: string,
+): void {
+  const key = (value: string | null | undefined) => value?.trim().toLocaleUpperCase("cs") || undefined;
+  const internal = key(candidate.internalCode);
+  const abf = key(candidate.abfCode);
+  for (const item of existingItems) {
+    if (item.id === exceptId) continue;
+    if (internal && key(item.abfCode) === internal) {
+      throw new CrossCodeCollisionError(candidate.internalCode!, `Generátorový kód „${candidate.internalCode}“ je ABF kódem jiné položky („${item.displayName ?? item.id}“).`);
+    }
+    if (abf && key(item.internalCode) === abf) {
+      throw new CrossCodeCollisionError(candidate.abfCode!, `ABF kód „${candidate.abfCode}“ je generátorovým kódem jiné položky („${item.displayName ?? item.id}“).`);
+    }
+  }
 }
 
 /** ABF codes are upper-case identifiers in every ABF source (T04, M8A, L02) — normalized so "m8a" can never create a second card. */

@@ -309,3 +309,11 @@ Doplňující pravidla:
 2. **A15:** pořadí batchů.
 3. **A2, jen princip:** tabulka legacy ID vznikne se všemi čtyřmi ID ve stavu `unmapped` a dnešní chování se nezmění. Konkrétní mapování se doplní po čtení produkce.
 4. **Povolení jen čtecího dotazu do produkce** pro A2 (oddíl 2.4, krok 3), pokud ho chcete mít před koncem batche 02. Není to podmínka startu.
+
+## 6. Rozhodnutí při uzavření V1-DATA-03 (2026-10-20)
+
+1. **Generátorový kód (A8):** po založení se nemění. Později přibude bezpečná administrátorská změna, která zachová všechny vazby (projekty, komplety, aliasy, mapování vyúčtování). Ve V1-DATA-03 se neimplementuje.
+2. **Aliasy (A7):** historické tabulky (`catalog_item_names`, `settlement_vendor_mappings`) se budou postupně sjednocovat do `catalog_item_aliases`. Při ručním potvrzení párování ve vyúčtování půjde potvrzený název uložit jako alias konkrétní komponenty a realizačky. Konflikty se nikdy nepřepisují automaticky. Řeší navazující batch. Dnes vyúčtování aliasy z katalogu jen čte a jeho vlastní mapování mají vždy přednost (`withCatalogAliases`).
+3. **Jednotky:** `m2/ak` se automaticky neslučuje s `m²`. Pozor: stávající `canonicalUnit` ve vyúčtování (`domain/settlementCheck.ts`) příponu `/ak`, `/akce` už dnes zahazuje, takže porovnání vyúčtování bere `m2/ak` jako `m2`. To se nemění bez ověření dopadu na historické kontroly. Návrh explicitních pravidel patří do navazujícího batche.
+4. **Kombinované jednotky:** budou samostatné řádky `catalog_units` (`is_combined = true`). Převod na základní jednotku jen po schválení jeho významu. Rozlišovat jednotky pro účtování od jednotek fyzických rozměrů (mm na kartě).
+5. **KIT v zákaznickém katalogu:** dnes se nenabízí (`CUSTOMER_CATALOG_ITEM_TYPES`). Publikace stejným schvalovacím mechanismem jako u ostatních produktů přijde ve V1-DATA-04.

@@ -21,7 +21,17 @@ import {
   type CatalogItemAdminDocument,
   type CatalogItemAdminEdit,
 } from "../../domain/catalogItemsAdmin.ts";
-import { defaultItemTypeForKind, DuplicateAbfCodeError } from "../../domain/catalogItemTypes.ts";
+import { assertNoCrossCodeCollision, defaultItemTypeForKind, DuplicateAbfCodeError } from "../../domain/catalogItemTypes.ts";
+import {
+  InvalidCatalogAliasesError,
+  planCatalogItemAliasChanges,
+  validateCatalogItemAliases,
+  type CatalogItemAlias,
+  type CatalogItemAliasInput,
+  type CatalogItemAliasKind,
+  type CatalogItemAliasSource,
+  type CatalogItemAliasStatus,
+} from "../../domain/catalogItemAliases.ts";
 import {
   assertValidPackageContents,
   InvalidCatalogPackageError,
@@ -32,7 +42,11 @@ import {
 import type { CatalogItemKind, CatalogItemStatus, CatalogItemType, ComponentDefinition } from "../../domain/models.ts";
 
 const LEGACY_ADMIN_COLUMNS = "id, internal_code, kind, lifecycle_status, display_name, official_name, category, unit, document, created_at, updated_at";
-const ADMIN_COLUMNS = `${LEGACY_ADMIN_COLUMNS}, abf_code, item_type`;
+/** 20261001120000 (abf_code, item_type). */
+const ADMIN_COLUMNS_V2 = `${LEGACY_ADMIN_COLUMNS}, abf_code, item_type`;
+/** 20261021120000 (V1-DATA-03: official_name_en, unit_code). Reads fall back V3 -> V2 -> legacy. */
+const ADMIN_COLUMNS = `${ADMIN_COLUMNS_V2}, official_name_en, unit_code`;
+const ALIAS_COLUMNS = "id, catalog_item_id, realization_company_id, alias_kind, alias_text, normalized_text, unit_code, source, status, note, is_active";
 const PACKAGE_COLUMNS = "id, package_item_id, child_item_id, quantity, included_in_package, sort_order, note";
 
 type CatalogItemAdminDbRow = Readonly<{
@@ -44,8 +58,10 @@ type CatalogItemAdminDbRow = Readonly<{
   lifecycle_status: string;
   display_name: string;
   official_name: string | null;
+  official_name_en?: string | null;
   category: string | null;
   unit: string | null;
+  unit_code?: string | null;
   document: unknown;
   created_at: string;
   updated_at: string;
@@ -68,7 +84,7 @@ type CatalogPackageItemDbRow = Readonly<{
  */
 export class CatalogSchemaNotMigratedError extends Error {
   constructor() {
-    super("Databáze ještě nemá migraci katalogu (abf_code / item_type / obsah balíčků). Aplikujte supabase/migrations/20261001120000_catalog_item_types_abf_codes_packages.sql.");
+    super("Databáze ještě nemá všechny migrace katalogu. Aplikujte supabase/migrations/20261001120000_catalog_item_types_abf_codes_packages.sql a 20261021120000_catalog_identity.sql.");
     this.name = "CatalogSchemaNotMigratedError";
   }
 }
@@ -90,8 +106,10 @@ function rowToAdmin(row: CatalogItemAdminDbRow, packageItems?: readonly CatalogP
     lifecycleStatus: row.lifecycle_status as CatalogItemStatus,
     displayName: row.display_name,
     officialName: row.official_name,
+    officialNameEn: row.official_name_en ?? null,
     category: row.category,
     unit: row.unit,
+    unitCode: row.unit_code ?? null,
     document: (row.document ?? {}) as CatalogItemAdminDocument,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -117,6 +135,7 @@ async function selectCatalogRows(client: SupabaseClient, id?: string): Promise<C
     return id ? base.eq("id", id) : base;
   };
   let { data, error } = await run(ADMIN_COLUMNS);
+  if (error && isMissingSchemaError(error)) ({ data, error } = await run(ADMIN_COLUMNS_V2));
   if (error && isMissingSchemaError(error)) ({ data, error } = await run(LEGACY_ADMIN_COLUMNS));
   if (error) throw error;
   return (data ?? []) as unknown as CatalogItemAdminDbRow[];
@@ -191,6 +210,7 @@ export async function createCatalogItemAdmin(client: SupabaseClient, input: Cata
     input.internalCode,
   );
   if (input.abfCode) await assertAbfCodeFree(client, input.abfCode);
+  assertNoCrossCodeCollision(existing, { internalCode: input.internalCode, abfCode: input.abfCode });
 
   const document = buildCatalogItemCreateDocument(input);
   const row: Record<string, unknown> = {
@@ -198,14 +218,22 @@ export async function createCatalogItemAdmin(client: SupabaseClient, input: Cata
     kind: input.kind,
     lifecycle_status: "needs_review",
     display_name: input.displayName,
-    official_name: null,
+    official_name: input.officialName ?? null,
     category: input.category,
     unit: input.unit ?? null,
     document,
     item_type: input.itemType ?? defaultItemTypeForKind(input.kind),
   };
   if (input.abfCode) row.abf_code = input.abfCode;
+  if (input.officialNameEn) row.official_name_en = input.officialNameEn;
+  if (input.unitCode) row.unit_code = input.unitCode;
   let { data, error } = await client.from("catalog_items").insert(row).select(ADMIN_COLUMNS).single();
+
+  // DB without the V1-DATA-03 migration: a card that uses none of its columns can still be created.
+  if (error && isMissingSchemaError(error)) {
+    if (input.officialNameEn || input.unitCode) throw new CatalogSchemaNotMigratedError();
+    ({ data, error } = await client.from("catalog_items").insert(row).select(ADMIN_COLUMNS_V2).single());
+  }
 
   // Pre-migration DB: item_type doesn't exist yet. A card without an ABF code can still be
   // created there (item_type is re-derived from kind on read); one WITH an ABF code cannot.
@@ -296,6 +324,16 @@ export async function saveCatalogItemAdmin(
   if (edit.abfCode !== undefined && edit.abfCode !== (current.abfCode ?? null)) {
     if (edit.abfCode) await assertAbfCodeFree(client, edit.abfCode, id);
     columnPatch.abf_code = edit.abfCode;
+  }
+  if (typeof columnPatch.abf_code === "string" || edit.fillInternalCode !== undefined) {
+    const others = (await selectCatalogRows(client)).map((row) => ({ id: row.id, internalCode: row.internal_code, abfCode: row.abf_code ?? null, displayName: row.display_name }));
+    assertNoCrossCodeCollision(others, { internalCode: edit.fillInternalCode ?? current.internalCode, abfCode: (columnPatch.abf_code as string | undefined) ?? current.abfCode }, id);
+  }
+  if (edit.officialName !== undefined && edit.officialName !== current.officialName) columnPatch.official_name = edit.officialName;
+  if (edit.officialNameEn !== undefined && edit.officialNameEn !== (current.officialNameEn ?? null)) columnPatch.official_name_en = edit.officialNameEn;
+  if (edit.unitCode !== undefined && edit.unitCode !== (current.unitCode ?? null)) {
+    columnPatch.unit_code = edit.unitCode;
+    if (edit.unitCode === null) columnPatch.unit = null;
   }
   if (edit.fillInternalCode !== undefined && edit.fillInternalCode !== current.internalCode) {
     if (current.internalCode) {
@@ -394,7 +432,8 @@ export async function saveCatalogItemAdmin(
 
   // Only select the new columns when the DB is known to have them (or this edit writes them) —
   // a routine save against a not-yet-migrated DB must keep working.
-  const touchesNewColumns = "item_type" in columnPatch || "abf_code" in columnPatch;
+  const touchesV2Columns = "item_type" in columnPatch || "abf_code" in columnPatch;
+  const touchesV3Columns = "official_name_en" in columnPatch || "unit_code" in columnPatch;
   const runUpdate = async (columns: string) => {
     let query = client.from("catalog_items").update(patch).eq("id", id);
     if (expectedUpdatedAt !== null) query = query.eq("updated_at", expectedUpdatedAt);
@@ -402,7 +441,11 @@ export async function saveCatalogItemAdmin(
   };
   let { data, error } = await runUpdate(ADMIN_COLUMNS);
   if (error && isMissingSchemaError(error)) {
-    if (touchesNewColumns) throw new CatalogSchemaNotMigratedError();
+    if (touchesV3Columns) throw new CatalogSchemaNotMigratedError();
+    ({ data, error } = await runUpdate(ADMIN_COLUMNS_V2));
+  }
+  if (error && isMissingSchemaError(error)) {
+    if (touchesV2Columns) throw new CatalogSchemaNotMigratedError();
     ({ data, error } = await runUpdate(LEGACY_ADMIN_COLUMNS));
   }
   if (error) {
@@ -461,7 +504,7 @@ export async function saveCatalogPackageItems(
   const allItems = await readCatalogItemsAdmin(client);
   const owner = allItems.find((item) => item.id === packageItemId);
   if (!owner) throw new CatalogItemAdminNotFoundError(packageItemId);
-  if (itemTypeOf(owner) !== "BOOTH") throw new InvalidCatalogPackageError("Obsah balíčku lze nastavit jen u karty typu Stánek.");
+  if (itemTypeOf(owner) !== "BOOTH" && itemTypeOf(owner) !== "KIT") throw new InvalidCatalogPackageError("Obsah lze nastavit jen u karty typu Stánek nebo Komplet.");
   const existingLinks = allItems.flatMap((item) => item.packageItems ?? []);
   assertValidPackageContents(packageItemId, lines, new Set(allItems.map((item) => item.id)), existingLinks);
 
@@ -490,4 +533,100 @@ export async function saveCatalogPackageItems(
   }
   const refreshed = await readCatalogPackageItems(client);
   return refreshed.filter((link) => link.packageItemId === packageItemId);
+}
+
+// ============================================================================
+// ALIASES (catalog_item_aliases, V1-DATA-03) — general and per realization company. Saved as a
+// full list per item: new/edited aliases are inserted, removed ones deactivated, nothing deleted.
+// ============================================================================
+
+type CatalogItemAliasDbRow = Readonly<{
+  id: string;
+  catalog_item_id: string;
+  realization_company_id: string | null;
+  alias_kind: string;
+  alias_text: string;
+  normalized_text: string;
+  unit_code: string | null;
+  source: string;
+  status: string;
+  note: string | null;
+  is_active: boolean;
+}>;
+
+function rowToAlias(row: CatalogItemAliasDbRow): CatalogItemAlias {
+  return {
+    id: row.id,
+    catalogItemId: row.catalog_item_id,
+    realizationCompanyId: row.realization_company_id ?? undefined,
+    aliasKind: row.alias_kind as CatalogItemAliasKind,
+    aliasText: row.alias_text,
+    normalizedText: row.normalized_text,
+    unitCode: row.unit_code ?? undefined,
+    source: row.source as CatalogItemAliasSource,
+    status: row.status as CatalogItemAliasStatus,
+    note: row.note ?? undefined,
+    isActive: row.is_active,
+  };
+}
+
+/** Every alias, active and inactive. Empty on a database without the V1-DATA-03 migration. */
+export async function readCatalogItemAliases(client: SupabaseClient): Promise<readonly CatalogItemAlias[]> {
+  const { data, error } = await client.from("catalog_item_aliases").select(ALIAS_COLUMNS).order("alias_text", { ascending: true });
+  if (error) {
+    if (isMissingSchemaError(error)) return [];
+    throw error;
+  }
+  return ((data ?? []) as CatalogItemAliasDbRow[]).map(rowToAlias);
+}
+
+export async function saveCatalogItemAliases(client: SupabaseClient, catalogItemId: string, inputs: readonly CatalogItemAliasInput[]): Promise<readonly CatalogItemAlias[]> {
+  const [items, aliases, companies] = await Promise.all([
+    selectCatalogRows(client),
+    readCatalogItemAliasesStrict(client),
+    client.from("print_surface_realization_companies").select("id"),
+  ]);
+  if (companies.error) throw companies.error;
+  if (!items.some((item) => item.id === catalogItemId)) throw new CatalogItemAdminNotFoundError(catalogItemId);
+  const issues = validateCatalogItemAliases(catalogItemId, inputs, {
+    aliases,
+    companyIds: new Set(((companies.data ?? []) as { id: string }[]).map((company) => company.id)),
+    itemNameById: new Map(items.map((item) => [item.id, item.display_name] as const)),
+  });
+  if (issues.length > 0) throw new InvalidCatalogAliasesError(issues);
+
+  const changes = planCatalogItemAliasChanges(catalogItemId, inputs, aliases);
+  // Deactivations first, so an edited alias can be re-inserted under the unique active-alias index.
+  for (const id of changes.deactivateIds) {
+    const { error } = await client.from("catalog_item_aliases").update({ is_active: false }).eq("id", id);
+    if (error) throw error;
+  }
+  if (changes.insert.length > 0) {
+    const { error } = await client.from("catalog_item_aliases").insert(changes.insert.map((alias) => ({
+      catalog_item_id: alias.catalogItemId,
+      realization_company_id: alias.realizationCompanyId ?? null,
+      alias_kind: alias.aliasKind,
+      alias_text: alias.aliasText,
+      normalized_text: alias.normalizedText,
+      unit_code: alias.unitCode ?? null,
+      source: alias.source,
+      status: alias.status,
+      note: alias.note ?? null,
+      is_active: true,
+    })));
+    if (error) {
+      if ((error as { code?: string }).code === "23505") throw new InvalidCatalogAliasesError([{ index: -1, code: "TAKEN", message: "Stejný alias mezitím uložil někdo jiný u jiné položky." }]);
+      throw error;
+    }
+  }
+  return (await readCatalogItemAliasesStrict(client)).filter((alias) => alias.catalogItemId === catalogItemId);
+}
+
+async function readCatalogItemAliasesStrict(client: SupabaseClient): Promise<readonly CatalogItemAlias[]> {
+  const { data, error } = await client.from("catalog_item_aliases").select(ALIAS_COLUMNS);
+  if (error) {
+    if (isMissingSchemaError(error)) throw new CatalogSchemaNotMigratedError();
+    throw error;
+  }
+  return ((data ?? []) as CatalogItemAliasDbRow[]).map(rowToAlias);
 }

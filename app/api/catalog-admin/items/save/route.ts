@@ -11,7 +11,7 @@ import {
   type CatalogItemAdminEdit,
 } from "../../../../../domain/catalogItemsAdmin.ts";
 import { CatalogReadinessError, DuplicateInternalCodeError } from "../../../../../domain/catalogReadiness.ts";
-import { DuplicateAbfCodeError } from "../../../../../domain/catalogItemTypes.ts";
+import { CrossCodeCollisionError, DuplicateAbfCodeError } from "../../../../../domain/catalogItemTypes.ts";
 
 type SaveBody = Readonly<{ id?: unknown; edit?: unknown; expectedUpdatedAt?: unknown }>;
 
@@ -46,7 +46,7 @@ export async function handleCatalogAdminItemsSave(
     if (error instanceof ConcurrencyConflictError) return NextResponse.json({ error: "Data byla mezitím změněna jinde. Obnovte stránku před uložením." }, { status: 409 });
     if (error instanceof CatalogReadinessError) return NextResponse.json({ error: error.message, issues: error.issues }, { status: 400 });
     if (error instanceof InvalidCatalogItemAdminEditError) return NextResponse.json({ error: error.message }, { status: 400 });
-    if (error instanceof DuplicateAbfCodeError || error instanceof DuplicateInternalCodeError) return NextResponse.json({ error: error.message }, { status: 409 });
+    if (error instanceof DuplicateAbfCodeError || error instanceof DuplicateInternalCodeError || error instanceof CrossCodeCollisionError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof CatalogSchemaNotMigratedError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof CatalogItemAdminNotFoundError) return NextResponse.json({ error: error.message }, { status: 404 });
     if (error instanceof SupabaseConfigurationError) return NextResponse.json({ error: error.message }, { status: 503 });
