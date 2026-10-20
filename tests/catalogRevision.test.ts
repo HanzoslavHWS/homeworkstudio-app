@@ -30,7 +30,8 @@ import {
   normalizeAbfCode,
 } from "../domain/catalogItemTypes.ts";
 import {
-  assertValidPackageContents,
+  assignKitLineKeys,
+  validateKitLines,
   InvalidCatalogPackageError,
   parseCatalogPackageItemsInput,
   pricePackage,
@@ -56,6 +57,7 @@ import {
   readCatalogItemsAdmin,
   saveCatalogItemAdmin,
   saveCatalogPackageItems,
+  CatalogSchemaNotMigratedError,
 } from "../lib/db/catalogItemsAdmin.supabase.ts";
 import { applyAbfImport, previewAbfImport } from "../lib/db/catalogAbfImport.supabase.ts";
 import { readKodyRowsFromBuffer } from "../lib/import/kodyReader.server.ts";
@@ -155,7 +157,13 @@ function createFakeClient(seed: Readonly<Record<string, readonly FakeRow[]>> = {
     }
     return builder;
   }
-  return { from, tables, calls };
+  // replace_catalog_kit_lines() does not exist here: this fake is a database WITHOUT the V1-DATA-04
+  // migration, so kit saves take the legacy path (tests/catalogKits.test.ts covers the RPC path).
+  const rpc = async (name: string) => {
+    calls.push(`rpc:${name}`);
+    return { data: null, error: { code: "PGRST202", message: `Could not find the function public.${name}` } };
+  };
+  return { from, rpc, tables, calls };
 }
 
 // ---------------------------------------------------------------------------------------
@@ -455,30 +463,40 @@ test("pre-migration DB: reads fall back to the legacy columns and derive itemTyp
 // BOOTH PACKAGES — booth -> item -> quantity -> included_in_package
 // =========================================================================================
 
-test("package: a BOOTH can contain other catalog items (incl. a base typovka) with quantities", async () => {
+test("package (DB without V1-DATA-04): a BOOTH can contain other catalog items with quantities — saved the legacy way", async () => {
   const eBooth = row({ id: "e-uuid", item_type: "BOOTH", kind: "booth", display_name: "Stánek E", category: "Typovky" });
   const client = createFakeClient({ catalog_items: [eBooth, p86Row(), m57Row(), pultRow()] });
-  const lines = await saveCatalogPackageItems(client as never, "e-uuid", [
-    { childItemId: "p86-uuid", quantity: 1, includedInPackage: true },
+  const { packageItems: lines } = await saveCatalogPackageItems(client as never, "e-uuid", [
     { childItemId: "pult-uuid", quantity: 1, includedInPackage: true },
     { childItemId: "m57-uuid", quantity: 2, includedInPackage: true, note: "2× židle" },
   ]);
-  assert.deepEqual(lines.map((line) => [line.childItemId, line.quantity, line.includedInPackage]), [["p86-uuid", 1, true], ["pult-uuid", 1, true], ["m57-uuid", 2, true]]);
+  assert.deepEqual(lines.map((line) => [line.childItemId, line.quantity, line.includedInPackage]), [["pult-uuid", 1, true], ["m57-uuid", 2, true]]);
+  assert.ok(client.calls.includes("rpc:replace_catalog_kit_lines"), "the transactional save is tried first");
   const [reloaded] = (await readCatalogItemsAdmin(client as never)).filter((item) => item.id === "e-uuid");
-  assert.equal(reloaded!.packageItems!.length, 3);
+  assert.equal(reloaded!.packageItems!.length, 2);
   // Re-save with fewer lines removes the stale one, never other packages' links.
-  const trimmed = await saveCatalogPackageItems(client as never, "e-uuid", [{ childItemId: "m57-uuid", quantity: 3, includedInPackage: false }]);
+  const { packageItems: trimmed } = await saveCatalogPackageItems(client as never, "e-uuid", [{ childItemId: "m57-uuid", quantity: 3, includedInPackage: false }]);
   assert.deepEqual(trimmed.map((line) => [line.childItemId, line.quantity, line.includedInPackage]), [["m57-uuid", 3, false]]);
+  // A14: a base typovka (BOOTH) inside another BOOTH is refused.
+  await assert.rejects(() => saveCatalogPackageItems(client as never, "e-uuid", [{ childItemId: "p86-uuid", quantity: 1, includedInPackage: true }]), /A14/u);
+  // Anything the old table cannot store needs the migration — never silently dropped.
+  await assert.rejects(() => saveCatalogPackageItems(client as never, "e-uuid", [{ lineKind: "text", label: "Stavba stánku", quantity: 1, includedInPackage: true }]), CatalogSchemaNotMigratedError);
 });
 
-test("package: only a BOOTH card can own contents; self, duplicates, unknown items and cycles are rejected", async () => {
+test("package: only a BOOTH/KIT card can own contents; self, unknown items and nested kits are rejected", async () => {
   const client = createFakeClient({ catalog_items: [m57Row(), pultRow()] });
   await assert.rejects(() => saveCatalogPackageItems(client as never, "m57-uuid", [{ childItemId: "pult-uuid", quantity: 1, includedInPackage: true }]), InvalidCatalogPackageError);
-  const known = new Set(["a", "b", "c"]);
-  assert.throws(() => assertValidPackageContents("a", [{ childItemId: "a", quantity: 1, includedInPackage: true }], known, []), InvalidCatalogPackageError);
-  assert.throws(() => assertValidPackageContents("a", [{ childItemId: "b", quantity: 1, includedInPackage: true }, { childItemId: "b", quantity: 1, includedInPackage: true }], known, []), InvalidCatalogPackageError);
-  assert.throws(() => assertValidPackageContents("a", [{ childItemId: "zzz", quantity: 1, includedInPackage: true }], known, []), InvalidCatalogPackageError);
-  assert.throws(() => assertValidPackageContents("a", [{ childItemId: "b", quantity: 1, includedInPackage: true }], known, [{ packageItemId: "b", childItemId: "a" }]), /cyklus/u);
+  const itemsById = new Map([
+    ["a", { id: "a", itemType: "BOOTH" as const }],
+    ["b", { id: "b", itemType: "PRODUCT" as const }],
+    ["k", { id: "k", itemType: "KIT" as const }],
+  ]);
+  const validate = (lines: Parameters<typeof assignKitLineKeys>[0]) => validateKitLines("a", assignKitLineKeys(lines, itemsById), { itemsById, variantSets: [] });
+  assert.throws(() => validate([{ childItemId: "a", quantity: 1, includedInPackage: true }]), InvalidCatalogPackageError);
+  assert.throws(() => validate([{ childItemId: "zzz", quantity: 1, includedInPackage: true }]), InvalidCatalogPackageError);
+  assert.throws(() => validate([{ childItemId: "k", quantity: 1, includedInPackage: true }]), /A14/u);
+  // The same component twice is allowed (separate lines); differing only in quantity is a warning.
+  assert.equal(validate([{ childItemId: "b", quantity: 1, includedInPackage: true }, { childItemId: "b", quantity: 2, includedInPackage: true }]).length, 1);
   assert.throws(() => parseCatalogPackageItemsInput([{ childItemId: "b", quantity: 0 }]), InvalidCatalogPackageError);
   assert.equal(parseCatalogPackageItemsInput([{ childItemId: "b", quantity: 2 }])[0]!.includedInPackage, true, "default: part of the package price");
 });

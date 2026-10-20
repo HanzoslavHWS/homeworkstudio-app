@@ -26,6 +26,7 @@ import {
   type DocumentDimensions,
 } from "./catalogItemsAdmin.ts";
 import { packageItemsFor } from "./catalogPackages.ts";
+import { catalogUnitByCode } from "./catalogUnits.ts";
 import { pricingEntriesForCatalogItem, type PricingEntrySummary } from "./catalogPricing.ts";
 import { sanitizeFileNameSegment } from "./graphicsFileNaming.ts";
 import type { CatalogItemType, Currency } from "./models.ts";
@@ -35,16 +36,17 @@ import type { Exhibition, PriceList } from "./organizations.ts";
 // PUBLISHABILITY
 // ============================================================================
 
-export const CUSTOMER_CATALOG_ITEM_TYPES = ["PRODUCT", "SERVICE", "BOOTH"] as const;
+export const CUSTOMER_CATALOG_ITEM_TYPES = ["PRODUCT", "SERVICE", "BOOTH", "KIT"] as const;
 export type CustomerCatalogItemType = (typeof CUSTOMER_CATALOG_ITEM_TYPES)[number];
 
 export const CUSTOMER_CATALOG_TYPE_LABELS_CS: Readonly<Record<CustomerCatalogItemType, string>> = {
   PRODUCT: "Produkt",
   SERVICE: "Služba",
   BOOTH: "Stánek",
+  KIT: "Komplet",
 };
 
-/** INTERNAL_COMPONENT is never offered to a customer, whatever its publication flag says. */
+/** INTERNAL_COMPONENT is never offered to a customer, whatever its publication flag says. KIT is published manually like any product (V1-DATA-04). */
 export function isCustomerCatalogItemType(itemType: CatalogItemType): itemType is CustomerCatalogItemType {
   return (CUSTOMER_CATALOG_ITEM_TYPES as readonly string[]).includes(itemType);
 }
@@ -147,7 +149,8 @@ export function formatCatalogPrice(amount: number, currency: Currency, euroSign:
 // ENTRIES — one published catalog item with everything a card may show
 // ============================================================================
 
-export type CustomerCatalogPackageLine = Readonly<{ childItemId: string; name: string; quantity: number; unit: string | null }>;
+/** One line of a kit's content as the customer sees it — never with a price of its own (the kit price covers it). */
+export type CustomerCatalogPackageLine = Readonly<{ childItemId: string | null; name: string; quantity: number; unit: string | null }>;
 
 export type CustomerCatalogEntry = Readonly<{
   id: string;
@@ -167,7 +170,7 @@ export type CustomerCatalogEntry = Readonly<{
   sortOrder: number | null;
   /** SERVICE technical metadata flattened to label/value pairs. */
   technicalParameters: readonly Readonly<{ key: string; value: string }>[];
-  /** BOOTH: customer-facing package contents — never internal construction components. */
+  /** BOOTH/KIT: customer-facing kit contents — never internal construction components, never priced. */
   packageContents: readonly CustomerCatalogPackageLine[];
   price: CustomerCatalogPrice;
 }>;
@@ -200,15 +203,19 @@ function serviceParameters(item: CatalogItemAdmin): readonly Readonly<{ key: str
 }
 
 /**
- * What the base package contains, for the customer: only lines included in the package price
- * whose child is itself a customer-facing type. INTERNAL_COMPONENT children (panels, posts,
- * profiles) are construction detail and never listed; optional extras are not "contents".
+ * What a kit (BOOTH or KIT) contains, for the customer: lines included in the kit price whose
+ * child is itself a customer-facing type, plus free text lines (A16). INTERNAL_COMPONENT children
+ * (panels, posts, profiles) are construction detail and never listed; optional extras are not
+ * "contents". The lines carry no price: the kit's own price covers them.
  */
-function boothPackageContents(item: CatalogItemAdmin, itemsById: ReadonlyMap<string, CatalogItemAdmin>): readonly CustomerCatalogPackageLine[] {
+function kitPackageContents(item: CatalogItemAdmin, itemsById: ReadonlyMap<string, CatalogItemAdmin>): readonly CustomerCatalogPackageLine[] {
   return packageItemsFor(item.id, item.packageItems ?? []).flatMap((line) => {
-    const child = itemsById.get(line.childItemId);
-    if (!child || !line.includedInPackage || !canPublishInCustomerCatalog(child)) return [];
-    return [{ childItemId: child.id, name: customerName(child), quantity: line.quantity, unit: child.unit }];
+    if (!line.includedInPackage) return [];
+    const unit = catalogUnitByCode(line.unitCode)?.symbol ?? null;
+    if (line.lineKind === "text") return line.label ? [{ childItemId: null, name: line.label, quantity: line.quantity, unit }] : [];
+    const child = line.childItemId ? itemsById.get(line.childItemId) : undefined;
+    if (!child || !canPublishInCustomerCatalog(child)) return [];
+    return [{ childItemId: child.id, name: customerName(child), quantity: line.quantity, unit: unit ?? child.unit }];
   });
 }
 
@@ -232,7 +239,7 @@ export function buildCustomerCatalogEntries(items: readonly CatalogItemAdmin[], 
       ...entryImage(item),
       sortOrder: publication.sortOrder ?? null,
       technicalParameters: itemType === "SERVICE" ? serviceParameters(item) : [],
-      packageContents: itemType === "BOOTH" ? boothPackageContents(item, itemsById) : [],
+      packageContents: itemType === "BOOTH" || itemType === "KIT" ? kitPackageContents(item, itemsById) : [],
       price: resolveCustomerCatalogPrice(item.id, context),
     };
   });
@@ -358,6 +365,8 @@ const CARD_LAYOUT_BY_TYPE: Readonly<Record<CustomerCatalogItemType, CustomerCata
   PRODUCT: "product",
   SERVICE: "service",
   BOOTH: "booth",
+  // A kit has no footprint of its own, but its card lists the contents exactly like a booth's.
+  KIT: "booth",
 };
 
 /** A card carries ONLY what the chosen options allow — a renderer never re-checks an option. */

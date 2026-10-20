@@ -7297,3 +7297,35 @@ select:focus {
 .catalogAliasTable td { padding: 3px 4px; vertical-align: middle; }
 .catalogAliasTable input, .catalogAliasTable select { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
 .catalogAliasTable td:last-child { width: 1%; white-space: nowrap; }
+
+/* V1-DATA-04 — kit editor (Obsah kompletu) and swatch books (Vzorníky) */
+.kitLine { margin-top: 8px; padding: 8px; border: 1px solid #e3e5e6; border-radius: 6px; background: #fff; font-size: 8px; }
+.kitLineText { background: #fafaf7; }
+.kitLineMain { display: grid; grid-template-columns: auto auto minmax(0, 2fr) 56px 72px auto auto auto; align-items: center; gap: 6px; }
+.kitLine input, .kitLine select, .variantSetsPanel input, .variantSetsPanel select { min-width: 0; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
+.kitLineOrder { display: flex; flex-direction: column; gap: 1px; }
+.kitLineOrder button { padding: 0 4px; border: 1px solid #dcdedf; border-radius: 3px; background: #fff; font-size: 6px; line-height: 1.4; cursor: pointer; }
+.kitLineOrder button:disabled { opacity: .35; cursor: default; }
+.kitLineBadge { padding: 2px 6px; border-radius: 999px; background: #eef0f1; color: #5b5f62; font-size: 7px; font-weight: 700; white-space: nowrap; }
+.kitLineQuantity { width: 100%; }
+.kitLineSummary { display: block; margin-top: 4px; color: #7a7e81; }
+.kitLineDetail { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e3e5e6; }
+.kitLineDetail label { display: grid; gap: 3px; }
+.kitLineDetail label > span, .kitLineGroupTitle { color: #989b9e; font-size: 7px; }
+.kitLineDetail label.checkboxRow { display: flex; }
+.kitLineGroup { display: grid; gap: 6px; grid-column: 1 / -1; padding: 6px; border-radius: 4px; background: #f6f7f7; }
+.kitSubstituteRow { display: grid; grid-template-columns: minmax(0, 2fr) repeat(auto-fit, minmax(70px, 1fr)); align-items: center; gap: 6px; }
+.kitWarning { display: block; color: #9a6700; }
+.kitError { display: block; white-space: pre-line; }
+.variantSetsPanel { margin-bottom: 12px; }
+.variantSetsHeader { display: flex; justify-content: space-between; align-items: center; }
+.variantSetsTabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.variantSetFields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; font-size: 8px; }
+.variantSetFields label { display: grid; gap: 3px; }
+.variantSetFields label.checkboxRow { display: flex; }
+.variantTable input[type="color"] { width: 32px; height: 20px; padding: 0; }
+.kitLine .checkboxRow { margin-top: 0; white-space: nowrap; }
+.kitLine .linkButton, .variantSetsHeader .linkButton { padding: 0; border: 0; background: none; color: #2f6f9f; font-size: 8px; text-decoration: underline; cursor: pointer; }
+.kitLine label.checkboxRow, .variantSetsPanel label.checkboxRow { flex-direction: row; align-items: center; gap: 5px; }
+.kitLine input[type="checkbox"], .variantSetsPanel input[type="checkbox"] { width: auto; height: auto; }
+.kitLine input:not([type="checkbox"]), .kitLine select, .variantSetsPanel input:not([type="checkbox"]):not([type="color"]), .variantSetsPanel select { height: 28px; }

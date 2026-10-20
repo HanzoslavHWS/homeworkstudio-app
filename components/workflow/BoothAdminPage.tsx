@@ -14,8 +14,9 @@ import {
 } from "../../domain/catalogItemsAdmin";
 import type { CatalogItemKind } from "../../domain/models";
 import type { CatalogPackageItemInput } from "../../domain/catalogPackages";
+import type { CatalogVariantSet } from "../../domain/catalogVariants";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
-import { ComponentAdminDetail, ComponentAdminList } from "./ComponentAdminPage";
+import { ComponentAdminDetail, ComponentAdminList, type SavedKitContents } from "./ComponentAdminPage";
 
 const BOOTH_ADMIN_TABS: readonly Readonly<{ kind: CatalogItemKind; label: string; hint: string }>[] = [
   { kind: "booth", label: "Typové stánky", hint: "Kompletní typové stánky (P86 a další) — vlastní master 2D/3D model, vlastní rozměry." },
@@ -46,6 +47,14 @@ export function BoothAdminPage({
   const [query, setQuery] = useState("");
   const [showArchived, setShowArchived] = useState(false);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [variantSets, setVariantSets] = useState<readonly CatalogVariantSet[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    // Swatch books only feed the kit editor's variant pickers; without them the editor still works.
+    repository.loadVariantSets().then((sets) => { if (!cancelled) setVariantSets(sets); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [repository]);
 
   useEffect(() => {
     let cancelled = false;
@@ -82,10 +91,11 @@ export function BoothAdminPage({
     setItems((current) => (current ?? []).map((item) => (item.id === saved.id ? saved : item)));
   }
 
-  async function handleSavePackage(lines: readonly CatalogPackageItemInput[]): Promise<void> {
-    if (!selected) return;
-    const packageItems = await repository.savePackage(selected.id, lines);
-    setItems((current) => (current ?? []).map((item) => (item.id === selected.id ? { ...item, packageItems } : item)));
+  async function handleSavePackage(lines: readonly CatalogPackageItemInput[]): Promise<SavedKitContents> {
+    if (!selected) return { packageItems: [], warnings: [] };
+    const saved = await repository.savePackage(selected.id, lines);
+    setItems((current) => (current ?? []).map((item) => (item.id === selected.id ? { ...item, packageItems: saved.packageItems } : item)));
+    return saved;
   }
 
   async function handleDuplicate(): Promise<void> {
@@ -161,6 +171,7 @@ export function BoothAdminPage({
                 allItems={items}
                 onSave={handleSave}
                 onSavePackage={handleSavePackage}
+                variantSets={variantSets}
                 onDuplicate={handleDuplicate}
                 onOpenPricing={() => onOpenPricing(selected.id)}
               />

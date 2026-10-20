@@ -125,7 +125,7 @@ const POST = item({ id: "post", itemType: "INTERNAL_COMPONENT", name: "INT-SLOUP
 const CARPET = item({ id: "carpet", itemType: "PRODUCT", name: "Koberec", category: "Podlaha", visible: false });
 
 function link(childItemId: string, quantity: number, sortOrder: number, includedInPackage = true): CatalogPackageItem {
-  return { id: `link-${childItemId}`, packageItemId: "booth-e", childItemId, quantity, includedInPackage, sortOrder, note: null };
+  return { id: `link-${childItemId}`, packageItemId: "booth-e", lineKey: childItemId, lineKind: "item", childItemId, quantity, includedInPackage, sortOrder, note: null };
 }
 const BOOTH = item({
   id: "booth-e",

@@ -1291,7 +1291,7 @@ test("GLB static model fallback remains functional: P86's legacy modelUrl (no mo
 
 test("BoothAdminPage.tsx reuses ComponentAdminList/ComponentAdminDetail exported from ComponentAdminPage.tsx — no parallel list/detail UI", () => {
   const source = readFileSync(new URL("../components/workflow/BoothAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /import \{ ComponentAdminDetail, ComponentAdminList \} from "\.\/ComponentAdminPage"/u);
+  assert.match(source, /import \{ ComponentAdminDetail, ComponentAdminList(, type \w+)* \} from "\.\/ComponentAdminPage"/u);
 });
 
 test("BoothAdminPage.tsx separates 'Typové stánky' (kind=booth) and 'Komponenty stánku' (kind=booth_component) as clearly labeled tabs", () => {

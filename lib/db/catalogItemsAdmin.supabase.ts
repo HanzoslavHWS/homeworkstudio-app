@@ -33,12 +33,33 @@ import {
   type CatalogItemAliasStatus,
 } from "../../domain/catalogItemAliases.ts";
 import {
-  assertValidPackageContents,
+  assignKitLineKeys,
+  buildKitLinesRpcPayload,
   InvalidCatalogPackageError,
+  isLegacyCompatibleKit,
+  kitTypeChangeIssue,
+  KIT_SUBSTITUTE_RULES,
+  packageItemToInput,
+  slugifyLineKey,
   sortPackageItems,
+  validateKitLines,
   type CatalogPackageItem,
   type CatalogPackageItemInput,
+  type KitLineSubstitute,
+  type KitSubstituteRule,
 } from "../../domain/catalogPackages.ts";
+import { parseKitPrintAllowances } from "../../domain/catalogKitPrintAllowance.ts";
+import {
+  InvalidCatalogVariantSetError,
+  validateCatalogVariantSet,
+  VARIANT_SET_KINDS,
+  VARIANT_SURCHARGE_RULES,
+  type CatalogVariant,
+  type CatalogVariantSet,
+  type CatalogVariantSetInput,
+  type VariantSetKind,
+  type VariantSurchargeRule,
+} from "../../domain/catalogVariants.ts";
 import type { CatalogItemKind, CatalogItemStatus, CatalogItemType, ComponentDefinition } from "../../domain/models.ts";
 
 const LEGACY_ADMIN_COLUMNS = "id, internal_code, kind, lifecycle_status, display_name, official_name, category, unit, document, created_at, updated_at";
@@ -47,7 +68,12 @@ const ADMIN_COLUMNS_V2 = `${LEGACY_ADMIN_COLUMNS}, abf_code, item_type`;
 /** 20261021120000 (V1-DATA-03: official_name_en, unit_code). Reads fall back V3 -> V2 -> legacy. */
 const ADMIN_COLUMNS = `${ADMIN_COLUMNS_V2}, official_name_en, unit_code`;
 const ALIAS_COLUMNS = "id, catalog_item_id, realization_company_id, alias_kind, alias_text, normalized_text, unit_code, source, status, note, is_active";
-const PACKAGE_COLUMNS = "id, package_item_id, child_item_id, quantity, included_in_package, sort_order, note";
+const LEGACY_PACKAGE_COLUMNS = "id, package_item_id, child_item_id, quantity, included_in_package, sort_order, note";
+/** 20261021130000 (V1-DATA-04: kit lines). Reads fall back to the legacy column set. */
+const PACKAGE_COLUMNS = `${LEGACY_PACKAGE_COLUMNS}, line_key, line_kind, label, label_en, unit_code, variant_set_id, default_variant_id, print_allowance`;
+const SUBSTITUTE_COLUMNS = "id, kit_line_id, substitute_item_id, substitute_variant_id, surcharge_rule, surcharge_unit_code, quantity_factor, is_active, sort_order, note";
+const VARIANT_SET_COLUMNS = "id, code, name, kind, is_active, note";
+const VARIANT_COLUMNS = "id, variant_set_id, code, name, name_en, swatch_color, price_item_id, surcharge_rule, surcharge_unit_code, legacy_finish_id, is_active, sort_order, note";
 
 type CatalogItemAdminDbRow = Readonly<{
   id: string;
@@ -70,9 +96,48 @@ type CatalogItemAdminDbRow = Readonly<{
 type CatalogPackageItemDbRow = Readonly<{
   id: string;
   package_item_id: string;
-  child_item_id: string;
+  child_item_id: string | null;
   quantity: number | string;
   included_in_package: boolean;
+  sort_order: number;
+  note: string | null;
+  line_key?: string | null;
+  line_kind?: string | null;
+  label?: string | null;
+  label_en?: string | null;
+  unit_code?: string | null;
+  variant_set_id?: string | null;
+  default_variant_id?: string | null;
+  print_allowance?: unknown;
+}>;
+
+type KitLineSubstituteDbRow = Readonly<{
+  id: string;
+  kit_line_id: string;
+  substitute_item_id: string;
+  substitute_variant_id: string | null;
+  surcharge_rule: string;
+  surcharge_unit_code: string | null;
+  quantity_factor: number | string;
+  is_active: boolean;
+  sort_order: number;
+  note: string | null;
+}>;
+
+type CatalogVariantSetDbRow = Readonly<{ id: string; code: string; name: string; kind: string; is_active: boolean; note: string | null }>;
+
+type CatalogVariantDbRow = Readonly<{
+  id: string;
+  variant_set_id: string;
+  code: string;
+  name: string;
+  name_en: string | null;
+  swatch_color: string | null;
+  price_item_id: string | null;
+  surcharge_rule: string;
+  surcharge_unit_code: string | null;
+  legacy_finish_id: string | null;
+  is_active: boolean;
   sort_order: number;
   note: string | null;
 }>;
@@ -84,7 +149,7 @@ type CatalogPackageItemDbRow = Readonly<{
  */
 export class CatalogSchemaNotMigratedError extends Error {
   constructor() {
-    super("Databáze ještě nemá všechny migrace katalogu. Aplikujte supabase/migrations/20261001120000_catalog_item_types_abf_codes_packages.sql a 20261021120000_catalog_identity.sql.");
+    super("Databáze ještě nemá všechny migrace katalogu. Aplikujte supabase/migrations/20261001120000_catalog_item_types_abf_codes_packages.sql, 20261021120000_catalog_identity.sql a 20261021130000_catalog_kits_variants.sql.");
     this.name = "CatalogSchemaNotMigratedError";
   }
 }
@@ -93,6 +158,12 @@ export class CatalogSchemaNotMigratedError extends Error {
 function isMissingSchemaError(error: unknown): boolean {
   const code = (error as { code?: string } | null)?.code;
   return code === "42703" || code === "42P01" || code === "PGRST204" || code === "PGRST205";
+}
+
+/** "function does not exist" — the RPC of a migration not applied yet. */
+function isMissingFunctionError(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code;
+  return code === "42883" || code === "PGRST202";
 }
 
 function rowToAdmin(row: CatalogItemAdminDbRow, packageItems?: readonly CatalogPackageItem[]): CatalogItemAdmin {
@@ -117,15 +188,39 @@ function rowToAdmin(row: CatalogItemAdminDbRow, packageItems?: readonly CatalogP
   return packageItems ? { ...item, packageItems } : item;
 }
 
-function rowToPackageItem(row: CatalogPackageItemDbRow): CatalogPackageItem {
+function rowToPackageItem(row: CatalogPackageItemDbRow, substitutes: readonly KitLineSubstitute[] = []): CatalogPackageItem {
+  const printAllowance = parseKitPrintAllowances(row.print_allowance);
   return {
     id: row.id,
     packageItemId: row.package_item_id,
+    // A row read before the V1-DATA-04 migration has no key yet: derive a stable one from its id.
+    lineKey: row.line_key ?? `polozka-${slugifyLineKey(row.id).slice(0, 8)}`,
+    lineKind: row.line_kind === "text" ? "text" : "item",
     childItemId: row.child_item_id,
+    ...(row.label ? { label: row.label } : {}),
+    ...(row.label_en ? { labelEn: row.label_en } : {}),
     quantity: Number(row.quantity),
+    ...(row.unit_code ? { unitCode: row.unit_code } : {}),
     includedInPackage: row.included_in_package,
     sortOrder: row.sort_order ?? 0,
     note: row.note,
+    ...(row.variant_set_id ? { variantSetId: row.variant_set_id } : {}),
+    ...(row.default_variant_id ? { defaultVariantId: row.default_variant_id } : {}),
+    ...(printAllowance.length ? { printAllowance } : {}),
+    ...(substitutes.length ? { substitutes } : {}),
+  };
+}
+
+function rowToSubstitute(row: KitLineSubstituteDbRow): KitLineSubstitute {
+  return {
+    id: row.id,
+    substituteItemId: row.substitute_item_id,
+    ...(row.substitute_variant_id ? { substituteVariantId: row.substitute_variant_id } : {}),
+    surchargeRule: ((KIT_SUBSTITUTE_RULES as readonly string[]).includes(row.surcharge_rule) ? row.surcharge_rule : "price_difference") as KitSubstituteRule,
+    ...(row.surcharge_unit_code ? { surchargeUnitCode: row.surcharge_unit_code } : {}),
+    quantityFactor: Number(row.quantity_factor),
+    isActive: row.is_active,
+    ...(row.note ? { note: row.note } : {}),
   };
 }
 
@@ -143,12 +238,27 @@ async function selectCatalogRows(client: SupabaseClient, id?: string): Promise<C
 
 /** Every package link in the catalog (small table). Empty when the migration hasn't been applied yet. */
 export async function readCatalogPackageItems(client: SupabaseClient): Promise<readonly CatalogPackageItem[]> {
-  const { data, error } = await client.from("catalog_item_package_items").select(PACKAGE_COLUMNS);
+  let { data, error } = await client.from("catalog_item_package_items").select(PACKAGE_COLUMNS);
+  if (error && isMissingSchemaError(error)) ({ data, error } = await client.from("catalog_item_package_items").select(LEGACY_PACKAGE_COLUMNS));
   if (error) {
     if (isMissingSchemaError(error)) return [];
     throw error;
   }
-  return sortPackageItems(((data ?? []) as CatalogPackageItemDbRow[]).map(rowToPackageItem));
+  const substitutesByLine = new Map<string, KitLineSubstitute[]>();
+  for (const row of await readKitLineSubstituteRows(client)) {
+    substitutesByLine.set(row.kit_line_id, [...(substitutesByLine.get(row.kit_line_id) ?? []), rowToSubstitute(row)]);
+  }
+  return sortPackageItems(((data ?? []) as CatalogPackageItemDbRow[]).map((row) => rowToPackageItem(row, substitutesByLine.get(row.id) ?? [])));
+}
+
+/** Empty on a database without the V1-DATA-04 migration. Ordered by sort_order. */
+async function readKitLineSubstituteRows(client: SupabaseClient): Promise<readonly KitLineSubstituteDbRow[]> {
+  const { data, error } = await client.from("catalog_kit_line_substitutes").select(SUBSTITUTE_COLUMNS);
+  if (error) {
+    if (isMissingSchemaError(error)) return [];
+    throw error;
+  }
+  return ((data ?? []) as KitLineSubstituteDbRow[]).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0) || a.id.localeCompare(b.id));
 }
 
 function attachPackages(rows: readonly CatalogItemAdminDbRow[], links: readonly CatalogPackageItem[]): readonly CatalogItemAdmin[] {
@@ -278,12 +388,8 @@ export async function duplicateCatalogItemAdmin(client: SupabaseClient, sourceId
   const created = rowToAdmin(data as CatalogItemAdminDbRow, []);
   const sourceLines = source.packageItems ?? [];
   if (sourceLines.length === 0) return created;
-  const links = await saveCatalogPackageItems(
-    client,
-    created.id,
-    sourceLines.map((line) => ({ childItemId: line.childItemId, quantity: line.quantity, includedInPackage: line.includedInPackage, ...(line.note ? { note: line.note } : {}) })),
-  );
-  return { ...created, packageItems: links };
+  const { packageItems } = await saveCatalogPackageItems(client, created.id, sourceLines.map((line) => packageItemToInput(line)));
+  return { ...created, packageItems };
 }
 
 /**
@@ -313,6 +419,11 @@ export async function saveCatalogItemAdmin(
   const typeAndKind = edit.itemType !== undefined || edit.kind !== undefined ? resolveTypeAndKindEdit(current, edit) : undefined;
   const kindForEdit = typeAndKind?.kind ?? current.kind;
   let nextDocument = applyCatalogItemEdit(current.document, typeAndKind && typeAndKind.kind !== current.kind ? { ...edit, kind: typeAndKind.kind } : edit);
+
+  if (typeAndKind && typeAndKind.itemType !== itemTypeOf(current)) {
+    const issue = kitTypeChangeIssue(id, typeAndKind.itemType, await readCatalogPackageItems(client));
+    if (issue) throw new InvalidCatalogItemAdminEditError("itemType", issue);
+  }
 
   const columnPatch: Record<string, unknown> = {};
   if (typeAndKind) {
@@ -492,22 +603,48 @@ export async function bulkLifecycleCatalogItemsAdmin(
 }
 
 /**
- * Replaces one BOOTH's package contents with exactly `lines` (upsert by
- * (package_item_id, child_item_id), then delete links no longer present — upsert first, so a
- * failure mid-way can never leave the package emptier than either the old or the new set).
+ * Replaces one BOOTH/KIT's content with exactly `inputs` (display order = sort order). New lines
+ * get a key, everything is validated in the domain, then replace_catalog_kit_lines() writes the
+ * whole kit in one transaction. On a database without the V1-DATA-04 migration a kit that uses
+ * nothing new is still saved the old way; anything new needs the migration.
  */
 export async function saveCatalogPackageItems(
   client: SupabaseClient,
   packageItemId: string,
-  lines: readonly CatalogPackageItemInput[],
-): Promise<readonly CatalogPackageItem[]> {
-  const allItems = await readCatalogItemsAdmin(client);
+  inputs: readonly CatalogPackageItemInput[],
+): Promise<Readonly<{ packageItems: readonly CatalogPackageItem[]; warnings: readonly string[] }>> {
+  const [allItems, variantSets] = await Promise.all([readCatalogItemsAdmin(client), readCatalogVariantSets(client)]);
   const owner = allItems.find((item) => item.id === packageItemId);
   if (!owner) throw new CatalogItemAdminNotFoundError(packageItemId);
-  if (itemTypeOf(owner) !== "BOOTH" && itemTypeOf(owner) !== "KIT") throw new InvalidCatalogPackageError("Obsah lze nastavit jen u karty typu Stánek nebo Komplet.");
-  const existingLinks = allItems.flatMap((item) => item.packageItems ?? []);
-  assertValidPackageContents(packageItemId, lines, new Set(allItems.map((item) => item.id)), existingLinks);
+  const itemsById = new Map(allItems.map((item) => [item.id, { id: item.id, itemType: itemTypeOf(item), displayName: item.displayName, abfCode: item.abfCode ?? null, internalCode: item.internalCode }] as const));
+  const lines = assignKitLineKeys(inputs, itemsById);
+  const warnings = validateKitLines(packageItemId, lines, { itemsById, variantSets });
 
+  const { error: rpcError } = await client.rpc("replace_catalog_kit_lines", { p_package_item_id: packageItemId, p_lines: buildKitLinesRpcPayload(lines) });
+  if (rpcError) {
+    if (!isMissingFunctionError(rpcError)) {
+      // Trigger / constraint messages (A14, text line rules) are Czech and meant for the admin.
+      if ((rpcError as { code?: string }).code === "P0001") throw new InvalidCatalogPackageError((rpcError as { message?: string }).message ?? "Obsah kompletu se nepodařilo uložit.");
+      throw rpcError;
+    }
+    if (!isLegacyCompatibleKit(lines)) throw new CatalogSchemaNotMigratedError();
+    await saveLegacyPackageItems(client, owner.packageItems ?? [], packageItemId, lines);
+  }
+  const refreshed = await readCatalogPackageItems(client);
+  return { packageItems: refreshed.filter((link) => link.packageItemId === packageItemId), warnings };
+}
+
+/**
+ * Pre-V1-DATA-04 write path: upsert by (package_item_id, child_item_id), then delete links no
+ * longer present — upsert first, so a failure mid-way can never leave the package emptier than
+ * either the old or the new set.
+ */
+async function saveLegacyPackageItems(
+  client: SupabaseClient,
+  storedLines: readonly CatalogPackageItem[],
+  packageItemId: string,
+  lines: readonly CatalogPackageItemInput[],
+): Promise<void> {
   if (lines.length > 0) {
     const { error: upsertError } = await client.from("catalog_item_package_items").upsert(
       lines.map((line, index) => ({
@@ -526,13 +663,118 @@ export async function saveCatalogPackageItems(
     }
   }
   const keep = new Set(lines.map((line) => line.childItemId));
-  const stale = (owner.packageItems ?? []).filter((link) => !keep.has(link.childItemId));
+  const stale = storedLines.filter((link) => !keep.has(link.childItemId ?? undefined));
   for (const link of stale) {
     const { error: deleteError } = await client.from("catalog_item_package_items").delete().eq("id", link.id);
     if (deleteError) throw deleteError;
   }
-  const refreshed = await readCatalogPackageItems(client);
-  return refreshed.filter((link) => link.packageItemId === packageItemId);
+}
+
+// ============================================================================
+// SWATCH BOOKS (catalog_variant_sets / catalog_variants, V1-DATA-04). Saved one set at a time:
+// variants are inserted or updated, never deleted (deactivate instead).
+// ============================================================================
+
+function rowToVariant(row: CatalogVariantDbRow): CatalogVariant {
+  return {
+    id: row.id,
+    variantSetId: row.variant_set_id,
+    code: row.code,
+    name: row.name,
+    ...(row.name_en ? { nameEn: row.name_en } : {}),
+    ...(row.swatch_color ? { swatchColor: row.swatch_color } : {}),
+    ...(row.price_item_id ? { priceItemId: row.price_item_id } : {}),
+    surchargeRule: ((VARIANT_SURCHARGE_RULES as readonly string[]).includes(row.surcharge_rule) ? row.surcharge_rule : "none") as VariantSurchargeRule,
+    ...(row.surcharge_unit_code ? { surchargeUnitCode: row.surcharge_unit_code } : {}),
+    ...(row.legacy_finish_id ? { legacyFinishId: row.legacy_finish_id } : {}),
+    isActive: row.is_active,
+    sortOrder: row.sort_order ?? 0,
+    ...(row.note ? { note: row.note } : {}),
+  };
+}
+
+/** Every swatch book with all its variants (active and inactive). Empty without the V1-DATA-04 migration. */
+export async function readCatalogVariantSets(client: SupabaseClient): Promise<readonly CatalogVariantSet[]> {
+  const [sets, variants] = await Promise.all([
+    client.from("catalog_variant_sets").select(VARIANT_SET_COLUMNS),
+    client.from("catalog_variants").select(VARIANT_COLUMNS),
+  ]);
+  for (const result of [sets, variants]) {
+    if (result.error) {
+      if (isMissingSchemaError(result.error)) return [];
+      throw result.error;
+    }
+  }
+  const variantsBySet = new Map<string, CatalogVariant[]>();
+  for (const row of (variants.data ?? []) as CatalogVariantDbRow[]) {
+    variantsBySet.set(row.variant_set_id, [...(variantsBySet.get(row.variant_set_id) ?? []), rowToVariant(row)]);
+  }
+  return ((sets.data ?? []) as CatalogVariantSetDbRow[])
+    .map((row) => ({
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      kind: ((VARIANT_SET_KINDS as readonly string[]).includes(row.kind) ? row.kind : "other") as VariantSetKind,
+      isActive: row.is_active,
+      ...(row.note ? { note: row.note } : {}),
+      variants: (variantsBySet.get(row.id) ?? []).sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code)),
+    }))
+    .sort((a, b) => a.code.localeCompare(b.code));
+}
+
+export async function saveCatalogVariantSet(client: SupabaseClient, input: CatalogVariantSetInput): Promise<CatalogVariantSet> {
+  const [sets, items] = await Promise.all([readCatalogVariantSetsStrict(client), selectCatalogRows(client)]);
+  const issues = validateCatalogVariantSet(input, { sets, knownItemIds: new Set(items.map((item) => item.id)) });
+  if (issues.length > 0) throw new InvalidCatalogVariantSetError(issues);
+
+  const setRow = { code: input.code, name: input.name, kind: input.kind, is_active: input.isActive, note: input.note ?? null };
+  let setId = input.id;
+  if (setId) {
+    const { error } = await client.from("catalog_variant_sets").update(setRow).eq("id", setId);
+    if (error) throw mapVariantWriteError(error);
+  } else {
+    const { data, error } = await client.from("catalog_variant_sets").insert(setRow).select("id").single();
+    if (error) throw mapVariantWriteError(error);
+    setId = (data as { id: string }).id;
+  }
+  for (const [index, variant] of input.variants.entries()) {
+    const row = {
+      variant_set_id: setId,
+      code: variant.code,
+      name: variant.name,
+      name_en: variant.nameEn ?? null,
+      swatch_color: variant.swatchColor ?? null,
+      price_item_id: variant.priceItemId ?? null,
+      surcharge_rule: variant.surchargeRule,
+      surcharge_unit_code: variant.surchargeRule === "per_unit" ? variant.surchargeUnitCode ?? null : null,
+      legacy_finish_id: variant.legacyFinishId ?? null,
+      is_active: variant.isActive,
+      sort_order: index,
+      note: variant.note ?? null,
+    };
+    const { error } = variant.id
+      ? await client.from("catalog_variants").update(row).eq("id", variant.id)
+      : await client.from("catalog_variants").insert(row);
+    if (error) throw mapVariantWriteError(error);
+  }
+  const saved = (await readCatalogVariantSetsStrict(client)).find((set) => set.id === setId);
+  if (!saved) throw new InvalidCatalogVariantSetError(["Vzorník se nepodařilo znovu načíst."]);
+  return saved;
+}
+
+async function readCatalogVariantSetsStrict(client: SupabaseClient): Promise<readonly CatalogVariantSet[]> {
+  const { error } = await client.from("catalog_variant_sets").select("id").limit(1);
+  if (error) {
+    if (isMissingSchemaError(error)) throw new CatalogSchemaNotMigratedError();
+    throw error;
+  }
+  return readCatalogVariantSets(client);
+}
+
+function mapVariantWriteError(error: unknown): unknown {
+  if (isMissingSchemaError(error)) return new CatalogSchemaNotMigratedError();
+  if ((error as { code?: string }).code === "23505") return new InvalidCatalogVariantSetError(["Kód vzorníku nebo barvy už existuje."]);
+  return error;
 }
 
 // ============================================================================

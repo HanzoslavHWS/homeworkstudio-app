@@ -36,8 +36,12 @@ import {
   type BulkLifecycleAction,
 } from "../../domain/catalogItemsAdmin";
 import { CATALOG_ITEM_KINDS_BY_TYPE, CATALOG_ITEM_TYPE_HINTS_CS, CATALOG_ITEM_TYPE_LABELS_CS, itemTypeExpectsAbfCode } from "../../domain/catalogItemTypes";
-import type { CatalogPackageItemInput } from "../../domain/catalogPackages";
-import { AbfImportPanel, CatalogItemCreateForm, CatalogPublicationSection, PackageContentsSection, ServiceTechnicalSection } from "./CatalogAdminPanels";
+import type { CatalogPackageItem, CatalogPackageItemInput } from "../../domain/catalogPackages";
+import { AbfImportPanel, CatalogItemCreateForm, CatalogPublicationSection, ServiceTechnicalSection } from "./CatalogAdminPanels";
+import { KitContentsSection, VariantSetsPanel } from "./CatalogKitPanels";
+import type { CatalogVariantSet, CatalogVariantSetInput } from "../../domain/catalogVariants";
+
+export type SavedKitContents = Readonly<{ packageItems: readonly CatalogPackageItem[]; warnings: readonly string[] }>;
 import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../domain/catalogReadiness";
 import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, CATALOG_ITEM_TYPES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type CatalogItemType } from "../../domain/models";
 import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "../../domain/assets";
@@ -106,12 +110,23 @@ export function ComponentAdminPage({
   const [loadError, setLoadError] = useState("");
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [filters, setFilters] = useState<CatalogItemAdminFilters>({});
-  const [panel, setPanel] = useState<"none" | "create" | "import">("none");
+  const [panel, setPanel] = useState<"none" | "create" | "import" | "variants">("none");
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState("");
   const [aliasRegister, setAliasRegister] = useState<CatalogAliasRegister | null>(null);
   const [aliasLoadError, setAliasLoadError] = useState("");
+  const [variantSets, setVariantSets] = useState<readonly CatalogVariantSet[]>([]);
+  const [variantSetsError, setVariantSetsError] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    repository
+      .loadVariantSets()
+      .then((sets) => { if (!cancelled) setVariantSets(sets); })
+      .catch((error) => { if (!cancelled) setVariantSetsError(error instanceof Error ? error.message : "Vzorníky se nepodařilo načíst."); });
+    return () => { cancelled = true; };
+  }, [repository]);
 
   useEffect(() => {
     let cancelled = false;
@@ -179,10 +194,17 @@ export function ComponentAdminPage({
     return stored;
   }
 
-  async function handleSavePackage(lines: readonly CatalogPackageItemInput[]): Promise<void> {
-    if (!selected) return;
-    const packageItems = await repository.savePackage(selected.id, lines);
-    setItems((current) => (current ?? []).map((item) => (item.id === selected.id ? { ...item, packageItems } : item)));
+  async function handleSavePackage(lines: readonly CatalogPackageItemInput[]): Promise<SavedKitContents> {
+    if (!selected) return { packageItems: [], warnings: [] };
+    const saved = await repository.savePackage(selected.id, lines);
+    setItems((current) => (current ?? []).map((item) => (item.id === selected.id ? { ...item, packageItems: saved.packageItems } : item)));
+    return saved;
+  }
+
+  async function handleSaveVariantSet(input: CatalogVariantSetInput): Promise<CatalogVariantSet> {
+    const saved = await repository.saveVariantSet(input);
+    setVariantSets((current) => [...current.filter((set) => set.id !== saved.id), saved].sort((a, b) => a.code.localeCompare(b.code)));
+    return saved;
   }
 
   async function handleDuplicate(): Promise<void> {
@@ -272,6 +294,9 @@ export function ComponentAdminPage({
             <button type="button" className="secondaryButton" onClick={() => setPanel(panel === "import" ? "none" : "import")}>
               Import ABF kódů (KODY.xlsm)
             </button>
+            <button type="button" className="secondaryButton" onClick={() => setPanel(panel === "variants" ? "none" : "variants")}>
+              Vzorníky
+            </button>
             {needsTypeReviewCount > 0 && (
               <button type="button" className="secondaryButton" onClick={() => setFilters({ ...filters, needsTypeReview: true, onlyArchived: false })}>
                 K zařazení: {needsTypeReviewCount}
@@ -281,6 +306,8 @@ export function ComponentAdminPage({
 
           {panel === "create" && <CatalogItemCreateForm repository={repository} onCancel={() => setPanel("none")} onCreated={handleCreated} />}
           {panel === "import" && <AbfImportPanel repository={repository} onClose={() => setPanel("none")} onApplied={() => void reload()} />}
+          {panel === "variants" && <VariantSetsPanel variantSets={variantSets} allItems={allItems} onSave={handleSaveVariantSet} onClose={() => setPanel("none")} />}
+          {variantSetsError && <p className="uploadError">{variantSetsError}</p>}
 
           <ComponentAdminFilters filters={filters} onChange={setFilters} />
 
@@ -317,6 +344,7 @@ export function ComponentAdminPage({
                 allItems={allItems}
                 onSave={handleSave}
                 onSavePackage={handleSavePackage}
+                variantSets={variantSets}
                 aliasRegister={aliasRegister}
                 aliasLoadError={aliasLoadError}
                 onSaveAliases={handleSaveAliases}
@@ -438,7 +466,7 @@ export function ComponentAdminList({
               {CATALOG_ITEM_TYPE_LABELS_CS[entry.itemType]}
               {entry.category ? ` · ${categoryLabelCs(entry.category)}` : ""}
               {entry.itemTypeNeedsReview ? " · k zařazení" : ""}
-              {entry.itemType === "BOOTH" && entry.packageItemCount > 0 ? ` · ${entry.packageItemCount} pol.` : ""}
+              {(entry.itemType === "BOOTH" || entry.itemType === "KIT") && entry.packageItemCount > 0 ? ` · ${entry.packageItemCount} pol.` : ""}
             </span>
             <span className={`lifecycleBadge ${entry.lifecycleStatus}`}>{CATALOG_ITEM_STATUS_LABELS_CS[entry.lifecycleStatus]}</span>
             <span>{entry.hasDimensions ? `${entry.widthMm} × ${entry.depthMm}${entry.heightMm ? ` × ${entry.heightMm}` : ""} mm` : "Chybí rozměry"}</span>
@@ -475,6 +503,7 @@ export function ComponentAdminDetail({
   allItems,
   onSave,
   onSavePackage,
+  variantSets,
   aliasRegister,
   aliasLoadError,
   onSaveAliases,
@@ -485,7 +514,10 @@ export function ComponentAdminDetail({
   /** Whole catalog — needed for the BOOTH/KIT package editor (child item picker). */
   allItems?: readonly CatalogItemAdmin[];
   onSave: (edit: CatalogItemAdminEdit) => Promise<void>;
-  onSavePackage?: (lines: readonly CatalogPackageItemInput[]) => Promise<void>;
+  /** Returns the stored lines and the non-blocking warnings (e.g. the same component on lines that differ only in quantity). */
+  onSavePackage?: (lines: readonly CatalogPackageItemInput[]) => Promise<SavedKitContents>;
+  /** Swatch books for the kit editor's variant pickers (V1-DATA-04). */
+  variantSets?: readonly CatalogVariantSet[];
   /** Aliases + units + realization companies (V1-DATA-03). null while loading. */
   aliasRegister?: CatalogAliasRegister | null;
   aliasLoadError?: string;
@@ -1196,7 +1228,7 @@ export function ComponentAdminDetail({
         {aliasRegister && onSaveAliases && <CatalogAliasesSection key={item.id} item={item} register={aliasRegister} onSave={onSaveAliases} />}
         {!aliasRegister && aliasLoadError && <p className="uploadError">{aliasLoadError}</p>}
         {(currentItemType === "BOOTH" || currentItemType === "KIT") && onSavePackage && allItems && (
-          <PackageContentsSection item={item} allItems={allItems} onSavePackage={onSavePackage} />
+          <KitContentsSection item={item} allItems={allItems} variantSets={variantSets ?? []} onSavePackage={onSavePackage} />
         )}
         <TechnicalRasterSection item={item} ownerId={ownerId} onSave={onSave} />
       </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import {
   CATALOG_ITEM_CATEGORY_OPTIONS,
   CATALOG_ITEM_KIND_LABELS_CS,
@@ -10,7 +10,6 @@ import {
   documentPhotoAsset,
   documentPhotoUrl,
   documentServiceTechnical,
-  itemTypeOf,
   type CatalogItemAdmin,
   type CatalogItemAdminCreateInput,
   type CatalogItemAdminEdit,
@@ -22,7 +21,6 @@ import {
   itemTypeExpectsAbfCode,
 } from "../../domain/catalogItemTypes";
 import { CATALOG_ITEM_TYPES, type CatalogItemKind, type CatalogItemType } from "../../domain/models";
-import type { CatalogPackageItemInput } from "../../domain/catalogPackages";
 import type { AbfImportPlan, AbfImportPlanRow } from "../../domain/catalogAbfImport";
 import type { AbfImportApplyResult } from "../../lib/db/catalogAbfImport.supabase";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
@@ -204,7 +202,7 @@ export function CatalogItemCreateForm({
           </Field>
         </dl>
       )}
-      {itemType === "BOOTH" && <p className="fieldHint">Obsah balíčku (typovka, pult, židle, světla…) nastavíte po založení v detailu karty.</p>}
+      {(itemType === "BOOTH" || itemType === "KIT") && <p className="fieldHint">Obsah kompletu (komponenty, textové položky, náhrady, zahrnutá grafika) nastavíte po založení v detailu karty.</p>}
       {itemType === "KIT" && <p className="fieldHint">Obsah kompletu nastavíte po založení v detailu karty. Náhrady a doplatky přibudou ve V1-DATA-04.</p>}
       {itemType === "SERVICE" && <p className="fieldHint">Technická metadata (výkon, parametry) a prezentaci v technickém rastru nastavíte po založení v detailu karty.</p>}
       <div className="catalogAdminReviewActions">
@@ -215,126 +213,6 @@ export function CatalogItemCreateForm({
       </div>
       {error && <small className="uploadError">{error}</small>}
     </div>
-  );
-}
-
-// ============================================================================
-// BOOTH PACKAGE CONTENTS — booth -> item -> quantity -> included_in_package
-// ============================================================================
-
-type PackageDraftLine = Readonly<{ key: string; childItemId: string; quantity: string; includedInPackage: boolean; note: string }>;
-
-function toDraft(item: CatalogItemAdmin): readonly PackageDraftLine[] {
-  return (item.packageItems ?? []).map((line) => ({
-    key: line.id,
-    childItemId: line.childItemId,
-    quantity: String(line.quantity),
-    includedInPackage: line.includedInPackage,
-    note: line.note ?? "",
-  }));
-}
-
-function itemOptionLabel(item: CatalogItemAdmin): string {
-  const code = item.abfCode ?? item.internalCode;
-  return `${code ? `${code} · ` : ""}${item.displayName} (${CATALOG_ITEM_TYPE_LABELS_CS[itemTypeOf(item)]}${item.lifecycleStatus === "archived" ? ", archivováno" : ""})`;
-}
-
-export function PackageContentsSection({
-  item,
-  allItems,
-  onSavePackage,
-}: {
-  item: CatalogItemAdmin;
-  allItems: readonly CatalogItemAdmin[];
-  onSavePackage: (lines: readonly CatalogPackageItemInput[]) => Promise<void>;
-}) {
-  const [lines, setLines] = useState<readonly PackageDraftLine[]>(() => toDraft(item));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [savedHint, setSavedHint] = useState("");
-
-  const byId = useMemo(() => new Map(allItems.map((candidate) => [candidate.id, candidate])), [allItems]);
-  // New lines may only pick non-archived items; an existing line keeps showing its (possibly
-  // archived) child — archival never silently breaks an existing package.
-  const pickable = useMemo(
-    () =>
-      allItems
-        .filter((candidate) => candidate.id !== item.id && candidate.lifecycleStatus !== "archived")
-        .slice()
-        .sort((a, b) => itemOptionLabel(a).localeCompare(itemOptionLabel(b), "cs", { numeric: true })),
-    [allItems, item.id],
-  );
-  const dirty = JSON.stringify(lines.map(({ key: _key, ...rest }) => rest)) !== JSON.stringify(toDraft(item).map(({ key: _key, ...rest }) => rest));
-
-  function update(key: string, patch: Partial<PackageDraftLine>) {
-    setLines((current) => current.map((line) => (line.key === key ? { ...line, ...patch } : line)));
-    setSavedHint("");
-  }
-
-  async function handleSave() {
-    setBusy(true);
-    setError("");
-    try {
-      const payload: CatalogPackageItemInput[] = lines
-        .filter((line) => line.childItemId)
-        .map((line) => ({
-          childItemId: line.childItemId,
-          quantity: Number(line.quantity.replace(",", ".")),
-          includedInPackage: line.includedInPackage,
-          ...(line.note.trim() ? { note: line.note.trim() } : {}),
-        }));
-      await onSavePackage(payload);
-      setSavedHint("Obsah stánku uložen.");
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Uložení obsahu selhalo.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className="catalogDetailSection catalogPackageSection">
-      <h3>Obsah stánku / balíčku</h3>
-      <p className="fieldHint">
-        Položky „v ceně balíčku“ generátor může fyzicky použít a započítat jejich množství, ale zákazníkovi se znovu nepřičítají — cena je v ceně stánku. Ostatní řádky jsou volitelné doplňky s vlastní cenou z ceníku.
-      </p>
-      {lines.length === 0 && <p className="workspaceEmpty">Balíček zatím neobsahuje žádné položky.</p>}
-      {lines.map((line) => {
-        const child = byId.get(line.childItemId);
-        return (
-          <div key={line.key} className="catalogPackageLine">
-            <select value={line.childItemId} onChange={(event) => update(line.key, { childItemId: event.target.value })}>
-              <option value="">— vyberte položku —</option>
-              {child && child.lifecycleStatus === "archived" && <option value={child.id}>{itemOptionLabel(child)}</option>}
-              {pickable.map((candidate) => (
-                <option key={candidate.id} value={candidate.id}>{itemOptionLabel(candidate)}</option>
-              ))}
-            </select>
-            <input aria-label="Množství" inputMode="decimal" value={line.quantity} onChange={(event) => update(line.key, { quantity: event.target.value })} />
-            <label className="checkboxRow">
-              <input type="checkbox" checked={line.includedInPackage} onChange={(event) => update(line.key, { includedInPackage: event.target.checked })} />
-              V ceně balíčku
-            </label>
-            <input aria-label="Poznámka" placeholder="Poznámka" value={line.note} onChange={(event) => update(line.key, { note: event.target.value })} />
-            <button type="button" className="dangerText" onClick={() => setLines((current) => current.filter((candidate) => candidate.key !== line.key))}>Odebrat</button>
-          </div>
-        );
-      })}
-      <div className="assetActions">
-        <button
-          type="button"
-          className="secondaryButton"
-          onClick={() => setLines((current) => [...current, { key: `new-${Date.now()}-${current.length}`, childItemId: "", quantity: "1", includedInPackage: true, note: "" }])}
-        >
-          + Přidat položku
-        </button>
-        <button type="button" className="primaryButton" onClick={() => void handleSave()} disabled={!dirty || busy}>
-          {busy ? "Ukládám…" : "Uložit obsah"}
-        </button>
-      </div>
-      {savedHint && <small className="fieldHint">{savedHint}</small>}
-      {error && <small className="uploadError">{error}</small>}
-    </section>
   );
 }
 

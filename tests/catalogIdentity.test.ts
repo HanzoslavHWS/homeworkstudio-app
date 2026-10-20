@@ -132,7 +132,8 @@ test("typy: všech pět typů lze založit; KIT má vlastní typ, BOOTH zůstáv
   ]);
   assert.deepEqual(CATALOG_ITEM_KINDS_BY_TYPE.BOOTH, ["booth"], "BOOTH se nepřevádí na KIT");
   assert.equal(defaultItemTypeForKind("other"), "PRODUCT", "mapování kind → typ pro starší zápisy beze změny");
-  assert.ok(!(CUSTOMER_CATALOG_ITEM_TYPES as readonly string[]).includes("KIT"), "KIT se zákazníkovi v PDF katalogu zatím nenabízí");
+  // V1-DATA-04: KIT is published manually like any product (tests/catalogKits.test.ts); INTERNAL_COMPONENT never.
+  assert.ok(!(CUSTOMER_CATALOG_ITEM_TYPES as readonly string[]).includes("INTERNAL_COMPONENT"), "interní komponenta se zákazníkovi nikdy nenabízí");
 });
 
 test("založení: oficiální názvy CZ/EN, jednotka z číselníku a parametry se uloží; kombinovaná jednotka je odmítnuta", () => {

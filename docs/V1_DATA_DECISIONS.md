@@ -317,3 +317,32 @@ Doplňující pravidla:
 3. **Jednotky:** `m2/ak` se automaticky neslučuje s `m²`. Pozor: stávající `canonicalUnit` ve vyúčtování (`domain/settlementCheck.ts`) příponu `/ak`, `/akce` už dnes zahazuje, takže porovnání vyúčtování bere `m2/ak` jako `m2`. To se nemění bez ověření dopadu na historické kontroly. Návrh explicitních pravidel patří do navazujícího batche.
 4. **Kombinované jednotky:** budou samostatné řádky `catalog_units` (`is_combined = true`). Převod na základní jednotku jen po schválení jeho významu. Rozlišovat jednotky pro účtování od jednotek fyzických rozměrů (mm na kartě).
 5. **KIT v zákaznickém katalogu:** dnes se nenabízí (`CUSTOMER_CATALOG_ITEM_TYPES`). Publikace stejným schvalovacím mechanismem jako u ostatních produktů přijde ve V1-DATA-04.
+
+## 7. V1-DATA-04 — schválená rozhodnutí a implementace (2026-10-20, DEV)
+
+Schváleno: **A4** (záporný rozdíl se nedobropisuje, minimální doplatek je 0, slevy jsou samostatné rozhodnutí), **A12** (varianty ve vzorníku, M01 = šedý koberec, M02 = koberec jiné barvy, a navíc individuální příplatek každé barvy), **A14** (komplet v kompletu ve v1.0 zakázán), **A16** (volné textové položky), **A17** (účtuje se jen přesah grafiky).
+
+Migrace `20261021130000_catalog_kits_variants.sql` (M6 + M7 v jednom souboru, aplikováno jen v DEV). Odchylky od návrhu v oddílu 1.3 architektury:
+- `difference_floor_zero` nevznikl. Podle A4 platí nula jako dolní mez vždy a bez výjimky v datech.
+- Vzorník nese u varianty i **pravidlo příplatku** (`surcharge_rule`: none / price_difference / per_unit / fixed + jednotka), aby dvě barvy se stejným ABF kódem (M02) mohly mít jiný příplatek. Částky v katalogu nejsou. Přijdou z cenových verzí V1-DATA-05 podle id varianty nebo náhrady.
+- `print_allowance` je pole rozsahů `{surfaceTypeId?, printSurfaceIds?, unitCode: bm|m2|ks, includedQuantity}`. Typ plochy je z modulu Tiskové plochy (`PRINT_SURFACE_TYPES`), konkrétní plocha z generátoru (`fascia-print`).
+- Celý obsah kompletu se ukládá jednou transakční funkcí `replace_catalog_kit_lines` (jen service_role). Řádky se párují podle `line_key` a ponechané řádky si drží své id.
+- Zákaz komplet v kompletu hlídá doména i trigger, a to jen při zápisu. Případné starší vnořené řádky zůstávají, ale komplet s nimi nejde znovu uložit, dokud se neodeberou.
+
+Doménová logika: `domain/catalogPackages.ts` (řádky, validace), `domain/catalogKitPricing.ts` (náhrady, varianty, doplatky přes cenový resolver), `domain/catalogKitPrintAllowance.ts` (zahrnutá grafika a přesah), `domain/catalogVariants.ts` (vzorníky). Generátor, výpočty existujících projektů a `BoothType.packageContents` se nemění. Napojení výpočtu kompletu do projektu a snapshotu patří do V1-DATA-07.
+
+### 7.1 Kontrola starších vnořených kompletů před nasazením M7 mimo DEV
+
+Produkce se v tomto kroku nečte ani nemění. Pravidlo A14 se kontroluje jen při zápisu. Případný starší řádek „stánek nebo komplet uvnitř kompletu“, případně řádek u karty, která není BOOTH ani KIT, proto migraci nezastaví, ale znemožní další uložení obsahu daného kompletu.
+
+1. Až bude k produkci výslovně povolen čtecí přístup, spusťte tento dotaz. Funguje před migrací `20261021130000` i po ní:
+   ```sql
+   select line.id, owner.display_name as komplet, owner.item_type, child.display_name as polozka, child.item_type
+   from catalog_item_package_items line
+   join catalog_items owner on owner.id = line.package_item_id
+   left join catalog_items child on child.id = line.child_item_id
+   where owner.item_type not in ('BOOTH', 'KIT') or child.item_type in ('BOOTH', 'KIT');
+   ```
+2. Prázdný výsledek znamená, že A14 nic neblokuje. V DEV byl výsledek prázdný (2026-10-20).
+3. U každého nalezeného řádku rozhodne uživatel, zda řádek odebrat, nebo vnořený stánek rozepsat na jeho komponenty. Nic se neopravuje automaticky.
+4. Teprve potom smí jít migrace M7 dál než do DEV.
