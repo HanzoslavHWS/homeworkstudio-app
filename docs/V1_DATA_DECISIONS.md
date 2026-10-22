@@ -346,3 +346,49 @@ Produkce se v tomto kroku nečte ani nemění. Pravidlo A14 se kontroluje jen p�
 2. Prázdný výsledek znamená, že A14 nic neblokuje. V DEV byl výsledek prázdný (2026-10-20).
 3. U každého nalezeného řádku rozhodne uživatel, zda řádek odebrat, nebo vnořený stánek rozepsat na jeho komponenty. Nic se neopravuje automaticky.
 4. Teprve potom smí jít migrace M7 dál než do DEV.
+
+## 8. V1-DATA-05 — verzované ceníky (2026-10-22, DEV)
+
+Schválená obchodní pravidla V1-DATA-05 mění tyto body plánu (oddíl 1.4 a M8/M9 architektury, A3, A11, A13, A18). Odchylky byly schváleny 2026-10-22 před implementací.
+
+| Bod plánu | Nově | Proč |
+|---|---|---|
+| `resolvePrice` hledá verzi „platnou k datu“; M9 `events.base_price_list_id` (ceník) | Veletrh má **výslovně přiřazenou verzi** (`event_price_assignments`, základní a elektřina zvlášť, s historií). Resolver datum nezná | Datum konání nesmí přepnout ceník; zářijový veletrh smí mít verzi platnou do června; publikace nové verze nic nepřecení |
+| A18: `valid_to` odvozené od další verze | `valid_from` / `valid_to` jsou **jen evidenční**, v konceptu upravitelné, publikací zamčené. Překryv je jen upozornění | Platnost nerozhoduje o ceně |
+| M8: `price_lists.kind` | Nové tabulky `versioned_price_lists`, `price_list_versions`; legacy `price_lists` a `pricing_entries` beze změny | Pět legacy čtenářů vypisuje všechny `price_lists`; nákupní ceník se tam nesmí objevit |
+| `purchase_czk` v řádku prodejní ceny | Samostatný nákupní ceník (`kind = purchase`), tabulka `purchase_price_entries`, vlastní API `/api/purchase-prices` a oprávnění `prices.purchase.*`; firmy přes `purchase_price_list_companies` (MVP: jeden aktivní nákupní ceník na firmu) | Oddělení nákupních a prodejních cen i oprávnění |
+| `price_list_surcharges.substitute_id` → řádek náhrady | Doplatek náhrady je klíčovaný (komplet, `line_key`, náhradní položka, varianta); doplatek barvy podle `variant_id` | `replace_catalog_kit_lines` náhrady při každém uložení kompletu maže a vkládá znovu, jejich id nejsou stabilní |
+| A11: elektřina = kódy řady L | `catalog_items.price_category` (`standard` / `electricity`). Jednorázově označeny SERVICE s ABF kódem L + 2 znaky. Ceník elektřiny smí obsahovat jen tuto kategorii (kontrola při publikaci). Chybí-li položka v ceníku elektřiny, použije se základní | Rozlišení kategorií, ne prefixem |
+| `eur_mode`: derived / fixed / none | derived / **direct** (cena stanovená v EUR) / **manual** (ručně přepsaný přepočet, označený) / none | Odlišit cenu v EUR od ručního přepsání |
+| A3: kurz se nepředvyplňuje | Výchozí kurz nové verze **24,17**, zaokrouhlení nahoru na 1 € (jednotková cena, ne součet) | Schválený testovací kurz |
+| A13: zmrazit legacy | **Neprovedeno** ve V1-DATA-05; legacy ceníky a „Správa cen“ fungují beze změny | Mimo rozsah, změnilo by stávající administraci |
+
+Implementace: migrace `20261022120000_price_list_versions.sql` (aplikováno jen v DEV), doména `domain/priceVersions.ts` (převod EUR, resolver bez data, adaptér pro `priceKit`, nákupní ceny, kontroly publikace), oprávnění `lib/auth/permissions.ts` (dnes jedno přihlášení = všechna oprávnění; uživatelské role zatím neexistují), API `lib/priceVersions/priceVersionsApi.server.ts`, stránka Administrace → **Ceníky (verze)**. Publikovaná verze je neměnná na úrovni triggerů; publikace jen RPC `publish_price_list_version`. Generátor, kalkulace a tiskové plochy dál počítají ze starých ceníků — napojení a snapshot patří do V1-DATA-07; výsledek resolveru už nese původ (verze, řádek, kurz, ruční cena) pro snapshot.
+
+Zkušební data v DEV (nearchivovat, pro společné testování): firmy Creativ Expo, Gendai, MAC Praha; veletrh `zkusebni-v1-data-05` (15.–18. 9. 2026); ceníky `ZKUSEBNI-ZAKLADNI` (v1 publikována a přiřazena, platnost 1–6/2026; v2 publikována s kurzem 25, nepřiřazena; v3 koncept), `ZKUSEBNI-ELEKTRINA` (v1 přiřazena), `ZKUSEBNI-NAKUP` (v1, navázány tři firmy).
+
+### 8.1 Oprava: tři prodejní ceny v jedné verzi (2026-10-22)
+
+Každá položka (a každý doplatek) má v jedné verzi prodejního ceníku **současně** tři ceny:
+
+| Cena | Význam | Uloženo |
+|---|---|---|
+| CZK | pevná cena v Kč | `sale_czk` |
+| EUR_SK | přepočet CZK kurzem verze, zaokrouhlení nahoru na 1 € (nebo ruční přepsání, označené) | `eur_mode` = `derived` / `manual`, ruční hodnota v `sale_eur` |
+| EUR_WORLD | samostatná pevná cena v EUR, nezávislá na kurzu | `sale_eur_world` (nové) |
+
+- Nabídka/projekt si režim **volí výslovně** (`priceTrack` = `CZK` / `EUR_SK` / `EUR_WORLD`); neodvozuje se ze země ani z měny. API výpočtu bez režimu vrátí chybu.
+- Změna CZK nebo kurzu v konceptu mění jen EUR_SK, nikdy EUR_WORLD. Ruční EUR_SK kurz nemění.
+- Publikace vyžaduje u každé pevné ceny i doplatku všechny tři hodnoty.
+- Migrace `20261022130000_price_list_versions_eur_world.sql` jen přidává sloupce a nahrazuje tři funkce; žádný existující (ani publikovaný) řádek nepřepisuje. Starší řádky s `eur_mode = direct` se čtou jako EUR_WORLD = jejich EUR cena a EUR_SK = přepočet z CZK; kopie do nové verze je převede do nového tvaru. Publikované v1/v2 zkušebního ceníku EUR_WORLD nemají, proto v tomto režimu vrací „k nacenění“.
+- Příprava Excelu (V1-DATA-08): `domain/priceVersionExcel.ts` — sloupce `price_czk`, `price_eur_sk` (jen pro čtení), `price_eur_sk_manual`, `price_eur_world`; prázdná buňka = beze změny, `#SMAZAT` maže. Hromadný import zatím neimplementován.
+
+### 8.2 Ochrana souběžných úprav a bezpečné automatické testy (2026-10-22)
+
+- **Optimistic concurrency:** `price_list_versions.revision` (migrace `20261022140000_price_list_versions_revision.sql`, jen nový sloupec, žádný řádek cen se nemění). Každý zápis do verze uvádí revizi, ze které vychází: uložení obsahu konceptu (prodejní i nákupní), hlavička, smazání, publikace, archivace a kopie **konceptu** (publikovaná verze se měnit nemůže). Kontrola probíhá v databázi pod zámkem řádku (`price_list_version_lock`, SQLSTATE `P0409`) ve stejné transakci jako zápis; API ji navíc ověří předem a vrátí 409 `{ conflict: true, currentRevision }`. Zápis bez revize je odmítnut. Staré podpisy funkcí bez revize byly zrušeny (jen funkce, ne data).
+- **Přiřazení veletrhu:** klient posílá přiřazení, které viděl (`expectedCurrentVersionId`); jiné aktuální přiřazení = konflikt.
+- **Editor:** při konfliktu se nic neuloží, rozpracované hodnoty zůstanou zobrazené a nabídne se „Načíst aktuální stav“. Akce verze (publikovat, kopírovat, smazat) jsou zablokované, dokud editor drží neuložené řádky.
+- **Smazání konceptu**, ze kterého vychází jiná verze, je odmítnuto srozumitelnou zprávou.
+- **Pokrytí cenových režimů:** registr nese ke každé verzi počet položek a doplatků bez CZK / EUR_SK / EUR_WORLD. Tabulka verzí i přiřazení veletrhu na neúplný režim upozorní; cena v něm je „k nacenění“, nic se nedopočítává ani nepřevádí z CZK.
+- **Automatické testy proti DEV** (`npm run test:price-versions-e2e`): jen DEV a lokální server; pracují výhradně ve vyhrazeném neaktivním ceníku `E2E-AUTOTEST`, jen s koncepty označenými ID běhu, nic nepublikují ani nepřiřazují a koncepty v `finally` smažou (nejdřív kopie). Zápis do jiné verze skript odmítne. Ručně připravená data (ZKUŠEBNÍ ceníky, veletrh) skripty bez výslovného povolení nemění.
+- **Tabulky cen (zobrazení):** prvním sloupcem je kód z katalogové karty — ABF kód, u interní položky bez něj generátorový kód (označený „gen.“). Do ceníku se kód neukládá. Hledání podle kódu i názvu, řazení podle kódu (přirozeně, L2 < L10) nebo názvu. Výpočty ani datový model se nemění.

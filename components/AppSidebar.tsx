@@ -2,8 +2,8 @@ type AppSidebarProps = {
   collapsed: boolean;
   onToggleCollapsed: () => void;
   onStartNewProject: () => void;
-  activeSection?: "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies";
-  onNavigate?: (section: "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies") => void;
+  activeSection?: "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies" | "priceVersions";
+  onNavigate?: (section: "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies" | "priceVersions") => void;
   /** Úkoly badge: overdue + today's open tasks (domain/tasks.ts computeTaskCounts().attention). 0/undefined hides it. */
   taskBadge?: number;
 };
@@ -67,6 +67,10 @@ export function AppSidebar({
         <button type="button" className={activeSection === "priceLists" ? "navItem active" : "navItem"} title="Ceníky" onClick={() => onNavigate?.("priceLists")}>
           <span className="navIcon">₠</span>
           <span className="navLabel">Ceníky</span>
+        </button>
+        <button type="button" className={activeSection === "priceVersions" ? "navItem active" : "navItem"} title="Verzované ceníky, přiřazení veletrhům a nákupní ceník (V1)" onClick={() => onNavigate?.("priceVersions")}>
+          <span className="navIcon">€</span>
+          <span className="navLabel">Ceníky (verze)</span>
         </button>
         <button type="button" className={activeSection === "pricingAdmin" ? "navItem active" : "navItem"} title="Správa cen" onClick={() => onNavigate?.("pricingAdmin")}>
           <span className="navIcon">⚙</span>

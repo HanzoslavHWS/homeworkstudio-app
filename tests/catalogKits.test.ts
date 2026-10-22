@@ -223,10 +223,11 @@ function request(url: string, init: Readonly<{ token?: string; body?: unknown; m
 // MIGRATION
 // =========================================================================================
 
-test("migrace: číslo navazuje na 20261021120000 a je poslední; nic nemaže ani nepřepisuje historická data", async () => {
+test("migrace: číslo navazuje na 20261021120000; nic nemaže ani nepřepisuje historická data", async () => {
   const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url)).filter((name) => name.endsWith(".sql")).sort();
-  assert.equal(migrations.at(-1), "20261021130000_catalog_kits_variants.sql");
-  assert.equal(migrations.at(-2), "20261021120000_catalog_identity.sql");
+  const index = migrations.indexOf("20261021130000_catalog_kits_variants.sql");
+  assert.ok(index > 0);
+  assert.equal(migrations[index - 1], "20261021120000_catalog_identity.sql");
   const sql = (await migrationSql()).toLowerCase();
   assert.doesNotMatch(sql, /drop\s+table|truncate|delete\s+from\s+catalog_items|update\s+projects/u);
   // The only delete is inside replace_catalog_kit_lines (lines of the kit being saved and their substitutes).
