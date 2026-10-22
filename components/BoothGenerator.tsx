@@ -225,6 +225,9 @@ import { TechnicalRastersPage } from "./workflow/TechnicalRastersPage";
 import { SettlementChecksPage } from "./workflow/settlement/SettlementChecksPage";
 import { RealizationCompaniesPage } from "./workflow/RealizationCompaniesPage";
 import { PriceVersionsPage } from "./workflow/priceVersions/PriceVersionsPage";
+import { eventConfigApi } from "../lib/db/eventConfig.remoteApi.client";
+import { suggestedTaskRealizationCompany, type EventRealizationLink } from "../domain/eventAdmin";
+import type { PersistedExhibition, RemoteEventRepository } from "../domain/remotePersistence";
 import { CustomerCatalogPage } from "./workflow/CustomerCatalogPage";
 import { RemoteApiCustomerCatalogPresetRepository } from "../lib/db/customerCatalogPresetRepository.remoteApi.client";
 import { RemoteApiTechnicalRasterProjectRepository } from "../lib/db/technicalRasterProjectRepository.remoteApi.client";
@@ -707,15 +710,23 @@ export default function BoothGenerator() {
   /* ================================================= */
 
   const selectedExhibition = adminEvents.find((event) => event.id === fairId);
+  /** Realization firms of the selected event (V1-DATA-06) — used only to suggest a firm for new tasks. */
+  const [eventRealizationLinks, setEventRealizationLinks] = useState<readonly EventRealizationLink[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    setEventRealizationLinks([]);
+    if (!fairId) return;
+    eventConfigApi.load(fairId).then((config) => { if (!cancelled) setEventRealizationLinks(config.realizationLinks); }).catch(() => undefined);
+    return () => { cancelled = true; };
+  }, [fairId]);
 
   const taskLookups: TaskLookups = { events: adminEvents, categories: taskStore.categories, realizationCompanies: taskRealizationCompanies };
   const taskDetail = taskDetailId ? taskStore.tasks?.find((task) => task.id === taskDetailId) : undefined;
 
   /** The open booth project as a task context: event, company, stand number, the event's realizačka and the project itself as the source. */
   function boothProjectTaskContext(): TaskContext {
-    const realizationCompanyId = selectedExhibition?.realizationCompanyId && taskRealizationCompanies.some((candidate) => candidate.id === selectedExhibition.realizationCompanyId)
-      ? selectedExhibition.realizationCompanyId
-      : undefined;
+    // Only a pre-filled value of a NEW task (taskInputFromContext); existing tasks are never changed.
+    const realizationCompanyId = suggestedTaskRealizationCompany(eventRealizationLinks, selectedExhibition?.realizationCompanyId, taskRealizationCompanies);
     return {
       eventId: fairId || undefined,
       companyName: company.trim() || undefined,
@@ -2808,11 +2819,24 @@ export default function BoothGenerator() {
                 tasks={taskStore.tasks}
                 eventId={eventId}
                 onShowEventTasks={(id) => navigateWorkspace("tasks", { tasksIntent: { tab: "all", filters: { eventId: id } } })}
+                onOpenTask={(taskId) => setTaskDetailId(taskId)}
               />
             )}
+            actorName={taskStore.actorName}
             onSave={async (event) => {
-              await eventRepositoryRef.current?.save(event);
-              setAdminEvents((events) => events.map((item) => item.id === event.id ? event : item));
+              const repository = eventRepositoryRef.current;
+              if (!repository) {
+                setAdminEvents((events) => events.map((item) => item.id === event.id ? event : item));
+                return event;
+              }
+              // Optimistic concurrency: save against the revision the card was loaded with, so an edit
+              // made elsewhere in the meantime is refused instead of overwritten (V1-DATA-06).
+              const knownRevision = (event as Partial<PersistedExhibition>).revision;
+              const stored = typeof knownRevision === "number" && "saveWithRevision" in repository
+                ? await (repository as RemoteEventRepository).saveWithRevision(event, knownRevision)
+                : await repository.save(event);
+              setAdminEvents((events) => events.map((item) => item.id === event.id ? stored : item));
+              return stored;
             }}
           />
         )}

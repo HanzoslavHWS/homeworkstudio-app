@@ -842,10 +842,11 @@ test("API: registr nese pokrytí cenových režimů každé verze", async () => 
   assert.equal(body.coverage["v-base"]?.missingRows.CZK, 0);
 });
 
-test("migrace revizí: poslední, sloupec s výchozí hodnotou, žádný řádek cen se nepřepisuje, staré podpisy bez revize zrušeny", async () => {
+test("migrace revizí: sloupec s výchozí hodnotou, žádný řádek cen se nepřepisuje, staré podpisy bez revize zrušeny", async () => {
   const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url)).filter((name) => name.endsWith(".sql")).sort();
-  assert.equal(migrations.at(-1), "20261022140000_price_list_versions_revision.sql");
-  assert.equal(migrations.at(-2), "20261022130000_price_list_versions_eur_world.sql");
+  const index = migrations.indexOf("20261022140000_price_list_versions_revision.sql");
+  assert.ok(index > 0);
+  assert.equal(migrations[index - 1], "20261022130000_price_list_versions_eur_world.sql");
   const sql = (await readFile(new URL("../supabase/migrations/20261022140000_price_list_versions_revision.sql", import.meta.url), "utf8")).toLowerCase();
   assert.match(sql, /add column revision integer not null default 1/u);
   assert.doesNotMatch(sql, /update\s+(price_list_entries|price_list_surcharges|purchase_price_entries|event_price_assignments\s+set\s+(?!replaced))/u);

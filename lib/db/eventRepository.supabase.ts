@@ -32,6 +32,7 @@ function eventToRow(event: Exhibition): Readonly<{
   active: boolean;
   start_date: string | null;
   end_date: string | null;
+  short_code?: string;
   document: Exhibition;
 }> {
   return {
@@ -42,6 +43,9 @@ function eventToRow(event: Exhibition): Readonly<{
     active: event.active,
     start_date: event.eventFrom ?? null,
     end_date: event.eventTo ?? null,
+    // Indexed copy of document.shortCode (unique, immutable once set — migration 20261022150000).
+    // Sent only when present, so saving works on a database without the column and never clears it.
+    ...(event.shortCode ? { short_code: event.shortCode } : {}),
     document: event,
   };
 }

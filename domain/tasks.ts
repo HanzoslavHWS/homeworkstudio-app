@@ -723,6 +723,21 @@ export function tasksForEvent(tasks: readonly Task[], eventId: string): readonly
   return tasks.filter((task) => task.eventId === eventId);
 }
 
+export type EventTaskOverview = Readonly<{
+  counts: TaskCounts;
+  /** Every not-done, not-cancelled task of the event — manual or automatic, any due date or none. */
+  openCount: number;
+  /** The first open tasks in the default order (overdue, today, upcoming, later, no date). */
+  nextOpen: readonly Task[];
+}>;
+
+/** Event card overview: the date buckets plus ALL open tasks, so a task due later or without a date is never invisible there. */
+export function eventTaskOverview(tasks: readonly Task[], eventId: string, today: string, limit = 5): EventTaskOverview {
+  const eventTasks = tasksForEvent(tasks, eventId);
+  const open = eventTasks.filter(isTaskOpen);
+  return { counts: computeTaskCounts(eventTasks, today), openCount: open.length, nextOpen: sortTasks(open, "default", today).slice(0, limit) };
+}
+
 // ============================================================================
 // Persistence contract
 // ============================================================================

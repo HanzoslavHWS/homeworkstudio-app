@@ -515,6 +515,13 @@ export function versionTrackCoverage(entries: readonly SalePriceEntry[], surchar
   return { fixedRows: rows.length, surcharges: amounts.length, missingRows: byTrack(rows), missingSurcharges: byTrack(amounts) };
 }
 
+/** Warning text for an incomplete version (empty when every track is covered). Shared by the price pages and the event card. */
+export function coverageWarningText(coverage: TrackCoverage | undefined): string {
+  const tracks = uncoveredTracks(coverage);
+  if (!coverage || tracks.length === 0) return "";
+  return tracks.map((track) => `${PRICE_TRACK_LABELS_CS[track]}: chybí u ${coverage.missingRows[track]} položek${coverage.missingSurcharges[track] ? ` a ${coverage.missingSurcharges[track]} doplatků` : ""}`).join("; ") + " — v tomto režimu bude cena „k nacenění“ (nic se nedopočítává).";
+}
+
 /** Tracks a version cannot fully price (any fixed row or surcharge missing). */
 export function uncoveredTracks(coverage: TrackCoverage | undefined): readonly PriceTrack[] {
   if (!coverage) return [];

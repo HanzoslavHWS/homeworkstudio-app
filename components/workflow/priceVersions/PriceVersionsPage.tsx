@@ -22,6 +22,7 @@ import {
   comparePriceItemsByCode,
   matchesPriceItemSearch,
   uncoveredTracks,
+  coverageWarningText,
   type EurSkMode,
   type PriceTrack,
   type EurRule,
@@ -648,11 +649,9 @@ function EventAssignmentsTab({ register, api, onChanged }: { register: SalePrice
 
   /** Tracks the version cannot price completely — e.g. EUR WORLD in versions published before the three-price correction. */
   function coverageWarning(versionId: string): string {
-    const coverage = register.coverage[versionId];
-    const tracks = uncoveredTracks(coverage);
-    if (!coverage || tracks.length === 0) return "";
-    return tracks.map((track) => `${PRICE_TRACK_LABELS_CS[track]}: chybí u ${coverage.missingRows[track]} položek${coverage.missingSurcharges[track] ? ` a ${coverage.missingSurcharges[track]} doplatků` : ""}`).join("; ") + " — v tomto režimu bude cena „k nacenění“ (nic se nedopočítává).";
+    return coverageWarningText(register.coverage[versionId]);
   }
+
 
   if (register.events.length === 0) return <p className="workspaceEmpty">Zatím není založený žádný veletrh. Založte jej v sekci Výstavy / eventy.</p>;
   return (

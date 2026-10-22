@@ -5,6 +5,7 @@ import {
   createEventDocumentFromAsset,
   eventHasUnsavedChanges,
   eventLogoUrl,
+  type EventDeadline,
   type EventDocument,
   type Exhibition,
   type PriceList,
@@ -17,6 +18,17 @@ import type { CatalogItemSummary } from "../../domain/catalogPricing";
 import type { PricingEntryAdmin } from "../../domain/pricingAdmin";
 import type { RemoteApiPricingAdminRepository } from "../../lib/db/pricingAdmin.remoteApi.client";
 import { DuplicatePriceListDialog, PriceListPricingTable } from "./PricingAdminPages";
+import { EventPricingSection, EventSettingsSections } from "./events/EventSettingsSections";
+import {
+  EVENT_DEADLINE_AUDIENCE_LABELS_CS,
+  EVENT_DEADLINE_AUDIENCES,
+  EVENT_DEADLINE_KIND_LABELS_CS,
+  EVENT_DEADLINE_KINDS,
+  EVENT_SHORT_CODE_EXAMPLE,
+  eventDateWarnings,
+  eventShortCodeIssue,
+  normalizeEventShortCode,
+} from "../../domain/eventAdmin";
 
 export function EventLogo({ event, compact = false }: { event?: Exhibition; compact?: boolean }) {
   return <EventMediaPreview asset={event?.logoAsset} url={event?.logoUrl} label="Logo výstavy" compact={compact} />;
@@ -29,7 +41,7 @@ function EventMediaPreview({ asset, url, label, compact = false, onOpen }: { ass
   return <button type="button" className={`eventMediaPreview ${compact ? "compact" : ""}`} onClick={() => resolved.url && onOpen?.(resolved.url)} disabled={!available || !onOpen}>{available ? <img src={resolved.url} alt={label} onError={() => setFailed(resolved.url!)} /> : <span>{resolved.loading ? "Načítám…" : label}</span>}</button>;
 }
 
-export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange, initialSelectedId, renderEventExtras }: { events: readonly Exhibition[]; priceLists: readonly PriceList[]; onChange: (events: Exhibition[]) => void; onSave: (event: Exhibition) => Promise<void>; onDirtyChange?: (dirty: boolean) => void; /** Opens this event instead of the first one (e.g. from a task's "Otevřít akci"). */ initialSelectedId?: string; /** Extra per-event content under the save bar (the Úkoly summary). */ renderEventExtras?: (eventId: string) => ReactNode }) {
+export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange, initialSelectedId, renderEventExtras, actorName }: { events: readonly Exhibition[]; priceLists: readonly PriceList[]; onChange: (events: Exhibition[]) => void; onSave: (event: Exhibition) => Promise<Exhibition | void>; /** Name recorded with price list assignments. */ actorName?: string; onDirtyChange?: (dirty: boolean) => void; /** Opens this event instead of the first one (e.g. from a task's "Otevřít akci"). */ initialSelectedId?: string; /** Extra per-event content under the save bar (the Úkoly summary). */ renderEventExtras?: (eventId: string) => ReactNode }) {
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(initialSelectedId && events.some((event) => event.id === initialSelectedId) ? initialSelectedId : events[0]?.id ?? "");
   const [adding, setAdding] = useState(false);
@@ -84,7 +96,6 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
       importantInfo: "",
       defaultCurrency: "CZK",
       priceListIds: [],
-      realizationCompanyId: "default",
       active: true,
     };
     onChange([...events, created]);
@@ -136,15 +147,17 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
     if (!selected) return;
     setSaveState("saving");
     try {
-      await onSave(selected);
-      savedEventsRef.current.set(selected.id, selected);
+      const stored = await onSave(selected);
+      savedEventsRef.current.set(selected.id, stored || selected);
       setSaveState("saved");
       onDirtyChange?.(false);
     } catch (error) {
       setSaveState("dirty");
       const message = error instanceof ConcurrencyConflictError
         ? "Data byla mezitím změněna jinde. Obnovte stránku před uložením."
-        : "Event se nepodařilo uložit. Uploadovaná data v R2 zůstávají bezpečně zachována.";
+        : error instanceof Error && error.message && !/^HTTP/u.test(error.message)
+          ? error.message
+          : "Event se nepodařilo uložit. Uploadovaná data v R2 zůstávají bezpečně zachována.";
       setUploadStates((current) => ({ ...current, save: { state: "error", percent: 0, message } }));
     }
   }
@@ -165,12 +178,20 @@ export function EventsPage({ events, priceLists, onChange, onSave, onDirtyChange
         <div className="eventForm">
           <label><span>Název</span><input value={selected.name} onChange={(event) => update({ name: event.target.value })} /></label>
           <div className="threeColumns"><label><span>Slug</span><input value={selected.slug} onChange={(event) => { const slug = event.target.value; update({ slug, logoUrl: eventLogoUrl(slug), coverImageUrl: eventCoverImageUrl(slug) }); }} /></label><label><span>Rok</span><input type="number" value={selected.year} onChange={(event) => update({ year: Number(event.target.value) })} /></label><label><span>Edice</span><input value={selected.edition} onChange={(event) => update({ edition: event.target.value })} /></label></div>
+          <ShortCodeField value={selected.shortCode} savedValue={savedEventsRef.current.get(selected.id)?.shortCode} onChange={(shortCode) => update({ shortCode })} />
           <label><span>Místo konání</span><input value={selected.venue} onChange={(event) => update({ venue: event.target.value })} /></label>
           <div className="fourColumns"><DateField label="Montáž" value={selected.assemblyDate} onChange={(assemblyDate) => update({ assemblyDate })} /><DateField label="Od" value={selected.eventFrom} onChange={(eventFrom) => update({ eventFrom })} /><DateField label="Do" value={selected.eventTo} onChange={(eventTo) => update({ eventTo })} /><DateField label="Demontáž" value={selected.disassemblyDate} onChange={(disassemblyDate) => update({ disassemblyDate })} /></div>
           <div className="twoColumns"><DateField label="Deadline dodání materiálů / dat" value={selected.materialDataDeadline} onChange={(materialDataDeadline) => update({ materialDataDeadline })} /><DateField label="Deadline odsouhlasení návrhu stavby" value={selected.designApprovalDeadline} onChange={(designApprovalDeadline) => update({ designApprovalDeadline })} /></div>
-          <div className="deadlineEditor"><div><strong>Další deadline</strong><button type="button" onClick={() => update({ deadlines: [...selected.deadlines, { id: `deadline-${Date.now()}`, name: "Nový deadline", date: "" }] })}>+ Přidat</button></div>{selected.deadlines.map((deadline) => <div key={deadline.id}><input value={deadline.name} onChange={(event) => update({ deadlines: selected.deadlines.map((item) => item.id === deadline.id ? { ...item, name: event.target.value } : item) })} /><input type="date" value={deadline.date} onChange={(event) => update({ deadlines: selected.deadlines.map((item) => item.id === deadline.id ? { ...item, date: event.target.value } : item) })} /></div>)}</div>
-          <div className="twoColumns"><label><span>Realizačka</span><select value={selected.realizationCompanyId ?? "default"} onChange={(event) => update({ realizationCompanyId: event.target.value })}>{realizationCompanies.filter((company) => company.active).map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label><label><span>Výchozí ceník</span><select value={selected.defaultPriceListId ?? ""} onChange={(event) => update({ defaultPriceListId: event.target.value || undefined })}><option value="">Bez výchozího ceníku</option>{priceLists.filter((list) => selected.priceListIds.includes(list.id)).map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label></div>
+          {eventDateWarnings(selected).map((warning) => <p key={warning} className="fieldHint">⚠ {warning}</p>)}
+          <DeadlinesEditor deadlines={selected.deadlines} onChange={(deadlines) => update({ deadlines })} />
+          <EventSettingsSections key={`settings-${selected.id}-${savedEventsRef.current.has(selected.id) ? "saved" : "new"}`} eventId={selected.id} legacyRealizationCompanyId={selected.realizationCompanyId} />
+          <EventPricingSection key={`pricing-${selected.id}-${savedEventsRef.current.has(selected.id) ? "saved" : "new"}`} eventId={selected.id} actorName={actorName} />
+          <section className="eventSettingsSection eventLegacySection">
+          <h3>Starší ceníky (generátor, do V1-DATA-07)</h3>
+          <p className="fieldHint">Stávající projekty a generátor zatím počítají z těchto ceníků. Ponecháno kvůli kompatibilitě, nové ceny se přiřazují výše.</p>
+          <div className="twoColumns"><label><span>Výchozí ceník</span><select value={selected.defaultPriceListId ?? ""} onChange={(event) => update({ defaultPriceListId: event.target.value || undefined })}><option value="">Bez výchozího ceníku</option>{priceLists.filter((list) => selected.priceListIds.includes(list.id)).map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label></div>
           <label><span>Dostupné ceníky</span><select multiple value={[...selected.priceListIds]} onChange={(event) => { const priceListIds = [...event.target.selectedOptions].map((option) => option.value); update({ priceListIds, defaultPriceListId: priceListIds.includes(selected.defaultPriceListId ?? "") ? selected.defaultPriceListId : priceListIds[0] }); }}>{priceLists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label>
+          </section>
           <label><span>Důležité informace</span><textarea value={selected.importantInfo} onChange={(event) => update({ importantInfo: event.target.value })} /></label>
           <label><span>Interní poznámky</span><textarea value={selected.notes.internalNote} onChange={(event) => update({ notes: { ...selected.notes, internalNote: event.target.value } })} /></label>
           <section className="eventDocuments"><div className="eventDocumentsHeader"><div><strong>Dokumenty pro vystavovatele</strong><small>Multi-upload ukládá soubory do R2; title, kategorie, jazyk a aktivita zůstávají samostatně editovatelné.</small></div><label className="smallUploadButton">+ Přidat dokumenty<input type="file" multiple accept=".pdf,.doc,.docx,.xls,.xlsx,.txt" onChange={(event) => { void addDocuments(event.target.files ?? undefined); event.target.value = ""; }} /></label></div><div className="eventDocumentDefaults"><label><span>Výchozí kategorie dávky</span><select value={documentCategory} onChange={(event) => setDocumentCategory(event.target.value)}><option value="application">Přihláška</option><option value="technical">Technické podmínky</option><option value="manual">Manuál</option><option value="instructions">Instrukce</option><option value="other">Ostatní</option></select></label><label><span>Výchozí jazyk</span><select value={documentLanguage} onChange={(event) => setDocumentLanguage(event.target.value as typeof documentLanguage)}><option value="">Neuveden</option><option value="cs">Čeština</option><option value="en">English</option></select></label></div><div className="eventDocumentDropzone" onDragOver={(event) => event.preventDefault()} onDrop={dropDocuments}>Přetáhněte sem více dokumentů najednou</div><UploadBatchStatus states={uploadStates} onRetry={() => void addDocuments([...retryFilesRef.current].filter(([key]) => key.startsWith("document-")).map(([, file]) => file))} />{selected.documents.length ? selected.documents.map((document) => <div className="eventDocumentRow" key={document.id}><div><input value={document.title} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, title: event.target.value } : item) })} /><select value={document.category} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, category: event.target.value } : item) })}><option value="application">Přihláška</option><option value="technical">Technické podmínky</option><option value="manual">Manuál</option><option value="instructions">Instrukce</option><option value="other">Ostatní</option></select><select value={document.language ?? ""} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, language: (event.target.value || undefined) as EventDocument["language"] } : item) })}><option value="">—</option><option value="cs">CS</option><option value="en">EN</option></select><label className="checkLabel"><input type="checkbox" checked={document.active} onChange={(event) => update({ documents: selected.documents.map((item) => item.id === document.id ? { ...item, active: event.target.checked } : item) })} /> Aktivní</label></div><span>{document.fileName} · {document.size ? `${formatFileSize(document.size)} · ` : ""}{document.mimeType} · {document.storageKey ? "R2" : document.availability === "temporary-session" ? "legacy dočasné" : "legacy uložené"}</span><div className="eventDocumentActions"><button type="button" onClick={() => void openDocument(document)}>Otevřít</button><button type="button" onClick={() => update({ documents: selected.documents.filter((item) => item.id !== document.id) })}>Odebrat</button></div>{uploadStates[`open-${document.id}`]?.message && <small className="uploadError">{uploadStates[`open-${document.id}`]?.message}</small>}</div>) : <p className="workspaceEmpty">Bez dokumentů.</p>}</section>
@@ -276,4 +297,44 @@ export function PriceListsPage({ priceLists, events, catalogItems, pricingAdminR
 
 function DateField({ label, value, onChange }: { label: string; value?: string; onChange: (value: string | undefined) => void }) {
   return <label><span>{label}</span><input type="date" value={value ?? ""} onChange={(event) => onChange(event.target.value || undefined)} /></label>;
+}
+
+/** Optional stable short code (V1-DATA-06). Editable until first saved, then fixed. */
+function ShortCodeField({ value, savedValue, onChange }: { value?: string; savedValue?: string; onChange: (value: string | undefined) => void }) {
+  const issue = eventShortCodeIssue(normalizeEventShortCode(value));
+  if (savedValue) {
+    return <label><span>Kód veletrhu</span><input value={savedValue} readOnly disabled /><small className="fieldHint">Uložený kód je neměnný (změna jen řízeným postupem).</small></label>;
+  }
+  return (
+    <label>
+      <span>Kód veletrhu (nepovinný)</span>
+      <input value={value ?? ""} placeholder={`např. ${EVENT_SHORT_CODE_EXAMPLE}`} onChange={(event) => onChange(event.target.value.toUpperCase() || undefined)} />
+      {issue ? <small className="uploadError">{issue}</small> : <small className="fieldHint">Stabilní krátký kód pro složky a budoucí zakázky. Nezávisí na názvu ani na cestě na disku; po uložení ho už nelze změnit.</small>}
+    </label>
+  );
+}
+
+/** Free-form deadlines with an optional type and audience (V1-DATA-06). */
+function DeadlinesEditor({ deadlines, onChange }: { deadlines: Exhibition["deadlines"]; onChange: (deadlines: Exhibition["deadlines"]) => void }) {
+  const patch = (id: string, change: Partial<EventDeadline>) => onChange(deadlines.map((item) => (item.id === id ? { ...item, ...change } : item)));
+  return (
+    <div className="deadlineEditor eventDeadlines">
+      <div><strong>Další uzávěrky</strong><button type="button" onClick={() => onChange([...deadlines, { id: `deadline-${Date.now()}`, name: "Nová uzávěrka", date: "" }])}>+ Přidat</button></div>
+      {deadlines.map((deadline) => (
+        <div key={deadline.id} className="eventDeadlineRow">
+          <input value={deadline.name} onChange={(event) => patch(deadline.id, { name: event.target.value })} />
+          <input type="date" value={deadline.date} onChange={(event) => patch(deadline.id, { date: event.target.value })} />
+          <select value={deadline.kind ?? ""} onChange={(event) => patch(deadline.id, { kind: (event.target.value || undefined) as EventDeadline["kind"] })}>
+            <option value="">Typ —</option>
+            {EVENT_DEADLINE_KINDS.map((kind) => <option key={kind} value={kind}>{EVENT_DEADLINE_KIND_LABELS_CS[kind]}</option>)}
+          </select>
+          <select value={deadline.audience ?? ""} onChange={(event) => patch(deadline.id, { audience: (event.target.value || undefined) as EventDeadline["audience"] })}>
+            <option value="">Pro koho —</option>
+            {EVENT_DEADLINE_AUDIENCES.map((audience) => <option key={audience} value={audience}>{EVENT_DEADLINE_AUDIENCE_LABELS_CS[audience]}</option>)}
+          </select>
+          <button type="button" onClick={() => { if (window.confirm(`Odebrat uzávěrku „${deadline.name}“?`)) onChange(deadlines.filter((item) => item.id !== deadline.id)); }}>Odebrat</button>
+        </div>
+      ))}
+    </div>
+  );
 }

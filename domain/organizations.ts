@@ -1,10 +1,15 @@
 import type { Currency, Notes } from "./models.ts";
 import type { StoredAsset } from "./assets.ts";
+import { normalizeEventDeadline, normalizeEventShortCode } from "./eventAdmin.ts";
 
 export type EventDeadline = Readonly<{
   id: string;
   name: string;
   date: string;
+  /** Optional type (V1-DATA-06): orders, design, graphics, technical, other. */
+  kind?: "orders" | "design" | "graphics" | "technical" | "other";
+  /** Optional: internal deadline or one communicated to customers. */
+  audience?: "internal" | "customer";
 }>;
 
 export type EventDocument = Readonly<{
@@ -35,6 +40,8 @@ export type EventMediaMetadata = Readonly<{
 export type Exhibition = Readonly<{
   id: string;
   slug: string;
+  /** Optional stable short code (V1-DATA-06), e.g. BEAUTY-2026-P. Separate from name and disk paths; immutable once saved. */
+  shortCode?: string;
   name: string;
   edition: string;
   year: number;
@@ -58,6 +65,7 @@ export type Exhibition = Readonly<{
   defaultCurrency: Currency;
   priceListIds: readonly string[];
   defaultPriceListId?: string;
+  /** LEGACY (kept for the old price calculations until V1-DATA-07): "default" / "realization-2..4" or a firm id. New assignments live in event_realization_companies. */
   realizationCompanyId?: string;
   active: boolean;
 }>; 
@@ -130,6 +138,7 @@ export function normalizeExhibition(
   return {
     id: event.id,
     slug,
+    ...(normalizeEventShortCode(event.shortCode) ? { shortCode: normalizeEventShortCode(event.shortCode) } : {}),
     name: event.name ?? "Nová výstava",
     edition: event.edition ?? "",
     year: event.year ?? new Date().getFullYear(),
@@ -144,7 +153,7 @@ export function normalizeExhibition(
     eventFrom: event.eventFrom,
     eventTo: event.eventTo,
     disassemblyDate: event.disassemblyDate,
-    deadlines: event.deadlines ?? [],
+    deadlines: (event.deadlines ?? []).map(normalizeEventDeadline),
     materialDataDeadline: event.materialDataDeadline,
     designApprovalDeadline: event.designApprovalDeadline,
     documents: (event.documents ?? []).map(normalizeEventDocument),

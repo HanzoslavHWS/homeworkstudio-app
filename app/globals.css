@@ -7371,3 +7371,37 @@ select:focus {
 .priceVersionTable th.priceItemCodeHead, .priceVersionTable td.priceItemCode { width: 1%; white-space: nowrap; }
 .priceVersionTable td.priceItemCode code { font-size: 8px; font-weight: 700; }
 .priceVersionTable .priceSortButton { color: inherit; font-size: 7px; font-weight: 700; text-decoration: none; text-transform: uppercase; }
+
+/* V1-DATA-06 — karta veletrhu: realizační firmy, složky, ceníky */
+.eventSettingsSection { display: grid; gap: 8px; padding: 10px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fcfcfb; }
+.eventSettingsSection h3 { margin: 0; font-size: 10px; }
+.eventSettingsSection .linkButton { justify-self: start; padding: 0; border: 0; background: none; color: #2f6f9f; font-size: 8px; text-decoration: underline; cursor: pointer; }
+.eventSettingsNotice { padding: 8px 10px; border: 1px dashed #d8dadb; border-radius: 8px; }
+.eventLegacyValue { margin: 0; padding: 6px 8px; border-radius: 6px; background: #f3f1ec; font-size: 8px; }
+.eventLegacySection { background: #faf8f4; }
+.eventRealizationRoles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
+.eventRealizationRole { display: grid; gap: 5px; align-content: start; padding: 8px; border: 1px solid #ecedee; border-radius: 6px; background: #fff; font-size: 8px; }
+.eventRealizationRow { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.eventRealizationRow > span { flex: 1 1 120px; }
+.eventRealizationRow select { flex: 1 1 140px; height: 28px; }
+.eventRealizationRow input[type="checkbox"] { width: auto; height: auto; }
+.eventRealizationNote { flex: 1 1 100px; height: 26px; }
+.eventPathRows, .eventPricingRows { display: grid; gap: 8px; }
+.eventPathRow { display: grid; gap: 3px; }
+.eventPathRow small { font-size: 7px; }
+.eventSectionBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.eventSectionBar > span { color: #8a8e91; font-size: 8px; font-weight: 700; text-transform: uppercase; }
+.eventSectionBar > span.dirty { color: #6f6251; }
+.eventDeadlines > div.eventDeadlineRow { display: grid; grid-template-columns: minmax(0, 2fr) 130px 150px 120px auto; gap: 6px; }
+.eventPricingHistory { margin: 0; padding-left: 14px; font-size: 8px; }
+@media (max-width: 900px) { .eventDeadlines > div.eventDeadlineRow { grid-template-columns: 1fr 1fr; } }
+.eventRealizationList { display: grid; gap: 6px; padding: 8px; border: 1px solid #ecedee; border-radius: 6px; background: #fff; font-size: 8px; }
+.eventPathModes { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 8px; }
+.eventPathModes input[type="radio"] { width: auto; height: auto; }
+.eventPathTable td input { width: 100%; height: 26px; }
+.eventPathTable td code { font-size: 8px; }
+.eventPathPreview { word-break: break-all; }
+.eventTasksList { display: grid; flex-basis: 100%; gap: 3px; }
+.eventTasksList ul { margin: 0; padding-left: 14px; }
+.eventTasksList li { font-size: 9px; }
+.eventTasksList .linkButton { padding: 0; border: 0; background: none; color: #2f6f9f; font-size: 9px; text-decoration: underline; cursor: pointer; min-height: 0; margin: 0; }
