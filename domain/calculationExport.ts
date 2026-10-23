@@ -5,7 +5,6 @@ import type {
   PlacedComponent,
 } from "./models.ts";
 import type { Exhibition, PriceList } from "./organizations.ts";
-import { resolveEventPriceListForCurrency } from "./organizations.ts";
 import type {
   ExportCalculationOptions,
   GeneratedPlanOutput,
@@ -14,9 +13,7 @@ import type {
   TechnicalRequirements,
   VisualizationItem,
 } from "./project.ts";
-import { getBasePricingEntry, groupCatalogSceneItems } from "./catalog.ts";
-import { calculateNetVatGross } from "./pricing.ts";
-import { priceCleaning, priceContainer, priceElectricity, priceGraphics } from "./technicalServices.ts";
+import { priceProjectLegacy, resolvePricingContext, type ProjectPriceLine, type ProjectPriceLineStatus, type ProjectPricingResult } from "./projectPricing.ts";
 import type { StoredAsset } from "./assets.ts";
 
 export type CalculationImageLayout = "one" | "two" | "three" | "four";
@@ -53,6 +50,8 @@ export type CustomerCalculationPriceRow = Readonly<{
   customerNotes?: readonly string[];
   includedInPackage?: boolean;
   warning?: string;
+  /** priced / included / missing ("K nacenění", amounts undefined) / not_billed (technical marker, priced as a service). */
+  status: ProjectPriceLineStatus;
 }>;
 
 export type CustomerCalculationViewModel = Readonly<{
@@ -77,6 +76,10 @@ export type CustomerCalculationViewModel = Readonly<{
   imageLayout: CalculationImageLayout;
   priceRows: readonly CustomerCalculationPriceRow[];
   warnings: readonly string[];
+  /** Lines without a price in the current source ("K nacenění"); > 0 means the total is not complete. */
+  missingCount: number;
+  /** The shared project pricing result (domain/projectPricing.ts) — the same one the editor price bar shows. */
+  pricing: ProjectPricingResult;
   totals: Readonly<{
     net: number;
     vat?: number;
@@ -107,26 +110,25 @@ export type CustomerCalculationSource = Readonly<{
   processedAt?: string;
 }>;
 
-/**
- * Section 8: event + project currency -> PriceList, never event.defaultPriceListId (that's
- * always the CZK list regardless of which currency this project actually uses — see
- * resolveEventPriceListForCurrency's own doc for why the two must never be conflated). No
- * fallback to the other currency's list, no conversion — an event with no PriceList yet in this
- * currency correctly yields priceListId: undefined, and every service then reports
- * "missing"/needs-quote rather than silently pricing against the wrong list.
- *
- * Graphics Export v1.1: extracted so the main calculation AND Graphics Export A/B resolve
- * pricing against the exact SAME context — never two different PriceList-resolution paths.
- */
-export function resolvePricingContext(
-  source: Readonly<{ event?: Exhibition; priceLists: readonly PriceList[]; currency: Currency }>,
-) {
+/** Event + project currency -> legacy PriceList context; moved to domain/projectPricing.ts (re-exported for existing callers such as the graphics export). */
+export { resolvePricingContext };
+
+function priceRowOf(line: ProjectPriceLine, source: CustomerCalculationSource): CustomerCalculationPriceRow {
+  const notes = line.kind === "scene_item" && source.options.includeItemNotes
+    ? [...new Set(source.sceneObjects.filter((scene) => scene.definitionId === line.itemId && scene.customerNote.trim()).map((scene) => scene.customerNote.trim()))]
+    : undefined;
   return {
-    priceListId: source.event ? resolveEventPriceListForCurrency(source.event, source.priceLists, source.currency)?.id : undefined,
-    exhibitionId: source.event?.id,
-    realizationCompanyId: source.event?.realizationCompanyId,
-    currency: source.currency,
-  } as const;
+    // Same row ids as before 07-B1 (booth-<id>, catalog item id, service id).
+    id: line.kind === "booth" ? `booth-${line.itemId}` : line.itemId,
+    name: line.name,
+    unit: line.unit,
+    quantity: line.quantity,
+    status: line.status,
+    ...(line.status === "priced" || line.status === "included" ? { unitPriceNet: line.unitPriceNet, totalNet: line.totalNet } : {}),
+    ...(line.status === "included" ? { includedInPackage: true } : {}),
+    ...(notes ? { customerNotes: notes } : {}),
+    ...(line.warning ? { warning: line.warning } : {}),
+  };
 }
 
 export function createCustomerCalculationViewModel(
@@ -136,41 +138,13 @@ export function createCustomerCalculationViewModel(
     [...source.generatedPlanOutputs, ...source.visualizations],
     source.options.selectedOutputIds,
   );
-  const rows: CustomerCalculationPriceRow[] = [];
-  const warnings: string[] = [];
-  const boothPrice = getBasePricingEntry(source.booth?.pricingEntries, source.currency);
-  if (source.booth && boothPrice?.salePrice !== undefined) {
-    rows.push({ id: `booth-${source.booth.id}`, name: source.booth.name, unit: "ks", quantity: 1, unitPriceNet: boothPrice.salePrice, totalNet: boothPrice.salePrice });
-  }
-  const groupedFurniture = groupCatalogSceneItems(source.sceneObjects, source.catalogItems, source.currency);
-  for (const item of groupedFurniture) {
-    const notes = source.sceneObjects
-      .filter((scene) => scene.definitionId === item.catalogItemId && scene.customerNote.trim())
-      .map((scene) => scene.customerNote.trim());
-    rows.push({
-      id: item.catalogItemId,
-      name: item.displayName,
-      unit: item.unit,
-      quantity: item.quantity,
-      unitPriceNet: item.saleUnitNet,
-      totalNet: item.saleTotalNet,
-      customerNotes: source.options.includeItemNotes ? [...new Set(notes)] : undefined,
-    });
-  }
-  const pricingContext = resolvePricingContext(source);
-  const services = [
-    priceCleaning(source.requirements, source.booth, source.catalogItems, pricingContext),
-    priceElectricity(source.requirements, source.catalogItems, pricingContext),
-    priceContainer(source.requirements, source.currency),
-    ...priceGraphics(source.requirements, source.booth, source.printSurfaceAssignments, source.realizationProfileId, source.catalogItems, pricingContext),
-  ].filter((service): service is NonNullable<typeof service> => Boolean(service));
-  for (const service of services) {
-    rows.push({ id: service.itemId, name: service.name, unit: service.unit, quantity: service.quantity, unitPriceNet: service.unitPriceNet, totalNet: service.totalNet, includedInPackage: service.includedInPackage, warning: service.warning });
-    if (service.warning) warnings.push(service.warning);
-  }
-  const net = rows.reduce((sum, row) => sum + (row.totalNet ?? 0), 0);
-  const vatRate = source.booth?.vatRatePercent ?? 21;
-  const tax = calculateNetVatGross(net, vatRate);
+  // 07-B1: the rows and totals come from the shared project pricing (same legacy rules and amounts
+  // as before; a missing price is now reported as "K nacenění" instead of a silent 0).
+  const pricing = priceProjectLegacy(source);
+  const rows = pricing.lines.map((line) => priceRowOf(line, source));
+  const warnings = pricing.warnings;
+  const net = pricing.totals.net;
+  const tax = pricing.totals;
   return {
     documentTitle: "Kalkulace / nabídka",
     processedAt: source.processedAt ?? new Date().toISOString(),
@@ -188,6 +162,8 @@ export function createCustomerCalculationViewModel(
     imageLayout: calculationImageLayout(source.options.includeVisuals ? outputs.length : 0),
     priceRows: source.options.includePricingTable ? rows : [],
     warnings,
+    missingCount: pricing.missingCount,
+    pricing,
     totals: source.options.includePricingTable
       ? source.options.includeVatSummary
         ? tax

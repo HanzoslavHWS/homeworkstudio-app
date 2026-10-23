@@ -1,33 +1,38 @@
-import { componentCatalogItems } from "../../data/components";
-import { calculateNetVatGross } from "../../domain/pricing";
-import type { BoothType, Currency, PlacedComponent, ProjectType } from "../../domain/models";
-import { getBasePricingEntry } from "../../domain/catalog";
+import type { ProjectType } from "../../domain/models";
+import { sumProjectLines, type ProjectPricingResult } from "../../domain/projectPricing";
 
 type PricingBarProps = {
-  booth?: BoothType;
-  placedItems: readonly PlacedComponent[];
-  currency: Currency;
+  /** The shared project pricing (domain/projectPricing.ts) — the same result as the customer calculation. */
+  pricing: ProjectPricingResult;
   projectType?: ProjectType;
 };
 
-export function PricingBar({ booth, placedItems, currency, projectType }: PricingBarProps) {
-  const boothNet = getBasePricingEntry(booth?.pricingEntries, currency)?.salePrice ?? 0;
-  const furnitureNet = placedItems.reduce((sum, item) => {
-    const definition = componentCatalogItems.find((candidate) => candidate.id === item.definitionId);
-    return sum + (getBasePricingEntry(definition?.pricingEntries, currency)?.salePrice ?? 0);
-  }, 0);
-  const totals = calculateNetVatGross(boothNet + furnitureNet);
-  // Report section 45: an Individual booth has no single fixed booth-level price (it's built from
-  // individually-priced components) — "FIXNÍ TYPOVKA" is a typovka-only concept and was
-  // semantically wrong here. This session doesn't implement Individual pricing (out of scope);
-  // only the wording changes — typovka's own fallback text is untouched.
-  const unpricedLabel = projectType === "individualni" ? "DLE KOMPONENT" : "FIXNÍ TYPOVKA";
+function money(value: number, currency: string): string {
+  return `${value.toLocaleString("cs-CZ")} ${currency}`;
+}
+
+/**
+ * Editor price bar (07-B1). Shows the same lines and totals as the customer calculation, the project
+ * summary and the exports — never its own partial sum. A missing price is "K nacenění", never 0.
+ */
+export function PricingBar({ pricing, projectType }: PricingBarProps) {
+  const { currency } = pricing;
+  const booth = pricing.lines.find((line) => line.kind === "booth");
+  const furniture = sumProjectLines(pricing.lines, (line) => line.kind === "scene_item" && line.status !== "not_billed");
+  const services = sumProjectLines(pricing.lines, (line) => line.kind === "service");
+  const boothLabel = !booth
+    ? projectType === "individualni" ? "DLE KOMPONENT" : "—"
+    : booth.status === "missing"
+      ? "K nacenění"
+      : booth.status === "included"
+        ? "v ceně"
+        : `${money(booth.totalNet ?? 0, currency)} bez DPH`;
   return (
     <div className="configuratorBottomBar">
       <div className="pricingInfo">
         <div>
           <span>CENA KONSTRUKCE</span>
-          <strong>{boothNet ? `${boothNet.toLocaleString("cs-CZ")} ${currency} bez DPH` : unpricedLabel}</strong>
+          <strong className={booth?.status === "missing" ? "pricingMissing" : undefined}>{boothLabel}</strong>
         </div>
         <div>
           <span>ÚPRAVY KONSTRUKCE</span>
@@ -35,11 +40,18 @@ export function PricingBar({ booth, placedItems, currency, projectType }: Pricin
         </div>
         <div>
           <span>MOBILIÁŘ</span>
-          <strong>{placedItems.length} položek · {furnitureNet.toLocaleString("cs-CZ")} {currency}</strong>
+          <strong>{furniture.count} položek · {money(furniture.net, currency)}{furniture.missing ? <em className="pricingMissing"> · {furniture.missing} k nacenění</em> : null}</strong>
         </div>
         <div>
-          <span>CELKEM</span>
-          <strong>{totals.net.toLocaleString("cs-CZ")} bez DPH · {totals.gross.toLocaleString("cs-CZ")} s DPH</strong>
+          <span>SLUŽBY A GRAFIKA</span>
+          <strong>{money(services.net, currency)}{services.missing ? <em className="pricingMissing"> · {services.missing} k nacenění</em> : null}</strong>
+        </div>
+        <div>
+          <span>{pricing.missingCount ? "MEZISOUČET — NEÚPLNÉ" : "CELKEM"}</span>
+          <strong title={pricing.missingCount ? "Mezisoučet oceněných položek; položky k nacenění nejsou zahrnuty — nejde o konečnou cenu." : undefined}>
+            {money(pricing.totals.net, currency)} bez DPH · {money(pricing.totals.gross, currency)} s DPH
+            {pricing.missingCount ? <em className="pricingMissing"> · {pricing.missingCount} k nacenění</em> : null}
+          </strong>
         </div>
       </div>
     </div>

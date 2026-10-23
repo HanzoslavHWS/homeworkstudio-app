@@ -11,16 +11,42 @@ const boothGeneratorSource = readFileSync(new URL("../components/BoothGenerator.
 // here; no Individual pricing engine is implemented in this session (explicitly out of scope).
 // =========================================================================================
 
-test("PRICING FOOTER: PricingBar picks a project-type-aware label when the booth has no fixed price — 'DLE KOMPONENT' for Individual, 'FIXNÍ TYPOVKA' unchanged for typovka", () => {
-  assert.match(pricingBarSource, /projectType === "individualni" \? "DLE KOMPONENT" : "FIXNÍ TYPOVKA"/u);
-  assert.doesNotMatch(pricingBarSource, /: "FIXNÍ TYPOVKA"\s*\}<\/strong>/u, "the raw literal fallback must be routed through unpricedLabel, never inlined directly again");
+// V1-DATA-07 / 07-B1: the bar shows the shared project pricing (domain/projectPricing.ts). A typovka
+// booth without a price is "K nacenění" (no longer hidden behind "FIXNÍ TYPOVKA" or a 0).
+
+test("PRICING FOOTER: individuální projekt bez stánku = „DLE KOMPONENT“; chybějící cena stánku = „K nacenění“, nikdy „FIXNÍ TYPOVKA“ ani 0", () => {
+  assert.match(pricingBarSource, /projectType === "individualni" \? "DLE KOMPONENT" : "—"/u);
+  assert.match(pricingBarSource, /booth\.status === "missing"\s*\?\s*"K nacenění"/u);
+  assert.doesNotMatch(pricingBarSource, /FIXNÍ TYPOVKA/u);
+  assert.doesNotMatch(pricingBarSource, /salePrice \?\? 0/u, "žádná tichá nula");
 });
 
-test("PRICING FOOTER: BoothGenerator.tsx passes the real project type into PricingBar (never hardcoded/omitted)", () => {
-  assert.match(boothGeneratorSource, /<PricingBar booth=\{selectedBooth\} placedItems=\{placedComponents\} currency=\{currency\} projectType=\{type\} \/>/u);
+test("PRICING FOOTER: BoothGenerator.tsx předává liště sdílený výsledek výpočtu a skutečný typ projektu", () => {
+  assert.match(boothGeneratorSource, /<PricingBar pricing=\{projectPricingResult\} projectType=\{type\} \/>/u);
+  assert.match(boothGeneratorSource, /const projectPricingResult = useMemo\(\(\) => priceProjectLegacy\(/u);
 });
 
-test("TYPOVKA REGRESSION: a typovka booth WITH a real fixed pricingEntries salePrice still shows the actual price, never the fallback label at all — this session never touches the priced branch", () => {
-  assert.match(pricingBarSource, /const boothNet = getBasePricingEntry\(booth\?\.pricingEntries, currency\)\?\.salePrice \?\? 0;/u);
-  assert.match(pricingBarSource, /\{boothNet \? `\$\{boothNet\.toLocaleString\("cs-CZ"\)\} \$\{currency\} bez DPH` : unpricedLabel\}/u);
+test("TYPOVKA REGRESSION: stánek s cenou ukazuje skutečnou částku z výsledku výpočtu", () => {
+  assert.match(pricingBarSource, /`\$\{money\(booth\.totalNet \?\? 0, currency\)\} bez DPH`/u);
+});
+
+// V1-DATA-07 / 07-B1: an incomplete calculation is always marked as a subtotal of priced items,
+// never as a final price; the customer PDF print asks for a confirmation but is never blocked.
+const workflowSource = readFileSync(new URL("../components/workflow/WorkflowSteps.tsx", import.meta.url), "utf8");
+
+test("NEÚPLNÁ KALKULACE: lišta ukáže „MEZISOUČET — NEÚPLNÉ“ místo „CELKEM“, když jsou položky k nacenění", () => {
+  assert.match(pricingBarSource, /pricing\.missingCount \? "MEZISOUČET — NEÚPLNÉ" : "CELKEM"/u);
+});
+
+test("NEÚPLNÁ KALKULACE: dokument (náhled = PDF) má označení a mezisoučet; tisk se jen potvrdí, nezablokuje", () => {
+  assert.match(workflowSource, /NEÚPLNÁ KALKULACE — obsahuje položky k nacenění/u);
+  assert.match(workflowSource, /calculation\.missingCount > 0 \? "Mezisoučet oceněných položek bez DPH" : "Celkem bez DPH"/u);
+  assert.match(workflowSource, /calculation\.missingCount > 0 \? "Mezisoučet s DPH" : "Celkem s DPH"/u);
+  assert.match(workflowSource, /if \(calculation\.missingCount > 0 && !window\.confirm\([\s\S]{0,400}\)\) return; printDocument\("customer-calculation"\);/u, "potvrzení jen při položkách k nacenění, jinak tisk hned");
+});
+
+test("NEÚPLNÁ KALKULACE: souhrn i textový souhrn (ZIP, e-mail) mluví o mezisoučtu, ne o konečné ceně", () => {
+  assert.match(workflowSource, /pricing\.missingCount \? "Mezisoučet bez DPH" : "Cena bez DPH"/u);
+  assert.match(workflowSource, /"Mezisoučet oceněných položek bez DPH"/u);
+  assert.match(workflowSource, /nejde o konečnou cenu/u);
 });

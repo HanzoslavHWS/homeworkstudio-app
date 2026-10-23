@@ -7405,3 +7405,8 @@ select:focus {
 .eventTasksList ul { margin: 0; padding-left: 14px; }
 .eventTasksList li { font-size: 9px; }
 .eventTasksList .linkButton { padding: 0; border: 0; background: none; color: #2f6f9f; font-size: 9px; text-decoration: underline; cursor: pointer; min-height: 0; margin: 0; }
+
+/* V1-DATA-07 / 07-B1 — missing prices are never shown as 0 */
+.pricingMissing { color: #9a5b12; font-style: normal; font-weight: 700; }
+.calculationMissing { color: #9a5b12; font-weight: 700; }
+.calculationIncompleteBadge { display: inline-block; margin-top: 6px; padding: 3px 8px; border: 1px solid #d9a35a; border-radius: 4px; color: #9a5b12; font-size: 9px; letter-spacing: .02em; }

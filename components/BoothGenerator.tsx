@@ -181,6 +181,7 @@ import { ConfiguratorHelp } from "./configurator/ConfiguratorHelp";
 import { NotesEditor } from "./configurator/NotesEditor";
 import { CoordinateInput } from "./configurator/CoordinateInput";
 import { PricingBar } from "./configurator/PricingBar";
+import { legacyPricingCatalogItems, priceProjectLegacy } from "../domain/projectPricing";
 import { RotationNavigator } from "./configurator/RotationNavigator";
 import { ScenePanel } from "./configurator/ScenePanel";
 import { ViewportToolbar } from "./configurator/ViewportToolbar";
@@ -1052,6 +1053,19 @@ export default function BoothGenerator() {
     selectedBooth?.finishVariants ?? constructionFinishVariants,
     constructionFinishId,
   );
+
+  // 07-B1: one project price for the editor bar, the calculation, the summary and the exports.
+  const projectPricingResult = useMemo(() => priceProjectLegacy({
+    currency,
+    booth: selectedBooth,
+    event: selectedExhibition,
+    priceLists: adminPriceLists,
+    sceneObjects: placedComponents,
+    requirements: technicalRequirements,
+    printSurfaceAssignments,
+    realizationProfileId,
+    catalogItems: legacyPricingCatalogItems(technicalCatalogItems, componentCatalogItems),
+  }), [currency, selectedBooth, selectedExhibition, adminPriceLists, placedComponents, technicalRequirements, printSurfaceAssignments, realizationProfileId, technicalCatalogItems]);
 
   const workflowStep = step <= 2 ? 1 : step - 1;
 
@@ -4933,7 +4947,7 @@ export default function BoothGenerator() {
                 </div>
               ) : type === "individualni" && (individualSubStep === "plocha" || individualSubStep === "podlaha") ? null : (
                 <>
-                  <PricingBar booth={selectedBooth} placedItems={placedComponents} currency={currency} projectType={type} />
+                  <PricingBar pricing={projectPricingResult} projectType={type} />
                   <div className="workflowActions configuratorContinue">
                     <button className="primaryButton" onClick={() => setStep(4)}>
                       Pokračovat na vizualizaci →
