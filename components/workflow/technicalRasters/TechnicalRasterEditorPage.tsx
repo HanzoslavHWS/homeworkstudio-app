@@ -45,7 +45,7 @@ import { groupImportedStandsByImport, groupParsedReportByStand, summarizeParsedR
 import { TechnicalImportParsedDataList } from "./TechnicalImportParsedDataList";
 import type { CatalogItemSummary } from "../../../domain/catalogPricing";
 import type { RemoteApiCatalogPricingRepository } from "../../../lib/db/catalogPricing.remoteApi.client";
-import { getAssetDownloadUrl, uploadAsset } from "../../../lib/storage/assetClient";
+import { browserFileMimeType, getAssetDownloadUrl, uploadAsset } from "../../../lib/storage/assetClient";
 import { loadPdfDocument } from "../../../lib/pdf/pdfDocumentLoader";
 import { logPdfLoadFailure } from "../../../lib/pdf/pdfLoadDiagnostics";
 import { extractPdfTextItems, getPdfPageSizes } from "../../../lib/pdf/pdfTextExtraction";
@@ -56,7 +56,8 @@ import { resolveWhiteModeAvailability } from "../../../lib/pdf/technicalRasterWh
 import { TechnicalRasterCanvas, type RasterCanvasMarker, type TechnicalRasterNoElectricityMarker, type TechnicalRasterRealizationUnderlineMarker, type TechnicalRasterServiceSymbolMarker } from "./TechnicalRasterCanvas";
 import { TechnicalRasterLayerPanel } from "./TechnicalRasterLayerPanel";
 import { TechnicalRasterSymbolLayerPanel } from "./TechnicalRasterSymbolLayerPanel";
-import { TechnicalServiceImportPanel, type PendingTechnicalImport } from "./TechnicalServiceImportPanel";
+import { TECHNICAL_IMPORT_PARSER_VERSIONS, TechnicalServiceImportPanel, type PendingTechnicalImport } from "./TechnicalServiceImportPanel";
+import { TechnicalExcelImportCheckSummary } from "./TechnicalExcelImportCheckSummary";
 import { TechnicalCatalogImportPanel } from "./TechnicalCatalogImportPanel";
 import { TechnicalStandBuffer } from "./TechnicalStandBuffer";
 import { TechnicalStandDetailPanel } from "./TechnicalStandDetailPanel";
@@ -132,6 +133,8 @@ export function TechnicalRasterEditorPage({
   const [selectedStandId, setSelectedStandId] = useState<string | undefined>(undefined);
   const [assignmentActiveStandId, setAssignmentActiveStandId] = useState<string | undefined>(undefined);
   const [pendingImport, setPendingImport] = useState<PendingTechnicalImport | undefined>(undefined);
+  const [isConfirmingImport, setIsConfirmingImport] = useState(false);
+  const [importConfirmError, setImportConfirmError] = useState("");
   /** "Report aktualizován" — the change summary of the last incremental re-import, until dismissed. */
   const [lastImportDiff, setLastImportDiff] = useState<Readonly<{ diff: TechnicalImportServiceDiff; category: string; filename: string }> | undefined>(undefined);
   const [isProcessingRaster, setIsProcessingRaster] = useState(false);
@@ -439,8 +442,11 @@ export function TechnicalRasterEditorPage({
   async function handleConfirmImport() {
     const current = projectRef.current;
     if (!current || !pendingImport) return;
-    const { category, file, report, replaceImportId } = pendingImport;
+    const { category, file, sourceFormat, report, replaceImportId } = pendingImport;
+    setImportConfirmError("");
+    setIsConfirmingImport(true);
     try {
+      // Upload first: if storage (R2) fails, the project is never touched and the preview stays open for a retry.
       const asset = await uploadAsset(file, { category: "technical-raster-import", ownerId: current.id, displayName: file.name });
       const standsFound = new Set(report.rows.map((row) => row.standNumber)).size;
       const servicesFound = report.rows.reduce((sum, row) => sum + row.services.length, 0);
@@ -450,7 +456,7 @@ export function TechnicalRasterEditorPage({
         filename: file.name,
         asset,
         importedAt: new Date().toISOString(),
-        parserVersion: "v1",
+        parserVersion: TECHNICAL_IMPORT_PARSER_VERSIONS[sourceFormat],
         parseStatus: report.warnings.length > 0 ? "ok_with_warnings" : "ok",
         standsFound,
         servicesFound,
@@ -463,7 +469,10 @@ export function TechnicalRasterEditorPage({
       setPendingImport(undefined);
       setLastImportDiff(diff ? { diff, category, filename: file.name } : undefined);
     } catch (error) {
-      setRasterError(error instanceof Error ? error.message : "Import se nepodařilo uložit.");
+      // Shown in the import preview itself — rasterError is only rendered on the "Rastr" step.
+      setImportConfirmError(`Soubor se nepodařilo uložit do úložiště, import nebyl proveden a projekt zůstal beze změny: ${error instanceof Error ? error.message : "neznámá chyba"}`);
+    } finally {
+      setIsConfirmingImport(false);
     }
   }
 
@@ -895,7 +904,7 @@ export function TechnicalRasterEditorPage({
 
       {step === "services" && (
         <div className="technicalRasterServicesStep">
-          <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={setPendingImport} />
+          <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={(pending) => { setImportConfirmError(""); setPendingImport(pending); }} />
 
           {pendingImport && (() => {
             const summary = summarizeParsedReport(pendingImport.report, resolveProductStatus);
@@ -920,6 +929,7 @@ export function TechnicalRasterEditorPage({
                   <span className={summary.warningCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Warningy <strong>{summary.warningCount}</strong></span>
                   <span className={summary.unknownProductCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Neznámé produkty <strong>{summary.unknownProductCount}</strong></span>
                 </div>
+                {pendingImport.excelCheck && <TechnicalExcelImportCheckSummary check={pendingImport.excelCheck} />}
                 {pendingImport.report.warnings.length > 0 && (
                   <div className="technicalImportWarnings">
                     <strong>Upozornění ({pendingImport.report.warnings.length}):</strong>
@@ -936,7 +946,7 @@ export function TechnicalRasterEditorPage({
                 </details>
                 {pendingImport.replaceImportId && (() => {
                   // Dry run of the exact merge the confirm button will perform — the preview can never disagree with the result.
-                  const previewRecord: TechnicalRasterImport = { id: "preview", category: pendingImport.category, filename: pendingImport.file.name, asset: { id: "preview", storageKey: "", originalFileName: pendingImport.file.name, mimeType: "application/pdf", size: 0, createdAt: "", category: "technical-raster-import" }, importedAt: "", parserVersion: "v1", parseStatus: "ok", standsFound: 0, servicesFound: 0, warnings: [] };
+                  const previewRecord: TechnicalRasterImport = { id: "preview", category: pendingImport.category, filename: pendingImport.file.name, asset: { id: "preview", storageKey: "", originalFileName: pendingImport.file.name, mimeType: browserFileMimeType(pendingImport.file), size: 0, createdAt: "", category: "technical-raster-import" }, importedAt: "", parserVersion: TECHNICAL_IMPORT_PARSER_VERSIONS[pendingImport.sourceFormat], parseStatus: "ok", standsFound: 0, servicesFound: 0, warnings: [] };
                   const preview = mergeTechnicalRasterImportWithDiff(project, previewRecord, pendingImport.report, resolveProduct, pendingImport.replaceImportId).diff;
                   return (
                     <div className="technicalImportUpdateNotice">
@@ -945,9 +955,10 @@ export function TechnicalRasterEditorPage({
                     </div>
                   );
                 })()}
+                {importConfirmError && <p className="uploadError">{importConfirmError}</p>}
                 <div className="printSurfaceCreateFormActions">
-                  <button type="button" className="primaryButton" onClick={() => void handleConfirmImport()}>{pendingImport.replaceImportId ? "Aktualizovat report" : "Potvrdit import"}</button>
-                  <button type="button" onClick={() => setPendingImport(undefined)}>Zrušit</button>
+                  <button type="button" className="primaryButton" disabled={isConfirmingImport} onClick={() => void handleConfirmImport()}>{isConfirmingImport ? "Ukládám…" : pendingImport.replaceImportId ? "Aktualizovat report" : "Potvrdit import"}</button>
+                  <button type="button" disabled={isConfirmingImport} onClick={() => { setImportConfirmError(""); setPendingImport(undefined); }}>Zrušit</button>
                 </div>
               </div>
             );

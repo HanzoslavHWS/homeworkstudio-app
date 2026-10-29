@@ -210,3 +210,23 @@ test("REGRESSION GUARD: the technical-raster project table's own delete-visibili
   assert.match(css, /\.technicalRasterProjectTable \.printSurfaceProjectRow\s*\{[^}]*grid-template-columns:/u);
   assert.match(css, /\.technicalRasterProjectTable\s*\{\s*overflow-x:\s*auto;\s*\}/u);
 });
+
+// =========================================================================================
+// Import confirm failure (pre-deploy browser check, 29. 10. 2026): an upload error (e.g. R2
+// unavailable) used to land in rasterError, which only the "Rastr" step renders — on the
+// Technické služby step the click silently did nothing. The project must stay untouched (upload
+// happens BEFORE the merge) and the error must be visible in the import preview itself.
+// =========================================================================================
+
+test("IMPORT CONFIRM FAILURE: the upload runs before the merge, its error is shown inside the import preview, and confirm can't be double-clicked", async () => {
+  const source = await readEditorSource();
+  const handler = source.slice(source.indexOf("async function handleConfirmImport()"), source.indexOf("// Step 3: Assignment"));
+  assert.ok(handler.indexOf("await uploadAsset(") < handler.indexOf("mergeTechnicalRasterImportWithDiff("), "upload must happen before the project is changed");
+  assert.ok(handler.indexOf("mergeTechnicalRasterImportWithDiff(") < handler.indexOf("updateProject(next)"));
+  assert.match(handler, /catch \(error\) \{[\s\S]*setImportConfirmError\(/u, "a failed upload must set the preview's own error");
+  assert.doesNotMatch(handler, /setRasterError\(/u, "rasterError is only rendered on the Rastr step");
+  const block = servicesStepBlock(source);
+  const preview = block.slice(block.indexOf("pendingImport && (() => {"), block.indexOf("HISTORIE IMPORTŮ"));
+  assert.match(preview, /\{importConfirmError && <p className="uploadError">\{importConfirmError\}<\/p>\}/u);
+  assert.match(preview, /className="primaryButton" disabled=\{isConfirmingImport\}/u);
+});

@@ -8,6 +8,7 @@
 import {
   evaluateNumericCellValue,
   parseGenericStandTable,
+  type GenericTableParseResult,
   type PdfTextItem,
   type ParsedStandTableRow,
 } from "../technicalReportTableParsing.ts";
@@ -81,7 +82,16 @@ function isExplicitZeroElectricityRow(
 
 /** The one implementation every category parser calls — turns a generic table parse into the standardized ParsedTechnicalReport (spec section 40), grouping rows by normalized stand number and attaching notes (spec section 13) to the matching row. */
 export function buildParsedTechnicalReport(category: string, items: readonly PdfTextItem[]): ParsedTechnicalReport {
-  const table = parseGenericStandTable(items);
+  return buildParsedTechnicalReportFromTable(category, parseGenericStandTable(items));
+}
+
+/**
+ * The source-format-independent half of buildParsedTechnicalReport: an already reconstructed
+ * stand table (from PDF text today, from an Excel sheet later) becomes the SAME ParsedTechnicalReport
+ * — same quantity evaluation, ambiguous-compound warnings, notes and explicit "BEZ" handling — so a
+ * second source format can never drift into its own parallel interpretation of a cell.
+ */
+export function buildParsedTechnicalReportFromTable(category: string, table: GenericTableParseResult): ParsedTechnicalReport {
   const warnings: Omit<TechnicalRasterImportWarning, "id">[] = table.warnings.map((warning) => ({ message: warning.message, page: warning.page, rawText: warning.rawText }));
 
   const rowsByStand = new Map<string, { companyName?: string; page: number; services: ParsedTechnicalServiceRow["services"][number][]; notes: { text: string; sourcePage: number; rawRow?: string }[]; explicitNoServiceAssignment: boolean }>();

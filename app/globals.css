@@ -6601,6 +6601,7 @@ select:focus {
 .technicalImportPreviewDetails > summary::before { content: "▸ "; }
 .technicalImportPreviewDetails[open] > summary::before { content: "▾ "; }
 .technicalImportPreviewDetails > div { margin-top: 8px; }
+.technicalImportPreviewDetails > ul { margin: 6px 0 0; padding-left: 16px; color: #55595c; }
 
 .technicalImportParsedDataList { display: grid; gap: 8px; }
 .technicalImportParsedDataSearch { margin-bottom: 2px; }

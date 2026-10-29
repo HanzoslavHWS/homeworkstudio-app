@@ -3,9 +3,11 @@ import test from "node:test";
 import {
   TECHNICAL_REPORT_PARSERS,
   detectLikelyTechnicalReportCategory,
+  buildParsedTechnicalReport,
+  buildParsedTechnicalReportFromTable,
   getTechnicalReportParser,
 } from "../domain/technicalReportParsers/index.ts";
-import type { PdfTextItem } from "../domain/technicalReportTableParsing.ts";
+import { parseGenericStandTable, type GenericTableParseResult, type PdfTextItem } from "../domain/technicalReportTableParsing.ts";
 
 // =========================================================================================
 // Technické rastry — the adapter/parser pattern (spec section 40): 5 thin category parsers,
@@ -173,4 +175,44 @@ test("a note between two stand rows is attached correctly through the full parse
   const standWithNote = report.rows.find((row) => row.standNumber === "1B04");
   assert.equal(standWithNote?.notes.length, 1);
   assert.match(standWithNote?.notes[0]?.text ?? "", /doobjednáno telefonicky/u);
+});
+
+// =========================================================================================
+// Source-format seam for the Excel import: buildParsedTechnicalReportFromTable is the shared
+// table -> ParsedTechnicalReport half that a non-PDF source will feed.
+// =========================================================================================
+
+test("buildParsedTechnicalReport(items) is exactly buildParsedTechnicalReportFromTable(parseGenericStandTable(items)) — the PDF path is unchanged", () => {
+  const items: PdfTextItem[] = [
+    item("Do 2kW 230V", 200, 466), item("Osvětlení", 300, 466), item("Non stop", 340, 466),
+    item("1A01", 20, 448), item("European", 60, 448), item("s.r.o.", 110, 448), item("2", 210, 448), item("1 0", 320, 448),
+    item("poznámka", 20, 430),
+    item("1A02", 20, 412), item("Nula", 60, 412), item("0", 210, 412), item("0", 320, 412),
+  ];
+  for (const category of ["electricity", "water"]) {
+    assert.deepEqual(buildParsedTechnicalReport(category, items), buildParsedTechnicalReportFromTable(category, parseGenericStandTable(items)));
+  }
+});
+
+test("a table built WITHOUT any PDF goes through the same quantity / ambiguity / note / BEZ rules", () => {
+  const table: GenericTableParseResult = {
+    headerFound: true,
+    rows: [
+      { standNumber: "1A 01", companyName: "Firma A", page: 1, rawRow: "1A01 Firma A 2 0", columnValues: new Map([["Do 2 kW", "2"], ["Jistič C", "0"]]) },
+      { standNumber: "1A02", companyName: "Firma B", page: 1, rawRow: "1A02 Firma B 1 0 0", columnValues: new Map([["Do 2 kW", "1 0"], ["Jistič C", "0"]]) },
+      { standNumber: "1A03", companyName: "Firma C", page: 2, rawRow: "1A03 Firma C 0 0", columnValues: new Map([["Do 2 kW", "0"], ["Jistič C", ""]]) },
+    ],
+    notes: [{ afterStandNumber: "1A01", text: "doobjednáno", page: 1, rawRow: "doobjednáno" }],
+    warnings: [],
+  };
+  const report = buildParsedTechnicalReportFromTable("electricity", table);
+  assert.equal(report.category, "electricity");
+  assert.deepEqual(report.rows.map((row) => row.standNumber), ["1A01", "1A02", "1A03"], "stand numbers normalized (whitespace removed) exactly like the PDF path");
+  assert.deepEqual(report.rows[0]!.services.map((service) => [service.externalLabel, service.quantity]), [["Do 2 kW", 2]]);
+  assert.equal(report.rows[0]!.notes[0]?.text, "doobjednáno");
+  assert.equal(report.rows[1]!.services.length, 0, "an ambiguous compound value never becomes a guessed service");
+  assert.equal(report.warnings.length, 1);
+  assert.match(report.warnings[0]!.message, /Nejednoznačná/u);
+  assert.equal(report.rows[1]!.explicitNoServiceAssignment, undefined);
+  assert.equal(report.rows[2]!.explicitNoServiceAssignment, true);
 });

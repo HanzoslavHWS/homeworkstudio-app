@@ -336,6 +336,11 @@ export function parseGenericStandTable(items: readonly PdfTextItem[]): GenericTa
   }
 
   let columns: readonly TableColumn[] = [];
+  // A multi-page report repeats the column header at the top of every page. Without this, those
+  // repeated lines became "notes" of the last stand on the previous page (real FOR BEAUTY 2026
+  // exports: electricity 3A48/3C13/4B10, internet 4B33). Only lines textually identical to the
+  // detected header are skipped, so a genuine note is never lost.
+  const headerLineTexts = new Set<string>();
   if (headerRow) {
     const aboveRow = headerRowIndex > 0 ? rows[headerRowIndex - 1] : undefined;
     const aboveIsContinuation =
@@ -345,6 +350,8 @@ export function parseGenericStandTable(items: readonly PdfTextItem[]): GenericTa
       !isNonStandReportLine(rowText(aboveRow)) &&
       !isMostlyNumericRow(aboveRow);
     columns = aboveIsContinuation ? buildTwoLineHeaderColumns(aboveRow!.items, headerRow.items) : buildTableColumns(headerRow.items);
+    headerLineTexts.add(rowText(headerRow));
+    if (aboveIsContinuation) headerLineTexts.add(rowText(aboveRow!));
   } else {
     warnings.push({ message: "Hlavička sloupců nebyla rozpoznána — hodnoty budou uloženy jen jako raw text bez přiřazení ke konkrétní službě.", page: dataStartPage });
   }
@@ -356,7 +363,7 @@ export function parseGenericStandTable(items: readonly PdfTextItem[]): GenericTa
   for (let index = dataStartIndex; index < rows.length; index += 1) {
     const row = rows[index]!;
     const text = rowText(row);
-    if (isNonStandReportLine(text)) continue;
+    if (isNonStandReportLine(text) || headerLineTexts.has(text)) continue;
 
     const leading = extractLeadingStandNumber(row);
     if (leading) {

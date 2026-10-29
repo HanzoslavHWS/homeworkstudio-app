@@ -10,7 +10,7 @@ import { cleaningReportParser } from "./cleaningReportParser.ts";
 import type { TechnicalReportParser } from "./technicalReportParser.ts";
 
 export type { TechnicalReportParser } from "./technicalReportParser.ts";
-export { buildParsedTechnicalReport } from "./technicalReportParser.ts";
+export { buildParsedTechnicalReport, buildParsedTechnicalReportFromTable } from "./technicalReportParser.ts";
 
 export const TECHNICAL_REPORT_PARSERS: readonly TechnicalReportParser[] = [
   electricityReportParser,

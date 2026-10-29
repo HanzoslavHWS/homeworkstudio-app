@@ -330,3 +330,72 @@ test("no stand-number-shaped row anywhere -> empty result with a warning, never 
   assert.equal(result.rows.length, 0);
   assert.ok(result.warnings.length > 0);
 });
+
+// =========================================================================================
+// Repeated page headers (real FOR BEAUTY 2026 PDF exports): every page repeats the column header
+// at its top. Those lines used to become "notes" of the last stand of the previous page
+// (electricity 3A48 / 3C13 / 4B10 with the two-line header, internet 4B33). Positions mirror the
+// real export: header lines at the top of each page, stands below.
+// =========================================================================================
+
+function twoLineHeader(page: number, upperY: number): PdfTextItem[] {
+  return [
+    item("Stánek", 20, upperY, page), item("Firma", 60, upperY, page), item("Rozvaděč", 200, upperY, page), item("Do 2kW", 260, upperY, page), item("Jistič", 320, upperY, page),
+    item("9-21kW", 200, upperY - 8, page), item("230V", 262, upperY - 8, page), item("C", 330, upperY - 8, page),
+  ];
+}
+
+function standRow(stand: string, company: string, values: readonly string[], y: number, page: number): PdfTextItem[] {
+  return [item(stand, 20, y, page), item(company, 60, y, page), ...values.map((value, index) => item(value, [215, 270, 330][index]!, y, page))];
+}
+
+test("a header repeated at the top of the next page (two-line, electricity) is never a note of the previous page's last stand", () => {
+  const items = [
+    ...twoLineHeader(1, 466),
+    ...standRow("3A47", "Firma A", ["0", "1", "0"], 440, 1),
+    ...standRow("3A48", "Firma B", ["0", "0", "1"], 430, 1),
+    ...twoLineHeader(2, 560),
+    ...standRow("3A49", "Firma C", ["0", "1", "0"], 540, 2),
+    ...twoLineHeader(3, 560),
+    ...standRow("3C15", "Firma D", ["1", "0", "0"], 540, 3),
+  ];
+  const result = parseGenericStandTable(items);
+  assert.deepEqual(result.notes, []);
+  assert.deepEqual(result.warnings, []);
+  assert.deepEqual(result.rows.map((row) => [row.standNumber, row.page, [...row.columnValues.entries()]]), [
+    ["3A47", 1, [["Rozvaděč 9-21kW", "0"], ["Do 2kW 230V", "1"], ["Jistič C", "0"]]],
+    ["3A48", 1, [["Rozvaděč 9-21kW", "0"], ["Do 2kW 230V", "0"], ["Jistič C", "1"]]],
+    ["3A49", 2, [["Rozvaděč 9-21kW", "0"], ["Do 2kW 230V", "1"], ["Jistič C", "0"]]],
+    ["3C15", 3, [["Rozvaděč 9-21kW", "1"], ["Do 2kW 230V", "0"], ["Jistič C", "0"]]],
+  ]);
+});
+
+test("a repeated header on the last page (internet: page 2 holds only the final stands) is skipped too", () => {
+  const header = (page: number, y: number): PdfTextItem[] => [
+    item("Číslo stánku", 20, y, page), item("Firma", 80, y, page), item("Další", 260, y, page), item("Router", 330, y, page),
+    item("Internet", 200, y - 8, page), item("přípojka", 258, y - 8, page), item("zapůjčení", 326, y - 8, page),
+  ];
+  const result = parseGenericStandTable([
+    ...header(1, 712),
+    ...standRow("4B33", "Firma A", ["0", "1", "0"], 690, 1).map((entry, index) => (index >= 2 ? { ...entry, x: [205, 265, 335][index - 2]! } : entry)),
+    ...header(2, 807),
+    ...standRow("4C05", "Firma B", ["1", "0", "0"], 786, 2).map((entry, index) => (index >= 2 ? { ...entry, x: [205, 265, 335][index - 2]! } : entry)),
+  ]);
+  assert.deepEqual(result.notes, []);
+  assert.deepEqual(result.rows.map((row) => row.standNumber), ["4B33", "4C05"]);
+});
+
+test("only lines IDENTICAL to the detected header are skipped — a real note that merely mentions a column is kept", () => {
+  const result = parseGenericStandTable([
+    ...twoLineHeader(1, 466),
+    ...standRow("3A48", "Firma B", ["0", "0", "1"], 440, 1),
+    item("Jistič C dodat až ve čtvrtek", 60, 430, 1),
+    ...twoLineHeader(2, 560),
+    item("Stánek Firma Rozvaděč", 60, 542, 2),
+    ...standRow("3A49", "Firma C", ["0", "1", "0"], 530, 2),
+  ]);
+  assert.deepEqual(result.notes.map((note) => [note.afterStandNumber, note.text]), [
+    ["3A48", "Jistič C dodat až ve čtvrtek"],
+    ["3A48", "Stánek Firma Rozvaděč"],
+  ]);
+});

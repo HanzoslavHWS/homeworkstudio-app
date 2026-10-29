@@ -148,9 +148,9 @@ const CATEGORY_RULES: Readonly<Record<AssetCategory, CategoryRule>> = {
   // AUTORITA", never rasterized/converted, kept exactly as uploaded) and each separately-uploaded
   // technical-service report PDF (spec section 8/9). Both PDF-only; 150MB matches the existing
   // large-binary precedent (catalog-source/project-export) — a real vector hall floor plan can be
-  // sizeable.
+  // sizeable. A report may also be the ABRA Excel export (.xlsx) of the same "Přehled - …" table.
   "technical-raster-source": { prefix: (id) => `technical-rasters/${id}/source`, maxBytes: 150_000_000, mimeTypes: ["application/pdf"] },
-  "technical-raster-import": { prefix: (id) => `technical-rasters/${id}/imports`, maxBytes: 150_000_000, mimeTypes: ["application/pdf"] },
+  "technical-raster-import": { prefix: (id) => `technical-rasters/${id}/imports`, maxBytes: 150_000_000, mimeTypes: ["application/pdf", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"] },
   // Technické rastry — component/catalog-card-driven technical marker icon (spec batch 11 section
   // 11/12): SVG preferred (kept as real vector all the way to export where possible), PNG allowed
   // as a fallback (embeddable as a small image XObject in the vector PDF export — never the whole
