@@ -2,7 +2,7 @@
 
 import { technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
 import { effectiveServicePlacements, requiredPlacementCount, type RasterStandLabel, type TechnicalRasterImport, type TechnicalService, type TechnicalStand } from "../../../domain/technicalRaster";
-import { resolveTechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
+import { resolveServicePresentation } from "../../../domain/technicalRasterServicePresentation";
 import { resolveNextPlacementTarget } from "../../../domain/technicalRasterWorkQueue";
 import { resolveTechnicalRealizationGroup, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
 
@@ -129,7 +129,7 @@ export function TechnicalStandDetailPanel({
         <div key={category} className="technicalStandDetailSection">
           <h4>{technicalServiceCategoryLabel(category).toLocaleUpperCase("cs")}</h4>
           {services.map((service) => {
-            const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+            const presentation = resolveServicePresentation(service);
             const placements = effectiveServicePlacements(service);
             // CORRECTIVE BATCH (real production, "quantity is not always number of placement
             // points") — gate/display against requiredPlacementCount, never raw service.quantity

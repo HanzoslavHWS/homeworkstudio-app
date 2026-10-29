@@ -218,7 +218,7 @@ test("buildTechnicalRasterExportLegend: only entries from placements actually pa
   assert.equal(placements.length, 2);
   const legend = buildTechnicalRasterExportLegend(placements);
   assert.equal(legend.length, 1, "two placements of the SAME presentation collapse into one legend entry");
-  assert.equal(legend[0]!.legendLabel, "ELEKTRIKA");
+  assert.equal(legend[0]!.legendLabel, "ELEKTŘINA");
 });
 
 test("buildTechnicalRasterExportLegend: an empty placement list (nothing placed, or everything filtered out) produces an empty legend, never a crash", () => {

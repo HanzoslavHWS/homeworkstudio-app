@@ -201,15 +201,58 @@ test("D) the source page's own real text is still present and extractable after 
 // E) technical text overlay exists / F) technical vector symbol exists
 // ============================================================================
 
-test("E/F) placed technical symbols draw a real filled vector-outline glyph path on page 1 (CORRECTIVE BATCH 3rd sections 8/9: never PDF text-showing operators any more — see the dedicated structural test above)", async () => {
+test("E/F, textMode \"outlines\" (fallback): placed technical symbols draw a real filled vector-outline glyph path on page 1, never PDF text-showing operators", async () => {
   const source = await buildPlainFixture();
   const placements = [placementItem({ presentation: resolveTechnicalServicePresentation("electricity", "Do 3kW 230V") })];
-  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X" });
+  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X", textMode: "outlines" });
   const markerText = await readPage1ContentEntryFromEnd(bytes);
   assert.match(markerText, /0\.702 0\.149 0\.118 rg/u, "the marker's own presentation color");
   assert.ok(/\bf\b/u.test(markerText), "a real fill paint operator");
   const { operatorList } = await decodeForInspection(bytes);
   assert.ok(operatorList.fnArray.length > 20, "expects real vector drawing operators (the glyph outline curves etc.), not a bare page");
+});
+
+test("HOTFIX-02 E/F, textMode \"text\" (DEFAULT): a technical label is a REAL PDF text object — BT … Tf … Tj … ET in its own color, extractable by a viewer, in a SIMPLE TrueType font (never Type0/CID, never Type3)", async () => {
+  const source = await buildPlainFixture();
+  const placements = [
+    placementItem({ placementId: "a", xNormalized: 0.3, presentation: resolveTechnicalServicePresentation("electricity", "Do 5kW 230V") }),
+    placementItem({ placementId: "b", xNormalized: 0.6, presentation: resolveTechnicalServicePresentation("water", "Bazén - objem", 3), category: "water" }),
+    placementItem({ placementId: "c", xNormalized: 0.8, presentation: resolveTechnicalServicePresentation("electricity", "Rozvaděč 9-21kW") }),
+  ];
+  const { bytes, textMode } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X" });
+  assert.equal(textMode, "text");
+  const overlay = await readPage1ContentEntryFromEnd(bytes);
+  assert.match(overlay, /q BT 0\.702 0\.149 0\.118 rg [\d.]+ [\d.]+ Td \/\S+ 2\.34 Tf <[0-9A-F]+> Tj ET Q/u, "5 kW: real text at the power-label size, in electricity red");
+  assert.match(overlay, /0\.102 0\.478 0\.298 rg [^\n]* 2\.8 Tf <[0-9A-F]+> Tj/u, "3 m³: real text in water green at the text-label size");
+  const { textContent } = await decodeForInspection(bytes);
+  const strings = (textContent.items as { str: string }[]).map((item) => item.str);
+  for (const label of ["5 kW", "3 m³", "El.rozvaděč"]) assert.ok(strings.includes(label), `"${label}" is extractable text, got ${JSON.stringify(strings)}`);
+
+  const reloaded = await PDFDocument.load(bytes);
+  const fonts = ((reloaded.getPage(0).node.lookup(PDFName.of("Resources")) as PDFDict).lookup(PDFName.of("Font")) as PDFDict);
+  const generated = fonts.keys().map((key) => fonts.lookup(key) as PDFDict).filter((font) => font.lookup(PDFName.of("BaseFont"))?.toString() === "/NotoSans-Bold");
+  assert.equal(generated.length, 1, "one generated font resource");
+  const font = generated[0]!;
+  assert.equal(font.lookup(PDFName.of("Subtype"))?.toString(), "/TrueType", "a simple TrueType font — the CorelDRAW-safe shape, never /Type0");
+  assert.ok(font.lookup(PDFName.of("ToUnicode")), "ToUnicode for search/copy");
+  const descriptor = font.lookup(PDFName.of("FontDescriptor")) as PDFDict;
+  assert.ok(descriptor.lookup(PDFName.of("FontFile2")), "the font program is embedded");
+  const encoding = font.lookup(PDFName.of("Encoding")) as PDFDict;
+  const differences = (encoding.lookup(PDFName.of("Differences")) as PDFArray).asArray().map((entry) => entry.toString());
+  for (const glyph of ["/ecaron", "/ccaron", "/threesuperior"]) assert.ok(differences.includes(glyph), `${glyph} encoded for "ě"/"č"/"³"`);
+});
+
+test("HOTFIX-02: outlines and text draw the label at the SAME position and size (same advance widths, same baseline)", async () => {
+  const source = await buildPlainFixture();
+  const placements = [placementItem({ presentation: resolveTechnicalServicePresentation("internet", "Internet"), category: "internet" })];
+  const text = await readPage1ContentEntryFromEnd((await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X" })).bytes);
+  const origin = /([\d.]+) ([\d.]+) Td/u.exec(text)!;
+  const outlines = await readPage1ContentEntryFromEnd((await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X", textMode: "outlines" })).bytes);
+  const xs = [...outlines.matchAll(/(-?[\d.]+) (-?[\d.]+) [ml]\b/gu)].map((match) => Number(match[1]));
+  assert.ok(Math.abs(Math.min(...xs) - Number(origin[1])) < 0.6, `outline glyphs start where the text run starts (${Math.min(...xs)} vs ${origin[1]})`);
+  // The whole run is centered on the placement point (0.5 of a 300pt page = 150) in both modes.
+  const width = Math.max(...xs) - Math.min(...xs);
+  assert.ok(Math.abs(Math.min(...xs) + width / 2 - 150) < 0.6, "centered on the placement point");
 });
 
 test("F) every real renderer kind draws without throwing (powerLabel/refrigeratedStar/textLabel/waterDrop/fallback)", async () => {
@@ -221,9 +264,17 @@ test("F) every real renderer kind draws without throwing (powerLabel/refrigerate
     resolveTechnicalServicePresentation("water", "x"),
     resolveTechnicalServicePresentation("some-future-category", "x"),
   ];
-  const placements = presentations.map((presentation, index) => placementItem({ placementId: `p-${index}`, xNormalized: 0.1 + index * 0.15, presentation }));
-  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X" });
-  assert.ok(bytes.length > 100);
+  const placements = [
+    ...presentations,
+    // Icon renderers are no longer a default, but a component override may still select them.
+    { ...presentations[0]!, renderer: "refrigeratedStar" as const },
+    { ...presentations[0]!, renderer: "waterDrop" as const },
+    { ...presentations[0]!, renderer: "wifiIcon" as const },
+  ].map((presentation, index) => placementItem({ placementId: `p-${index}`, xNormalized: 0.05 + index * 0.1, presentation }));
+  for (const textMode of ["text", "outlines"] as const) {
+    const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X", textMode });
+    assert.ok(bytes.length > 100);
+  }
 });
 
 // ============================================================================
@@ -274,8 +325,8 @@ test("I) the source PDF bytes passed in are never mutated", async () => {
 test("J) the legend lives on a SEPARATE page — page 1's own size is completely unaffected by legend content", async () => {
   const source = await buildPlainFixture();
   const legend: readonly TechnicalRasterExportLegendEntry[] = [
-    { legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" },
-    { legendLabel: "VODA — PŘÍVOD / ODPAD VODY", color: "#1a7a4c", renderer: "waterDrop" },
+    { legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" },
+    { legendLabel: "VODA — PŘÍVOD / ODPAD VODY", color: "#1a7a4c", key: "test" },
   ];
   const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X" });
   const reloaded = await PDFDocument.load(bytes);
@@ -287,8 +338,8 @@ test("J) the legend lives on a SEPARATE page — page 1's own size is completely
 
 test("J) legend page draws real vector-outline geometry when shown, and is still present (with a fallback message) when there's nothing to list — GENERATED LEGEND BATCH: legend text is genuine vector-outline geometry, never a page.drawText()/Type0 text-showing operator, so this asserts on the raw content stream rather than pdf.js getTextContent() (which would read empty)", async () => {
   const source = await buildPlainFixture();
-  const legend: readonly TechnicalRasterExportLegendEntry[] = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel", displayLabel: "3 kW" }];
-  const withLegend = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "Technický rastr / Hala 1" });
+  const legend: readonly TechnicalRasterExportLegendEntry[] = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" }];
+  const withLegend = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "Technický rastr / Hala 1", textMode: "outlines" });
   const reloadedWith = await PDFDocument.load(withLegend.bytes);
   assert.equal(reloadedWith.getPageCount(), 2);
   const legendPageText = await readAllPageContentText(withLegend.bytes, 1);
@@ -297,11 +348,27 @@ test("J) legend page draws real vector-outline geometry when shown, and is still
   }
   assert.ok(/\bf\b/u.test(legendPageText), "expected genuine vector-outline fill geometry (title/header/label/symbol) on the legend page");
 
-  const emptyLegend = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: true, headerLine: "X" });
+  const emptyLegend = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: true, headerLine: "X", textMode: "outlines" });
   const reloadedEmpty = await PDFDocument.load(emptyLegend.bytes);
   assert.equal(reloadedEmpty.getPageCount(), 2, "the legend page is still present even with nothing to list — draws the fallback message instead of omitting the page");
   const emptyLegendText = await readAllPageContentText(emptyLegend.bytes, 1);
   assert.ok(/\bf\b/u.test(emptyLegendText), "expected the fallback message's own vector-outline fill geometry");
+});
+
+test("HOTFIX-02 J) legend page in the default text mode: title, header line and category rows are real, extractable text (Czech diacritics intact); each row has a filled color swatch", async () => {
+  const source = await buildPlainFixture();
+  const legend: readonly TechnicalRasterExportLegendEntry[] = [
+    { legendLabel: "ELEKTŘINA", color: "#b3261e", key: "category:electricity" },
+    { legendLabel: "ÚKLID", color: "#6a4c93", key: "category:cleaning" },
+  ];
+  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "Technický rastr / Hala 1" });
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
+  const strings = ((await (await doc.getPage(2)).getTextContent()).items as { str: string }[]).map((item) => item.str);
+  for (const expected of ["TECHNICKÝ EXPORT – LEGENDA", "Technický rastr / Hala 1", "LEGENDA:", "ELEKTŘINA", "ÚKLID"]) assert.ok(strings.includes(expected), `"${expected}" in ${JSON.stringify(strings)}`);
+  const legendPage = await readAllPageContentText(bytes, 1);
+  assert.match(legendPage, /0\.701961 0\.14902 0\.117647 rg [^f]* c f/u, "electricity swatch: a filled circle in the category color");
+  assert.match(legendPage, /0\.415686 0\.298039 0\.576471 rg [^f]* c f/u, "cleaning swatch");
 });
 
 // ============================================================================
@@ -345,14 +412,13 @@ test("OCG: a source PDF WITH OCGs has its OCG names/order/state reconstructed at
   assert.equal(ocgDiagnostic.reconstructedOcgCount, 2);
   assert.deepEqual(ocgDiagnostic.unmatchedOcgNames, []);
 
-  // CORRECTIVE BATCH (3rd) section 10/11 — every export now also carries a 3rd, generator-owned
-  // "GENERÁTOR DATA" OCG (appended after the 2 reconstructed source layers) so generator overlay
-  // content can be toggled independently of the original layers.
+  // HOTFIX-02 — an export with nothing generated adds NO layer of its own (TECHNICKÉ SLUŽBY /
+  // GENERÁTOR DATA are only created when they receive content): exactly the source layers.
   const { ocConfig } = await decodeForInspection(bytes);
   const order = ocConfig.getOrder();
-  assert.equal(order?.length, 3);
+  assert.equal(order?.length, 2);
   const names = order!.map((id) => ocConfig.getGroup(id)?.name);
-  assert.deepEqual(names, ["VRSTVA A", "VRSTVA B", "GENERÁTOR DATA"]);
+  assert.deepEqual(names, ["VRSTVA A", "VRSTVA B"]);
 });
 
 test("reconstructOcProperties: unit-level — directly exercises the function against pdf-lib PDFDocument objects (source with OCGs, new doc after copyPages)", async () => {
@@ -376,13 +442,13 @@ test("OCG hardening: an orphaned OCG (declared in /OCProperties but never refere
   assert.equal(ocgDiagnostic.reconstructedOcgCount, 1);
   assert.deepEqual(ocgDiagnostic.unmatchedOcgNames, ["VRSTVA NA JINÉ STRÁNCE"]);
 
-  // The orphaned source group never shows up (never a broken/dangling reference) — but the
-  // generator's own "GENERÁTOR DATA" OCG is still always present alongside the one real reconstructed group.
+  // The orphaned source group never shows up (never a broken/dangling reference); with nothing
+  // generated, no generator layer is added either (HOTFIX-02).
   const { ocConfig } = await decodeForInspection(bytes);
   const order = ocConfig.getOrder();
-  assert.equal(order?.length, 2);
+  assert.equal(order?.length, 1);
   const names = order!.map((id) => ocConfig.getGroup(id)?.name);
-  assert.deepEqual(names, ["VRSTVA A", "GENERÁTOR DATA"]);
+  assert.deepEqual(names, ["VRSTVA A"]);
 });
 
 test("OCG hardening: no duplicate catalog registrations — calling reconstructOcProperties does not register the same OCProperties/D/OCGs structure twice even though it touches the context multiple times internally", async () => {
@@ -408,10 +474,10 @@ test("OCG hardening: no duplicate catalog registrations — calling reconstructO
 // spec explicitly demands the ACTUAL measured pt/mm bounding box (never a full-page circle badge).
 // ============================================================================
 
-test("corrective batch 3/CORRECTIVE BATCH 3rd section 8/9) a text-label placement symbol draws ONLY a filled vector-outline glyph path — never PDF text-showing operators, never a circle backdrop", async () => {
+test("corrective batch 3/CORRECTIVE BATCH 3rd section 8/9, textMode \"outlines\") a text-label placement symbol draws ONLY a filled vector-outline glyph path — never PDF text-showing operators, never a circle backdrop", async () => {
   const source = await buildPlainFixture();
   const placements = [placementItem({ presentation: resolveTechnicalServicePresentation("electricity", "Do 3kW 230V") })];
-  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X" });
+  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X", textMode: "outlines" });
   // The marker's OWN content chunk only (not the whole page — buildPlainFixture's SOURCE content
   // legitimately contains its own real BT/Tj text, which must never be mistaken for a violation).
   const text = await readPage1ContentEntryFromEnd(bytes);
@@ -429,6 +495,14 @@ test("corrective batch 3/CORRECTIVE BATCH 3rd section 8/9) a text-label placemen
   // paint op, which only a backdrop shape would need.
   assert.ok(!/\bre\b/u.test(text), `expected no rectangle backdrop operator, got: ${text}`);
   assert.ok(!/\b[BS]\b/u.test(text), `expected no stroke/fill-and-stroke backdrop paint operator, got: ${text}`);
+});
+
+test("HOTFIX-02 (text mode) a text-label placement symbol is ONLY its text — no circle/rectangle backdrop, no stroke", async () => {
+  const source = await buildPlainFixture();
+  const placements = [placementItem({ presentation: resolveTechnicalServicePresentation("electricity", "Do 3kW 230V") })];
+  const text = await readPage1ContentEntryFromEnd((await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X" })).bytes);
+  assert.match(text, /^q BT [^\n]* Tj ET Q$/u, `exactly one text object, got: ${text}`);
+  assert.ok(!/\b(re|[BSf])\b/u.test(text), `no backdrop shape, got: ${text}`);
 });
 
 test("corrective batch 3) a text-label symbol's physical bounding box stays well under the old circle badge size, for every real short label this app produces", async () => {
@@ -466,12 +540,11 @@ test("CORRECTIVE BATCH (4th, export-polish-only): electricity power labels are d
   assert.equal(intPlacement.presentation.displayLabel, "INT");
 
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
-    sourcePdfBytes: source, page: 1, placements: [powerPlacement, intPlacement], legend: [], showLegend: false, headerLine: "X",
+    sourcePdfBytes: source, page: 1, placements: [powerPlacement, intPlacement], legend: [], showLegend: false, headerLine: "X", textMode: "outlines",
   });
 
-  // /Contents = [original, BDC, power-glyph-chunk, int-glyph-chunk, EMC] — drawn in placement order.
-  const powerChunk = await readPage1ContentEntryFromEnd(bytes, 2);
-  const intChunk = await readPage1ContentEntryFromEnd(bytes, 1);
+  // /Contents = [original, BDC, overlay, EMC]; the overlay holds one "q … Q" group per marker, in placement order.
+  const [powerChunk = "", intChunk = ""] = (await readPage1ContentEntryFromEnd(bytes, 1)).split(/\n(?=q )/u);
 
   // Still genuine vector-outline fills, never text-showing operators, for BOTH labels.
   for (const [label, chunk] of [["power", powerChunk], ["INT", intChunk]] as const) {
@@ -733,11 +806,8 @@ test("REAL EXPORT CRASH REPRODUCTION: white mode at the DEFAULT 60% opacity (eve
   assert.equal(result.whiteModeDiagnostic.status, "applied");
   const text = await readAllPage1ContentText(result.bytes);
   assert.match(text, /1 1 1 rg/, "white mode content survives");
-  // CORRECTIVE BATCH (3rd) sections 8/9 — the "3 kW" marker drawn AFTER white mode is no longer
-  // extractable PDF text (it is genuine vector-outline fill geometry, on purpose — see
-  // domain/technicalRasterVectorGlyphOutline.ts's own doc); its own presentation color (#b3261e ->
-  // 0.702 0.149 0.118) followed by a fill operator is the structural proof it survived instead.
-  assert.match(text, /0\.702 0\.149 0\.118 rg[\s\S]*\bf\b/u, `expected the technical symbol's own vector-outline fill to survive after white mode, got: ${text}`);
+  // The "3 kW" marker drawn AFTER white mode survives as a real text object in its own color.
+  assert.match(text, /0\.702 0\.149 0\.118 rg [^\n]* Tj ET Q/u, `expected the technical symbol's own text to survive after white mode, got: ${text}`);
 });
 
 test("REAL EXPORT CRASH REPRODUCTION (multi-page function, the one the real UI actually calls): white mode + placements + realization underlines + legend across 2 pages completes without throwing", async () => {
@@ -749,7 +819,7 @@ test("REAL EXPORT CRASH REPRODUCTION (multi-page function, the one the real UI a
       placements: [placementItem()],
       realizationUnderlines: [{ standId: "s1", xNormalized: 0.4, yNormalized: 0.4, widthNormalized: 0.05, color: "#2f8f4e" }],
     }],
-    legend: [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" }],
+    legend: [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" }],
     showLegend: true,
     headerLine: "X",
     whiteMode: { opacity: 0.6 },
@@ -879,7 +949,7 @@ test("part A) textScales composes correctly with white mode active for a DIFFERE
 // PRODUCTION BATCH, PART B — "BEZ elektriky" automatic red X, export side.
 // ============================================================================
 
-test("part B) noElectricityMarkers: draws two red vector diagonal strokes (never a text glyph), inside GENERÁTOR DATA", async () => {
+test("part B) noElectricityMarkers: draws two red vector diagonal strokes (never a text glyph), inside TECHNICKÉ SLUŽBY (HOTFIX-02)", async () => {
   const source = await buildPlainFixture();
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X",
@@ -994,9 +1064,8 @@ test("corrective batch 5) /Catalog /OCProperties /D /Order actually exists as a 
   assert.ok(d instanceof PDFDict);
   const order = (d as PDFDict).lookup(PDFName.of("Order"));
   assert.ok(order instanceof PDFArray, "/D/Order must be a real PDFArray at the raw PDF-object level");
-  // CORRECTIVE BATCH (3rd) sections 10/11 — the generator's own "GENERÁTOR DATA" OCG is always
-  // appended to /D/Order too, alongside the 2 reconstructed source groups.
-  assert.equal((order as PDFArray).size(), 3);
+  // HOTFIX-02 — nothing generated, so only the 2 reconstructed source groups.
+  assert.equal((order as PDFArray).size(), 2);
 });
 
 /** Same 12-layer shape docs/technical-rasters.md describes for Hala 1.pdf, but here as a fully synthetic, committable fixture — a nested /D/Order (one top-level heading string, two real OCGs grouped under it, plus one flat OCG) mirroring how a real hall-plan PDF groups its layers under headings in Acrobat's own Layers panel. */
@@ -1060,8 +1129,7 @@ test("corrective batch 5) a nested /D/Order (heading string + sub-group) is pres
   const ocProps = reloaded.catalog.lookup(PDFName.of("OCProperties"));
   const d = (ocProps as PDFDict).lookup(PDFName.of("D"));
   const order = (d as PDFDict).lookup(PDFName.of("Order")) as PDFArray;
-  // CORRECTIVE BATCH (3rd) sections 10/11 — "GENERÁTOR DATA" is appended as one more flat entry.
-  assert.equal(order.size(), 4, "heading string + nested subgroup array + one flat OCG ref + GENERÁTOR DATA");
+  assert.equal(order.size(), 3, "heading string + nested subgroup array + one flat OCG ref (no generator layer without content)");
   assert.ok(order.get(0) instanceof PDFString, "the heading string survives");
   assert.equal((order.get(0) as PDFString).decodeText(), "SKUPINA");
   assert.ok(order.get(1) instanceof PDFArray, "the nested sub-group survives as a real nested array, never flattened");
@@ -1102,8 +1170,7 @@ test("corrective batch 5) an /Order entry pointing at an OCG this page never act
   const ocProps = reloaded.catalog.lookup(PDFName.of("OCProperties"));
   const d = (ocProps as PDFDict).lookup(PDFName.of("D"));
   const orderOut = (d as PDFDict).lookup(PDFName.of("Order")) as PDFArray;
-  // CORRECTIVE BATCH (3rd) sections 10/11 — "GENERÁTOR DATA" is always appended too.
-  assert.equal(orderOut.size(), 2, "the orphaned OCG must never appear in the exported /Order — only VRSTVA A + GENERÁTOR DATA");
+  assert.equal(orderOut.size(), 1, "the orphaned OCG must never appear in the exported /Order — only VRSTVA A");
 });
 
 // ============================================================================
@@ -1124,23 +1191,20 @@ test("GENERÁTOR DATA: created exactly once, appears in /OCGs, appears in /D/Ord
   const ocProps = reloaded.catalog.lookup(PDFName.of("OCProperties"));
   assert.ok(ocProps instanceof PDFDict, "a fresh /OCProperties structure must be created even for a source with none");
   const ocgsArr = (ocProps as PDFDict).lookup(PDFName.of("OCGs")) as PDFArray;
-  assert.equal(ocgsArr.size(), 1, "exactly one OCG — GENERÁTOR DATA — never duplicated");
-  const ocg = reloaded.context.lookup(ocgsArr.get(0));
-  assert.ok(ocg instanceof PDFDict);
-  assert.equal((ocg as PDFDict).lookup(PDFName.of("Name"))?.toString().includes("GENER"), true);
+  // HOTFIX-02 — the marker goes into a (new) TECHNICKÉ SLUŽBY layer, the underline into GENERÁTOR DATA: one of each, never duplicated.
+  assert.equal(ocgsArr.size(), 2, "exactly TECHNICKÉ SLUŽBY + GENERÁTOR DATA");
 
   const d = (ocProps as PDFDict).lookup(PDFName.of("D")) as PDFDict;
   assert.equal(d.lookup(PDFName.of("BaseState"))?.toString(), "/ON");
   const onArr = d.lookup(PDFName.of("ON")) as PDFArray;
-  assert.equal(onArr.size(), 1, "GENERÁTOR DATA is ON by default");
+  assert.equal(onArr.size(), 2, "both ON by default");
   const orderArr = d.lookup(PDFName.of("Order")) as PDFArray;
-  assert.equal(orderArr.size(), 1, "GENERÁTOR DATA appears in /D/Order");
+  assert.equal(orderArr.size(), 2, "both appear in /D/Order");
   const offArr = d.lookup(PDFName.of("OFF"));
   assert.ok(!(offArr instanceof PDFArray) || offArr.size() === 0, "never placed in /D/OFF");
 
   const { ocConfig } = await decodeForInspection(bytes);
-  const config = ocConfig.getGroup(ocConfig.getOrder()![0]!);
-  assert.equal(config?.name, "GENERÁTOR DATA");
+  assert.deepEqual(ocConfig.getOrder()!.map((id) => ocConfig.getGroup(id)?.name), ["TECHNICKÉ SLUŽBY", "GENERÁTOR DATA"]);
 });
 
 test("GENERÁTOR DATA: original source OCGs remain untouched, and generator overlay content is actually marked as belonging to it (real /OC BDC ... EMC span in the content stream, resolvable via the page's own /Resources/Properties)", async () => {
@@ -1172,7 +1236,10 @@ test("GENERÁTOR DATA: original source OCGs remain untouched, and generator over
 
 test("GENERÁTOR DATA: source raster content is never accidentally moved into it — the ORIGINAL copied content stream (page.doc content BEFORE any BDC) is completely untouched", async () => {
   const source = await buildStandLayerContentFixture(); // has real content OUTSIDE the app's own overlay
-  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X" });
+  const { bytes } = await buildTechnicalRasterVectorExportPdf({
+    sourcePdfBytes: source, page: 1, placements: [placementItem()], legend: [], showLegend: false, headerLine: "X",
+    realizationUnderlines: [{ standId: "s1", xNormalized: 0.4, yNormalized: 0.5, widthNormalized: 0.08, color: "#2f8f4e" }],
+  });
   const reloaded = await PDFDocument.load(bytes);
   const page1 = reloaded.getPage(0);
   const contents = page1.node.Contents();
@@ -1185,7 +1252,7 @@ test("GENERÁTOR DATA: source raster content is never accidentally moved into it
   // generator's own separate BDC bracket — never merged/moved into the GENERÁTOR DATA span itself.
   assert.match(firstText, /\/OC \/MC0 BDC/u, "the SOURCE's own marked-content span is untouched");
   assert.match(firstText, /0 0 0 rg 5 5 15 15 re f/u, "content outside the source's own OCG span is untouched and stays in the original stream");
-  assert.ok(!/GenData/u.test(firstText), "the original content is never itself tagged with the generator's own property key");
+  assert.ok(!/GenData|TechSluzby/u.test(firstText), "the original content is never itself tagged with a generator layer's own property key");
 });
 
 test("GENERÁTOR DATA: white-mode's own rewrite of source stand fills stays OUTSIDE the GENERÁTOR DATA span — white mode transforms EXISTING content, it is never generator-added content", async () => {
@@ -1210,7 +1277,7 @@ test("GENERÁTOR DATA: multiple pages in a multi-page export re-use the SAME OCG
   const source = await buildTwoPageOcgSourceFixture();
   const { bytes } = await buildTechnicalRasterMultiPageVectorExportPdf({
     sourcePdfBytes: source,
-    pages: [{ page: 1, placements: [] }, { page: 2, placements: [] }],
+    pages: [1, 2].map((page) => ({ page, placements: [], realizationUnderlines: [{ standId: `s${page}`, xNormalized: 0.4, yNormalized: 0.5, widthNormalized: 0.08, color: "#2f8f4e" }] })),
     legend: [],
     showLegend: false,
     headerLine: "X",
@@ -1351,7 +1418,7 @@ test("GENERATED LEGEND BATCH section 13 — the legend's REALIZACE key lists ONL
 
 test("corrective batch 7) source-legend-area draws the legend directly on the source page — no separate page 2 is appended, page 1's own size is untouched", async () => {
   const source = await buildPlainFixture(); // 300x200
-  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" }];
+  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" }];
   // A comfortably large region (120x60pt of a 300x200pt page) — big enough that ONE legend row
   // fits at full scale/one column, so this test exercises "in-place legend actually used", not the
   // overflow-fallback path (see the dedicated GENERATED LEGEND BATCH overflow test further below).
@@ -1363,7 +1430,7 @@ test("corrective batch 7) source-legend-area draws the legend directly on the so
     showLegend: true,
     headerLine: "X",
     legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.5, yNormalized: 0.6, widthNormalized: 0.4, heightNormalized: 0.3 } },
-  });
+   textMode: "outlines" });
   const reloaded = await PDFDocument.load(bytes);
   assert.equal(reloaded.getPageCount(), 1, "no separate legend page when drawn in-place");
   const page1 = reloaded.getPage(0);
@@ -1409,7 +1476,7 @@ test("corrective batch 7) multi-page: source-legend-area targets ONE specific pa
   doc.addPage([300, 200]);
   doc.addPage([300, 200]);
   const source = await doc.save();
-  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" }];
+  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" }];
 
   const { buildTechnicalRasterMultiPageVectorExportPdf } = await import("../lib/technicalRasterVectorPdf.ts");
   const { bytes, legendPageNumber } = await buildTechnicalRasterMultiPageVectorExportPdf({

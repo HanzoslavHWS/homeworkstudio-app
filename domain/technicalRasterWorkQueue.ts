@@ -18,11 +18,11 @@
  * section 10: "nad SEZNAMEM").
  */
 import { effectiveServicePlacements, requiredPlacementCount, type TechnicalStand, type TechnicalService } from "./technicalRaster.ts";
-import { resolveTechnicalServicePresentation } from "./technicalRasterServicePresentation.ts";
+import { resolveServicePresentation } from "./technicalRasterServicePresentation.ts";
 import { sortStandNumbersNatural } from "./technicalStandNumber.ts";
 
 function isPointService(service: TechnicalService): boolean {
-  return resolveTechnicalServicePresentation(service.category, service.externalLabel).placementBehavior === "point";
+  return resolveServicePresentation(service).placementBehavior === "point";
 }
 
 function needsMorePlacements(service: TechnicalService): boolean {

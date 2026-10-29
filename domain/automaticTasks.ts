@@ -13,7 +13,7 @@
  * approaching graphics deadline -> "Zkontrolovat chybějící grafické podklady".
  */
 import { effectiveServicePlacements, requiredPlacementCount, type TechnicalRasterProject } from "./technicalRaster.ts";
-import { resolveTechnicalServicePresentation } from "./technicalRasterServicePresentation.ts";
+import { resolveServicePresentation } from "./technicalRasterServicePresentation.ts";
 import type { TaskInput } from "./tasks.ts";
 
 export type AutomaticTaskCandidate = Readonly<{
@@ -62,7 +62,7 @@ export const technicalRasterUnplacedServicesRule: AutomaticTaskRule<TechnicalRas
       if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
       const missingCategories = new Set<string>();
       for (const service of stand.services) {
-        if (resolveTechnicalServicePresentation(service.category, service.externalLabel).placementBehavior !== "point") continue;
+        if (resolveServicePresentation(service).placementBehavior !== "point") continue;
         if (effectiveServicePlacements(service).length < requiredPlacementCount(service)) missingCategories.add(service.category);
       }
       for (const category of missingCategories) {

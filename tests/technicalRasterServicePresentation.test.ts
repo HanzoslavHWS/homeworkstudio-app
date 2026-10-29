@@ -6,6 +6,7 @@ import {
   extractElectricityKwLabel,
   resolveTechnicalServicePresentation,
 } from "../domain/technicalRasterServicePresentation.ts";
+import { APPROVED_TECHNICAL_MARKER_ROWS } from "../domain/technicalMarkerApprovedTable.ts";
 
 // =========================================================================================
 // Technické rastry — Phase 2 technical presentation config (spec batch 7). Every real label
@@ -30,24 +31,17 @@ test("electricity: Do 9kW 400V -> 9 kW (voltage suffix ignored, kW is the only t
   assert.equal(resolveTechnicalServicePresentation("electricity", "Do 9kW 400V").displayLabel, "9 kW");
 });
 
-test("electricity: Lednicový okruh -> refrigeratedStar, point, red, refrigerated legend", () => {
-  const p = resolveTechnicalServicePresentation("electricity", "Lednicový okruh");
-  assert.equal(p.placementBehavior, "point");
-  assert.equal(p.renderer, "refrigeratedStar");
-  assert.equal(p.color, TECHNICAL_RASTER_COLORS.electricity);
-  assert.equal(p.legendLabel, "LEDNICOVÝ OKRUH");
+test("HOTFIX-02: Lednicový okruh -> text 'LED', Non stop -> its OWN text 'Non-stop' (no shared star glyph any more)", () => {
+  const fridge = resolveTechnicalServicePresentation("electricity", "Lednicový okruh");
+  const nonStop = resolveTechnicalServicePresentation("electricity", "Non stop");
+  assert.deepEqual([fridge.renderer, fridge.displayLabel, fridge.color], ["textLabel", "LED", TECHNICAL_RASTER_COLORS.electricity]);
+  assert.deepEqual([nonStop.renderer, nonStop.displayLabel], ["textLabel", "Non-stop"]);
+  assert.notEqual(fridge.variantId, nonStop.variantId);
 });
 
-test("electricity: 'Non stop' (spec section 16's documented alias, not in the real fixture set but must still resolve) -> same refrigeratedStar presentation", () => {
-  const p = resolveTechnicalServicePresentation("electricity", "Non stop");
-  assert.equal(p.renderer, "refrigeratedStar");
-  assert.equal(p.legendLabel, "LEDNICOVÝ OKRUH");
-});
-
-test("electricity: a label with no extractable kW and no refrigerated match -> honest 'EL' fallback label, never a guessed number", () => {
-  const p = resolveTechnicalServicePresentation("electricity", "Rozvaděč");
+test("electricity: a label with no extractable kW and no dedicated variant -> honest 'EL', never a guessed number", () => {
+  const p = resolveTechnicalServicePresentation("electricity", "Prodlužovací kabel");
   assert.equal(p.placementBehavior, "point");
-  assert.equal(p.renderer, "powerLabel");
   assert.equal(p.displayLabel, "EL");
   assert.equal(p.isFallback, false, "still a real, recognized electricity row — just without a safely-extractable number, not an unresolved fallback");
 });
@@ -117,22 +111,30 @@ test("CORRECTIVE BATCH (2nd) — breaker: a concrete amperage value already pres
   assert.equal(resolveTechnicalServicePresentation("electricity", "jistic C").displayLabel, "C", "diacritic-free 'jistic' must still be recognized");
 });
 
-test("GENERATED LEGEND BATCH — breaker legendLabel is per-characteristic-letter, extensible: C and D never collapse into one shared 'JISTIČ (CHARAKTERISTIKA)' legend row", () => {
-  assert.equal(resolveTechnicalServicePresentation("electricity", "Jistič C").legendLabel, "JISTIČ CHARAKTERISTIKY C");
-  assert.equal(resolveTechnicalServicePresentation("electricity", "Jistič D").legendLabel, "JISTIČ CHARAKTERISTIKY D");
-  assert.notEqual(
-    resolveTechnicalServicePresentation("electricity", "Jistič C").legendLabel,
-    resolveTechnicalServicePresentation("electricity", "Jistič D").legendLabel,
-  );
-  // A concrete amperage (C16/C20) still dedups to the SAME per-letter legend row as a bare "Jistič C" — the legend describes the characteristic, never one row per amperage value.
-  assert.equal(resolveTechnicalServicePresentation("electricity", "Jistič C16").legendLabel, "JISTIČ CHARAKTERISTIKY C");
+test("HOTFIX-02: legendLabel is the CATEGORY legend text — the PDF legend explains colors, never individual labels", () => {
+  assert.equal(resolveTechnicalServicePresentation("electricity", "Jistič C").legendLabel, "ELEKTŘINA");
+  assert.equal(resolveTechnicalServicePresentation("electricity", "Do 3kW 230V").legendLabel, "ELEKTŘINA");
+  assert.equal(resolveTechnicalServicePresentation("internet", "WIFI").legendLabel, "INTERNET / WiFi");
+  assert.equal(resolveTechnicalServicePresentation("water", "Voda, odpad").legendLabel, "VODA");
+  assert.equal(resolveTechnicalServicePresentation("waste", "Kontejn 1100 l").legendLabel, "ODPAD");
+  assert.equal(resolveTechnicalServicePresentation("cleaning", "Denní úklid").legendLabel, "ÚKLID");
 });
 
-test("water: category-level point/green/waterDrop regardless of externalLabel", () => {
+test("water: any other water label -> text 'Voda', point, green", () => {
   const p = resolveTechnicalServicePresentation("water", "Přípojka vody");
   assert.equal(p.placementBehavior, "point");
-  assert.equal(p.renderer, "waterDrop");
+  assert.equal(p.renderer, "textLabel");
+  assert.equal(p.displayLabel, "Voda");
   assert.equal(p.color, TECHNICAL_RASTER_COLORS.water);
+});
+
+test("HOTFIX-02 dynamic label: 'Bazén - objem' shows its own quantity as '{mnozstvi} m³', always ONE point", () => {
+  assert.equal(resolveTechnicalServicePresentation("water", "Bazén - objem", 3).displayLabel, "3 m³");
+  assert.equal(resolveTechnicalServicePresentation("water", "Bazén - objem", 5).displayLabel, "5 m³");
+  assert.equal(resolveTechnicalServicePresentation("water", "Bazén – objem", 2.5).displayLabel, "2.5 m³", "en dash and a decimal quantity");
+  assert.equal(resolveTechnicalServicePresentation("water", "Bazén - objem").displayLabel, "? m³", "no quantity known -> never an invented number");
+  assert.equal(resolveTechnicalServicePresentation("water", "Bazén - objem", 3).placementCardinality, "onePerRecord");
+  assert.equal(resolveTechnicalServicePresentation("water", "Bazén - objem", 3).variantId, resolveTechnicalServicePresentation("water", "Bazén - objem", 5).variantId, "the identity never depends on the quantity");
 });
 
 test("CORRECTIVE BATCH (real production): waste -> point, onePerRecord, never crashes on the real 'Kontejn 1100 l' label", () => {
@@ -199,12 +201,12 @@ const PRESENTATION_SNAPSHOT_CASES: readonly Readonly<{
   { category: "electricity", externalLabel: "Do 5kW 230V", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "powerLabel", displayLabel: "5 kW", colorKey: "electricity" },
   { category: "electricity", externalLabel: "Do 6kW 230V", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "powerLabel", displayLabel: "6 kW", colorKey: "electricity" },
   { category: "electricity", externalLabel: "Do 9kW 400V", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "powerLabel", displayLabel: "9 kW", colorKey: "electricity" },
-  { category: "electricity", externalLabel: "Lednicový okruh", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "refrigeratedStar", colorKey: "electricity" },
+  { category: "electricity", externalLabel: "Lednicový okruh", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "LED", colorKey: "electricity" },
   { category: "internet", externalLabel: "Pevná IP", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "IP", colorKey: "internet" },
   { category: "internet", externalLabel: "Internet", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "INT", colorKey: "internet" },
   { category: "internet", externalLabel: "WIFI", placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "textLabel", displayLabel: "WiFi", colorKey: "internet" },
   { category: "electricity", externalLabel: "Jistič C", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "C", colorKey: "electricity" },
-  { category: "water", externalLabel: "Přípojka vody", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "waterDrop", colorKey: "water" },
+  { category: "water", externalLabel: "Přípojka vody", placementBehavior: "point", placementCardinality: "perQuantity", renderer: "textLabel", displayLabel: "Voda", colorKey: "water" },
   { category: "waste", externalLabel: "Kontejn 1100 l", placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "textLabel", displayLabel: "ODP", colorKey: "waste" },
   { category: "cleaning", externalLabel: "Denní úklid", placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "textLabel", displayLabel: "ÚKL", colorKey: "cleaning" },
   { category: "some-unknown-category", externalLabel: "Nová budoucí služba", placementBehavior: "point", placementCardinality: "onePerRecord", renderer: "fallback", displayLabel: "NOVÁ", colorKey: "fallback" },
@@ -236,4 +238,52 @@ test("CORRECTIVE BATCH (real production): categoryCanHaveExportableSymbol is tru
   assert.equal(categoryCanHaveExportableSymbol("waste"), true);
   assert.equal(categoryCanHaveExportableSymbol("cleaning"), true);
   assert.equal(categoryCanHaveExportableSymbol("some-unknown-category"), true);
+});
+
+// =========================================================================================
+// HOTFIX-02 — the APPROVED marker table (_IMPORT/TECHNICKE_ZNACKY/Generator_ABF_Revize_technickych_znacek.xlsx,
+// sheet "Technické značky": B = ABRA name, K = NOVÝ popisek v rastru (= L, NOVÝ text v PDF),
+// N = NOVÁ barva, P = NOVÉ pravidlo počtu bodů). Every one of the 34 approved rows, verbatim.
+// The Excel itself is never committed; scripts/technicalMarkersExcelCheck.ts re-checks the same
+// table (domain/technicalMarkerApprovedTable.ts) against it when it is available locally.
+// =========================================================================================
+
+test("HOTFIX-02 APPROVED TABLE: every approved ABRA name -> its approved text, color and point rule; every marker is TEXT", () => {
+  assert.equal(APPROVED_TECHNICAL_MARKER_ROWS.length, 34);
+  for (const row of APPROVED_TECHNICAL_MARKER_ROWS) {
+    const quantity = 4;
+    const p = resolveTechnicalServicePresentation(row.category, row.abraName, quantity);
+    const where = `${row.category} / "${row.abraName}"`;
+    assert.equal(p.displayLabel, row.label.replace("{mnozstvi}", String(quantity)), `${where}: label`);
+    assert.equal(p.color, row.color, `${where}: color`);
+    assert.equal(p.placementCardinality, row.rule === "Vždy 1 bod" ? "onePerRecord" : "perQuantity", `${where}: point rule`);
+    assert.equal(p.placementBehavior, "point", `${where}: placeable`);
+    assert.ok(["powerLabel", "textLabel", "fallback"].includes(p.renderer), `${where}: drawn as text, got ${p.renderer}`);
+  }
+});
+
+test("HOTFIX-02 identity: every approved service that is a DIFFERENT service has a different internal variant id", () => {
+  const ids = (category: string, ...labels: string[]) => labels.map((label) => resolveTechnicalServicePresentation(category, label).variantId);
+  const [do21, rozvadec] = ids("electricity", "Do 21kW 400V", "Rozvaděč 9-21kW");
+  assert.notEqual(do21, rozvadec, "Do 21 kW ≠ Rozvaděč 9–21 kW");
+  const [fridge, nonStop] = ids("electricity", "Lednicový okruh", "Non stop");
+  assert.notEqual(fridge, nonStop, "Non stop ≠ Lednicový okruh");
+  const [lighting, overhead, plusKw] = ids("electricity", "Osvětlení", "Vrchní přívod", "+ kW");
+  assert.equal(new Set([lighting, overhead, plusKw]).size, 3, "Osvětlení ≠ Vrchní přívod ≠ + kW");
+  const [internet, router] = ids("internet", "Internet", "Router zapůjčení");
+  assert.notEqual(internet, router, "Internet ≠ Router");
+  const [poolConnection, poolVolume, water] = ids("water", "Bazén - přípojka", "Bazén - objem", "Voda, odpad");
+  assert.equal(new Set([poolConnection, poolVolume, water]).size, 3);
+  // Labels the approved table treats as the same service kind keep ONE identity.
+  assert.deepEqual(ids("internet", "WIFI", "Další WIFI přípojka", "WIFI 2 EEt"), ["wifi", "wifi", "wifi"]);
+});
+
+test("HOTFIX-02 identity: ids of services that never collided are byte-identical to the previous version (no churn)", () => {
+  const expected: readonly [string, string, string][] = [
+    ["electricity", "Do 2kW 230V", "2kw"], ["electricity", "Do 21kW 400V", "21kw"], ["electricity", "EET 0.5KW", "0.5kw"],
+    ["electricity", "Lednicový okruh", "refrigerated"], ["internet", "Pevná IP", "fixed-ip"], ["internet", "WIFI", "wifi"],
+    ["internet", "Router zapůjčení", "internet:router"], ["internet", "Internet", "internet:plain"], ["water", "Voda, odpad", "water:connection"],
+    ["cleaning", "Denní úklid", "cleaning:daily"], ["cleaning", "Generální úklid", "cleaning:general"], ["waste", "Kontejn 1100 l", "kontejn 1100 l"],
+  ];
+  for (const [category, label, variantId] of expected) assert.equal(resolveTechnicalServicePresentation(category, label).variantId, variantId, label);
 });

@@ -31,86 +31,22 @@
  * batch (no real fixture file was available to build/verify it against, the same standard every
  * other parser in domain/technicalReportParsers/* was already held to).
  */
-import { extractElectricityKwLabel, isFixedIpLabel, isRefrigeratedElectricityLabel, isWifiLabel } from "./technicalRasterServicePresentation.ts";
+import { normalizeGenericServiceVariant, resolveServiceVariantId } from "./technicalRasterServicePresentation.ts";
 import { normalizeStandNumber } from "./technicalStandNumber.ts";
-
-/** Diacritic-insensitive, lowercase compare key — the same NFD-strip discipline this app already uses elsewhere (e.g. technicalRasterRealization.ts's own normalizeForMatching) rather than a second, subtly-different Unicode approach. */
-function stripDiacritics(text: string): string {
-  return text.normalize("NFD").replace(/[̀-ͯ]/gu, "").toLowerCase();
-}
-
-/**
- * CORRECTIVE BATCH (3rd) section 13 — real case: stand 1C01, report says "denni uklid", catalog
- * says "uklid denni" (word order reversed). Same real-world service, but a bare normalized-string
- * comparison treats reversed word order as a different variant, producing a false CONFLICT. This
- * checks for BOTH tokens present anywhere in the label, independent of order — deliberately narrow
- * (just the one real "daily cleaning" pair this app has actually seen conflict on), never a general
- * word-order-insensitive matcher for arbitrary labels.
- */
-function isAbfDailyCleaningLabel(externalLabel: string): boolean {
-  const normalized = stripDiacritics(externalLabel);
-  return /denn/u.test(normalized) && /uklid/u.test(normalized);
-}
 
 /**
  * CORRECTIVE BATCH (3rd) section 14 — real case: stand 1B05, report says "Lednicový okruh", catalog
  * says the real (sometimes OCR-truncated) "ELEKTRICKÁ ENERGIE - NOČNÍ PROUD (LEDNI...)". For THIS
- * catalog's own vocabulary, "noční proud" IS the refrigerated-circuit variant — but this is a
- * RECONCILIATION-ONLY alias, deliberately NOT folded into `isRefrigeratedElectricityLabel`
- * (technicalRasterServicePresentation.ts), which is also the LIVE presentation resolver deciding how
- * a report's own label renders in the editor/export — extending that shared pattern risks changing
- * rendering behavior for labels this batch was never asked to touch (spec: "keep all already-working
- * behavior unless explicitly changed"). Scoped to exactly the real catalog wording seen so far —
- * never an unsafe global fuzzy matcher (spec's own explicit instruction).
+ * catalog's own vocabulary, "noční proud" IS the refrigerated-circuit variant — a RECONCILIATION-ONLY
+ * alias, deliberately NOT part of the live presentation table (domain/technicalRasterServicePresentation.ts),
+ * which also decides how a report's own label renders.
  */
 function isAbfNightCurrentRefrigeratedCatalogLabel(externalLabel: string): boolean {
-  return /nocni\s*proud/u.test(stripDiacritics(externalLabel));
+  return /nocni\s*proud/u.test(normalizeGenericServiceVariant(externalLabel));
 }
 
-/**
- * CORRECTIVE BATCH (4th, real Beauty-catalog production import) section 7 — real case: report says
- * "generalni uklid", catalog says "uklid jednorazovy". Operationally equivalent enough for this
- * reconciliation not to be shown as a hard conflict (spec's own explicit instruction), even though
- * the exact Czech terms differ. Scoped to exactly this real pair, never a general cleaning-service
- * merger — "denní úklid" (daily, handled above by isAbfDailyCleaningLabel) and any other real
- * cleaning wording stay their own distinct variant.
- */
-function isAbfGeneralOneTimeCleaningLabel(externalLabel: string): boolean {
-  const normalized = stripDiacritics(externalLabel);
-  return /uklid/u.test(normalized) && (/general/u.test(normalized) || /jednorazov/u.test(normalized));
-}
-
-/**
- * CORRECTIVE BATCH (4th, real Beauty-catalog production import) section 7 — real case: report says
- * "voda, odpad", catalog says "voda / odpad (přívod)" — the same real water/waste CONNECTION
- * service, worded differently by the two sources. Checked for BOTH tokens present anywhere in the
- * label, independent of order/exact punctuation — the same narrow, real-pair-only discipline as
- * isAbfDailyCleaningLabel above (never a general fuzzy matcher for arbitrary water/waste labels).
- */
-function isAbfWaterWasteConnectionLabel(externalLabel: string): boolean {
-  const normalized = stripDiacritics(externalLabel);
-  return /voda/u.test(normalized) && /odpad/u.test(normalized);
-}
-
-/**
- * CORRECTIVE BATCH (real Beauty production, 3A45) — router rental ("Router zapůjčení" in the
- * internet report, "Router - zapůjčení" in the catalog) is equipment, not another Internet
- * connection. Without its own variant it fell into the catch-all "internet:plain" and was SUMMED
- * with the real Internet row (report 2× vs catalog 1×, a false quantity mismatch). Reconciliation
- * only — placement cardinality, markers and legend never read this.
- */
-function isRouterRentalLabel(externalLabel: string): boolean {
-  return /router|smerovac/u.test(stripDiacritics(externalLabel));
-}
-
-function normalizeGenericVariant(externalLabel: string): string {
-  return externalLabel
-    .normalize("NFD")
-    .replace(/[̀-ͯ]/gu, "")
-    .toLowerCase()
-    .replace(/\s+/gu, " ")
-    .trim();
-}
+/** Prefix of the catch-all variant id for electricity labels without a dedicated variant (the raw label follows the "|"). */
+const UNRECOGNIZED_ELECTRICITY_VARIANT = "electricity:unrecognized";
 
 export type TechnicalReconciliationSource = "report" | "catalog";
 
@@ -149,56 +85,36 @@ export type TechnicalReconciliationOutcome =
   }>;
 
 /**
- * The ONE place canonical service identity is resolved (spec: "Canonical identity minimálně:
- * standNumber, service category, normalized variant") — reuses the exact same real-label
- * classification `resolveTechnicalServicePresentation` itself trusts, never a second parallel
- * heuristic. Falls back to a whitespace/case-normalized copy of the raw label for anything this
- * app doesn't have a dedicated classifier for yet — still never a bare exact-string comparison,
- * per spec's own explicit requirement, but also never a guess at a category this app doesn't
- * understand (an unknown category's variant is just its own normalized text, matched only against
- * an identically-normalized counterpart).
+ * Canonical service variant for reconciliation (spec: "Canonical identity minimálně: standNumber,
+ * service category, normalized variant") — the SAME variant table the live presentation uses
+ * (resolveServiceVariantId), never a second parallel heuristic, plus the catalog-only "noční proud"
+ * alias above. Deduplication is never exact-string: "Do 2 kW 230V" and "ELEKTRICKÁ ENERGIE - PŘÍKON
+ * DO 2 kW/230" both resolve to "2kw", "denní úklid" and "úklid denní" both to "cleaning:daily".
+ *
+ * Every electricity label without a dedicated variant reconciles as ONE "electricity:unrecognized"
+ * bucket (unchanged behavior) — only the re-import identity below keeps those labels apart.
  */
 export function resolveCanonicalServiceVariant(category: string, externalLabel: string): string {
-  if (category === "electricity") {
-    if (isRefrigeratedElectricityLabel(externalLabel) || isAbfNightCurrentRefrigeratedCatalogLabel(externalLabel)) return "refrigerated";
-    const kw = extractElectricityKwLabel(externalLabel);
-    if (kw) return kw.replace(/\s+/gu, "").toLowerCase();
-    return "electricity:unrecognized";
-  }
-  if (category === "internet") {
-    if (isFixedIpLabel(externalLabel)) return "fixed-ip";
-    if (isWifiLabel(externalLabel)) return "wifi";
-    if (isRouterRentalLabel(externalLabel)) return "internet:router";
-    return "internet:plain";
-  }
-  if (category === "cleaning") {
-    if (isAbfDailyCleaningLabel(externalLabel)) return "cleaning:daily";
-    if (isAbfGeneralOneTimeCleaningLabel(externalLabel)) return "cleaning:general";
-    return normalizeGenericVariant(externalLabel);
-  }
-  if (category === "water") {
-    if (isAbfWaterWasteConnectionLabel(externalLabel)) return "water:connection";
-    return normalizeGenericVariant(externalLabel);
-  }
-  return normalizeGenericVariant(externalLabel);
+  if (category === "electricity" && isAbfNightCurrentRefrigeratedCatalogLabel(externalLabel)) return "refrigerated";
+  const variant = resolveServiceVariantId(category, externalLabel);
+  return variant.startsWith(`${UNRECOGNIZED_ELECTRICITY_VARIANT}|`) ? UNRECOGNIZED_ELECTRICITY_VARIANT : variant;
 }
 
 /**
  * Stable LOGICAL identity of one service row across re-imports of the same report type (used by
- * domain/technicalRaster.ts's incremental re-import): `<category>|<canonical variant>` — the SAME
- * canonical variant reconciliation uses ("electricity" + "3kw", "internet" + "internet:router", …),
- * never a database/random id. The stand is part of the grouping at the call site (a project is one
- * hall's raster, and the stand number itself carries the hall prefix).
+ * domain/technicalRaster.ts's incremental re-import): `<category>|<variant id>` — never a
+ * database/random id, never the display label. The stand is part of the grouping at the call site.
  *
- * One deliberate refinement: "electricity:unrecognized" is a catch-all for labels with no kW value
- * (e.g. two different breaker types). Treating those as ONE service would let a different
- * unrecognized label silently inherit another service's placement, so for that catch-all the
- * normalized label itself is part of the key.
+ * HOTFIX-02 — the variant table gives every approved service its own id, so services that used to
+ * collide are now distinct: "Rozvaděč 9-21kW" ≠ "Do 21kW 400V", "Non stop" ≠ "Lednicový okruh",
+ * "Osvětlení" ≠ "Vrchní přívod", "Router zapůjčení" ≠ "Internet". The identity is NEVER stored — it
+ * is recomputed for the old AND the new service with this same function on every re-import, so an
+ * older saved project needs no migration and keeps its placements (see
+ * tests/technicalRasterServiceIdentity.test.ts). Ids that never collided are unchanged, e.g.
+ * "electricity|3kw", "internet|wifi", "electricity|electricity:unrecognized|<label>".
  */
 export function resolveServiceIdentityKey(category: string, externalLabel: string): string {
-  const variant = resolveCanonicalServiceVariant(category, externalLabel);
-  if (variant === "electricity:unrecognized") return `${category}|${variant}|${normalizeGenericVariant(externalLabel)}`;
-  return `${category}|${variant}`;
+  return `${category}|${resolveServiceVariantId(category, externalLabel)}`;
 }
 
 type MentionGroup = Readonly<{ standNumber: string; category: string; report: readonly TechnicalReconciliationMention[]; catalog: readonly TechnicalReconciliationMention[] }>;

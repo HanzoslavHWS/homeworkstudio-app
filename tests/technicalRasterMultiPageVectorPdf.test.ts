@@ -119,15 +119,11 @@ test("each source page draws only ITS OWN placements — a placement on page 2 n
     showLegend: false,
     headerLine: "X",
   });
-  // CORRECTIVE BATCH (3rd) sections 8/9 — the "3 kW" marker is no longer extractable PDF text (it
-  // is genuine vector-outline fill geometry — see domain/technicalRasterVectorGlyphOutline.ts's own
-  // doc), so this checks each page's own raw content for the marker's own presentation color
-  // followed by a fill operator instead of a pdf.js text string (readPageContentText, module-level).
+  // HOTFIX-02 — the "3 kW" marker is a real text object in its own color (#b3261e -> 0.702 0.149 0.118), once per page.
   const page1Text = await readPageContentText(result.bytes, 0);
   const page2Text = await readPageContentText(result.bytes, 1);
-  // electricity "Do 3kW 230V" resolves to a "3 kW" powerLabel symbol (#b3261e -> 0.702 0.149 0.118).
-  assert.match(page1Text, /0\.702 0\.149 0\.118 rg[\s\S]*\bf\b/u);
-  assert.match(page2Text, /0\.702 0\.149 0\.118 rg[\s\S]*\bf\b/u);
+  assert.equal((page1Text.match(/0\.702 0\.149 0\.118 rg [^\n]* Tj ET Q/gu) ?? []).length, 1);
+  assert.equal((page2Text.match(/0\.702 0\.149 0\.118 rg [^\n]* Tj ET Q/gu) ?? []).length, 1);
 });
 
 test("OCG diagnostics are reported per exported page, in the same order as input.pages", async () => {
@@ -158,15 +154,10 @@ test("legend content reflects only what's actually used across ALL exported page
     showLegend: true,
     headerLine: "X",
   });
-  // GENERATED LEGEND BATCH — the legend page's own text (headings/descriptions) is now genuine
-  // vector-outline geometry, never a page.drawText()/Type0 text-showing operator (spec section 12),
-  // so pdf.js getTextContent() reads it as empty. Verify structurally instead: the electricity
-  // entry's own vector symbol is drawn in the electricity red, immediately followed by a fill; the
-  // water entry's own vector-outline drop symbol is drawn in the water green, also followed by a
-  // fill — the exact same discipline every other vector-outline test in this suite already uses.
+  // HOTFIX-02 — each legend row is one filled color swatch (a closed Bézier circle) in its category color.
   const legendPageText = await readPageContentText(result.bytes, result.legendPageNumber - 1);
-  assert.match(legendPageText, /0\.702 0\.149 0\.118 rg[\s\S]*\bf\b/u, "legend page must draw the electricity entry's own red vector symbol");
-  assert.match(legendPageText, /0\.10196\d* 0\.47843\d* 0\.29803\d* rg[\s\S]*\bf\b/u, "legend page must draw the water entry's own green vector drop symbol");
+  assert.match(legendPageText, /0\.701961 0\.14902 0\.117647 rg [^f]* c f/u, "legend page draws the electricity swatch in electricity red");
+  assert.match(legendPageText, /0\.101961 0\.478431 0\.298039 rg [^f]* c f/u, "legend page draws the water swatch in water green");
 });
 
 test("invalid placement coordinates are skipped and counted, never crash the multi-page export", async () => {

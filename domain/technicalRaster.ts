@@ -23,7 +23,7 @@ import { normalizeStandNumber, sortStandNumbersNatural } from "./technicalStandN
 import { computeStandNumberCanonicalIdentity } from "./technicalStandNumberIdentity.ts";
 import { matchStandNumberToRasterLabels } from "./technicalRasterMatching.ts";
 import { classifyStandScope } from "./technicalRasterHallScope.ts";
-import { resolveTechnicalServicePresentation } from "./technicalRasterServicePresentation.ts";
+import { resolveServicePresentation } from "./technicalRasterServicePresentation.ts";
 import { DEFAULT_AUTO_LEGEND_PLACEMENT, type TechnicalLegendPlacement } from "./technicalRasterLegendPlacement.ts";
 import { resolveServiceIdentityKey, type TechnicalReconciliationMention } from "./technicalRasterReconciliation.ts";
 import type { ParsedCatalogImport } from "./technicalRasterCatalogImport.ts";
@@ -391,7 +391,7 @@ export function effectiveServicePlacements(service: TechnicalService): readonly 
  * gates on `placementBehavior === "point"` separately before this is ever consulted).
  */
 export function requiredPlacementCount(service: TechnicalService): number {
-  const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+  const presentation = resolveServicePresentation(service);
   if (presentation.placementBehavior !== "point") return 0;
   return presentation.placementCardinality === "perQuantity" ? service.quantity : 1;
 }
@@ -1049,7 +1049,7 @@ export function placeTechnicalService(
   point: Readonly<{ page: number; xNormalized: number; yNormalized: number }>,
 ): TechnicalRasterProject {
   return updateServiceInStand(project, standId, serviceId, (service) => {
-    const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+    const presentation = resolveServicePresentation(service);
     if (presentation.placementBehavior !== "point") return service;
     const existing = effectiveServicePlacements(service);
     if (existing.length >= requiredPlacementCount(service)) return service;

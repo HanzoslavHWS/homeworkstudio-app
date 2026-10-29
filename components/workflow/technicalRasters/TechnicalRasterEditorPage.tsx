@@ -34,7 +34,7 @@ import {
   type TechnicalRasterProjectRepository,
 } from "../../../domain/technicalRaster";
 import { resolveTechnicalServiceProduct } from "../../../domain/technicalServiceProductMapping";
-import { resolveTechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
+import { resolveServicePresentation } from "../../../domain/technicalRasterServicePresentation";
 import { resolveRealizationDisplayState, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
 import { computeRealizationUnderlineGeometry } from "../../../domain/technicalRasterRealizationUnderline";
 import { computeNoElectricityMarkerGeometry } from "../../../domain/technicalRasterNoElectricityMarker";
@@ -63,18 +63,23 @@ import { TechnicalStandBuffer } from "./TechnicalStandBuffer";
 import { TechnicalStandDetailPanel } from "./TechnicalStandDetailPanel";
 import { TechnicalRasterPlacementContextPanel } from "./TechnicalRasterPlacementContextPanel";
 import { TechnicalRasterOutputsPanel } from "./TechnicalRasterOutputsPanel";
-import { TechnicalRasterDrawingToolbar } from "./TechnicalRasterDrawingToolbar";
+import { TechnicalRasterDrawingDetailPanel, TechnicalRasterDrawingToolbar } from "./TechnicalRasterDrawingToolbar";
 import {
   createLineDrawing,
   createPointDrawing,
-  DEFAULT_DRAWING_COLOR,
+  DEFAULT_DRAWING_CATEGORY,
+  DEFAULT_DRAWING_POINT_STYLE,
   DEFAULT_DRAWING_SIZE,
+  drawingCategoryColor,
   effectiveManualDrawings,
   isDegenerateLine,
   withManualDrawingAdded,
   withManualDrawingMoved,
   withManualDrawingRemoved,
+  withManualDrawingNote,
   withManualDrawingStyle,
+  type DrawingCategory,
+  type DrawingPointStyle,
   type DrawingSize,
   type TechnicalRasterDrawingTool,
 } from "../../../domain/technicalRasterDrawings";
@@ -150,7 +155,8 @@ export function TechnicalRasterEditorPage({
   // RUČNÍ ZNAČKY — manual point/line tools (domain/technicalRasterDrawings.ts). UI state only; the
   // drawings themselves live in project.manualDrawings.
   const [drawingTool, setDrawingTool] = useState<TechnicalRasterDrawingTool>("off");
-  const [drawingColor, setDrawingColor] = useState(DEFAULT_DRAWING_COLOR);
+  const [drawingCategory, setDrawingCategory] = useState<DrawingCategory>(DEFAULT_DRAWING_CATEGORY);
+  const [drawingPointStyle, setDrawingPointStyle] = useState<DrawingPointStyle>(DEFAULT_DRAWING_POINT_STYLE);
   const [drawingSize, setDrawingSize] = useState<DrawingSize>(DEFAULT_DRAWING_SIZE);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | undefined>(undefined);
   /** Point A of a line being drawn ("Čára" after the first click). */
@@ -612,7 +618,7 @@ export function TechnicalRasterEditorPage({
   /** "Bod": one click = one point. "Čára": first click = A (preview follows the pointer), second click = B. */
   function handleDrawingClick(page: number, x: number, y: number) {
     if (drawingTool === "point") {
-      setProject((current) => (current ? withManualDrawingAdded(current, createPointDrawing(page, x, y, drawingColor, drawingSize)) : current));
+      setProject((current) => (current ? withManualDrawingAdded(current, createPointDrawing(page, x, y, { category: drawingCategory, size: drawingSize, pointStyle: drawingPointStyle })) : current));
       return;
     }
     if (drawingTool !== "line") return;
@@ -620,7 +626,7 @@ export function TechnicalRasterEditorPage({
     const a = lineDraft;
     setLineDraft(undefined);
     if (isDegenerateLine(a, { x, y })) return;
-    setProject((current) => (current ? withManualDrawingAdded(current, createLineDrawing(page, a, { x, y }, drawingColor, drawingSize)) : current));
+    setProject((current) => (current ? withManualDrawingAdded(current, createLineDrawing(page, a, { x, y }, { category: drawingCategory, size: drawingSize })) : current));
   }
 
   function handleDeleteSelectedDrawing() {
@@ -630,9 +636,19 @@ export function TechnicalRasterEditorPage({
     setProject((current) => (current ? withManualDrawingRemoved(current, id) : current));
   }
 
-  function handleDrawingColorChange(color: string) {
-    setDrawingColor(color);
-    if (selectedDrawingId) setProject((current) => (current ? withManualDrawingStyle(current, selectedDrawingId, { color }) : current));
+  function handleDrawingCategoryChange(category: DrawingCategory) {
+    setDrawingCategory(category);
+    if (selectedDrawingId) setProject((current) => (current ? withManualDrawingStyle(current, selectedDrawingId, { category }) : current));
+  }
+
+  function handleDrawingPointStyleChange(pointStyle: DrawingPointStyle) {
+    setDrawingPointStyle(pointStyle);
+    if (selectedDrawingId) setProject((current) => (current ? withManualDrawingStyle(current, selectedDrawingId, { pointStyle }) : current));
+  }
+
+  /** Internal or visible note of one drawing — stored in the project with the drawing itself. */
+  function handleDrawingNoteChange(drawingId: string, note: Readonly<{ text: string; visible: boolean }>) {
+    setProject((current) => (current ? withManualDrawingNote(current, drawingId, note) : current));
   }
 
   function handleDrawingSizeChange(size: DrawingSize) {
@@ -707,12 +723,14 @@ export function TechnicalRasterEditorPage({
   // markers[] above (the plain label/selected/anchor markers) — see TechnicalRasterServiceSymbolMarker's own doc.
   // ============================================================================
   const hiddenServiceCategories = effectiveHiddenServiceCategories(project.rasterSettings);
+  // The selected manual mark ("Vybrat" tool only) — its detail/note panel sits in the right sidebar.
+  const selectedDrawing = drawingTool === "select" ? effectiveManualDrawings(project).find((drawing) => drawing.id === selectedDrawingId) : undefined;
   const servicePlacementMarkers: TechnicalRasterServiceSymbolMarker[] = [];
   for (const stand of project.stands) {
     if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
     for (const service of stand.services) {
       if (hiddenServiceCategories.has(service.category)) continue;
-      const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+      const presentation = resolveServicePresentation(service);
       if (presentation.placementBehavior !== "point") continue;
       for (const placement of effectiveServicePlacements(service)) {
         servicePlacementMarkers.push({
@@ -723,6 +741,7 @@ export function TechnicalRasterEditorPage({
           xNormalized: placement.xNormalized,
           yNormalized: placement.yNormalized,
           presentation,
+          tooltip: `${stand.standNumber} · ${service.externalLabel} · ${presentation.legendLabel}`,
           isSelected: placementMode?.mode === "move" && placementMode.placementId === placement.id,
         });
       }
@@ -1025,11 +1044,13 @@ export function TechnicalRasterEditorPage({
           <TechnicalRasterDrawingToolbar
             tool={drawingTool}
             onToolChange={handleDrawingToolChange}
-            color={drawingColor}
-            onColorChange={handleDrawingColorChange}
+            category={drawingCategory}
+            onCategoryChange={handleDrawingCategoryChange}
+            pointStyle={drawingPointStyle}
+            onPointStyleChange={handleDrawingPointStyleChange}
             size={drawingSize}
             onSizeChange={handleDrawingSizeChange}
-            hasSelection={drawingTool === "select" && Boolean(selectedDrawingId)}
+            selectedDrawing={selectedDrawing}
             hasLineDraft={Boolean(lineDraft)}
             onDeleteSelected={handleDeleteSelectedDrawing}
             onCancelLineDraft={() => setLineDraft(undefined)}
@@ -1060,7 +1081,7 @@ export function TechnicalRasterEditorPage({
               drawingTool={drawingTool}
               selectedDrawingId={selectedDrawingId}
               lineDraft={lineDraft}
-              draftStyle={{ color: drawingColor, size: drawingSize }}
+              draftStyle={{ color: drawingCategoryColor(drawingCategory), size: drawingSize }}
               onDrawingClick={handleDrawingClick}
               onSelectDrawing={setSelectedDrawingId}
               onMoveDrawing={(drawingId, dx, dy) => setProject((current) => (current ? withManualDrawingMoved(current, drawingId, dx, dy) : current))}
@@ -1093,6 +1114,7 @@ export function TechnicalRasterEditorPage({
                 <span className="technicalRasterPlacementWorkflowHint">Zkratky: <kbd>U</kbd> umístit další · <kbd>Esc</kbd> zrušit umisťování</span>
                 {placementNotice && <span className="technicalRasterPlacementWorkflowNotice" role="status">{placementNotice}</span>}
               </div>
+              {selectedDrawing && <TechnicalRasterDrawingDetailPanel drawing={selectedDrawing} onNoteChange={handleDrawingNoteChange} />}
               {!placementMode && assignmentActiveStandId && activeAssignmentStand && (
                 <p className="technicalRasterAssignHint">Spárujte stánek <strong>{activeAssignmentStand.standNumber}</strong> kliknutím do rastru.</p>
               )}

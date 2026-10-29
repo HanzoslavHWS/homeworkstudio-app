@@ -233,7 +233,8 @@ Three independent, real-production fixes:
   already-verified normalized meaning. Auto-positioned next to the matched stand's own label (same
   matched_auto/matched_manual safety gate as realization underlines), visible automatically in the
   editor, export-gated by `rasterSettings.includeNoElectricityMarkersInExport` (default OFF), drawn
-  as two plain vector diagonal strokes (never a text glyph) inside GENERÁTOR DATA.
+  as two plain vector diagonal strokes (never a text glyph) inside TECHNICKÉ SLUŽBY (HOTFIX-02; was
+  GENERÁTOR DATA).
 - **WiFi cardinality** — `resolveTechnicalServicePresentation`'s WiFi variant is now
   `placementCardinality: "onePerRecord"` (was `"perQuantity"`): exactly ONE required marker
   regardless of the imported quantity (2/3/5), same mechanism cleaning/waste already used. The raw
@@ -241,25 +242,27 @@ Three independent, real-production fixes:
 
 ## RUČNÍ ZNAČKY (manual points and lines)
 
-- `project.manualDrawings` (domain/technicalRasterDrawings.ts) holds a free point ("Bod", drawn as a colored
-  cross) and a line A–B ("Čára"). It is a separate layer: never a service, never a placement, and report
+- `project.manualDrawings` (domain/technicalRasterDrawings.ts) holds a free point ("Bod" — a dot ● or a
+  cross ×; points saved before HOTFIX-02 keep their original "+") and a line A–B ("Čára"). It is a separate layer: never a service, never a placement, and report
   imports never touch it. Coordinates are page + x/y normalized to the displayed page — the same space
   as placements — so drawings line up at any zoom, after reload and in the export.
-- Tools: Vybrat / Bod / Čára. Pick a color (5 presets) and a thickness (tenká / střední / silná); with a
-  drawing selected, picking either restyles it. Select a drawing, drag to move it, and press Delete or
+- Tools: Vybrat / Bod / Čára. Pick a technical color category (Elektřina, Internet / WiFi, Voda, Úklid,
+  Odpad, Neutrální — the service colors, HOTFIX-02), a point shape and a thickness (tenká / střední /
+  silná); with a drawing selected, picking any of them restyles it. A selected drawing shows its note
+  (see HOTFIX-02 below). Select a drawing, drag to move it, and press Delete or
   "Smazat" to remove it. Esc cancels a line that is being drawn.
 - Starting any service work (Umístit, U, Přemístit, pairing) switches drawing off. Service symbols are
   clickable only while drawing is off. Pan (middle button / space + drag) always works.
-- Persisted inside the project `document` JSON, so no migration is needed. Exported as vector strokes in
-  their own OCG layer "RUČNÍ ZNAČKY", next to GENERÁTOR DATA. OCG names outside Latin-1 are written as
-  UTF-16, so "Č" is not lost.
+- Persisted inside the project `document` JSON, so no migration is needed. Exported as vector shapes in
+  the TECHNICKÉ SLUŽBY layer together with the service markers (HOTFIX-02; the separate "RUČNÍ ZNAČKY"
+  layer is gone). OCG names outside Latin-1 are written as UTF-16, so "Š"/"Č" are not lost.
 
 ## Incremental report re-import (new version of an already imported report)
 
 - Re-importing a category no longer resets placements. `mergeTechnicalRasterImportWithDiff` pairs old and
-  new service rows per stand by `resolveServiceIdentityKey`. The key is the category plus the same canonical
-  variant reconciliation uses, e.g. `electricity|3kw` or `internet|internet:router`. Unrecognised
-  electricity labels (breakers) also include the label itself.
+  new service rows per stand by `resolveServiceIdentityKey`. The key is the category plus the variant id of
+  the approved marker table, e.g. `electricity|3kw` or `internet|internet:router` (HOTFIX-02: see below for
+  the ids that used to collide). Unrecognised electricity labels also include the label itself.
 - **Unchanged:** the service keeps its id and placements.
 - **Quantity up:** placements are kept; the missing points appear in K UMÍSTĚNÍ via `requiredPlacementCount`.
 - **Quantity down:** the first placements (in creation order) are kept and the surplus is removed.
@@ -410,3 +413,40 @@ outcomes) are used as regression baselines inside the skip-safe diagnostic scrip
 exhibitor names, notes, or report contents are reproduced here or in test fixtures — every
 committed test uses synthetic data built directly with this app's own libraries (pdf-lib/jsPDF),
 never a real customer document.
+
+## HOTFIX-02 — approved technical markers, manual marks with notes, editable PDF text, one layer
+
+Branch `hotfix/technical-markers-pdf` (from `master` 9abd0a0). Czech working notes, compatibility and the
+CorelDRAW check: [TECHNICAL_MARKERS_HOTFIX02.md](TECHNICAL_MARKERS_HOTFIX02.md).
+
+- **Approved marker table.** `domain/technicalRasterServicePresentation.ts` resolves every service through
+  one ordered variant table taken from the approved Excel
+  (`_IMPORT/TECHNICKE_ZNACKY/Generator_ABF_Revize_technickych_znacek.xlsx`, git-ignored): text label (the
+  same in the editor and the PDF), color, point rule and a stable `variantId`. Every marker is text
+  ("LED", "Non-stop", "Voda", "El.rozvaděč", …). Dynamic label: "Bazén - objem" → `{quantity} m³`, one
+  point. The table is pinned in `domain/technicalMarkerApprovedTable.ts` + tests;
+  `npm run test:technical-markers-excel` re-checks it against the real Excel (skip-safe).
+- **Service identity ≠ label.** `variantId` separates services that used to share an identity:
+  Rozvaděč 9-21kW ≠ Do 21kW, Non stop ≠ Lednicový okruh, Osvětlení ≠ Vrchní přívod ≠ + kW. Ids that never
+  collided are byte-identical. Identities are never stored — both sides of a re-import are recomputed with
+  the current table — so older projects need no migration (`tests/technicalRasterServiceIdentity.test.ts`,
+  including the old colliding ids via `resolveLegacyServiceIdentityKey`).
+- **Nespárované položky** is collapsed by default ("Nespárované položky (N) ▼") and scrolls inside a capped
+  height. Stands confidently in another hall stay under MIMO AKTUÁLNÍ RASTR; nothing is auto-assigned.
+- **Manual marks:** category (shared service palette + neutral black), shape (dot/cross), size, position and
+  an optional note `{ text, visible }`. Internal notes stay in the project only; visible notes are drawn
+  next to the mark (editor) and exported as real text. The note has no own coordinates, so it moves with
+  its mark.
+- **Editable PDF text** (`lib/pdf/pdfSimpleTrueTypeText.ts`): labels, visible notes and the legend are real
+  text objects in a SIMPLE embedded TrueType font (`/Subtype /TrueType`, WinAnsi base + `/Differences` for
+  Czech letters and "³", `/ToUnicode`, whole font program as `/FontFile2`) — deliberately not pdf-lib's
+  Type0/CID `drawText`, the shape CorelDRAW 2018 dropped. Export option "Texty jako křivky (záložní režim)"
+  keeps the previous outline rendering (`textMode: "outlines"`).
+- **One layer.** Every automatic and manual technical element is inside ONE `/OC … BDC … EMC` bracket of the
+  OCG "TECHNICKÉ SLUŽBY": the source raster's own layer when the page has it (both real hall rasters do),
+  otherwise one new shared layer; it is forced ON when it receives content and never duplicated.
+  GENERÁTOR DATA keeps only realization underlines and the in-place legend and is created only when used.
+  All overlay content is written as raw operators into one buffer per page (pdf-lib's `drawLine` writes
+  into one lazily placed stream, which could land outside the bracket).
+- **Legend** explains category colors only ("● ELEKTŘINA", "● INTERNET / WiFi", …), lists only categories
+  used by placements or manual marks, and shows NEUTRÁLNÍ only for neutral manual marks.

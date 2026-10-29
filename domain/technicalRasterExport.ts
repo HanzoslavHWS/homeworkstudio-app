@@ -23,7 +23,8 @@ import {
   type TechnicalStand,
 } from "./technicalRaster.ts";
 import {
-  resolveTechnicalServicePresentation,
+  resolveServicePresentation,
+  TECHNICAL_CATEGORY_LEGEND_LABELS,
   TECHNICAL_RASTER_COLORS,
   type TechnicalServicePresentation,
 } from "./technicalRasterServicePresentation.ts";
@@ -68,7 +69,7 @@ export function buildTechnicalRasterExportPlacements(
     if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
     for (const service of stand.services) {
       if (hiddenCategories.has(service.category)) continue;
-      const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+      const presentation = resolveServicePresentation(service);
       if (presentation.placementBehavior !== "point") continue;
       for (const placement of effectiveServicePlacements(service)) {
         if (placement.page !== page) continue;
@@ -89,65 +90,54 @@ export function buildTechnicalRasterExportPlacements(
 }
 
 export type TechnicalRasterExportLegendEntry = Readonly<{
+  /** "ELEKTŘINA", "INTERNET / WiFi", … — or an unknown category's own raw label. */
   legendLabel: string;
+  /** The category color the swatch shows. */
   color: string;
-  renderer: TechnicalServicePresentation["renderer"];
-  /**
-   * A representative displayLabel for this row's own symbol (e.g. "2 kW" for the electricity row,
-   * "WiFi" for the internet row) — captured ONLY so the generated PDF legend can draw a real,
-   * representative EXAMPLE of the actual symbol (reusing the same vector-outline text renderer real
-   * markers use), never to enumerate every distinct value/subtype actually seen. `undefined` for
-   * icon-only renderers (refrigeratedStar/waterDrop/wifiIcon), which carry their own fixed shape
-   * and need no representative text at all.
-   */
-  displayLabel?: string;
+  /** Stable key of the row ("category:electricity", "label:<raw>", "neutral"). */
+  key: string;
 }>;
 
 // ============================================================================
-// SIMPLIFIED LEGEND BATCH — the generated PDF legend now explains CATEGORIES, never individual
-// exported subtypes/variants (spec: "do not list every exported subtype... remove separate legend
-// rows such as WiFi/INT/fixed IP/refrigerated circuit/breaker C/every individual kW value"). A
-// category's real presentation resolution (color/renderer/actual displayLabel per placement) stays
-// fully centralized in domain/technicalRasterServicePresentation.ts and completely untouched — the
-// individual RASTER MARKERS still show their own specific value/subtype exactly as before. This
-// table is the ONE place that decides what a category's own legend ROW looks like: a fixed,
-// representative sample symbol + a short category-level description — never a second/independent
-// classification system (the CATEGORY key itself, and every color used here, still come straight
-// from the service's own real category string and TECHNICAL_RASTER_COLORS).
+// HOTFIX-02 (phase 7) — the legend explains the category COLORS only ("● ELEKTŘINA" red, "● INTERNET /
+// WiFi" gold, …). It no longer shows sample symbols or explains labels — "5 kW" needs no legend row.
+// A category appears only when the export actually uses it: through a placed service OR a manual
+// drawing of that category (a red manual line still means electricity). Neutral black appears only
+// when a neutral manual drawing is exported. Unknown imported categories keep a row with their own
+// raw label in the fallback gray. Rows come in a fixed order, independent of placement order.
 // ============================================================================
 
-type CategoryLegendPreset = Readonly<{ legendLabel: string; color: string; renderer: TechnicalServicePresentation["renderer"]; displayLabel?: string }>;
-
-const CATEGORY_LEGEND_PRESETS: Readonly<Record<string, CategoryLegendPreset>> = {
-  electricity: { legendLabel: "ELEKTRIKA", color: TECHNICAL_RASTER_COLORS.electricity, renderer: "powerLabel", displayLabel: "2 kW" },
-  internet: { legendLabel: "INTERNET / WiFi", color: TECHNICAL_RASTER_COLORS.internet, renderer: "textLabel", displayLabel: "WiFi" },
-  water: { legendLabel: "VODA", color: TECHNICAL_RASTER_COLORS.water, renderer: "waterDrop" },
-  cleaning: { legendLabel: "ÚKLID", color: TECHNICAL_RASTER_COLORS.cleaning, renderer: "textLabel", displayLabel: "ÚKL" },
-  waste: { legendLabel: "ODPAD", color: TECHNICAL_RASTER_COLORS.waste, renderer: "textLabel", displayLabel: "ODP" },
+const CATEGORY_LEGEND_ORDER: readonly string[] = ["electricity", "internet", "water", "cleaning", "waste"];
+const COLOR_BY_LEGEND_CATEGORY: Readonly<Record<string, string>> = {
+  electricity: TECHNICAL_RASTER_COLORS.electricity,
+  internet: TECHNICAL_RASTER_COLORS.internet,
+  water: TECHNICAL_RASTER_COLORS.water,
+  cleaning: TECHNICAL_RASTER_COLORS.cleaning,
+  waste: TECHNICAL_RASTER_COLORS.waste,
 };
+export const NEUTRAL_LEGEND_LABEL = "NEUTRÁLNÍ";
 
-/**
- * Only ever built from placements ACTUALLY INCLUDED in this export (spec section 49: "legenda jen
- * z prezentací skutečně použitých v tomto exportu") — e.g. a hidden/never-placed category never
- * appears. Deduplicated by CATEGORY (not by subtype/legendLabel any more — SIMPLIFIED LEGEND BATCH):
- * every electricity placement (kW figures, refrigerated circuit, breaker characteristics) collapses
- * into ONE "ELEKTRIKA" row; every internet placement (Internet/Pevná IP/WiFi) collapses into ONE
- * "INTERNET / WiFi" row. A category with no known preset (a genuinely future/unrecognized category)
- * still degrades gracefully to the OLD per-subtype behavior (grouped by its own real legendLabel) —
- * this table is additive/extensible, never a hard requirement for every category to be listed here.
- * Entries are returned in first-seen order (deterministic, not alphabetical).
- */
-export function buildTechnicalRasterExportLegend(placements: readonly TechnicalRasterExportPlacementItem[]): readonly TechnicalRasterExportLegendEntry[] {
-  const seen = new Map<string, TechnicalRasterExportLegendEntry>();
+export function buildTechnicalRasterExportLegend(
+  placements: readonly TechnicalRasterExportPlacementItem[],
+  manualDrawings: readonly Readonly<{ category?: string }>[] = [],
+): readonly TechnicalRasterExportLegendEntry[] {
+  const usedCategories = new Set<string>();
+  const unknown = new Map<string, TechnicalRasterExportLegendEntry>();
   for (const item of placements) {
-    const preset = CATEGORY_LEGEND_PRESETS[item.category];
-    const key = preset ? `category:${item.category}` : `label:${item.presentation.legendLabel}`;
-    if (seen.has(key)) continue;
-    seen.set(key, preset
-      ? { legendLabel: preset.legendLabel, color: preset.color, renderer: preset.renderer, displayLabel: preset.displayLabel }
-      : { legendLabel: item.presentation.legendLabel, color: item.presentation.color, renderer: item.presentation.renderer, displayLabel: item.presentation.displayLabel });
+    if (COLOR_BY_LEGEND_CATEGORY[item.category]) usedCategories.add(item.category);
+    else if (!unknown.has(item.presentation.legendLabel)) unknown.set(item.presentation.legendLabel, { legendLabel: item.presentation.legendLabel, color: item.presentation.color, key: `label:${item.presentation.legendLabel}` });
   }
-  return [...seen.values()];
+  let usesNeutral = false;
+  for (const drawing of manualDrawings) {
+    if (!drawing.category) continue;
+    if (drawing.category === "neutral") usesNeutral = true;
+    else if (COLOR_BY_LEGEND_CATEGORY[drawing.category]) usedCategories.add(drawing.category);
+  }
+  return [
+    ...CATEGORY_LEGEND_ORDER.filter((category) => usedCategories.has(category)).map((category) => ({ legendLabel: TECHNICAL_CATEGORY_LEGEND_LABELS[category]!, color: COLOR_BY_LEGEND_CATEGORY[category]!, key: `category:${category}` })),
+    ...unknown.values(),
+    ...(usesNeutral ? [{ legendLabel: NEUTRAL_LEGEND_LABEL, color: TECHNICAL_RASTER_COLORS.neutral, key: "neutral" }] : []),
+  ];
 }
 
 // ============================================================================
@@ -186,7 +176,7 @@ export function computeTechnicalRasterStatusSummary(project: TechnicalRasterProj
     totalStandCount += 1;
     if (stand.placement.status === "matched_auto" || stand.placement.status === "matched_manual") matchedStandCount += 1;
     for (const service of stand.services) {
-      const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+      const presentation = resolveServicePresentation(service);
       if (presentation.placementBehavior !== "point") continue;
       const required = requiredPlacementCount(service);
       totalPointCount += required;
@@ -220,7 +210,7 @@ export function computeTechnicalRasterExportWarnings(project: TechnicalRasterPro
   for (const stand of project.stands) {
     if (stand.placement.status === "outside_current_raster") continue;
     for (const service of stand.services) {
-      const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+      const presentation = resolveServicePresentation(service);
       if (presentation.placementBehavior !== "point") continue;
       const required = requiredPlacementCount(service);
       const missing = required - Math.min(effectiveServicePlacements(service).length, required);

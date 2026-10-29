@@ -110,7 +110,22 @@ export function TechnicalStandBuffer({
       {ambiguous.length > 0 && (
         <TechnicalStandGroup title="PROBLÉMOVÉ" stands={ambiguous} numbered={false} showCandidateHint selectedStandId={selectedStandId} activeAssignmentStandId={activeAssignmentStandId} onSelectStand={onSelectStand} />
       )}
-      <TechnicalStandGroup title="NESPÁROVANÉ" stands={unassigned} numbered selectedStandId={selectedStandId} activeAssignmentStandId={activeAssignmentStandId} onSelectStand={onSelectStand} />
+      {/* HOTFIX-02 (phase 2) — after a combined/foreign import this list can hold dozens of stands, so it
+          is collapsed by default ("Nespárované položky (48) ▼"), the count always visible, and once
+          opened it scrolls inside its own capped height instead of stretching the whole page. Nothing
+          is hidden or removed — every stand is still listed and still pairable from here. Stands this
+          app can CONFIDENTLY place in another hall are already listed under MIMO AKTUÁLNÍ RASTR below;
+          ambiguous ones stay here, never auto-assigned. */}
+      <TechnicalStandGroup
+        title="NESPÁROVANÉ"
+        summaryText={(count) => `Nespárované položky (${count})`}
+        stands={unassigned}
+        numbered
+        selectedStandId={selectedStandId}
+        activeAssignmentStandId={activeAssignmentStandId}
+        onSelectStand={onSelectStand}
+        collapsedByDefault
+      />
 
       {/* CORRECTIVE BATCH (multi-hall imports) section 10/11 — a SEPARATE, collapsed-by-default,
           visually informational group (never styled like PROBLÉMOVÉ's error treatment above) — a
@@ -147,6 +162,7 @@ function TechnicalStandGroup({
   subtitleClassName,
   collapsedByDefault,
   informational,
+  summaryText,
 }: {
   title: string;
   stands: readonly TechnicalStand[];
@@ -163,6 +179,8 @@ function TechnicalStandGroup({
   collapsedByDefault?: boolean;
   /** CORRECTIVE BATCH (multi-hall imports) section 10 — MIMO AKTUÁLNÍ RASTR only: a visually secondary/informational treatment, deliberately never the PROBLÉMOVÉ/ambiguous error styling. */
   informational?: boolean;
+  /** Collapsible groups only: replaces the "TITLE count" summary heading with a full sentence, e.g. "Nespárované položky (48)". */
+  summaryText?: (count: number) => string;
 }) {
   if (stands.length === 0) return null;
 
@@ -197,8 +215,12 @@ function TechnicalStandGroup({
   if (collapsedByDefault) {
     return (
       <details className={`${groupClassName} collapsible`}>
-        <summary><h4>{title} <span className="technicalStandBufferGroupCount">{stands.length}</span></h4></summary>
-        {list}
+        <summary>
+          {summaryText ? <h4>{summaryText(stands.length)}</h4> : <h4>{title} <span className="technicalStandBufferGroupCount">{stands.length}</span></h4>}
+          <span className="technicalStandBufferChevron" aria-hidden="true">▼</span>
+        </summary>
+        {/* Own capped, vertically scrolling area — a long list never stretches the page. */}
+        <div className="technicalStandBufferScroll">{list}</div>
       </details>
     );
   }

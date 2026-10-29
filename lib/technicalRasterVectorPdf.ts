@@ -35,7 +35,7 @@
  * `/OC <name> BDC ... EMC` marked content — this module's own `reconstructOcProperties` keeps the
  * SOURCE OCGs fully intact and untouched by this addition.
  */
-import { PDFDocument, PDFName, PDFDict, PDFArray, PDFHexString, PDFString, PDFRawStream, PDFRef, LineCapStyle, decodePDFRawStream, rgb, type PDFPage, type PDFContext } from "pdf-lib";
+import { PDFDocument, PDFName, PDFDict, PDFArray, PDFHexString, PDFString, PDFRawStream, PDFRef, decodePDFRawStream, rgb, type PDFPage, type PDFContext } from "pdf-lib";
 import fontkit from "@pdf-lib/fontkit";
 import { NOTO_SANS_CZECH_BOLD_BASE64 } from "./fonts/graphicsProductionFont.ts";
 import { isValidNormalizedCoordinate, normalizedDisplayPointToRawPdfPoint, normalizedDisplayRectToRawPdfBoundingBox, type AffineTransform6 } from "../domain/technicalRasterExportPlacementGeometry.ts";
@@ -58,6 +58,7 @@ import {
 import { TECHNICAL_REALIZATION_GROUPS, type TechnicalRealizationGroupInfo } from "../domain/technicalRasterRealization.ts";
 import { buildVectorGlyphPathOperators, type GlyphOutlineCommand, type PositionedGlyphOutline } from "../domain/technicalRasterVectorGlyphOutline.ts";
 import { ensurePdfJsWorkerConfigured } from "./pdf/pdfJsWorkerConfig.ts";
+import { createSimpleTrueTypeTextFont, type PdfRgb } from "./pdf/pdfSimpleTrueTypeText.ts";
 import type { TechnicalRasterExportDrawingItem } from "../domain/technicalRasterDrawings.ts";
 
 /**
@@ -446,8 +447,6 @@ export function reconstructOcProperties(
 // ============================================================================
 
 const GENERATOR_DATA_OCG_NAME = "GENERÁTOR DATA";
-/** Manual points/lines (domain/technicalRasterDrawings.ts) get their OWN layer, separate from the generated data, so they can be toggled independently in Acrobat/Corel. */
-const MANUAL_DRAWINGS_OCG_NAME = "RUČNÍ ZNAČKY";
 
 function ensureDictChild(parent: PDFDict, ctx: PDFContext, key: string): PDFDict {
   const existing = parent.lookup(PDFName.of(key));
@@ -508,11 +507,11 @@ function ensureGeneratorDataOcg(newDoc: PDFDocument, copiedPage: PDFPage, existi
   return ensureOverlayOcg(newDoc, copiedPage, existingRef, GENERATOR_DATA_OCG_NAME, "GenData");
 }
 
-/** Same mechanics as ensureGeneratorDataOcg, for any named overlay layer (GENERÁTOR DATA, RUČNÍ ZNAČKY). */
+/** Same mechanics as ensureGeneratorDataOcg, for any named overlay layer (GENERÁTOR DATA, TECHNICKÉ SLUŽBY). */
 function ensureOverlayOcg(newDoc: PDFDocument, copiedPage: PDFPage, existingRef: PDFRef | undefined, ocgName: string, propertyKeyPrefix: string): Readonly<{ ref: PDFRef; propertyName: string }> {
   const ctx = newDoc.context;
-  // PDFString only carries PDFDocEncoding: "Á" in "GENERÁTOR DATA" survives, but "Č" in
-  // "RUČNÍ ZNAČKY" was silently dropped ("RUNÍ ZNAKY"). Names outside Latin-1 are therefore
+  // PDFString only carries PDFDocEncoding: "Á" in "GENERÁTOR DATA" survives, but "Š" in
+  // "TECHNICKÉ SLUŽBY" would be silently dropped. Names outside Latin-1 are therefore
   // written as a UTF-16 hex string; GENERÁTOR DATA keeps its existing, byte-identical encoding.
   const nameObject = /^[ -~ -ÿ]*$/u.test(ocgName) ? PDFString.of(ocgName) : PDFHexString.fromText(ocgName);
   const ref = existingRef ?? ctx.register(ctx.obj({ Type: "OCG", Name: nameObject }));
@@ -1013,30 +1012,24 @@ function requireVectorWhiteModeApplied(diagnostic: VectorWhiteModeDiagnostic, pa
 }
 
 // ============================================================================
-// Overlay symbols — real vector/text, never emoji/bitmap (spec section 17). Corrective batch
-// section 3: NO mandatory circular badge (the previous ~19pt filled-circle backdrop, verified by
-// manual review to visually dominate a busy hall plan, is gone entirely) — a compact colored
-// text/glyph directly at the placement point, sized from the central constants in
-// domain/technicalRasterExportSymbolSize.ts, never a literal pt number inline here.
+// Overlay text — HOTFIX-02 (phase 5). Every generator-added label (technical markers, visible notes
+// of manual drawings, legend text) goes through ONE ExportTextRenderer:
 //
-// CORRECTIVE BATCH (3rd, post real-file acceptance test) sections 8/9 — the kW/EL/INT/IP/"*" labels
-// below are drawn as TRUE VECTOR OUTLINES (filled Bézier paths), never `page.drawText()`/PDF
-// text-showing operators. Root cause (see domain/technicalRasterVectorGlyphOutline.ts's own header
-// doc for the full elimination argument): CorelDRAW 2018 was found to drop exactly these
-// `page.drawText()`-based generator labels on import, while every OTHER generator overlay element
-// (the realization underline's `drawLine`, the water-drop's `drawSvgPath` below) — which carry no
-// font/text operator at all — import correctly. The embedded NotoSansCzech font is a Type0
-// composite font (`/Identity-H` encoding, `CIDFontType2` descendant, embedded `FontFile2`) — a
-// documented category of PDF-import incompatibility in several Corel versions. Converting only
-// these generator-added marker glyphs to vector geometry sidesteps that question entirely: filled
-// path geometry renders identically in any PDF-conformant consumer, independent of composite-font
-// support. The SOURCE PDF's own text is completely untouched either way.
+//   - "text" (DEFAULT): real, editable PDF text objects in a SIMPLE embedded TrueType font
+//     (lib/pdf/pdfSimpleTrueTypeText.ts) — Czech diacritics and "³" included, selectable/searchable,
+//     editable in CorelDRAW ("5 kW" -> "9 kW"). Deliberately NOT pdf-lib's `page.drawText()`: that is
+//     always a Type0/CIDFont (`/Identity-H`), the exact font shape CorelDRAW 2018 was found to DROP on
+//     import (CORRECTIVE BATCH 3rd, sections 8/9) — the reason the labels had been converted to
+//     outlines before;
+//   - "outlines": the previous behavior — every glyph as a filled vector path (no font at all).
+//     Kept as the safe fallback ("Texty jako křivky") in case a particular importer still mishandles
+//     the text; position, size and color are identical in both modes.
 //
-// GENERATED LEGEND BATCH — the generated legend's OWN text (heading/descriptions/realization names)
-// now uses this EXACT same vector-outline mechanism too (previously still `page.drawText()` via a
-// real pdf-lib `PDFFont`, which is exactly the Type0/CIDFont shape this whole section exists to
-// avoid) — see drawLegendPage/drawInPlaceLegend further below.
+// Both measure text the same way they draw it, so centering and legend fitting never disagree with
+// the result. The SOURCE PDF's own text is untouched either way.
 // ============================================================================
+
+export type TechnicalRasterExportTextMode = "text" | "outlines";
 
 /** Runtime-verified shape of a fontkit glyph outline command (`{command, args}`) — NOT part of `@pdf-lib/fontkit`'s own .d.ts (which only exposes the imperative `Path.moveTo()`-style builder methods), confirmed directly against the installed package's own bundled source. */
 type FontkitGlyphPathCommand = Readonly<{ command: "moveTo" | "lineTo" | "quadraticCurveTo" | "bezierCurveTo" | "closePath"; args: readonly number[] }>;
@@ -1059,12 +1052,7 @@ function convertFontkitPathCommand(command: FontkitGlyphPathCommand): GlyphOutli
 
 type ShapingFont = ReturnType<typeof fontkit.create>;
 
-/**
- * Shapes `text` through a fontkit font loaded INDEPENDENTLY of pdf-lib's own `newDoc.embedFont`
- * (see this section's own header doc for why: this bypasses PDF text-showing operators/font
- * embedding entirely for these glyphs) into the pure `PositionedGlyphOutline` shape
- * domain/technicalRasterVectorGlyphOutline.ts's own converter expects.
- */
+/** Shapes `text` through fontkit into the pure `PositionedGlyphOutline` shape domain/technicalRasterVectorGlyphOutline.ts's own converter expects ("outlines" mode). */
 function shapeTextToPositionedGlyphOutlines(font: ShapingFont, text: string): readonly PositionedGlyphOutline[] {
   const run = font.layout(text);
   const glyphs: PositionedGlyphOutline[] = [];
@@ -1078,164 +1066,197 @@ function shapeTextToPositionedGlyphOutlines(font: ShapingFont, text: string): re
   return glyphs;
 }
 
-/** Total advance width for `text` shaped through `font`, in the SAME font design units `shapeTextToPositionedGlyphOutlines` positions glyphs in (i.e. NOT yet scaled to points) — used to center a marker label exactly like `PDFFont.widthOfTextAtSize` did before this conversion, just measured from the fontkit run instead of pdf-lib's own font wrapper. */
-function measureShapedTextWidthInDesignUnits(font: ShapingFont, text: string): number {
-  return font.layout(text).positions.reduce((sum, position) => sum + position.xAdvance, 0);
+type Rgb = ReturnType<typeof rgb>;
+
+function rgbOf(color: Rgb): PdfRgb {
+  return color as unknown as PdfRgb;
 }
 
-function formatColorComponent(value: number): string {
-  const rounded = Math.round(Math.min(1, Math.max(0, value)) * 1000) / 1000;
-  return String(rounded);
+function formatOperand(value: number): string {
+  const rounded = Math.round(value * 1000) / 1000;
+  return Object.is(rounded, -0) ? "0" : String(rounded);
 }
 
-/** Draws `text` as a single filled vector-outline content chunk, appended via the same safe `/Contents`-shape-handling every other overlay append in this pipeline uses — never a `page.drawText()` call, never a PDF font resource. `(originX, originY)` is the glyph run's own baseline-left origin, exactly where `page.drawText` would place it. */
-function drawVectorOutlineText(page: PDFPage, originX: number, originY: number, text: string, shapingFont: ShapingFont, fontSizePt: number, color: ReturnType<typeof rgb>): void {
-  const glyphs = shapeTextToPositionedGlyphOutlines(shapingFont, text);
-  const pathOperators = buildVectorGlyphPathOperators(glyphs, originX, originY, shapingFont.unitsPerEm, fontSizePt);
-  if (!pathOperators) return;
-  const rgbColor = color as unknown as { red: number; green: number; blue: number };
-  const content = `${formatColorComponent(rgbColor.red)} ${formatColorComponent(rgbColor.green)} ${formatColorComponent(rgbColor.blue)} rg\n${pathOperators}`;
-  appendRawContentChunk(page.doc.context, page, content);
+/** Text color — 3 decimals, byte-identical to the previous outline labels' own color operator. */
+function colorOperands(color: Rgb): string {
+  const { red, green, blue } = rgbOf(color);
+  return `${formatOperand(red)} ${formatOperand(green)} ${formatOperand(blue)}`;
 }
 
-/**
- * Centered short colored text — used for powerLabel (kW/EL), textLabel (IP/INT), fallback (?).
- * Drawn as vector-outline geometry (see this section's own header doc), directly in the
- * presentation's own color, no backdrop of any kind. CORRECTIVE BATCH (4th, export-polish-only):
- * `fontSizePt` is now an explicit caller-supplied parameter (never a single shared constant read
- * internally) so `drawPlacementSymbol` below can size electricity's own power labels independently
- * of INT/IP/fallback — see `EXPORT_POWER_LABEL_FONT_SIZE_PT`'s own doc for why.
- */
-function drawTextSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>, text: string, shapingFont: ShapingFont, fontSizePt: number): void {
-  const width = (measureShapedTextWidthInDesignUnits(shapingFont, text) / shapingFont.unitsPerEm) * fontSizePt;
-  drawVectorOutlineText(page, x - width / 2, y - fontSizePt * 0.35, text, shapingFont, fontSizePt, color);
+/** Stroke/fill color of plain shapes — full precision, as pdf-lib's own drawLine/drawCircle wrote it before. */
+function shapeColorOperands(color: Rgb): string {
+  const { red, green, blue } = rgbOf(color);
+  return [red, green, blue].map((component) => String(Math.round(component * 1e6) / 1e6)).join(" ");
 }
 
-/**
- * A plain colored asterisk glyph (spec section 17/29: genuinely vector geometry via the SAME
- * embedded font as every other label here — never a Unicode "✱" the font subset might lack), no
- * backdrop. `sizePt` is an explicit caller-supplied parameter (GENERATED LEGEND BATCH — was
- * previously read from the single shared `EXPORT_STAR_SYMBOL_FONT_SIZE_PT` constant internally) so
- * the generated legend can reuse this EXACT drawing code at its own, smaller/legend-appropriate
- * scale — never a hand-drawn visual copy of the same symbol.
- */
-function drawStarSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>, shapingFont: ShapingFont, sizePt: number): void {
-  const width = (measureShapedTextWidthInDesignUnits(shapingFont, "*") / shapingFont.unitsPerEm) * sizePt;
-  drawVectorOutlineText(page, x - width / 2, y - sizePt * 0.4, "*", shapingFont, sizePt, color);
+type ExportTextRenderer = Readonly<{
+  mode: TechnicalRasterExportTextMode;
+  /** Width in points of `text` at `fontSizePt` — exactly what `operators` draws. */
+  measure(text: string, fontSizePt: number): number;
+  /** Content-stream operators drawing `text` with its baseline-left origin at (x, y). */
+  operators(page: PDFPage, originX: number, originY: number, text: string, fontSizePt: number, color: Rgb): string;
+  /** Completes font resources (text mode). Call once, before save. */
+  finalize(): void;
+}>;
+
+function createOutlineTextRenderer(shapingFont: ShapingFont): ExportTextRenderer {
+  return {
+    mode: "outlines",
+    measure: (text, fontSizePt) => (shapingFont.layout(text).positions.reduce((sum, position) => sum + position.xAdvance, 0) / shapingFont.unitsPerEm) * fontSizePt,
+    operators: (_page, originX, originY, text, fontSizePt, color) => {
+      const pathOperators = buildVectorGlyphPathOperators(shapeTextToPositionedGlyphOutlines(shapingFont, text), originX, originY, shapingFont.unitsPerEm, fontSizePt);
+      return pathOperators ? `q ${colorOperands(color)} rg\n${pathOperators}\nQ` : "";
+    },
+    finalize: () => undefined,
+  };
 }
 
-/**
- * A real vector teardrop (spec section 17: "kapka", "žádné emoji, žádná bitmapa") — the SAME SVG
- * path the editor's on-screen symbol already uses (components/workflow/technicalRasters/
- * TechnicalRasterCanvas.tsx), drawn here via pdf-lib's own SVG-path support instead of an inline
- * React <svg>, directly in the service's own color, no backdrop. `heightPt` is an explicit
- * caller-supplied parameter (GENERATED LEGEND BATCH — was previously the single shared
- * `EXPORT_WATER_DROP_HEIGHT_PT` constant) for the same legend-reuse reason as drawStarSymbol above.
- */
-function drawWaterDropSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>, heightPt: number): void {
-  // The path's own bounding box is roughly 14 units wide by 13.5 tall (x:5-19, y:2-15.5 in its
-  // native 24x24-ish coordinate space) — scaled so its actual on-page HEIGHT matches the given
-  // heightPt, never a magic ratio against the old circle radius.
-  const scale = heightPt / 13.5;
-  page.drawSvgPath("M12 2C12 2 5 11 5 15.5A7 7 0 0019 15.5C19 11 12 2 12 2Z", {
-    x: x - 12 * scale,
-    y: y + 12 * scale,
-    scale,
-    color,
-  });
+function createRealTextRenderer(newDoc: PDFDocument, fontBytes: Uint8Array, shapingFont: ShapingFont): ExportTextRenderer {
+  const font = createSimpleTrueTypeTextFont(newDoc, fontBytes, shapingFont);
+  return {
+    mode: "text",
+    measure: (text, fontSizePt) => font.measure(text, fontSizePt),
+    operators: (page, originX, originY, text, fontSizePt, color) => font.textOperators(page, originX, originY, text, fontSizePt, rgbOf(color)),
+    finalize: () => font.finalize(),
+  };
 }
 
-/**
- * CORRECTIVE BATCH (real production — "every imported operational service must be placeable"): the
- * SAME stroked (never filled) wifi-arcs glyph the editor's own on-screen marker uses
- * (components/workflow/technicalRasters/TechnicalRasterCanvas.tsx's wifiIcon renderer). No fill, no
- * backdrop — same discipline as `drawWaterDropSymbol`/`drawStarSymbol` above. `widthPt` is an
- * explicit caller-supplied parameter (GENERATED LEGEND BATCH — was previously the single shared
- * `EXPORT_WIFI_SYMBOL_WIDTH_PT` constant) so the generated legend can reuse this same glyph too,
- * for a component override that still explicitly selects the icon-only "wifiIcon" renderer (the
- * CENTRAL default for a real WIFI report label is the plain "WiFi" text label — see
- * domain/technicalRasterServicePresentation.ts's own doc — but this renderer stays real/drawable).
- */
-function drawWifiSymbol(page: PDFPage, x: number, y: number, color: ReturnType<typeof rgb>, widthPt: number): void {
-  // The path's own bounding box is roughly 20 units wide (x:2-22) by 16.8 tall (y:3.5-20.3) in its
-  // native 24x24-ish coordinate space — scaled off its WIDTH, matching the given widthPt.
-  const scale = widthPt / 20;
-  page.drawSvgPath("M2 8.5C7.5 3.5 16.5 3.5 22 8.5M5.5 12.5C9.5 9 14.5 9 18.5 12.5M9 16.5C10.5 15 13.5 15 15 16.5M12 20.2v.1", {
-    x: x - 12 * scale,
-    y: y + 12 * scale,
-    scale,
-    borderColor: color,
-    borderWidth: 2.5 * scale,
-  });
+function createExportTextRenderer(newDoc: PDFDocument, mode: TechnicalRasterExportTextMode | undefined): ExportTextRenderer {
+  const fontBytes = base64ToBytes(NOTO_SANS_CZECH_BOLD_BASE64);
+  const shapingFont: ShapingFont = fontkit.create(fontBytes);
+  return mode === "outlines" ? createOutlineTextRenderer(shapingFont) : createRealTextRenderer(newDoc, fontBytes, shapingFont);
 }
 
-function drawPlacementSymbol(page: PDFPage, x: number, y: number, item: TechnicalRasterExportPlacementItem, markerShapingFont: ShapingFont): void {
+// ============================================================================
+// Overlay primitives — HOTFIX-02 (phase 6): every overlay piece is written as raw operators into ONE
+// buffer per page, flushed as ONE content stream. pdf-lib's own `page.drawLine()`/`drawRectangle()`
+// write into a single lazily created page stream that sits wherever it was FIRST used, so content
+// drawn later through them could silently land inside (or outside) the wrong `/OC … BDC … EMC`
+// layer bracket. With one buffer the layer brackets always enclose exactly what they should.
+// ============================================================================
+
+class OverlayBuffer {
+  private readonly parts: string[] = [];
+  push(operators: string): void {
+    if (operators) this.parts.push(operators);
+  }
+  get isEmpty(): boolean {
+    return this.parts.length === 0;
+  }
+  flush(page: PDFPage): void {
+    if (this.parts.length === 0) return;
+    appendRawContentChunk(page.doc.context, page, this.parts.join("\n"));
+    this.parts.length = 0;
+  }
+}
+
+function strokeLineOperators(x1: number, y1: number, x2: number, y2: number, thicknessPt: number, color: Rgb): string {
+  return `q ${shapeColorOperands(color)} RG ${formatOperand(thicknessPt)} w 1 J ${formatOperand(x1)} ${formatOperand(y1)} m ${formatOperand(x2)} ${formatOperand(y2)} l S Q`;
+}
+
+/** Circle as four cubic Béziers (the standard 0.5523 approximation). */
+function circlePathOperators(cx: number, cy: number, r: number): string {
+  const k = 0.5522847498 * r;
+  const f = formatOperand;
+  return [
+    `${f(cx + r)} ${f(cy)} m`,
+    `${f(cx + r)} ${f(cy + k)} ${f(cx + k)} ${f(cy + r)} ${f(cx)} ${f(cy + r)} c`,
+    `${f(cx - k)} ${f(cy + r)} ${f(cx - r)} ${f(cy + k)} ${f(cx - r)} ${f(cy)} c`,
+    `${f(cx - r)} ${f(cy - k)} ${f(cx - k)} ${f(cy - r)} ${f(cx)} ${f(cy - r)} c`,
+    `${f(cx + k)} ${f(cy - r)} ${f(cx + r)} ${f(cy - k)} ${f(cx + r)} ${f(cy)} c`,
+  ].join(" ");
+}
+
+function fillCircleOperators(cx: number, cy: number, r: number, color: Rgb): string {
+  return `q ${shapeColorOperands(color)} rg ${circlePathOperators(cx, cy, r)} f Q`;
+}
+
+function fillRectOperators(x: number, y: number, width: number, height: number, color: Rgb): string {
+  return `q ${shapeColorOperands(color)} rg ${formatOperand(x)} ${formatOperand(y)} ${formatOperand(width)} ${formatOperand(height)} re f Q`;
+}
+
+// ============================================================================
+// Technical marker symbols — real vector/text, never emoji/bitmap (spec section 17), no badge, sized
+// from domain/technicalRasterExportSymbolSize.ts. HOTFIX-02: every central default renderer is TEXT
+// ("powerLabel"/"textLabel"/"fallback" — the same displayLabel the editor shows). The icon renderers
+// below stay drawable for a TechnicalRasterComponentConfig override only.
+// ============================================================================
+
+/** Centered short colored text — powerLabel (kW), textLabel (IP/INT/El.rozvaděč/3 m³/…), fallback. */
+function textSymbolOperators(page: PDFPage, x: number, y: number, color: Rgb, text: string, renderer: ExportTextRenderer, fontSizePt: number): string {
+  const width = renderer.measure(text, fontSizePt);
+  return renderer.operators(page, x - width / 2, y - fontSizePt * 0.35, text, fontSizePt, color);
+}
+
+/** SVG path data (24×24, y-down) -> PDF operators centered on (x, y), y flipped — the same placement drawSvgPath used (origin at x-12·s, y+12·s). */
+function svgPathOperators(commands: readonly (readonly [string, ...number[]])[], x: number, y: number, scale: number): string {
+  const px = (sx: number) => formatOperand(x - 12 * scale + sx * scale);
+  const py = (sy: number) => formatOperand(y + 12 * scale - sy * scale);
+  return commands.map(([op, ...a]) => {
+    if (op === "m" || op === "l") return `${px(a[0]!)} ${py(a[1]!)} ${op}`;
+    if (op === "c") return `${px(a[0]!)} ${py(a[1]!)} ${px(a[2]!)} ${py(a[3]!)} ${px(a[4]!)} ${py(a[5]!)} c`;
+    return "h";
+  }).join(" ");
+}
+
+/** The editor's teardrop (M12 2C12 2 5 11 5 15.5 A7 7 0 0019 15.5 C19 11 12 2 12 2Z) — its lower half-circle as two quarter Béziers. */
+const WATER_DROP_PATH: readonly (readonly [string, ...number[]])[] = [
+  ["m", 12, 2], ["c", 12, 2, 5, 11, 5, 15.5], ["c", 5, 19.366, 8.134, 22.5, 12, 22.5], ["c", 15.866, 22.5, 19, 19.366, 19, 15.5], ["c", 19, 11, 12, 2, 12, 2], ["h"],
+];
+const WIFI_PATH: readonly (readonly [string, ...number[]])[] = [
+  ["m", 2, 8.5], ["c", 7.5, 3.5, 16.5, 3.5, 22, 8.5], ["m", 5.5, 12.5], ["c", 9.5, 9, 14.5, 9, 18.5, 12.5], ["m", 9, 16.5], ["c", 10.5, 15, 13.5, 15, 15, 16.5], ["m", 12, 20.2], ["l", 12, 20.3],
+];
+
+function placementSymbolOperators(page: PDFPage, x: number, y: number, item: TechnicalRasterExportPlacementItem, renderer: ExportTextRenderer): string {
   const color = hexToRgbFraction(item.presentation.color);
   switch (item.presentation.renderer) {
     case "refrigeratedStar":
-      drawStarSymbol(page, x, y, color, markerShapingFont, EXPORT_STAR_SYMBOL_FONT_SIZE_PT);
-      return;
-    case "waterDrop":
-      drawWaterDropSymbol(page, x, y, color, EXPORT_WATER_DROP_HEIGHT_PT);
-      return;
-    case "wifiIcon":
-      drawWifiSymbol(page, x, y, color, EXPORT_WIFI_SYMBOL_WIDTH_PT);
-      return;
+      return textSymbolOperators(page, x, y - EXPORT_STAR_SYMBOL_FONT_SIZE_PT * 0.05, color, "*", renderer, EXPORT_STAR_SYMBOL_FONT_SIZE_PT);
+    case "waterDrop": {
+      const scale = EXPORT_WATER_DROP_HEIGHT_PT / 13.5;
+      return `q ${shapeColorOperands(color)} rg ${svgPathOperators(WATER_DROP_PATH, x, y, scale)} f Q`;
+    }
+    case "wifiIcon": {
+      const scale = EXPORT_WIFI_SYMBOL_WIDTH_PT / 20;
+      return `q ${shapeColorOperands(color)} RG ${formatOperand(2.5 * scale)} w 1 J ${svgPathOperators(WIFI_PATH, x, y, scale)} S Q`;
+    }
     case "powerLabel":
-      // CORRECTIVE BATCH (4th, export-polish-only) — electricity's own power labels ("2 kW"/"5 kW"/
-      // "6 kW"/"9 kW"/"EL") use their own, independently-tuned size; never shared with INT/IP below.
-      drawTextSymbol(page, x, y, color, item.presentation.displayLabel ?? "?", markerShapingFont, EXPORT_POWER_LABEL_FONT_SIZE_PT);
-      return;
+      // Electricity power labels ("2 kW" … "40 kW") keep their own, independently tuned size.
+      return textSymbolOperators(page, x, y, color, item.presentation.displayLabel ?? "?", renderer, EXPORT_POWER_LABEL_FONT_SIZE_PT);
     case "textLabel":
     case "fallback":
     default:
-      drawTextSymbol(page, x, y, color, item.presentation.displayLabel ?? "?", markerShapingFont, EXPORT_TEXT_SYMBOL_FONT_SIZE_PT);
+      return textSymbolOperators(page, x, y, color, item.presentation.displayLabel ?? "?", renderer, EXPORT_TEXT_SYMBOL_FONT_SIZE_PT);
   }
 }
 
 // ============================================================================
-// Realization underline (corrective batch, post real-file acceptance test, section 4/5/14) —
-// REPLACES the previous "badge" drawing (a white box + dark outline + redrawn stand number), which
-// FAILED manual acceptance. Now a single ordinary vector stroke — no fill, no transparency, no
-// nested object structure — the simplest possible Corel-friendly primitive (spec section 14: "velmi
-// jednoduchý vector path/stroke... žádná zbytečná transparency / masking / complex object
-// structure"). Deliberately separate drawing code from the technical symbols above (a completely
-// different concern — WHO builds the stand, never WHAT service sits where) and anchored to the
-// stand's own label position (computed entirely in domain/technicalRasterRealizationUnderline.ts,
-// shared verbatim with the editor), so it structurally cannot collide with a placed technical
-// symbol, and NEVER redraws/covers the source PDF's own stand-number text.
+// Realization underline (corrective batch, post real-file acceptance test, section 4/5/14) — a single
+// ordinary vector stroke, anchored below the stand number (geometry from
+// domain/technicalRasterRealizationUnderline.ts, shared with the editor). Not a technical service —
+// stays in the GENERÁTOR DATA layer.
 // ============================================================================
 
 export type TechnicalRasterExportRealizationUnderlineItem = Readonly<{
   standId: string;
-  /** Normalized page-space geometry — the SAME rectangle domain/technicalRasterRealizationUnderline.ts's computeRealizationUnderlineGeometry produces for the editor; this drawing code only ever converts its two endpoints through the rotation-aware raw-PDF-point transform, it never computes geometry itself. */
+  /** Normalized page-space geometry — the SAME rectangle domain/technicalRasterRealizationUnderline.ts's computeRealizationUnderlineGeometry produces for the editor. */
   xNormalized: number;
   yNormalized: number;
   widthNormalized: number;
-  /** The resolved realization group's own central color (domain/technicalRasterRealization.ts) — this drawing code paints whatever color it's given, it never resolves the group itself. */
+  /** The resolved realization group's own central color (domain/technicalRasterRealization.ts). */
   color: string;
 }>;
 
-function drawRealizationUnderline(page: PDFPage, item: TechnicalRasterExportRealizationUnderlineItem, geometry: SourcePageGeometry): void {
+function realizationUnderlineOperators(item: TechnicalRasterExportRealizationUnderlineItem, geometry: SourcePageGeometry): string {
   const start = normalizedDisplayPointToRawPdfPoint(item.xNormalized, item.yNormalized, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
   const end = normalizedDisplayPointToRawPdfPoint(item.xNormalized + item.widthNormalized, item.yNormalized, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
-  page.drawLine({
-    start,
-    end,
-    thickness: REALIZATION_UNDERLINE_THICKNESS_PT,
-    color: hexToRgbFraction(item.color),
-    lineCap: LineCapStyle.Round,
-  });
+  return strokeLineOperators(start.x, start.y, end.x, end.y, REALIZATION_UNDERLINE_THICKNESS_PT, hexToRgbFraction(item.color));
 }
 
 // ============================================================================
-// "BEZ elektriky" automatic red X (PRODUCTION BATCH, part B) — same "plain vector stroke, never a
-// text glyph" discipline as the realization underline above (spec section 18: "Prefer two vector
-// strokes over a textual '×' glyph" — no generated-font dependency needed at all for this marker).
-// Position comes from domain/technicalRasterNoElectricityMarker.ts's own
-// computeNoElectricityMarkerGeometry, the SAME normalized page-space geometry shared with the
-// editor — this drawing code only ever converts that one CENTER point through the rotation-aware
-// raw-PDF-point transform, it never computes geometry itself.
+// "BEZ elektriky" automatic red X (PRODUCTION BATCH, part B) — two plain vector strokes centered on
+// domain/technicalRasterNoElectricityMarker.ts's geometry. An automatic technical marker, so it
+// lives in the TECHNICKÉ SLUŽBY layer (HOTFIX-02).
 // ============================================================================
 
 export type TechnicalRasterExportNoElectricityMarkerItem = Readonly<{
@@ -1247,32 +1268,53 @@ export type TechnicalRasterExportNoElectricityMarkerItem = Readonly<{
 
 const NO_ELECTRICITY_MARKER_COLOR = hexToRgbFraction("#c1121f");
 
-function drawNoElectricityMarker(page: PDFPage, item: TechnicalRasterExportNoElectricityMarkerItem, geometry: SourcePageGeometry): void {
+function noElectricityMarkerOperators(item: TechnicalRasterExportNoElectricityMarkerItem, geometry: SourcePageGeometry): string {
   const center = normalizedDisplayPointToRawPdfPoint(item.xNormalized, item.yNormalized, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
   const half = NO_ELECTRICITY_MARKER_HALF_SIZE_PT;
-  const strokeOptions = { thickness: NO_ELECTRICITY_MARKER_THICKNESS_PT, color: NO_ELECTRICITY_MARKER_COLOR, lineCap: LineCapStyle.Round };
-  page.drawLine({ start: { x: center.x - half, y: center.y - half }, end: { x: center.x + half, y: center.y + half }, ...strokeOptions });
-  page.drawLine({ start: { x: center.x - half, y: center.y + half }, end: { x: center.x + half, y: center.y - half }, ...strokeOptions });
+  return [
+    strokeLineOperators(center.x - half, center.y - half, center.x + half, center.y + half, NO_ELECTRICITY_MARKER_THICKNESS_PT, NO_ELECTRICITY_MARKER_COLOR),
+    strokeLineOperators(center.x - half, center.y + half, center.x + half, center.y - half, NO_ELECTRICITY_MARKER_THICKNESS_PT, NO_ELECTRICITY_MARKER_COLOR),
+  ].join("\n");
 }
 
 // ============================================================================
-// Manual drawings ("Bod" / "Čára", domain/technicalRasterDrawings.ts) — plain vector strokes in the
-// user's color, positioned through the SAME rotation-aware normalized -> raw PDF transform as every
-// placement. A point is a small "+" cross (two strokes), a line is one stroke A–B. Drawn inside their
-// own "RUČNÍ ZNAČKY" layer (see drawManualDrawingsLayer).
+// Manual drawings ("Bod" / "Čára", domain/technicalRasterDrawings.ts) — plain vector shapes in the
+// drawing's category color, positioned through the SAME rotation-aware normalized -> raw PDF
+// transform as every placement: a dot (filled circle), a cross × (two diagonal strokes), the original
+// "+" of an older point, or a line A–B. A VISIBLE note is real text right of a point / above a
+// line's midpoint (internal notes never reach this code). All inside TECHNICKÉ SLUŽBY (HOTFIX-02).
 // ============================================================================
 
-function drawManualDrawing(page: PDFPage, item: TechnicalRasterExportDrawingItem, geometry: SourcePageGeometry): void {
+function manualDrawingOperators(page: PDFPage, item: TechnicalRasterExportDrawingItem, geometry: SourcePageGeometry, renderer: ExportTextRenderer): string {
   const toRaw = (x: number, y: number) => normalizedDisplayPointToRawPdfPoint(x, y, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
-  const strokeOptions = { thickness: item.strokePt, color: hexToRgbFraction(item.color), lineCap: LineCapStyle.Round };
+  const color = hexToRgbFraction(item.color);
+  const parts: string[] = [];
   if (item.kind === "point") {
     const center = toRaw(item.x, item.y);
     const half = item.crossHalfPt;
-    page.drawLine({ start: { x: center.x - half, y: center.y }, end: { x: center.x + half, y: center.y }, ...strokeOptions });
-    page.drawLine({ start: { x: center.x, y: center.y - half }, end: { x: center.x, y: center.y + half }, ...strokeOptions });
-    return;
+    let extent = half;
+    if (item.shape === "dot") {
+      extent = item.dotRadiusPt;
+      parts.push(fillCircleOperators(center.x, center.y, item.dotRadiusPt, color));
+    } else if (item.shape === "cross") {
+      const d = half * Math.SQRT1_2;
+      parts.push(strokeLineOperators(center.x - d, center.y - d, center.x + d, center.y + d, item.strokePt, color));
+      parts.push(strokeLineOperators(center.x - d, center.y + d, center.x + d, center.y - d, item.strokePt, color));
+    } else {
+      parts.push(strokeLineOperators(center.x - half, center.y, center.x + half, center.y, item.strokePt, color));
+      parts.push(strokeLineOperators(center.x, center.y - half, center.x, center.y + half, item.strokePt, color));
+    }
+    if (item.note) parts.push(renderer.operators(page, center.x + extent + item.note.gapPt, center.y - item.note.fontSizePt * 0.35, item.note.text, item.note.fontSizePt, color));
+    return parts.join("\n");
   }
-  page.drawLine({ start: toRaw(item.x1, item.y1), end: toRaw(item.x2, item.y2), ...strokeOptions });
+  const a = toRaw(item.x1, item.y1);
+  const b = toRaw(item.x2, item.y2);
+  parts.push(strokeLineOperators(a.x, a.y, b.x, b.y, item.strokePt, color));
+  if (item.note) {
+    const width = renderer.measure(item.note.text, item.note.fontSizePt);
+    parts.push(renderer.operators(page, (a.x + b.x) / 2 - width / 2, (a.y + b.y) / 2 + item.strokePt / 2 + item.note.gapPt, item.note.text, item.note.fontSizePt, color));
+  }
+  return parts.join("\n");
 }
 
 function isValidDrawingItem(item: TechnicalRasterExportDrawingItem): boolean {
@@ -1281,70 +1323,13 @@ function isValidDrawingItem(item: TechnicalRasterExportDrawingItem): boolean {
     : [item.x1, item.y1, item.x2, item.y2].every(isValidNormalizedCoordinate);
 }
 
-/**
- * Draws one page's manual drawings inside the "RUČNÍ ZNAČKY" OCG and returns that OCG's ref (created
- * on first use, then shared by every page). A page with no drawings gets no layer bracket; the layer is
- * still re-registered after every page's OCProperties rebuild once it exists.
- */
-function drawManualDrawingsLayer(newDoc: PDFDocument, page: PDFPage, items: readonly TechnicalRasterExportDrawingItem[], geometry: SourcePageGeometry, existingRef: PDFRef | undefined): PDFRef | undefined {
-  const valid = items.filter(isValidDrawingItem);
-  if (valid.length === 0) {
-    if (existingRef) appendGeneratorDataOcgToCatalog(newDoc, existingRef);
-    return existingRef;
-  }
-  const layer = ensureOverlayOcg(newDoc, page, existingRef, MANUAL_DRAWINGS_OCG_NAME, "ManualDrawings");
-  appendRawContentChunk(newDoc.context, page, `/OC /${layer.propertyName} BDC`);
-  for (const item of valid) drawManualDrawing(page, item, geometry);
-  appendRawContentChunk(newDoc.context, page, "EMC");
-  return layer.ref;
-}
-
 // ============================================================================
-// GENERATED LEGEND BATCH — every generated legend row (technical + realization), in BOTH the
-// separate-page fallback and the in-place ("source-legend-area") strategy, is now drawn through
-// this ONE shared function so both strategies stay visually consistent and reuse the EXACT same
-// vector symbol renderers real technical placements use (drawStarSymbol/drawWaterDropSymbol/
-// drawWifiSymbol/drawTextSymbol above) — never a hand-drawn visual copy of the real symbol.
-// `sizes` lets each strategy pick its OWN scale (spec section 11: "legend size and placement-marker
-// size are separate concerns" — these are ALSO separate from the real EXPORT_*_SIZE_PT marker
-// constants, which stay completely untouched). SMALL POLISH BATCH — the IN-PLACE legend's own
-// technical rows additionally draw one small colored dot beside this real symbol (see
-// drawInPlaceLegend below) purely so the category color reads at a glance; that dot is a small
-// ADDITIONAL cue, never a replacement for the real symbol drawn here.
+// Legend (HOTFIX-02, phase 7) — explains the category COLORS only ("● ELEKTŘINA", "● INTERNET /
+// WiFi", …), never what an individual label means. Only categories used in this export are listed
+// (domain/technicalRasterExport.ts buildTechnicalRasterExportLegend); the realization key stays its
+// own column. Every legend text goes through the same ExportTextRenderer as the markers.
 // ============================================================================
 
-type LegendSymbolSizes = Readonly<{ textFontSizePt: number; starFontSizePt: number; waterDropHeightPt: number; wifiWidthPt: number }>;
-
-/** `(x, y)` is the symbol's own CENTER point — same convention drawPlacementSymbol's real marker drawing already uses. */
-function drawLegendEntrySymbol(page: PDFPage, x: number, y: number, entry: TechnicalRasterExportLegendEntry, shapingFont: ShapingFont, sizes: LegendSymbolSizes): void {
-  const color = hexToRgbFraction(entry.color);
-  switch (entry.renderer) {
-    case "refrigeratedStar":
-      drawStarSymbol(page, x, y, color, shapingFont, sizes.starFontSizePt);
-      return;
-    case "waterDrop":
-      drawWaterDropSymbol(page, x, y, color, sizes.waterDropHeightPt);
-      return;
-    case "wifiIcon":
-      drawWifiSymbol(page, x, y, color, sizes.wifiWidthPt);
-      return;
-    case "powerLabel":
-    case "textLabel":
-    case "fallback":
-    default:
-      drawTextSymbol(page, x, y, color, entry.displayLabel ?? "?", shapingFont, sizes.textFontSizePt);
-  }
-}
-
-/**
- * GENERATED LEGEND BATCH section 13 — the realization legend now lists ONLY the canonical groups
- * that actually have at least one real underline in the CURRENT export (never a fixed always-all-4
- * key, which was the previous behavior) — matched by each group's own central `color`
- * (domain/technicalRasterRealization.ts), since every real underline item already carries that
- * exact color and colors are guaranteed distinct per group. Returns entries in the SAME fixed
- * canonical order (GENDAI/CREATIV EXPO/MAC PRAHA/OSTATNÍ) every time, never encounter order, for a
- * deterministic legend regardless of stand iteration order.
- */
 function resolveUsedRealizationGroups(underlineColors: ReadonlySet<string>): readonly TechnicalRealizationGroupInfo[] {
   return TECHNICAL_REALIZATION_GROUPS.filter((group) => underlineColors.has(group.color));
 }
@@ -1353,18 +1338,7 @@ function realizationUnderlineColors(underlines: readonly Readonly<{ color: strin
   return new Set(underlines.map((underline) => underline.color));
 }
 
-// ============================================================================
-// Legend page (spec section 26/27) — a SEPARATE page, never resizing/rescaling the copied source
-// page (spec: "neškáluj copied page") — the safer of the two options the spec offered, since it
-// requires zero structural changes to the copied page's own MediaBox/CropBox/rotation. GENERATED
-// LEGEND BATCH: every piece of generated text here (title, header line, "žádné značky" hint,
-// descriptions, realization names) is now genuine vector-outline geometry via the SAME
-// `drawVectorOutlineText`/shaping-font mechanism the real technical markers use — never
-// `page.drawText()` (spec section 12: Corel-safe, no Type0/CIDFont text for ANY generated legend
-// content). The realization swatch is now a short colored LINE (spec section 13: "represent
-// realization using the same colored line language used under stand numbers, not filled squares"),
-// reusing the exact same REALIZATION_UNDERLINE_THICKNESS_PT stroke real underlines use.
-// ============================================================================
+// Legend page (spec section 26/27) — a SEPARATE page, never resizing/rescaling the copied source page.
 
 const LEGEND_PAGE_WIDTH_PT = 420;
 const LEGEND_MARGIN_PT = 28;
@@ -1373,21 +1347,14 @@ const LEGEND_TITLE_FONT_SIZE_PT = 12;
 const LEGEND_SUBHEADING_FONT_SIZE_PT = 9;
 const LEGEND_TEXT_FONT_SIZE_PT = 9;
 const LEGEND_SYMBOL_COLUMN_WIDTH_PT = 16;
-const LEGEND_SYMBOL_SIZES: LegendSymbolSizes = { textFontSizePt: 8, starFontSizePt: 9, waterDropHeightPt: 7, wifiWidthPt: 9 };
+const LEGEND_SWATCH_RADIUS_PT = 3.2;
 const LEGEND_REALIZATION_SWATCH_WIDTH_PT = 10;
-/** Gap between the technical (left) and realization (right) columns — SIMPLIFIED LEGEND BATCH. */
+/** Gap between the technical (left) and realization (right) columns. */
 const LEGEND_COLUMN_GAP_PT = 24;
+/** The embedded font has no em dash — an en dash keeps the title readable in both text modes. */
+const LEGEND_PAGE_TITLE = "TECHNICKÝ EXPORT – LEGENDA";
 
-/**
- * SIMPLIFIED LEGEND BATCH — shared side-by-side layout math for BOTH the separate-page legend and
- * the in-place legend below: technical categories in a LEFT column, realization groups in a RIGHT
- * column beside it (never stacked below any more) — the two sections are drawn independently
- * top-down from the SAME starting Y, so the whole block's height is the TALLER of the two sides,
- * never their sum. This is what keeps the legend compact (spec: "avoid unnecessary vertical
- * growth") now that the technical side is also capped at ~5 category rows (never one row per
- * subtype). No realization groups at all simply means no right column — the left column then owns
- * the full available width.
- */
+/** Technical categories in a LEFT column, realization groups in a RIGHT column beside it (never stacked) — shared by both legend strategies. */
 function planLegendColumns(
   availableWidth: number,
   columnGap: number,
@@ -1402,7 +1369,7 @@ function drawLegendPage(
   newDoc: PDFDocument,
   headerLine: string,
   legend: readonly TechnicalRasterExportLegendEntry[],
-  shapingFont: ShapingFont,
+  renderer: ExportTextRenderer,
   usedRealizationGroups: readonly TechnicalRealizationGroupInfo[],
 ): void {
   const hasRealizationColumn = usedRealizationGroups.length > 0;
@@ -1411,11 +1378,12 @@ function drawLegendPage(
   const bodyRows = Math.max(leftRows, rightRows) + 1; // +1 for the LEGENDA:/REALIZACE: heading row
   const height = LEGEND_MARGIN_PT * 2 + 40 + bodyRows * LEGEND_ROW_HEIGHT_PT;
   const page = newDoc.addPage([LEGEND_PAGE_WIDTH_PT, height]);
+  const ops = new OverlayBuffer();
   let y = height - LEGEND_MARGIN_PT;
 
-  drawVectorOutlineText(page, LEGEND_MARGIN_PT, y, "TECHNICKÝ EXPORT — LEGENDA", shapingFont, LEGEND_TITLE_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08));
+  ops.push(renderer.operators(page, LEGEND_MARGIN_PT, y, LEGEND_PAGE_TITLE, LEGEND_TITLE_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08)));
   y -= 16;
-  if (headerLine) drawVectorOutlineText(page, LEGEND_MARGIN_PT, y, headerLine, shapingFont, LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.4, 0.42, 0.44));
+  if (headerLine) ops.push(renderer.operators(page, LEGEND_MARGIN_PT, y, headerLine, LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.4, 0.42, 0.44)));
   y -= 24;
 
   const { leftWidth } = planLegendColumns(LEGEND_PAGE_WIDTH_PT - LEGEND_MARGIN_PT * 2, LEGEND_COLUMN_GAP_PT, hasRealizationColumn);
@@ -1423,95 +1391,52 @@ function drawLegendPage(
   const rightX = leftX + leftWidth + LEGEND_COLUMN_GAP_PT;
   const bodyTopY = y;
 
-  drawVectorOutlineText(page, leftX, y, "LEGENDA:", shapingFont, LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08));
+  ops.push(renderer.operators(page, leftX, y, "LEGENDA:", LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08)));
   let leftY = y - LEGEND_ROW_HEIGHT_PT;
   if (legend.length === 0) {
-    drawVectorOutlineText(page, leftX, leftY, "Žádné technické značky v tomto exportu.", shapingFont, LEGEND_TEXT_FONT_SIZE_PT, rgb(0.55, 0.57, 0.58));
+    ops.push(renderer.operators(page, leftX, leftY, "Žádné technické značky v tomto exportu.", LEGEND_TEXT_FONT_SIZE_PT, rgb(0.55, 0.57, 0.58)));
   } else {
     for (const entry of legend) {
-      drawLegendEntrySymbol(page, leftX + LEGEND_SYMBOL_COLUMN_WIDTH_PT / 2, leftY + LEGEND_TEXT_FONT_SIZE_PT * 0.35, entry, shapingFont, LEGEND_SYMBOL_SIZES);
-      drawVectorOutlineText(page, leftX + LEGEND_SYMBOL_COLUMN_WIDTH_PT, leftY, entry.legendLabel, shapingFont, LEGEND_TEXT_FONT_SIZE_PT, rgb(0.1, 0.1, 0.1));
+      ops.push(fillCircleOperators(leftX + LEGEND_SYMBOL_COLUMN_WIDTH_PT / 2 - 2, leftY + LEGEND_TEXT_FONT_SIZE_PT * 0.35, LEGEND_SWATCH_RADIUS_PT, hexToRgbFraction(entry.color)));
+      ops.push(renderer.operators(page, leftX + LEGEND_SYMBOL_COLUMN_WIDTH_PT, leftY, entry.legendLabel, LEGEND_TEXT_FONT_SIZE_PT, rgb(0.1, 0.1, 0.1)));
       leftY -= LEGEND_ROW_HEIGHT_PT;
     }
   }
 
   if (hasRealizationColumn) {
     let rightY = bodyTopY;
-    drawVectorOutlineText(page, rightX, rightY, "REALIZACE:", shapingFont, LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08));
+    ops.push(renderer.operators(page, rightX, rightY, "REALIZACE:", LEGEND_SUBHEADING_FONT_SIZE_PT, rgb(0.08, 0.08, 0.08)));
     rightY -= LEGEND_ROW_HEIGHT_PT;
     for (const group of usedRealizationGroups) {
       const lineY = rightY + LEGEND_TEXT_FONT_SIZE_PT * 0.3;
-      page.drawLine({
-        start: { x: rightX, y: lineY },
-        end: { x: rightX + LEGEND_REALIZATION_SWATCH_WIDTH_PT, y: lineY },
-        thickness: REALIZATION_UNDERLINE_THICKNESS_PT,
-        color: hexToRgbFraction(group.color),
-        lineCap: LineCapStyle.Round,
-      });
-      drawVectorOutlineText(page, rightX + LEGEND_SYMBOL_COLUMN_WIDTH_PT, rightY, group.label, shapingFont, LEGEND_TEXT_FONT_SIZE_PT, rgb(0.1, 0.1, 0.1));
+      ops.push(strokeLineOperators(rightX, lineY, rightX + LEGEND_REALIZATION_SWATCH_WIDTH_PT, lineY, REALIZATION_UNDERLINE_THICKNESS_PT, hexToRgbFraction(group.color)));
+      ops.push(renderer.operators(page, rightX + LEGEND_SYMBOL_COLUMN_WIDTH_PT, rightY, group.label, LEGEND_TEXT_FONT_SIZE_PT, rgb(0.1, 0.1, 0.1)));
       rightY -= LEGEND_ROW_HEIGHT_PT;
     }
   }
+  ops.flush(page);
 }
 
 // ============================================================================
-// In-place legend (corrective batch section 7, "source-legend-area") — covers a USER-DEFINED (or
-// domain/technicalRasterLegendPlacement.ts's own hall-agnostic AUTOMATIC DEFAULT — never
-// auto-detected/guessed from the source page's own content) region of the copied source page with a
-// plain white VECTOR rectangle — solid fill, opacity always 1.0 (completely independent of "Krytí
-// bílé"/white-mode opacity, spec section 4), NO stroke/border — and redraws a compact, category-
-// level technical legend (left) + realization key (right) directly inside it. The source page's own
-// size/MediaBox/CropBox is never touched.
+// In-place legend (corrective batch section 7, "source-legend-area") — covers a user-defined (or the
+// hall-agnostic automatic default) region of the copied source page with a plain white vector
+// rectangle (opacity 1.0, no stroke) and draws a compact category legend (left) + realization key
+// (right) inside it. The source page's own size/MediaBox/CropBox is never touched.
 //
-// SIMPLIFIED LEGEND BATCH — OVERFLOW SAFETY: before drawing anything, `planInPlaceLegendLayout`
-// below computes whether the (now much shorter, category-level) legend actually fits the configured
-// region, trying progressively smaller (but never microscopic) scales. If none fit, this function
-// draws NOTHING at all (never a partial/overlapping/clipped drawing, never a lonely white box with
-// no content) and reports `"does_not_fit"` so the caller can fall back to the safe separate-page
-// legend instead — the configured region and its underlying source content are left completely
-// untouched in that case.
+// OVERFLOW SAFETY: `planInPlaceLegendLayout` decides BEFORE anything is drawn whether the legend fits
+// the region at one of a few modest scales. If none fits, nothing is drawn (no white box, no partial
+// text) and the caller falls back to the separate legend page.
 // ============================================================================
 
-// SMALL POLISH BATCH — the whole block is now slightly smaller overall (was ROW_HEIGHT=9,
-// FONT_SIZE=6, HEADING=7, SYMBOL=5.5, STAR=6.5, WATER_DROP=5, WIFI=5.5) so it visually fits better
-// against the nearby printed source text, and SYMBOL_COLUMN_WIDTH is wider (was 11) so the
-// symbol/sample never reads as glued directly onto its description (spec: "3 kW" must not feel
-// stuck onto "ELEKTRIKA"). MARGIN/COLUMN_GAP/MIN_SCALE are unchanged — this is a size/spacing nudge,
-// not a new layout.
-//
-// MICRO POLISH BATCH (2nd size pass) — one more small, uniform reduction on top of the above (was
-// ROW_HEIGHT=8.5, FONT_SIZE=5.5, HEADING=6.5, SYMBOL=5, STAR=6, WATER_DROP=4.5, WIFI=5). The
-// realization (right column) rows reuse these SAME shared rowHeight/textFontSize/headingFontSize
-// values (see drawInPlaceLegend below), so they shrink together with the technical rows — no
-// separate realization-only constant exists for the in-place legend. MARGIN/SYMBOL_COLUMN_WIDTH/
-// COLUMN_GAP/MIN_SCALE stay exactly as-is — still a size nudge only, never a new layout.
 const IN_PLACE_LEGEND_MARGIN_PT = 4;
 const IN_PLACE_LEGEND_ROW_HEIGHT_PT = 8;
 const IN_PLACE_LEGEND_FONT_SIZE_PT = 5;
 const IN_PLACE_LEGEND_HEADING_FONT_SIZE_PT = 6;
-const IN_PLACE_LEGEND_SYMBOL_FONT_SIZE_PT = 4.5;
-const IN_PLACE_LEGEND_STAR_FONT_SIZE_PT = 5.5;
-const IN_PLACE_LEGEND_WATER_DROP_HEIGHT_PT = 4;
-const IN_PLACE_LEGEND_WIFI_WIDTH_PT = 4.5;
-const IN_PLACE_LEGEND_SYMBOL_COLUMN_WIDTH_PT = 15;
+/** Width of the color-swatch column before each description. */
+const IN_PLACE_LEGEND_SYMBOL_COLUMN_WIDTH_PT = 8;
 const IN_PLACE_LEGEND_COLUMN_GAP_PT = 10;
-/** Radius of the small colored category dot drawn next to each TECHNICAL row's own symbol/sample (SMALL POLISH BATCH) — never used for the realization column, which already has its own colored line swatch. Size unchanged by the MICRO POLISH BATCH — only its own offset (below) moved. */
-const IN_PLACE_LEGEND_DOT_RADIUS_PT = 1.3;
-/**
- * DOT POLISH BATCH — the dot's own CENTER offset from the row's left content edge (`leftX`), before
- * scale. Was an inline `plan.dotRadius + 0.5` (1.8pt at scale 1) — the dot's own right edge (at
- * dotRadius 1.3, i.e. ~3.1pt from leftX) could sit close enough to a wide symbol's own left edge to
- * read as touching it. Moved further left (0.5pt from leftX, i.e. 1.3pt further left than before) so
- * a small but clearly visible gap always remains before the symbol/sample — the symbol/text and
- * description positions themselves are completely untouched by this constant.
- *
- * MICRO POLISH BATCH — real manual review found 0.5pt still not quite enough breathing room, so
- * this moved a bit further left again (into the row's own left margin — still safely inside
- * IN_PLACE_LEGEND_MARGIN_PT, never clipped by the box edge). The dot stays the SAME size/color and
- * still sits at the very start of its own row, so it reads as clearly associated with that row.
- */
-const IN_PLACE_LEGEND_DOT_LEFT_OFFSET_PT = -0.2;
-/** The smallest scale a size reduction is allowed to shrink to (spec: "modest... within a sensible minimum", "no microscopic text") — a 30% reduction, never more. */
+const IN_PLACE_LEGEND_SWATCH_RADIUS_PT = 1.6;
+/** The smallest scale a size reduction is allowed to shrink to (spec: "no microscopic text") — a 30% reduction, never more. */
 const IN_PLACE_LEGEND_MIN_SCALE = 0.7;
 const IN_PLACE_LEGEND_SCALE_STEPS: readonly number[] = [1, 0.85, IN_PLACE_LEGEND_MIN_SCALE];
 
@@ -1519,14 +1444,12 @@ type InPlaceLegendPlan = Readonly<{
   rowHeight: number;
   headingFontSize: number;
   textFontSize: number;
-  symbolSizes: LegendSymbolSizes;
+  swatchRadius: number;
   symbolColumnWidth: number;
   columnGap: number;
   leftWidth: number;
   rightWidth: number;
   hasRealizationColumn: boolean;
-  dotRadius: number;
-  dotOffsetFromLeftX: number;
 }>;
 
 function computeInPlaceLegendPlanAt(
@@ -1534,18 +1457,12 @@ function computeInPlaceLegendPlanAt(
   box: Readonly<{ width: number; height: number }>,
   legend: readonly TechnicalRasterExportLegendEntry[],
   usedRealizationGroups: readonly TechnicalRealizationGroupInfo[],
-  shapingFont: ShapingFont,
+  renderer: ExportTextRenderer,
 ): InPlaceLegendPlan | undefined {
   const margin = IN_PLACE_LEGEND_MARGIN_PT;
   const rowHeight = IN_PLACE_LEGEND_ROW_HEIGHT_PT * scale;
   const headingFontSize = IN_PLACE_LEGEND_HEADING_FONT_SIZE_PT * scale;
   const textFontSize = IN_PLACE_LEGEND_FONT_SIZE_PT * scale;
-  const symbolSizes: LegendSymbolSizes = {
-    textFontSizePt: IN_PLACE_LEGEND_SYMBOL_FONT_SIZE_PT * scale,
-    starFontSizePt: IN_PLACE_LEGEND_STAR_FONT_SIZE_PT * scale,
-    waterDropHeightPt: IN_PLACE_LEGEND_WATER_DROP_HEIGHT_PT * scale,
-    wifiWidthPt: IN_PLACE_LEGEND_WIFI_WIDTH_PT * scale,
-  };
   const symbolColumnWidth = IN_PLACE_LEGEND_SYMBOL_COLUMN_WIDTH_PT * scale;
   const columnGap = IN_PLACE_LEGEND_COLUMN_GAP_PT * scale;
   const hasRealizationColumn = usedRealizationGroups.length > 0;
@@ -1555,107 +1472,254 @@ function computeInPlaceLegendPlanAt(
   const rightDescriptionWidth = rightWidth - symbolColumnWidth;
   if (leftDescriptionWidth <= 0 || (hasRealizationColumn && rightDescriptionWidth <= 0)) return undefined;
 
-  // Side by side, never stacked (spec: "move realization legend to the RIGHT... avoid unnecessary
-  // vertical growth") — required height is the TALLER side's own row count, not their sum.
+  // Side by side, never stacked — required height is the TALLER side's own row count.
   const leftRows = 1 + legend.length;
   const rightRows = hasRealizationColumn ? 1 + usedRealizationGroups.length : 0;
   const requiredHeight = Math.max(leftRows, rightRows) * rowHeight + margin * 2;
   if (requiredHeight > box.height) return undefined;
 
   for (const entry of legend) {
-    const width = (measureShapedTextWidthInDesignUnits(shapingFont, entry.legendLabel) / shapingFont.unitsPerEm) * textFontSize;
-    if (width > leftDescriptionWidth) return undefined;
+    if (renderer.measure(entry.legendLabel, textFontSize) > leftDescriptionWidth) return undefined;
   }
   for (const group of usedRealizationGroups) {
-    const width = (measureShapedTextWidthInDesignUnits(shapingFont, group.label) / shapingFont.unitsPerEm) * textFontSize;
-    if (width > rightDescriptionWidth) return undefined;
+    if (renderer.measure(group.label, textFontSize) > rightDescriptionWidth) return undefined;
   }
 
-  return {
-    rowHeight, headingFontSize, textFontSize, symbolSizes, symbolColumnWidth, columnGap, leftWidth, rightWidth, hasRealizationColumn,
-    dotRadius: IN_PLACE_LEGEND_DOT_RADIUS_PT * scale,
-    dotOffsetFromLeftX: IN_PLACE_LEGEND_DOT_LEFT_OFFSET_PT * scale,
-  };
+  return { rowHeight, headingFontSize, textFontSize, swatchRadius: IN_PLACE_LEGEND_SWATCH_RADIUS_PT * scale, symbolColumnWidth, columnGap, leftWidth, rightWidth, hasRealizationColumn };
 }
 
-/**
- * Tries progressively smaller scales (never a column-count search any more — the two "columns" are
- * now the FIXED technical-left/realization-right roles, not an overflow strategy). `undefined` means
- * the configured region genuinely cannot hold this export's legend at any attempted scale — the
- * caller must fall back to the separate-page legend rather than draw a broken/overflowing box.
- */
+/** `undefined` = the region cannot hold this legend at any attempted scale — the caller must use the separate legend page instead. */
 function planInPlaceLegendLayout(
   box: Readonly<{ width: number; height: number }>,
   legend: readonly TechnicalRasterExportLegendEntry[],
   usedRealizationGroups: readonly TechnicalRealizationGroupInfo[],
-  shapingFont: ShapingFont,
+  renderer: ExportTextRenderer,
 ): InPlaceLegendPlan | undefined {
   for (const scale of IN_PLACE_LEGEND_SCALE_STEPS) {
-    const plan = computeInPlaceLegendPlanAt(scale, box, legend, usedRealizationGroups, shapingFont);
+    const plan = computeInPlaceLegendPlanAt(scale, box, legend, usedRealizationGroups, renderer);
     if (plan) return plan;
   }
   return undefined;
 }
 
-/** `"drawn"` on success; `"does_not_fit"` when NOTHING was drawn (not even the white cover) — see this section's own header doc for why the caller must treat that as "use the separate-page legend instead", never as "legend silently missing". */
-function drawInPlaceLegend(
+function inPlaceLegendOperators(
   page: PDFPage,
   box: Readonly<{ x: number; y: number; width: number; height: number }>,
+  plan: InPlaceLegendPlan,
   legend: readonly TechnicalRasterExportLegendEntry[],
   usedRealizationGroups: readonly TechnicalRealizationGroupInfo[],
-  shapingFont: ShapingFont,
-): "drawn" | "does_not_fit" {
-  const plan = planInPlaceLegendLayout(box, legend, usedRealizationGroups, shapingFont);
-  if (!plan) return "does_not_fit";
-
-  // 1. Opaque white cover rectangle — vector, solid white, opacity ALWAYS 1.0 (never derived from
-  // "Krytí bílé"/booth white-mode opacity, which this drawing call never even receives), NO stroke.
-  // `opacity` is deliberately OMITTED rather than passed as `1` — pdf-lib wraps ANY explicit
-  // `opacity` (even 1) in its own `/GS gs` ExtGState; omitting it keeps this the same simple,
-  // ExtGState-free "rg ... f" fill every other plain vector shape in this pipeline already uses,
-  // while still being unconditionally, exactly 1.0 opaque (pdf's own un-overridden default alpha).
-  page.drawRectangle({ x: box.x, y: box.y, width: box.width, height: box.height, color: rgb(1, 1, 1) });
-
+  renderer: ExportTextRenderer,
+): string {
+  const parts: string[] = [];
+  // 1. Opaque white cover — solid fill, no stroke, no ExtGState (independent of "Krytí bílé").
+  parts.push(fillRectOperators(box.x, box.y, box.width, box.height, rgb(1, 1, 1)));
   const margin = IN_PLACE_LEGEND_MARGIN_PT;
   const leftX = box.x + margin;
   const rightX = leftX + plan.leftWidth + plan.columnGap;
   const topY = box.y + box.height - margin - plan.headingFontSize;
 
-  // 2/3/4. Technical categories — LEFT column: heading, then one row per category. Each row also
-  // gets a small colored dot (SMALL POLISH BATCH) next to its symbol/sample, in that row's own
-  // category color, purely so the category color reads at a glance — never replacing the real
-  // symbol renderer already reused here, just a small additional visual cue beside it.
-  drawVectorOutlineText(page, leftX, topY, "LEGENDA:", shapingFont, plan.headingFontSize, rgb(0.08, 0.08, 0.08));
+  // 2. Technical categories — LEFT column: heading, then "● CATEGORY" rows.
+  parts.push(renderer.operators(page, leftX, topY, "LEGENDA:", plan.headingFontSize, rgb(0.08, 0.08, 0.08)));
   let leftY = topY - plan.rowHeight;
   for (const entry of legend) {
-    const rowCenterY = leftY + plan.textFontSize * 0.35;
-    page.drawCircle({ x: leftX + plan.dotOffsetFromLeftX, y: rowCenterY, size: plan.dotRadius, color: hexToRgbFraction(entry.color) });
-    drawLegendEntrySymbol(page, leftX + plan.symbolColumnWidth / 2, rowCenterY, entry, shapingFont, plan.symbolSizes);
-    drawVectorOutlineText(page, leftX + plan.symbolColumnWidth, leftY, entry.legendLabel, shapingFont, plan.textFontSize, rgb(0.1, 0.1, 0.1));
+    parts.push(fillCircleOperators(leftX + plan.swatchRadius, leftY + plan.textFontSize * 0.35, plan.swatchRadius, hexToRgbFraction(entry.color)));
+    parts.push(renderer.operators(page, leftX + plan.symbolColumnWidth, leftY, entry.legendLabel, plan.textFontSize, rgb(0.1, 0.1, 0.1)));
     leftY -= plan.rowHeight;
   }
 
-  // 5. Realization — RIGHT column, beside the technical legend (never below it any more), starting
-  // from the SAME top Y — a colored LINE swatch (never a filled square), matching the real
-  // underline's own visual language. Only the groups actually used in this export.
+  // 3. Realization — RIGHT column, a colored LINE swatch (the underline's own visual language).
   if (plan.hasRealizationColumn) {
-    drawVectorOutlineText(page, rightX, topY, "REALIZACE:", shapingFont, plan.headingFontSize, rgb(0.08, 0.08, 0.08));
+    parts.push(renderer.operators(page, rightX, topY, "REALIZACE:", plan.headingFontSize, rgb(0.08, 0.08, 0.08)));
     let rightY = topY - plan.rowHeight;
     for (const group of usedRealizationGroups) {
       const lineY = rightY + plan.textFontSize * 0.3;
-      page.drawLine({
-        start: { x: rightX, y: lineY },
-        end: { x: rightX + plan.symbolColumnWidth - 2, y: lineY },
-        thickness: REALIZATION_UNDERLINE_THICKNESS_PT,
-        color: hexToRgbFraction(group.color),
-        lineCap: LineCapStyle.Round,
-      });
-      drawVectorOutlineText(page, rightX + plan.symbolColumnWidth, rightY, group.label, shapingFont, plan.textFontSize, rgb(0.1, 0.1, 0.1));
+      parts.push(strokeLineOperators(rightX, lineY, rightX + plan.symbolColumnWidth - 2, lineY, REALIZATION_UNDERLINE_THICKNESS_PT, hexToRgbFraction(group.color)));
+      parts.push(renderer.operators(page, rightX + plan.symbolColumnWidth, rightY, group.label, plan.textFontSize, rgb(0.1, 0.1, 0.1)));
       rightY -= plan.rowHeight;
     }
   }
+  return parts.join("\n");
+}
 
-  return "drawn";
+// ============================================================================
+// One source page's overlay (HOTFIX-02, phase 6) — the two generator layers:
+//
+//   TECHNICKÉ SLUŽBY — EVERY automatic and manual technical element: service labels, "BEZ
+//     elektriky", manual dots/crosses/lines and their VISIBLE notes. The source raster's OWN
+//     "TECHNICKÉ SLUŽBY" layer is reused when the page has it (both real hall rasters do — an empty,
+//     ON layer prepared for exactly this) — never a second layer with the same name; otherwise one
+//     is created once and shared by every page. Forced ON when it receives content.
+//   GENERÁTOR DATA — the rest of the generator's additions (realization underlines, the in-place
+//     legend) — created only when there is something to put in it.
+//
+// The source page's own content and layers are never modified here.
+// ============================================================================
+
+export const TECHNICAL_SERVICES_OCG_NAME = "TECHNICKÉ SLUŽBY";
+
+/** How the technical layer was obtained: the source raster's own layer, a newly created one, or not needed (nothing to draw). */
+export type TechnicalServicesLayerStatus = "reused_source_layer" | "created" | "not_needed";
+
+function propertyKeyForRef(page: PDFPage, ref: PDFRef): string | undefined {
+  const resources = page.node.lookup(PDFName.of("Resources"));
+  const properties = resources instanceof PDFDict ? resources.lookup(PDFName.of("Properties")) : undefined;
+  if (!(properties instanceof PDFDict)) return undefined;
+  return properties.keys().find((key) => properties.get(key)?.toString() === ref.toString())?.decodeText();
+}
+
+function orderContainsRef(array: PDFArray, ref: PDFRef, ctx: PDFContext): boolean {
+  for (let i = 0; i < array.size(); i += 1) {
+    const entry = array.get(i);
+    if (entry?.toString() === ref.toString()) return true;
+    const nested = entry ? ctx.lookup(entry) : undefined;
+    if (nested instanceof PDFArray && orderContainsRef(nested, ref, ctx)) return true;
+  }
+  return false;
+}
+
+/** Registers `ref` in /OCGs, /D/ON and /D/Order (never duplicating a nested /Order entry) and removes it from /D/OFF — the layer that carries the technical data must be visible by default. */
+function registerOcgDefaultOn(newDoc: PDFDocument, ref: PDFRef): void {
+  const ctx = newDoc.context;
+  const ocProps = ensureDictChild(newDoc.catalog, ctx, "OCProperties");
+  pushRefIfAbsent(ensureArrayChild(ocProps, ctx, "OCGs"), ref);
+  const dDict = ensureDictChild(ocProps, ctx, "D");
+  if (!(dDict.lookup(PDFName.of("BaseState")) instanceof PDFName)) dDict.set(PDFName.of("BaseState"), PDFName.of("ON"));
+  pushRefIfAbsent(ensureArrayChild(dDict, ctx, "ON"), ref);
+  const off = dDict.lookup(PDFName.of("OFF"));
+  if (off instanceof PDFArray) {
+    for (let i = off.size() - 1; i >= 0; i -= 1) if (off.get(i)?.toString() === ref.toString()) off.remove(i);
+  }
+  const order = ensureArrayChild(dDict, ctx, "Order");
+  if (!orderContainsRef(order, ref, ctx)) order.push(ref);
+}
+
+/**
+ * Removes every OTHER OCG named TECHNICKÉ SLUŽBY from the catalog lists, so a viewer never shows the
+ * layer twice. Only relevant for a multi-page source (each page is copied separately, so each page
+ * brings its own copy of the source layer object); the copies' content — if any — stays on the page.
+ */
+function dropDuplicateTechnicalLayerRegistrations(newDoc: PDFDocument, keep: PDFRef): void {
+  const ctx = newDoc.context;
+  const ocProps = newDoc.catalog.lookup(PDFName.of("OCProperties"));
+  if (!(ocProps instanceof PDFDict)) return;
+  const isDuplicate = (entry: unknown): boolean => {
+    if (!(entry instanceof PDFRef) || entry.toString() === keep.toString()) return false;
+    const ocg = ctx.lookup(entry);
+    return ocg instanceof PDFDict && decodePdfTextLike(ocg.lookup(PDFName.of("Name"))) === TECHNICAL_SERVICES_OCG_NAME;
+  };
+  const prune = (array: unknown): void => {
+    if (!(array instanceof PDFArray)) return;
+    for (let i = array.size() - 1; i >= 0; i -= 1) {
+      const entry = array.get(i);
+      if (isDuplicate(entry)) { array.remove(i); continue; }
+      prune(entry ? ctx.lookup(entry) : undefined);
+    }
+  };
+  prune(ocProps.lookup(PDFName.of("OCGs")));
+  const dDict = ocProps.lookup(PDFName.of("D"));
+  if (dDict instanceof PDFDict) for (const key of ["ON", "OFF", "Order", "Locked"]) prune(dDict.lookup(PDFName.of(key)));
+}
+
+type SourcePageOverlayInput = Readonly<{
+  newDoc: PDFDocument;
+  page: PDFPage;
+  geometry: SourcePageGeometry;
+  placements: readonly TechnicalRasterExportPlacementItem[];
+  realizationUnderlines: readonly TechnicalRasterExportRealizationUnderlineItem[];
+  noElectricityMarkers: readonly TechnicalRasterExportNoElectricityMarkerItem[];
+  manualDrawings: readonly TechnicalRasterExportDrawingItem[];
+  /** Set only when the in-place legend targets THIS page. */
+  inPlaceLegend?: Readonly<{ box: Readonly<{ x: number; y: number; width: number; height: number }>; legend: readonly TechnicalRasterExportLegendEntry[]; usedRealizationGroups: readonly TechnicalRealizationGroupInfo[] }>;
+  renderer: ExportTextRenderer;
+  /** The TECHNICKÉ SLUŽBY ref already used on an earlier page (shared across the whole export), and whether it is the source raster's own layer. */
+  technicalLayerRef: PDFRef | undefined;
+  technicalLayerIsSourceLayer: boolean;
+  generatorDataRef: PDFRef | undefined;
+}>;
+
+type SourcePageOverlayResult = Readonly<{
+  technicalLayerRef: PDFRef | undefined;
+  technicalLayerIsSourceLayer: boolean;
+  generatorDataRef: PDFRef | undefined;
+  skippedInvalidPlacementCount: number;
+  inPlaceLegendDrawn: boolean;
+}>;
+
+function drawSourcePageOverlay(input: SourcePageOverlayInput): SourcePageOverlayResult {
+  const { newDoc, page, geometry, renderer } = input;
+  const technical = new OverlayBuffer();
+  let skippedInvalidPlacementCount = 0;
+  for (const item of input.placements) {
+    if (!isValidNormalizedCoordinate(item.xNormalized) || !isValidNormalizedCoordinate(item.yNormalized)) {
+      skippedInvalidPlacementCount += 1;
+      continue;
+    }
+    const raw = normalizedDisplayPointToRawPdfPoint(item.xNormalized, item.yNormalized, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
+    technical.push(placementSymbolOperators(page, raw.x, raw.y, item, renderer));
+  }
+  for (const marker of input.noElectricityMarkers) {
+    if (!isValidNormalizedCoordinate(marker.xNormalized) || !isValidNormalizedCoordinate(marker.yNormalized)) continue;
+    technical.push(noElectricityMarkerOperators(marker, geometry));
+  }
+  for (const drawing of input.manualDrawings) {
+    if (!isValidDrawingItem(drawing)) continue;
+    technical.push(manualDrawingOperators(page, drawing, geometry, renderer));
+  }
+
+  const generator = new OverlayBuffer();
+  for (const underline of input.realizationUnderlines) {
+    if (!isValidNormalizedCoordinate(underline.xNormalized) || !isValidNormalizedCoordinate(underline.yNormalized)) continue;
+    if (!isValidNormalizedCoordinate(underline.xNormalized + underline.widthNormalized)) continue;
+    generator.push(realizationUnderlineOperators(underline, geometry));
+  }
+  let inPlaceLegendDrawn = false;
+  if (input.inPlaceLegend) {
+    const plan = planInPlaceLegendLayout(input.inPlaceLegend.box, input.inPlaceLegend.legend, input.inPlaceLegend.usedRealizationGroups, renderer);
+    if (plan) {
+      generator.push(inPlaceLegendOperators(page, input.inPlaceLegend.box, plan, input.inPlaceLegend.legend, input.inPlaceLegend.usedRealizationGroups, renderer));
+      inPlaceLegendDrawn = true;
+    }
+  }
+
+  // TECHNICKÉ SLUŽBY first, GENERÁTOR DATA on top (the in-place legend's white cover must stay
+  // readable even where a marker happens to sit inside its region — same stacking as before).
+  let technicalLayerRef = input.technicalLayerRef;
+  let technicalLayerIsSourceLayer = input.technicalLayerIsSourceLayer;
+  if (!technical.isEmpty) {
+    // Prefer the source raster's own layer; once the export has a technical layer, every later page
+    // reuses that SAME object (never a second layer with the same name).
+    const sourceRef = buildOcgNameToCopiedRefMap(newDoc, page).get(TECHNICAL_SERVICES_OCG_NAME);
+    if (!technicalLayerRef && sourceRef) {
+      technicalLayerRef = sourceRef;
+      technicalLayerIsSourceLayer = true;
+    }
+    let propertyName = technicalLayerRef ? propertyKeyForRef(page, technicalLayerRef) : undefined;
+    if (!propertyName) {
+      const layer = ensureOverlayOcg(newDoc, page, technicalLayerRef, TECHNICAL_SERVICES_OCG_NAME, "TechSluzby");
+      technicalLayerRef = layer.ref;
+      propertyName = layer.propertyName;
+    }
+    registerOcgDefaultOn(newDoc, technicalLayerRef!);
+    appendRawContentChunk(newDoc.context, page, `/OC /${propertyName} BDC`);
+    technical.flush(page);
+    appendRawContentChunk(newDoc.context, page, "EMC");
+  } else if (technicalLayerRef) {
+    // Re-register after this page's own OCProperties rebuild (see reconstructOcProperties).
+    registerOcgDefaultOn(newDoc, technicalLayerRef);
+  }
+
+  let generatorDataRef = input.generatorDataRef;
+  if (!generator.isEmpty) {
+    const generatorDataOcg = ensureGeneratorDataOcg(newDoc, page, generatorDataRef);
+    generatorDataRef = generatorDataOcg.ref;
+    appendRawContentChunk(newDoc.context, page, `/OC /${generatorDataOcg.propertyName} BDC`);
+    generator.flush(page);
+    appendRawContentChunk(newDoc.context, page, "EMC");
+  } else if (generatorDataRef) {
+    appendGeneratorDataOcgToCatalog(newDoc, generatorDataRef);
+  }
+
+  return { technicalLayerRef, technicalLayerIsSourceLayer, generatorDataRef, skippedInvalidPlacementCount, inPlaceLegendDrawn };
 }
 
 // ============================================================================
@@ -1670,142 +1734,75 @@ export type TechnicalRasterVectorExportInput = Readonly<{
   legend: readonly TechnicalRasterExportLegendEntry[];
   showLegend: boolean;
   headerLine: string;
-  /** "Pracovní — bílé" for the export (corrective batch section 4) — omitted (never `{opacity:0}` implicitly) exports with the source's ORIGINAL vector colors untouched, exactly like every export before this batch. When present, `opacity` is the same 0-1 "Krytí bílé" fraction as the live editor's own project setting (spec: "60 % v editoru = 60 % v exportu") — clamped defensively the same way effectiveWhiteFillOpacity already is upstream. */
+  /** "Pracovní — bílé" for the export (corrective batch section 4) — omitted exports with the source's ORIGINAL vector colors untouched. `opacity` is the same 0-1 "Krytí bílé" fraction as the live editor's own project setting. */
   whiteMode?: Readonly<{ opacity: number }>;
-  /** "Zahrnout realizačky do exportu" (corrective batch section 10) — every underline to draw on THIS page. Optional/defaults to none so every existing caller/test is unaffected. */
+  /** "Zahrnout realizačky do exportu" (corrective batch section 10) — every underline to draw on THIS page. */
   realizationUnderlines?: readonly TechnicalRasterExportRealizationUnderlineItem[];
-  /** Whether the legend page's own fixed "REALIZACE" key (all 4 canonical groups, always) is included — independent of whether `realizationUnderlines` is empty on this particular page, since a multi-page export's key reflects the WHOLE export, not just page 1. */
+  /** Whether the legend's "REALIZACE" key is included (only the groups actually used). */
   includeRealizationKey?: boolean;
-  /** "Exportovat označení „BEZ elektriky“" (PRODUCTION BATCH, part B section 17/18) — every red-X marker to draw on THIS page. Optional/defaults to none so every existing caller/test is unaffected; the caller (TechnicalRasterOutputsPanel.tsx) only ever populates this when the user's own export toggle is ON. */
+  /** "Exportovat označení „BEZ elektriky“" (PRODUCTION BATCH, part B section 17/18) — every red-X marker to draw on THIS page. */
   noElectricityMarkers?: readonly TechnicalRasterExportNoElectricityMarkerItem[];
-  /** PRODUCTION BATCH, part A — every source-OCG layer's own configured text scale, resolved to real OCG names (never pdf.js's own internal layer id). Optional/defaults to none so every existing caller/test is unaffected. A scale of exactly 1 (100%) is expected to already be filtered out by the caller — this list only ever contains layers that actually need a transform. */
+  /** PRODUCTION BATCH, part A — every source-OCG layer's own configured text scale, resolved to real OCG names. */
   textScales?: readonly TechnicalRasterExportTextScaleItem[];
-  /** Corrective batch section 7 — WHERE the legend is drawn. Omitted resolves to today's existing "separate-page" behavior via resolveEffectiveLegendPlacement. A "source-legend-area" region targeting a page OTHER than `input.page` has no effect in this single-page function (there IS no other page here) — the multi-page function below is what real multi-page exports use. */
+  /** Corrective batch section 7 — WHERE the legend is drawn. Omitted resolves to "separate-page". */
   legendPlacement?: TechnicalLegendPlacement;
   /** The project's actual source-layer ON/OFF state -> the exported PDF's default OCG state (see reconstructOcProperties). Omitted keeps the source PDF's own defaults. */
   sourceLayerVisibility?: readonly TechnicalRasterExportSourceLayerVisibility[];
-  /** Manual points/lines on THIS page (domain/technicalRasterDrawings.ts buildManualDrawingExportItems) — drawn in their own "RUČNÍ ZNAČKY" layer. */
+  /** Manual points/lines on THIS page (domain/technicalRasterDrawings.ts buildManualDrawingExportItems) — drawn in TECHNICKÉ SLUŽBY. */
   manualDrawings?: readonly TechnicalRasterExportDrawingItem[];
+  /** HOTFIX-02 — "text" (default): real editable text; "outlines": the previous vector-outline labels (fallback). */
+  textMode?: TechnicalRasterExportTextMode;
 }>;
 
 export type TechnicalRasterVectorExportResult = Readonly<{
   bytes: Uint8Array;
   ocgDiagnostic: OcgReconstructionResult;
-  /** Placements skipped because their own xNormalized/yNormalized was outside [0,1] or non-finite (NaN/Infinity) — spec batch 13 section 6: never silently clamped (a clamp would draw a symbol at a plausible-looking but WRONG position) and never allowed to crash the export. Always 0 for data that ever went through the real UI; only ever non-zero for corrupted/hand-edited persisted data. */
+  /** Placements skipped because their own xNormalized/yNormalized was outside [0,1] or non-finite — never silently clamped, never allowed to crash the export. */
   skippedInvalidPlacementCount: number;
-  /** Whether/how "Pracovní — bílé" was actually applied (corrective batch section 4) — `"not_requested"` when `input.whiteMode` was omitted, `"unsupported"` when requested but the stand layer/content couldn't be safely rewritten (the export STILL succeeds, with the page's original vector colors — never a raster fallback), `"applied"` on success. */
+  /** Whether/how "Pracovní — bílé" was actually applied (corrective batch section 4). */
   whiteModeDiagnostic: VectorWhiteModeDiagnostic;
-  /** PRODUCTION BATCH, part A — one diagnostic per requested `input.textScales` entry (empty when none were requested). Unlike white mode, an "unsupported" entry here always means the WHOLE export already threw (see requireTextScalesApplied) — this list only ever reaches the caller fully "applied" when it's non-empty at all. */
+  /** PRODUCTION BATCH, part A — one diagnostic per requested `input.textScales` entry. */
   textScaleDiagnostics: readonly TechnicalRasterTextScaleDiagnostic[];
+  /** HOTFIX-02 — where the technical data went (the source's own TECHNICKÉ SLUŽBY layer, a new one, or nowhere because nothing was drawn). */
+  technicalLayerStatus: TechnicalServicesLayerStatus;
+  textMode: TechnicalRasterExportTextMode;
 }>;
 
 /**
- * The ONE export entry point (spec batch 9). Source page copied 1:1 (no rasterization, no
- * resize/rescale) -> OCG catalog reconstructed on a best-effort basis (never blocking, always
- * honestly reported) -> "Pracovní — bílé" applied to the copied page's own content stream, if
- * requested and safe (corrective batch section 4) -> technical symbols drawn as real vector/text
- * directly onto the copied page, at rotation-correct raw PDF coordinates -> a separate legend page
- * appended (source page's own MediaBox/CropBox never touched) -> saved. Never mutates
- * `sourcePdfBytes` — pdf-lib's `load` is read-only, and this always returns a brand-new byte array.
+ * The single-page export entry point (spec batch 9). Source page copied 1:1 (no rasterization, no
+ * resize/rescale) -> OCG catalog reconstructed -> "Pracovní — bílé" / text scale applied to the copied
+ * page's own content stream if requested -> technical overlay in TECHNICKÉ SLUŽBY (+ GENERÁTOR DATA)
+ * -> a separate legend page unless the in-place legend fits -> saved. Never mutates `sourcePdfBytes`.
  */
 export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRasterVectorExportInput): Promise<TechnicalRasterVectorExportResult> {
-  const geometry = await resolveSourcePageGeometry(input.sourcePdfBytes, input.page);
-
-  const srcDoc = await PDFDocument.load(input.sourcePdfBytes);
-  const newDoc = await PDFDocument.create();
-  newDoc.registerFontkit(fontkit);
-
-  const [copiedPage] = await newDoc.copyPages(srcDoc, [input.page - 1]);
-  newDoc.addPage(copiedPage);
-  disableUnnecessaryAutoNormalizeCtm(copiedPage);
-
-  const ocgDiagnostic = reconstructOcProperties(srcDoc, newDoc, copiedPage, input.sourceLayerVisibility);
-
-  // Content-stream rewriting happens BEFORE any overlay symbol is drawn (below) — pdf-lib's own
-  // page.draw*() calls append fresh operators/streams on top of whatever Contents already holds,
-  // so applying white mode first means the overlay symbols are never themselves re-tokenized by
-  // computeVectorWhiteModeContentStream, and never accidentally whitened (they're plain, always-
-  // visible vector content outside any Optional Content span to begin with — see this module's own
-  // header doc on why the overlay itself carries no OCG).
-  const whiteModeDiagnostic: VectorWhiteModeDiagnostic = input.whiteMode
-    ? requireVectorWhiteModeApplied(applyVectorWhiteMode(srcDoc, newDoc, copiedPage, Math.min(1, Math.max(0, input.whiteMode.opacity))), input.page)
-    : { status: "not_requested" };
-
-  // PRODUCTION BATCH, part A — per-source-OCG text scale, applied AFTER white mode (the two never
-  // touch the same bytes: white mode only rewrites fill-color operators, text scale only rewrites
-  // `Tf` size operands) and BEFORE any generator overlay content is appended below.
-  const textScaleDiagnostics = requireTextScalesApplied(applyTextScalesToPage(newDoc, copiedPage, input.textScales ?? [], input.page));
-
-  // GENERATED LEGEND BATCH — the legend's own generated text (heading/descriptions/realization
-  // names) now shares this SAME fontkit-only shaping font instance, drawn via the SAME
-  // drawVectorOutlineText vector-outline mechanism the real placement markers already use — never a
-  // pdf-lib `embedFont`/`page.drawText()`/Type0 font resource of any kind for generator content
-  // (spec section 12). The source PDF's own text is completely untouched either way.
-  const markerShapingFont: ShapingFont = fontkit.create(base64ToBytes(NOTO_SANS_CZECH_BOLD_BASE64));
-
-  // GENERÁTOR DATA OCG (corrective batch 3rd, sections 10/11) — every generator-added overlay piece
-  // below (placement markers, realization underlines, the in-place legend when used) is bracketed in
-  // a `/OC <name> BDC ... EMC` marked-content span so it can be toggled independently of the 12
-  // original source layers. The white-mode rewrite above stays OUTSIDE this bracket on purpose — it
-  // transforms EXISTING source content, it is never generator-added content.
-  const generatorDataOcg = ensureGeneratorDataOcg(newDoc, copiedPage, undefined);
-  appendRawContentChunk(newDoc.context, copiedPage, `/OC /${generatorDataOcg.propertyName} BDC`);
-
-  let skippedInvalidPlacementCount = 0;
-  for (const item of input.placements) {
-    if (!isValidNormalizedCoordinate(item.xNormalized) || !isValidNormalizedCoordinate(item.yNormalized)) {
-      skippedInvalidPlacementCount += 1;
-      continue;
-    }
-    const raw = normalizedDisplayPointToRawPdfPoint(item.xNormalized, item.yNormalized, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
-    drawPlacementSymbol(copiedPage, raw.x, raw.y, item, markerShapingFont);
-  }
-
-  for (const underline of input.realizationUnderlines ?? []) {
-    if (!isValidNormalizedCoordinate(underline.xNormalized) || !isValidNormalizedCoordinate(underline.yNormalized)) continue;
-    if (!isValidNormalizedCoordinate(underline.xNormalized + underline.widthNormalized)) continue;
-    drawRealizationUnderline(copiedPage, underline, geometry);
-  }
-
-  for (const marker of input.noElectricityMarkers ?? []) {
-    if (!isValidNormalizedCoordinate(marker.xNormalized) || !isValidNormalizedCoordinate(marker.yNormalized)) continue;
-    drawNoElectricityMarker(copiedPage, marker, geometry);
-  }
-
-  const effectiveLegendPlacement = resolveEffectiveLegendPlacement(input.legendPlacement);
-  const legendToShow = input.showLegend ? input.legend : [];
-  // GENERATED LEGEND BATCH section 13 — only the realization groups with a REAL underline on this
-  // page's own export contribute to the key; `includeRealizationKey` stays the user's own "Zahrnout
-  // realizačky do exportu" opt-in gate, never a fixed always-show-all-4 list.
-  const usedRealizationGroups = input.includeRealizationKey ? resolveUsedRealizationGroups(realizationUnderlineColors(input.realizationUnderlines ?? [])) : [];
-  let usesInPlaceLegend = effectiveLegendPlacement.strategy === "source-legend-area" && effectiveLegendPlacement.sourceRegion!.page === input.page;
-  if (usesInPlaceLegend) {
-    const box = normalizedDisplayRectToRawPdfBoundingBox(effectiveLegendPlacement.sourceRegion!, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
-    // GENERATED LEGEND BATCH section 15 — if the configured region genuinely cannot hold this
-    // export's legend (at any attempted scale/column count), NOTHING is drawn here at all (no
-    // partial cover, no clipped text) and the separate-page fallback below takes over instead.
-    if (drawInPlaceLegend(copiedPage, box, legendToShow, usedRealizationGroups, markerShapingFont) === "does_not_fit") usesInPlaceLegend = false;
-  }
-  appendRawContentChunk(newDoc.context, copiedPage, "EMC");
-  drawManualDrawingsLayer(newDoc, copiedPage, input.manualDrawings ?? [], geometry, undefined);
-  if (!usesInPlaceLegend) {
-    // A separate, entirely new legend PAGE (never mixed with source content) is deliberately left
-    // OUTSIDE the GENERÁTOR DATA span — there is no source raster content on that page for a viewer
-    // to toggle back to, so nothing meaningful is gained by making the whole page OCG-controlled.
-    drawLegendPage(newDoc, input.headerLine, legendToShow, markerShapingFont, usedRealizationGroups);
-  }
-
-  const bytes = await newDoc.save();
-  return { bytes, ocgDiagnostic, skippedInvalidPlacementCount, whiteModeDiagnostic, textScaleDiagnostics };
+  const result = await buildTechnicalRasterMultiPageVectorExportPdf({
+    sourcePdfBytes: input.sourcePdfBytes,
+    pages: [{ page: input.page, placements: input.placements, realizationUnderlines: input.realizationUnderlines, noElectricityMarkers: input.noElectricityMarkers, manualDrawings: input.manualDrawings }],
+    legend: input.legend,
+    showLegend: input.showLegend,
+    headerLine: input.headerLine,
+    whiteMode: input.whiteMode,
+    includeRealizationKey: input.includeRealizationKey,
+    textScales: input.textScales,
+    legendPlacement: input.legendPlacement,
+    sourceLayerVisibility: input.sourceLayerVisibility,
+    textMode: input.textMode,
+  });
+  return {
+    bytes: result.bytes,
+    ocgDiagnostic: result.ocgDiagnosticsByPage[0]!,
+    skippedInvalidPlacementCount: result.skippedInvalidPlacementCount,
+    whiteModeDiagnostic: result.whiteModeDiagnosticsByPage[0]!,
+    textScaleDiagnostics: result.textScaleDiagnostics,
+    technicalLayerStatus: result.technicalLayerStatus,
+    textMode: result.textMode,
+  };
 }
 
 // ============================================================================
-// Multi-page source export (manual acceptance batch, section 38/50) — a SEPARATE entry point,
-// deliberately layered on top of the exact same building blocks buildTechnicalRasterVectorExportPdf
-// above already uses (resolveSourcePageGeometry / reconstructOcProperties / drawPlacementSymbol /
-// drawLegendPage), rather than changing that function's own signature — every one of its ~45
-// existing single-page tests keeps exercising exactly the behavior it already pins. Only
-// TechnicalRasterOutputsPanel.tsx's own multi-page source case calls this one.
+// Multi-page source export (manual acceptance batch, section 38/50) — every source page copied 1:1
+// in order, ONE legend page appended after the last one (or the in-place legend on its target page).
+// The single-page function above is this one with one page.
 // ============================================================================
 
 export type TechnicalRasterVectorExportPageInput = Readonly<{
@@ -1816,82 +1813,68 @@ export type TechnicalRasterVectorExportPageInput = Readonly<{
   realizationUnderlines?: readonly TechnicalRasterExportRealizationUnderlineItem[];
   /** PRODUCTION BATCH, part B section 17/18 — every "BEZ elektriky" red-X marker on THIS page. */
   noElectricityMarkers?: readonly TechnicalRasterExportNoElectricityMarkerItem[];
-  /** Manual points/lines on THIS page — drawn in their own "RUČNÍ ZNAČKY" layer. */
+  /** Manual points/lines on THIS page — drawn in TECHNICKÉ SLUŽBY. */
   manualDrawings?: readonly TechnicalRasterExportDrawingItem[];
 }>;
 
 export type TechnicalRasterMultiPageVectorExportInput = Readonly<{
   sourcePdfBytes: Uint8Array;
-  /** EVERY source page to include, in the order they should appear in the export (normally 1..N in order) — each copied 1:1, exactly like the single-page function's own `page`/`placements` pair, just once per source page instead of once total. */
+  /** EVERY source page to include, in the order they should appear in the export. */
   pages: readonly TechnicalRasterVectorExportPageInput[];
   legend: readonly TechnicalRasterExportLegendEntry[];
   showLegend: boolean;
   headerLine: string;
-  /** Same "Pracovní — bílé" request as the single-page function's own `whiteMode` — applied independently to EVERY exported source page (each page has its own content stream/OCG resources, so "unsupported" on one page never affects another). */
+  /** Same "Pracovní — bílé" request as the single-page function's own `whiteMode` — applied independently to EVERY exported source page. */
   whiteMode?: Readonly<{ opacity: number }>;
-  /** Whether the legend page's own fixed "REALIZACE" key is included — a whole-export flag, since the key always lists all 4 canonical groups regardless of which page(s) actually carry badges. */
+  /** Whether the legend's "REALIZACE" key is included — computed over the WHOLE export. */
   includeRealizationKey?: boolean;
-  /** PRODUCTION BATCH, part A — same whole-export-level shape as `whiteMode` above: every configured layer's own text scale is applied independently to EVERY exported source page (each page has its own content stream/OCG resources, so "unsupported" on one page never affects another). */
+  /** PRODUCTION BATCH, part A — applied independently to EVERY exported source page. */
   textScales?: readonly TechnicalRasterExportTextScaleItem[];
-  /** Corrective batch section 7 — WHERE the legend is drawn. Omitted resolves to today's existing "separate-page" behavior. */
+  /** Corrective batch section 7 — WHERE the legend is drawn. Omitted resolves to "separate-page". */
   legendPlacement?: TechnicalLegendPlacement;
   /** Same as the single-page input's `sourceLayerVisibility` — applied to every exported page's OCG reconstruction. */
   sourceLayerVisibility?: readonly TechnicalRasterExportSourceLayerVisibility[];
+  /** HOTFIX-02 — "text" (default) or "outlines" (fallback), see TechnicalRasterExportTextMode. */
+  textMode?: TechnicalRasterExportTextMode;
 }>;
 
 export type TechnicalRasterMultiPageVectorExportResult = Readonly<{
   bytes: Uint8Array;
-  /** One OCG diagnostic per exported source page, in the same order as `input.pages` (spec section 40: OCG reconstruction must keep working per page, never just for a single page). */
+  /** One OCG diagnostic per exported source page, in the same order as `input.pages`. */
   ocgDiagnosticsByPage: readonly OcgReconstructionResult[];
   skippedInvalidPlacementCount: number;
-  /** 1-based export page number the legend landed on — `input.pages.length + 1` (spec section 38: "legendu přidej AŽ ZA POSLEDNÍ SOURCE PAGE") for the default "separate-page" placement, or whichever source page the "source-legend-area" region targeted (corrective batch section 7). */
+  /** 1-based export page number the legend landed on. */
   legendPageNumber: number;
-  /** One "Pracovní — bílé" diagnostic per exported source page, same order/independence as `ocgDiagnosticsByPage`. */
+  /** One "Pracovní — bílé" diagnostic per exported source page. */
   whiteModeDiagnosticsByPage: readonly VectorWhiteModeDiagnostic[];
-  /** PRODUCTION BATCH, part A — every requested layer's own diagnostic, for every exported page (empty when `input.textScales` was omitted/empty). Always fully "applied" by the time this is returned — see requireTextScalesApplied. */
+  /** PRODUCTION BATCH, part A — every requested layer's own diagnostic, for every exported page. */
   textScaleDiagnostics: readonly TechnicalRasterTextScaleDiagnostic[];
+  /** HOTFIX-02 — see TechnicalRasterVectorExportResult. */
+  technicalLayerStatus: TechnicalServicesLayerStatus;
+  textMode: TechnicalRasterExportTextMode;
 }>;
 
-/**
- * Multi-page counterpart of buildTechnicalRasterVectorExportPdf (spec section 38): every source
- * page in `input.pages` is copied 1:1 (own MediaBox/CropBox/rotation, own OCG reconstruction, own
- * overlay symbols — nothing here ever resizes/rescales a source page, exactly like the single-page
- * function), in order, and the legend is appended as ONE extra page after all of them — never
- * inserted in between, never sharing a page with source content. A single-page source
- * (`input.pages.length === 1`) produces byte-for-byte the same PAGE STRUCTURE the single-page
- * function would (page 1 = source+overlay, page 2 = legend); TechnicalRasterOutputsPanel.tsx uses
- * this ONE function for both cases so there is only one export code path to reason about.
- */
 export async function buildTechnicalRasterMultiPageVectorExportPdf(input: TechnicalRasterMultiPageVectorExportInput): Promise<TechnicalRasterMultiPageVectorExportResult> {
   const srcDoc = await PDFDocument.load(input.sourcePdfBytes);
   const newDoc = await PDFDocument.create();
   newDoc.registerFontkit(fontkit);
-
-  // See buildTechnicalRasterVectorExportPdf's own doc — loaded independently of any pdf-lib
-  // embedFont, used to shape BOTH the generator's own placement-marker glyphs AND the generated
-  // legend's own text into pure vector outlines (spec section 12) — never a page.drawText()/Type0
-  // font resource for any generator content.
-  const markerShapingFont: ShapingFont = fontkit.create(base64ToBytes(NOTO_SANS_CZECH_BOLD_BASE64));
+  const renderer = createExportTextRenderer(newDoc, input.textMode);
 
   const ocgDiagnosticsByPage: OcgReconstructionResult[] = [];
   const whiteModeDiagnosticsByPage: VectorWhiteModeDiagnostic[] = [];
   let skippedInvalidPlacementCount = 0;
   const effectiveLegendPlacement = resolveEffectiveLegendPlacement(input.legendPlacement);
-  // GENERATED LEGEND BATCH section 13/19 — computed ONCE across every exported page's own
-  // underlines (never just the in-place legend's own target page) since the realization key
-  // reflects the WHOLE export, matching this function's own pre-existing doc comment on
-  // `includeRealizationKey` itself.
+  const legendToShow = input.showLegend ? input.legend : [];
+  // Computed ONCE across every exported page — the realization key reflects the WHOLE export.
   const usedRealizationGroups = input.includeRealizationKey
     ? resolveUsedRealizationGroups(realizationUnderlineColors(input.pages.flatMap((pageInput) => pageInput.realizationUnderlines ?? [])))
     : [];
   let inPlaceLegendPageNumber: number | undefined;
-  // GENERÁTOR DATA OCG (corrective batch 3rd, sections 10/11) — ONE shared ref threaded across
-  // every exported page (`reconstructOcProperties` rebuilds `/OCProperties` from scratch on each
-  // per-page call; `ensureGeneratorDataOcg` is deliberately idempotent/re-appending so this stays a
-  // SINGLE object re-registered on every page, never duplicated).
-  let generatorDataOcgRef: PDFRef | undefined;
-  /** "RUČNÍ ZNAČKY" layer — created on the first page that has manual drawings, then shared. */
-  let manualDrawingsOcgRef: PDFRef | undefined;
+  // ONE shared ref per generator layer across every exported page (reconstructOcProperties rebuilds
+  // /OCProperties per page; the overlay re-registers both layers after each rebuild).
+  let technicalLayerRef: PDFRef | undefined;
+  let technicalLayerIsSourceLayer = false;
+  let generatorDataRef: PDFRef | undefined;
   const textScaleDiagnostics: TechnicalRasterTextScaleDiagnostic[] = [];
 
   let exportPageNumber = 0;
@@ -1902,6 +1885,8 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
     newDoc.addPage(copiedPage);
     disableUnnecessaryAutoNormalizeCtm(copiedPage);
     ocgDiagnosticsByPage.push(reconstructOcProperties(srcDoc, newDoc, copiedPage, input.sourceLayerVisibility));
+    // Content-stream rewriting happens BEFORE any overlay is appended, so the overlay itself is
+    // never re-tokenized/whitened by these transforms.
     whiteModeDiagnosticsByPage.push(
       input.whiteMode
         ? requireVectorWhiteModeApplied(applyVectorWhiteMode(srcDoc, newDoc, copiedPage, Math.min(1, Math.max(0, input.whiteMode.opacity))), pageInput.page)
@@ -1909,58 +1894,43 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
     );
     textScaleDiagnostics.push(...requireTextScalesApplied(applyTextScalesToPage(newDoc, copiedPage, input.textScales ?? [], pageInput.page)));
 
-    const generatorDataOcg = ensureGeneratorDataOcg(newDoc, copiedPage, generatorDataOcgRef);
-    generatorDataOcgRef = generatorDataOcg.ref;
-    appendRawContentChunk(newDoc.context, copiedPage, `/OC /${generatorDataOcg.propertyName} BDC`);
-
-    for (const item of pageInput.placements) {
-      if (!isValidNormalizedCoordinate(item.xNormalized) || !isValidNormalizedCoordinate(item.yNormalized)) {
-        skippedInvalidPlacementCount += 1;
-        continue;
-      }
-      const raw = normalizedDisplayPointToRawPdfPoint(item.xNormalized, item.yNormalized, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
-      drawPlacementSymbol(copiedPage, raw.x, raw.y, item, markerShapingFont);
-    }
-
-    for (const underline of pageInput.realizationUnderlines ?? []) {
-      if (!isValidNormalizedCoordinate(underline.xNormalized) || !isValidNormalizedCoordinate(underline.yNormalized)) continue;
-      if (!isValidNormalizedCoordinate(underline.xNormalized + underline.widthNormalized)) continue;
-      drawRealizationUnderline(copiedPage, underline, geometry);
-    }
-
-    for (const marker of pageInput.noElectricityMarkers ?? []) {
-      if (!isValidNormalizedCoordinate(marker.xNormalized) || !isValidNormalizedCoordinate(marker.yNormalized)) continue;
-      drawNoElectricityMarker(copiedPage, marker, geometry);
-    }
-
-    // In-place legend (corrective batch section 7) — CORRECTIVE BATCH 3rd, section 10: moved to
-    // run AFTER white mode (previously drawn before it) so it lands inside the SAME GENERÁTOR DATA
-    // bracket as the markers/underlines above, matching buildTechnicalRasterVectorExportPdf's own
-    // (single-page) ordering. White mode's own content-stream merge (readPageContentBytes) already
-    // concatenates whatever content existed at the time it ran — legend draws carry no `/OC` tag of
-    // their own, so moving them to run after white mode changes neither their appearance nor
-    // white mode's own recoloring, only which content-stream chunk they end up in.
-    if (effectiveLegendPlacement.strategy === "source-legend-area" && effectiveLegendPlacement.sourceRegion!.page === pageInput.page) {
-      const box = normalizedDisplayRectToRawPdfBoundingBox(effectiveLegendPlacement.sourceRegion!, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
-      // GENERATED LEGEND BATCH section 15 — a "does_not_fit" result draws NOTHING on this page (no
-      // partial cover/text) and simply never sets inPlaceLegendPageNumber, so the fallback below
-      // appends a normal separate legend page instead — the safe behavior, never a broken drawing.
-      if (drawInPlaceLegend(copiedPage, box, input.showLegend ? input.legend : [], usedRealizationGroups, markerShapingFont) === "drawn") {
-        inPlaceLegendPageNumber = exportPageNumber;
-      }
-    }
-    appendRawContentChunk(newDoc.context, copiedPage, "EMC");
-    manualDrawingsOcgRef = drawManualDrawingsLayer(newDoc, copiedPage, pageInput.manualDrawings ?? [], geometry, manualDrawingsOcgRef);
+    const wantsInPlaceLegend = effectiveLegendPlacement.strategy === "source-legend-area" && effectiveLegendPlacement.sourceRegion!.page === pageInput.page;
+    const overlay = drawSourcePageOverlay({
+      newDoc,
+      page: copiedPage,
+      geometry,
+      placements: pageInput.placements,
+      realizationUnderlines: pageInput.realizationUnderlines ?? [],
+      noElectricityMarkers: pageInput.noElectricityMarkers ?? [],
+      manualDrawings: pageInput.manualDrawings ?? [],
+      inPlaceLegend: wantsInPlaceLegend
+        ? { box: normalizedDisplayRectToRawPdfBoundingBox(effectiveLegendPlacement.sourceRegion!, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform), legend: legendToShow, usedRealizationGroups }
+        : undefined,
+      renderer,
+      technicalLayerRef,
+      technicalLayerIsSourceLayer,
+      generatorDataRef,
+    });
+    technicalLayerRef = overlay.technicalLayerRef;
+    technicalLayerIsSourceLayer = overlay.technicalLayerIsSourceLayer;
+    generatorDataRef = overlay.generatorDataRef;
+    skippedInvalidPlacementCount += overlay.skippedInvalidPlacementCount;
+    // A region that cannot hold the legend draws NOTHING here; the separate page below takes over.
+    if (overlay.inPlaceLegendDrawn) inPlaceLegendPageNumber = exportPageNumber;
   }
+  if (technicalLayerRef) dropDuplicateTechnicalLayerRegistrations(newDoc, technicalLayerRef);
 
   let legendPageNumber: number;
   if (inPlaceLegendPageNumber !== undefined) {
     legendPageNumber = inPlaceLegendPageNumber;
   } else {
-    drawLegendPage(newDoc, input.headerLine, input.showLegend ? input.legend : [], markerShapingFont, usedRealizationGroups);
+    // A separate, entirely new legend PAGE — outside every layer (no source content to toggle there).
+    drawLegendPage(newDoc, input.headerLine, legendToShow, renderer, usedRealizationGroups);
     legendPageNumber = newDoc.getPageCount();
   }
 
+  renderer.finalize();
   const bytes = await newDoc.save();
-  return { bytes, ocgDiagnosticsByPage, skippedInvalidPlacementCount, legendPageNumber, whiteModeDiagnosticsByPage, textScaleDiagnostics };
+  const technicalLayerStatus: TechnicalServicesLayerStatus = !technicalLayerRef ? "not_needed" : technicalLayerIsSourceLayer ? "reused_source_layer" : "created";
+  return { bytes, ocgDiagnosticsByPage, skippedInvalidPlacementCount, legendPageNumber, whiteModeDiagnosticsByPage, textScaleDiagnostics, technicalLayerStatus, textMode: renderer.mode };
 }

@@ -6664,6 +6664,22 @@ select:focus {
 .technicalStandBufferGroup.collapsible > summary { cursor: pointer; list-style: none; margin-bottom: 6px; }
 .technicalStandBufferGroup.collapsible > summary::-webkit-details-marker { display: none; }
 .technicalStandBufferGroup.collapsible > summary h4 { display: inline; }
+/* HOTFIX-02 (phase 2) — collapsible groups (Nespárované položky, Hotovo, …): a chevron that flips
+   when open, and the opened list scrolls inside its own capped height instead of growing the page. */
+.technicalStandBufferChevron { display: inline-block; margin-left: 6px; font-size: 8px; color: #85898c; transition: transform 0.15s ease; }
+.technicalStandBufferGroup.collapsible[open] > summary .technicalStandBufferChevron { transform: rotate(180deg); }
+.technicalStandBufferScroll { max-height: 260px; overflow-y: auto; overscroll-behavior: contain; padding-right: 2px; }
+
+/* HOTFIX-02 (phases 3/4) — manual drawing detail (note + "Zobrazit poznámku v rastru a PDF") and the
+   visible note drawn next to a mark. */
+.technicalRasterDrawingCategoryName { font-size: 9px; color: #55595c; margin-left: 4px; }
+.technicalRasterDrawingDetail { display: grid; gap: 8px; }
+.technicalRasterDrawingNote { display: grid; gap: 6px; }
+.technicalRasterDrawingNoteField { display: grid; gap: 4px; font-size: 10px; }
+.technicalRasterDrawingNoteField input { width: 100%; min-width: 0; }
+.technicalRasterDrawingNoteToggle { display: flex; align-items: center; gap: 6px; font-size: 10px; cursor: pointer; }
+.technicalRasterDrawingNoteToggle input { width: auto; height: auto; margin: 0; }
+.technicalRasterDrawingNoteText { font-family: inherit; font-weight: 700; pointer-events: none; user-select: none; }
 
 /* CORRECTIVE BATCH (multi-hall imports) — MIMO AKTUÁLNÍ RASTR: deliberately a neutral/informational
    tone, never the ambiguous group's red/error treatment above — these are valid records, not

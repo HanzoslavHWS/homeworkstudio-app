@@ -87,6 +87,9 @@ export function TechnicalRasterOutputsPanel({
   // its own choices).
   const [includeRealizations, setIncludeRealizations] = useState(effectiveIncludeRealizationsInExport(project.rasterSettings));
   const [includeNoElectricityMarkers, setIncludeNoElectricityMarkers] = useState(effectiveIncludeNoElectricityMarkersInExport(project.rasterSettings));
+  // HOTFIX-02 — technical texts are real, editable PDF text by default; this one-export fallback draws
+  // them as vector outlines (the previous behavior) in case an importer still mishandles the text.
+  const [textsAsOutlines, setTextsAsOutlines] = useState(false);
   const [showWarningConfirm, setShowWarningConfirm] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState("");
@@ -184,10 +187,10 @@ export function TechnicalRasterOutputsPanel({
         placements: buildTechnicalRasterExportPlacements(project, pageNumber, excludedCategories),
         realizationUnderlines: underlinesByPage.get(pageNumber) ?? [],
         noElectricityMarkers: noElectricityMarkersByPage.get(pageNumber) ?? [],
-        // Manual points/lines — always exported, in their own "RUČNÍ ZNAČKY" layer.
+        // Manual points/lines (+ their VISIBLE notes) — always exported, in TECHNICKÉ SLUŽBY together with the service markers.
         manualDrawings: buildManualDrawingExportItems(effectiveManualDrawings(project), pageNumber),
       }));
-      const legend = buildTechnicalRasterExportLegend(pages.flatMap((pageInput) => pageInput.placements));
+      const legend = buildTechnicalRasterExportLegend(pages.flatMap((pageInput) => pageInput.placements), pages.flatMap((pageInput) => pageInput.manualDrawings));
 
       // PRODUCTION BATCH, part A — resolves the project's own `sourceLayerTextScales` (keyed by
       // RasterLayer.id, the only stable identifier this project persists — spec section 9) to the
@@ -236,6 +239,7 @@ export function TechnicalRasterOutputsPanel({
         // Actual source-layer ON/OFF -> the exported PDF's default OCG state. The working-view-only
         // "Nezobrazovat v pracovní verzi" hide is deliberately not part of this (see the resolver).
         sourceLayerVisibility: resolveExportSourceLayerVisibility(project),
+        textMode: textsAsOutlines ? "outlines" : "text",
       });
 
       const blobUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: "application/pdf" }));
@@ -326,6 +330,14 @@ export function TechnicalRasterOutputsPanel({
                 Exportovat označení „BEZ elektriky“
               </label>
             </div>
+
+            <div className="technicalRasterOutputsFormRow">
+              <label>
+                <input type="checkbox" checked={textsAsOutlines} onChange={(event) => setTextsAsOutlines(event.target.checked)} style={{ width: "auto", height: "auto", marginRight: 6 }} />
+                Texty jako křivky (záložní režim)
+              </label>
+            </div>
+            <p className="fieldHint">Technické popisky a viditelné poznámky se exportují jako upravitelný text do vrstvy „TECHNICKÉ SLUŽBY“. Záložní režim je převede na křivky (nelze je pak přepsat).</p>
 
             {exportError && <p className="uploadError">{exportError}</p>}
 

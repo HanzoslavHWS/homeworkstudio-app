@@ -4,6 +4,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFRawStream, PDFRef, PDFString, decodePDFRawStream } from "pdf-lib";
 import { buildTechnicalRasterMultiPageVectorExportPdf, buildTechnicalRasterVectorExportPdf } from "../lib/technicalRasterVectorPdf.ts";
+import { resolveTechnicalServicePresentation } from "../domain/technicalRasterServicePresentation.ts";
 import {
   createTechnicalRasterProject,
   effectiveHiddenLayerIds,
@@ -136,6 +137,11 @@ async function page1ContentText(bytes: Uint8Array): Promise<string> {
   return streams.map((stream) => (stream instanceof PDFRawStream ? new TextDecoder().decode(decodePDFRawStream(stream).decode()) : "")).join("\n");
 }
 
+const MARKER = {
+  standId: "s1", standNumber: "1A01", serviceId: "svc", placementId: "pl", xNormalized: 0.5, yNormalized: 0.5,
+  presentation: resolveTechnicalServicePresentation("electricity", "Do 3kW 230V"), category: "electricity",
+} as const;
+
 async function exportWith(visibility: readonly { ocgName: string; visible: boolean }[], extra: Partial<Parameters<typeof buildTechnicalRasterVectorExportPdf>[0]> = {}) {
   return buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: await buildLayeredSource(), page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", sourceLayerVisibility: visibility, ...extra });
 }
@@ -205,13 +211,23 @@ test("E) source /OCGs order and nested /Order (heading + subgroup) are preserved
   assert.deepEqual(oc.order.filter((node) => node !== "GENERÁTOR DATA"), ["«SKUPINA»", [STAND, TEXT], GRID, DIMS]);
 });
 
-test("F) GENERÁTOR DATA stays registered and ON, independent of source layers being OFF", async () => {
-  const { bytes } = await exportWith([STAND, TEXT, GRID, DIMS].map((ocgName) => ({ ocgName, visible: false })));
+test("F) the generator's own layers (TECHNICKÉ SLUŽBY + GENERÁTOR DATA) are registered and ON, independent of source layers being OFF", async () => {
+  const { bytes } = await exportWith([STAND, TEXT, GRID, DIMS].map((ocgName) => ({ ocgName, visible: false })), {
+    placements: [MARKER],
+    realizationUnderlines: [{ standId: "s1", xNormalized: 0.4, yNormalized: 0.5, widthNormalized: 0.08, color: "#2f8f4e" }],
+  });
   const oc = await readOcProperties(bytes);
-  assert.ok(oc.ocgs.includes("GENERÁTOR DATA"));
-  assert.ok(oc.on.has("GENERÁTOR DATA"));
-  assert.ok(!oc.off.has("GENERÁTOR DATA"));
-  assert.equal((await readViewerVisibility(bytes)).get("GENERÁTOR DATA"), true);
+  for (const name of ["TECHNICKÉ SLUŽBY", "GENERÁTOR DATA"]) {
+    assert.ok(oc.ocgs.includes(name), name);
+    assert.ok(oc.on.has(name) && !oc.off.has(name), name);
+    assert.equal((await readViewerVisibility(bytes)).get(name), true, name);
+  }
+});
+
+test("F2) with nothing generated, the export adds NO layer of its own — exactly the source layers", async () => {
+  const { bytes } = await exportWith([{ ocgName: GRID, visible: false }]);
+  const oc = await readOcProperties(bytes);
+  assert.deepEqual(oc.ocgs, [STAND, TEXT, GRID, DIMS]);
 });
 
 test("G) a disabled layer is NOT deleted: its OCG object and its marked content are still in the PDF", async () => {
@@ -241,7 +257,7 @@ test("I) white mode on a disabled stand layer does not re-enable it (and is stil
 test("MULTI-PAGE export applies the same source-layer defaults", async () => {
   const { bytes } = await buildTechnicalRasterMultiPageVectorExportPdf({
     sourcePdfBytes: await buildLayeredSource(),
-    pages: [{ page: 1, placements: [] }],
+    pages: [{ page: 1, placements: [], realizationUnderlines: [{ standId: "s1", xNormalized: 0.4, yNormalized: 0.5, widthNormalized: 0.08, color: "#2f8f4e" }] }],
     legend: [],
     showLegend: false,
     headerLine: "X",
@@ -257,7 +273,7 @@ test("MULTI-PAGE export applies the same source-layer defaults", async () => {
 
 for (const file of ["Hala 1.pdf", "Hala 3_2026- ver.12_NOVY_3.pdf"]) {
   const filePath = new URL(`../_IMPORT/${file}`, import.meta.url);
-  test(`REAL ${file}: one source layer switched OFF exports OFF; every other layer keeps its own state; order + GENERÁTOR DATA intact`, { skip: !existsSync(filePath) }, async () => {
+  test(`REAL ${file}: one source layer switched OFF exports OFF; every other layer keeps its own state; order intact; nothing added when nothing is generated`, { skip: !existsSync(filePath) }, async () => {
     const source = new Uint8Array(await readFile(filePath));
     const sourceViewer = await readViewerVisibility(source);
     const layerNames = [...sourceViewer.keys()];
@@ -267,8 +283,24 @@ for (const file of ["Hala 1.pdf", "Hala 3_2026- ver.12_NOVY_3.pdf"]) {
     const viewer = await readViewerVisibility(bytes);
     assert.equal(viewer.get(target), false, `${target} exported OFF`);
     for (const name of layerNames) if (name !== target) assert.equal(viewer.get(name), sourceViewer.get(name), `${name} keeps its state`);
-    assert.equal(viewer.get("GENERÁTOR DATA"), true);
+    assert.deepEqual([...viewer.keys()], layerNames, "exactly the source layers");
     const oc = await readOcProperties(bytes);
     assert.ok(oc.ocgs.includes(target), "disabled layer still present");
+  });
+
+  test(`REAL ${file} (HOTFIX-02): technical data goes into the raster's OWN TECHNICKÉ SLUŽBY layer — forced ON even when the project had it OFF; never a duplicate; all other layer states kept`, { skip: !existsSync(filePath) }, async () => {
+    const source = new Uint8Array(await readFile(filePath));
+    const sourceViewer = await readViewerVisibility(source);
+    const technical = "TECHNICKÉ SLUŽBY";
+    assert.ok(sourceViewer.has(technical), "the real raster has its own TECHNICKÉ SLUŽBY layer");
+    const visibility = [...sourceViewer.keys()].map((ocgName) => ({ ocgName, visible: ocgName === technical ? false : sourceViewer.get(ocgName)! }));
+    const withoutData = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", sourceLayerVisibility: visibility });
+    assert.equal((await readViewerVisibility(withoutData.bytes)).get(technical), false, "nothing to draw -> the project's own OFF is respected");
+    const { bytes, technicalLayerStatus } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [MARKER], legend: [], showLegend: false, headerLine: "X", sourceLayerVisibility: visibility });
+    assert.equal(technicalLayerStatus, "reused_source_layer");
+    const viewer = await readViewerVisibility(bytes);
+    assert.equal(viewer.get(technical), true, "the layer that carries the technical data is ON");
+    assert.deepEqual([...viewer.keys()], [...sourceViewer.keys()], "same layers, same order, no duplicate");
+    for (const name of sourceViewer.keys()) if (name !== technical) assert.equal(viewer.get(name), sourceViewer.get(name), `${name} keeps its state`);
   });
 }

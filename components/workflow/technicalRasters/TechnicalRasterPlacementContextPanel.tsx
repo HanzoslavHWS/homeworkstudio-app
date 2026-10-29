@@ -1,7 +1,7 @@
 "use client";
 
 import { technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
-import { resolveTechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
+import { resolveServicePresentation } from "../../../domain/technicalRasterServicePresentation";
 import { computePlacementPointProgress } from "../../../domain/technicalRasterPlacementContext";
 import type { TechnicalService, TechnicalStand } from "../../../domain/technicalRaster";
 
@@ -38,7 +38,7 @@ export function TechnicalRasterPlacementContextPanel({
   sequential?: boolean;
   onCancel: () => void;
 }) {
-  const presentation = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+  const presentation = resolveServicePresentation(service);
   const displayLabel = presentation.displayLabel ?? service.externalLabel;
   const categoryLabel = technicalServiceCategoryLabel(service.category);
   const progress = computePlacementPointProgress(service, mode, placementId);

@@ -83,7 +83,7 @@ test("CONTENT SELECTION: an outside_current_raster stand's own services never co
   const placements = buildTechnicalRasterExportPlacements(project, 1, new Set());
   const legend = buildTechnicalRasterExportLegend(placements);
   assert.equal(legend.length, 1, "only the CURRENT raster's own electricity row contributes — the foreign-hall 9kW row must not create a second entry (or any entry at all)");
-  assert.equal(legend[0]!.legendLabel, "ELEKTRIKA");
+  assert.equal(legend[0]!.legendLabel, "ELEKTŘINA");
 });
 
 test("CONTENT SELECTION: an unmatched stand's services never contribute a legend entry", () => {
@@ -123,8 +123,8 @@ test("CONTENT SELECTION: duplicate power values (2/3/6/10 kW) across several mat
   assert.equal(placements.length, 4);
   const legend = buildTechnicalRasterExportLegend(placements);
   assert.equal(legend.length, 1, "one electricity legend row regardless of how many distinct kW values are actually present");
-  assert.equal(legend[0]!.legendLabel, "ELEKTRIKA");
-  assert.equal(legend[0]!.displayLabel, "2 kW", "the electricity row always shows the SAME fixed sample value, never one of the actually-imported kW figures");
+  // HOTFIX-02 — the row explains the COLOR only: no sample symbol, no kW value.
+  assert.deepEqual(legend[0], { legendLabel: "ELEKTŘINA", color: TECHNICAL_RASTER_COLORS.electricity, key: "category:electricity" });
 });
 
 test("SIMPLIFIED LEGEND BATCH — CONTENT SELECTION: INT/IP/WiFi collapse into ONE 'INTERNET / WiFi' category row, never three separate subtype rows", () => {
@@ -148,7 +148,7 @@ test("SIMPLIFIED LEGEND BATCH — CONTENT SELECTION: INT/IP/WiFi collapse into O
   const legend = buildTechnicalRasterExportLegend(buildTechnicalRasterExportPlacements(project, 1, new Set()));
   assert.equal(legend.length, 1, "INT, IP, and WiFi must collapse into ONE category-level row, never three separate subtype rows");
   assert.equal(legend[0]!.legendLabel, "INTERNET / WiFi");
-  assert.equal(legend[0]!.displayLabel, "WiFi", "the internet row always shows the SAME fixed 'WiFi' sample, regardless of which specific subtype(s) were actually imported");
+  assert.deepEqual(legend[0], { legendLabel: "INTERNET / WiFi", color: TECHNICAL_RASTER_COLORS.internet, key: "category:internet" }, "color only — never a 'WiFi'/'INT' sample");
 });
 
 test("SIMPLIFIED LEGEND BATCH — real per-marker subtype semantics (INT vs IP vs WiFi vs breaker letters vs specific kW figures) stay completely untouched — only the GENERATED PDF LEGEND now summarizes at category level", () => {
@@ -193,7 +193,7 @@ test("CONTENT SELECTION: Cleaning's legend entry uses the SAME centralized purpl
 
 test("PDF STRUCTURE: the legend cover rectangle is a plain vector fill — solid white, no stroke operator ('S'/'s'/'B') anywhere in its own drawn block", async () => {
   const source = await buildPlainFixture();
-  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" }];
+  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" }];
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X",
     legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.5, yNormalized: 0.6, widthNormalized: 0.4, heightNormalized: 0.3 } },
@@ -207,7 +207,7 @@ test("PDF STRUCTURE: the legend cover rectangle is a plain vector fill — solid
 
 test("PDF STRUCTURE + OCG REVERSIBILITY: both the white cover AND the generated legend content sit inside the SAME GENERÁTOR DATA /OC BDC ... EMC bracket — hiding that one OCG in a viewer structurally hides BOTH, revealing the untouched source content underneath", async () => {
   const source = await buildPlainFixture();
-  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" }];
+  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" }];
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X",
     legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.5, yNormalized: 0.6, widthNormalized: 0.4, heightNormalized: 0.3 } },
@@ -231,10 +231,10 @@ test("PDF STRUCTURE + OCG REVERSIBILITY: both the white cover AND the generated 
 test("OVERFLOW SAFETY: a configured in-place legend region far too small for the content falls back to the safe separate-page legend — nothing is drawn on the source page at all, never a broken/overlapping/clipped drawing", async () => {
   const source = await buildPlainFixture(); // 300x200pt
   const legend = [
-    { legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" },
-    { legendLabel: "PŘÍVOD / ODPAD VODY", color: "#1a7a4c", renderer: "waterDrop" as const },
-    { legendLabel: "WIFI", color: "#b8860b", renderer: "textLabel" as const, displayLabel: "WiFi" },
-    { legendLabel: "ÚKLID", color: TECHNICAL_RASTER_COLORS.cleaning, renderer: "textLabel" as const, displayLabel: "ÚKL" },
+    { legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" },
+    { legendLabel: "PŘÍVOD / ODPAD VODY", color: "#1a7a4c", key: "test" },
+    { legendLabel: "WIFI", color: "#b8860b", key: "test" },
+    { legendLabel: "ÚKLID", color: TECHNICAL_RASTER_COLORS.cleaning, key: "test" },
   ];
   // A genuinely tiny region (6x6pt) — cannot hold even one row at the minimum allowed scale.
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
@@ -251,7 +251,7 @@ test("OVERFLOW SAFETY: a configured in-place legend region far too small for the
 
 test("PDF STRUCTURE: white mode 40/75/100% opacity never changes the legend cover's own opacity — the cover stays a plain, unconditional 'rg ... f' fill with no /ca or gs reference of its own, independent of the whiteMode input", async () => {
   const source = await buildPlainFixture();
-  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "3 kW" }];
+  const legend = [{ legendLabel: "PŘÍVOD EL. ENERGIE", color: "#b3261e", key: "test" }];
   for (const opacity of [0.4, 0.75, 1]) {
     const { bytes } = await buildTechnicalRasterVectorExportPdf({
       sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X",
@@ -290,11 +290,12 @@ function firstMoveToXAfter(content: string, searchFromIndex: number): number {
 
 test("SIMPLIFIED LEGEND BATCH: realization renders BESIDE (right column) the technical legend, not below it — in-place legend", async () => {
   const source = await buildPlainFixture();
-  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "2 kW" }];
+  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", key: "test" }];
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X", includeRealizationKey: true,
     realizationUnderlines: [{ standId: "r1", xNormalized: 0.1, yNormalized: 0.1, widthNormalized: 0.05, color: "#2f8f4e" }], // GENDAI
     legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.05, yNormalized: 0.5, widthNormalized: 0.9, heightNormalized: 0.4 } },
+    textMode: "outlines",
   });
   const reloaded = await PDFDocument.load(bytes);
   assert.equal(reloaded.getPageCount(), 1, "expected the in-place legend to actually fit this generous region");
@@ -311,16 +312,17 @@ test("SIMPLIFIED LEGEND BATCH: realization renders BESIDE (right column) the tec
 
 test("SIMPLIFIED LEGEND BATCH: realization renders BESIDE (right column) the technical legend, not below it — separate-page fallback (same layout, more room)", async () => {
   const source = await buildPlainFixture();
-  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "2 kW" }];
+  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", key: "test" }];
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X", includeRealizationKey: true,
     realizationUnderlines: [{ standId: "r1", xNormalized: 0.1, yNormalized: 0.1, widthNormalized: 0.05, color: "#2f8f4e" }], // GENDAI
+    textMode: "outlines",
   });
   const reloaded = await PDFDocument.load(bytes);
   assert.equal(reloaded.getPageCount(), 2);
   const content = await readAllPageContentText(bytes, 1);
   const headingColor = "0.08 0.08 0.08 rg";
-  // The page title ("TECHNICKÝ EXPORT — LEGENDA") also uses this heading color, so on the
+  // The page title ("TECHNICKÝ EXPORT – LEGENDA") also uses this heading color, so on the
   // separate-page fallback there are THREE occurrences: title, LEGENDA:, REALIZACE: — in that order.
   const firstIdx = content.indexOf(headingColor);
   const secondIdx = content.indexOf(headingColor, firstIdx + headingColor.length);
@@ -348,7 +350,7 @@ test("SIMPLIFIED LEGEND BATCH: the shared automatic default region actually prod
   const doc = await PDFDocument.create();
   doc.addPage([1200, 800]);
   const source = await doc.save();
-  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "2 kW" }];
+  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", key: "test" }];
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X",
     legendPlacement: DEFAULT_AUTO_LEGEND_PLACEMENT,
@@ -360,34 +362,21 @@ test("SIMPLIFIED LEGEND BATCH: the shared automatic default region actually prod
 });
 
 // ============================================================================
-// SMALL POLISH BATCH — position/scale/spacing nudge + a small colored category dot on the
-// TECHNICAL (left) rows only. Conceptually the SAME simplified category-based legend, same
-// two-block LEGENDA/REALIZACE layout, same automatic in-place behavior, same fallback — this is a
-// constants-only visual polish, verified here at both the source-constant level and structurally.
+// HOTFIX-02 (phase 7) — the legend explains category COLORS only: one filled color swatch + the
+// category name per row ("● ELEKTŘINA"), no sample symbol, no explanation of individual labels.
+// The realization column keeps its own colored LINE swatch.
 // ============================================================================
 
-test("SMALL POLISH BATCH: in-place legend size/spacing constants match the reported polish (source-level pin, so a future accidental revert is caught)", async () => {
+test("HOTFIX-02: in-place legend size constants (source-level pin)", async () => {
   const source = await readFile(new URL("../lib/technicalRasterVectorPdf.ts", import.meta.url), "utf8");
-  assert.match(source, /const IN_PLACE_LEGEND_SYMBOL_COLUMN_WIDTH_PT = 15;/u, "symbol-to-description gap: 11 -> 15 (the main 'not glued together' ask)");
-  assert.match(source, /const IN_PLACE_LEGEND_DOT_RADIUS_PT = 1\.3;/u, "small colored category dot radius");
-  assert.match(source, /const IN_PLACE_LEGEND_MARGIN_PT = 4;/u, "internal box margin stays unchanged");
-  assert.match(source, /const IN_PLACE_LEGEND_COLUMN_GAP_PT = 10;/u, "technical/realization column gap stays unchanged (the ask was specifically about the symbol/description gap)");
-});
-
-test("MICRO POLISH BATCH: in-place legend size constants got one more small, uniform reduction (source-level pin, so a future accidental revert is caught)", async () => {
-  const source = await readFile(new URL("../lib/technicalRasterVectorPdf.ts", import.meta.url), "utf8");
-  assert.match(source, /const IN_PLACE_LEGEND_ROW_HEIGHT_PT = 8;/u, "row height: 8.5 -> 8");
-  assert.match(source, /const IN_PLACE_LEGEND_FONT_SIZE_PT = 5;/u, "description/realization-row font: 5.5 -> 5");
-  assert.match(source, /const IN_PLACE_LEGEND_HEADING_FONT_SIZE_PT = 6;/u, "heading font (LEGENDA:/REALIZACE:): 6.5 -> 6");
-  assert.match(source, /const IN_PLACE_LEGEND_SYMBOL_FONT_SIZE_PT = 4\.5;/u, "text-based symbol/sample font: 5 -> 4.5");
-  assert.match(source, /const IN_PLACE_LEGEND_STAR_FONT_SIZE_PT = 5\.5;/u, "refrigerated-star symbol size: 6 -> 5.5");
-  assert.match(source, /const IN_PLACE_LEGEND_WATER_DROP_HEIGHT_PT = 4;/u, "water-drop symbol height: 4.5 -> 4");
-  assert.match(source, /const IN_PLACE_LEGEND_WIFI_WIDTH_PT = 4\.5;/u, "wifi-icon symbol width: 5 -> 4.5");
-  // MARGIN/SYMBOL_COLUMN_WIDTH/COLUMN_GAP/MIN_SCALE must stay exactly as the previous batch left them.
-  assert.match(source, /const IN_PLACE_LEGEND_MARGIN_PT = 4;/u, "margin stays unchanged");
-  assert.match(source, /const IN_PLACE_LEGEND_SYMBOL_COLUMN_WIDTH_PT = 15;/u, "symbol-to-description gap stays unchanged");
-  assert.match(source, /const IN_PLACE_LEGEND_COLUMN_GAP_PT = 10;/u, "technical/realization column gap stays unchanged");
-  assert.match(source, /const IN_PLACE_LEGEND_MIN_SCALE = 0\.7;/u, "overflow-safety minimum scale stays unchanged");
+  assert.match(source, /const IN_PLACE_LEGEND_ROW_HEIGHT_PT = 8;/u);
+  assert.match(source, /const IN_PLACE_LEGEND_FONT_SIZE_PT = 5;/u);
+  assert.match(source, /const IN_PLACE_LEGEND_HEADING_FONT_SIZE_PT = 6;/u);
+  assert.match(source, /const IN_PLACE_LEGEND_SWATCH_RADIUS_PT = 1\.6;/u, "color swatch radius");
+  assert.match(source, /const IN_PLACE_LEGEND_SYMBOL_COLUMN_WIDTH_PT = 8;/u, "swatch column — no sample symbol to make room for any more");
+  assert.match(source, /const IN_PLACE_LEGEND_MARGIN_PT = 4;/u);
+  assert.match(source, /const IN_PLACE_LEGEND_COLUMN_GAP_PT = 10;/u);
+  assert.match(source, /const IN_PLACE_LEGEND_MIN_SCALE = 0\.7;/u);
 });
 
 test("SMALL POLISH BATCH: the default in-place region moved slightly right + down and shrank slightly (source-level pin of the reported old -> new values)", async () => {
@@ -398,80 +387,40 @@ test("SMALL POLISH BATCH: the default in-place region moved slightly right + dow
   assert.match(source, /heightNormalized: 0\.19,/u, "height: 0.24 -> 0.19 (slightly smaller)");
 });
 
-test("SMALL POLISH BATCH: technical legend rows draw a small colored dot in the row's own category color, in ADDITION to the real symbol/sample — never replacing it", async () => {
+test("HOTFIX-02: each technical legend row is exactly ONE filled color swatch in its category color + its category name as real text — no sample symbol", async () => {
   const source = await buildPlainFixture();
-  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "2 kW" }];
+  const legend = [
+    { legendLabel: "ELEKTŘINA", color: TECHNICAL_RASTER_COLORS.electricity, key: "category:electricity" },
+    { legendLabel: "VODA", color: TECHNICAL_RASTER_COLORS.water, key: "category:water" },
+  ];
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X",
     legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.5, yNormalized: 0.55, widthNormalized: 0.45, heightNormalized: 0.35 } },
   });
-  const reloaded = await PDFDocument.load(bytes);
-  assert.equal(reloaded.getPageCount(), 1, "expected the in-place legend to fit this generous region");
-  const content = await readAllPageContentText(bytes, 0);
-  const generatorContent = content.slice(content.indexOf("/OC /"));
-  // Electricity red (#b3261e) must be SET at least twice for this one row — once for the small
-  // colored dot (page.drawCircle, pdf-lib's own FULL-PRECISION color formatting) and once for the
-  // real "2 kW" vector-outline text symbol (this pipeline's own formatColorComponent, ROUNDED to 3
-  // decimals) — the two drawing paths format the identical color differently, so both patterns are
-  // checked. Exactly one occurrence would mean the dot was never actually drawn.
-  const roundedCount = (generatorContent.match(/0\.702 0\.149 0\.118 rg/gu) ?? []).length;
-  const fullPrecisionCount = (generatorContent.match(/0\.7019607843137254 0\.14901960784313725 0\.11764705882352941 rg/gu) ?? []).length;
-  const colorOccurrences = roundedCount + fullPrecisionCount;
-  assert.ok(colorOccurrences >= 2, `expected the row's own category color to be set at least twice (dot + real symbol), got ${colorOccurrences} (rounded=${roundedCount}, full=${fullPrecisionCount}) in: ${generatorContent}`);
+  assert.equal((await PDFDocument.load(bytes)).getPageCount(), 1, "expected the in-place legend to fit this generous region");
+  const generatorContent = (await readAllPageContentText(bytes, 0)).slice((await readAllPageContentText(bytes, 0)).indexOf("/OC /"));
+  assert.equal((generatorContent.match(/0\.701961 0\.14902 0\.117647 rg [^f]* c f/gu) ?? []).length, 1, "one red swatch");
+  assert.equal((generatorContent.match(/0\.101961 0\.478431 0\.298039 rg [^f]* c f/gu) ?? []).length, 1, "one green swatch");
+  assert.ok(!/0\.702 0\.149 0\.118 rg/u.test(generatorContent), "no sample symbol/text drawn in the category color");
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const doc = await pdfjsLib.getDocument({ data: new Uint8Array(bytes) }).promise;
+  const strings = ((await (await doc.getPage(1)).getTextContent()).items as { str: string }[]).map((item) => item.str);
+  for (const expected of ["LEGENDA:", "ELEKTŘINA", "VODA"]) assert.ok(strings.includes(expected), `"${expected}" is real text, got ${JSON.stringify(strings)}`);
+  assert.ok(!strings.some((item) => /kW|WiFi|ÚKL/u.test(item)), "no individual labels explained");
 });
 
-test("SMALL POLISH BATCH: the realization (right) column is untouched by the new dot — still only its own colored LINE swatch, never a dot", async () => {
+test("HOTFIX-02: the realization (right) column keeps only its own colored LINE swatch — never a dot", async () => {
   const source = await buildPlainFixture();
-  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "2 kW" }];
+  const legend = [{ legendLabel: "ELEKTŘINA", color: TECHNICAL_RASTER_COLORS.electricity, key: "category:electricity" }];
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X", includeRealizationKey: true,
-    // No real realizationUnderlines placement here — that draws its OWN separate real underline
-    // marker on the raster (unrelated to the legend), which would also legitimately match GENDAI's
-    // color and confuse this count. includeRealizationKey with a legend row's own display is
-    // triggered purely via a used-color match, so a directly-supplied underline color is enough.
-    realizationUnderlines: [{ standId: "r1", xNormalized: -1, yNormalized: -1, widthNormalized: 0.05, color: "#2f8f4e" }], // off-page (never actually visible), only feeds resolveUsedRealizationGroups
+    // Off-page (never drawn on the raster), only feeds resolveUsedRealizationGroups.
+    realizationUnderlines: [{ standId: "r1", xNormalized: -1, yNormalized: -1, widthNormalized: 0.05, color: "#2f8f4e" }],
     legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.05, yNormalized: 0.5, widthNormalized: 0.9, heightNormalized: 0.4 } },
   });
-  const reloaded = await PDFDocument.load(bytes);
-  assert.equal(reloaded.getPageCount(), 1, "expected the in-place legend to fit this generous region");
+  assert.equal((await PDFDocument.load(bytes)).getPageCount(), 1);
   const content = await readAllPageContentText(bytes, 0);
-  // Only look at content from the legend's own white cover onward — an off-page underline is
-  // skipped entirely by isValidNormalizedCoordinate, so nothing of it is drawn before this point.
   const legendContent = content.slice(content.indexOf("1 1 1 rg"));
-  // GENDAI green (pdf-lib's own real precision: "0.1843137254901961 0.5607843137254902
-  // 0.3058823529411765") must be set exactly ONCE for the realization row — its own line stroke
-  // color — never twice like the technical dot's fill + symbol fill pair.
-  const gendaiOccurrences = (legendContent.match(/0\.184\d+ 0\.560\d+ 0\.305\d+ RG/gu) ?? []).length;
-  assert.equal(gendaiOccurrences, 1, `expected the realization row's own stroke color to be set exactly once (its line, no dot), got ${gendaiOccurrences} in: ${legendContent}`);
-});
-
-// ============================================================================
-// DOT POLISH BATCH — the technical-row dot was too close to its own symbol/sample (could visually
-// touch a wide symbol). Moved further left via a new named offset constant — symbol/description
-// positions, row layout, LEGENDA/REALIZACE arrangement, and export logic are all untouched.
-// ============================================================================
-
-test("DOT POLISH BATCH / MICRO POLISH BATCH: the technical-row dot's own left offset moved further left again (was 0.5pt from leftX, now -0.2pt — a tiny bit into the row's own left margin, still safely inside IN_PLACE_LEGEND_MARGIN_PT) — symbol/description draw calls are byte-for-byte unchanged", async () => {
-  const source = await readFile(new URL("../lib/technicalRasterVectorPdf.ts", import.meta.url), "utf8");
-  assert.match(source, /const IN_PLACE_LEGEND_DOT_LEFT_OFFSET_PT = -0\.2;/u, "dot-offset constant: 0.5 -> -0.2 (a bit more breathing room from the symbol)");
-  assert.match(source, /page\.drawCircle\(\{ x: leftX \+ plan\.dotOffsetFromLeftX, y: rowCenterY, size: plan\.dotRadius, color: hexToRgbFraction\(entry\.color\) \}\);/u, "the dot's own draw call reads its x from the new offset field");
-  // Symbol center and description start must be COMPLETELY UNCHANGED by this batch.
-  assert.match(source, /drawLegendEntrySymbol\(page, leftX \+ plan\.symbolColumnWidth \/ 2, rowCenterY, entry, shapingFont, plan\.symbolSizes\);/u, "symbol/sample center position untouched");
-  assert.match(source, /drawVectorOutlineText\(page, leftX \+ plan\.symbolColumnWidth, leftY, entry\.legendLabel, shapingFont, plan\.textFontSize, rgb\(0\.1, 0\.1, 0\.1\)\);/u, "description position untouched");
-});
-
-test("DOT POLISH BATCH: the dot still draws successfully (in ADDITION to the real symbol) at its new, more-left offset — same color, same size, still a valid single-page in-place export", async () => {
-  const source = await buildPlainFixture();
-  const legend = [{ legendLabel: "ELEKTRIKA", color: "#b3261e", renderer: "powerLabel" as const, displayLabel: "2 kW" }];
-  const { bytes } = await buildTechnicalRasterVectorExportPdf({
-    sourcePdfBytes: source, page: 1, placements: [], legend, showLegend: true, headerLine: "X",
-    legendPlacement: { strategy: "source-legend-area", sourceRegion: { page: 1, xNormalized: 0.5, yNormalized: 0.55, widthNormalized: 0.45, heightNormalized: 0.35 } },
-  });
-  const reloaded = await PDFDocument.load(bytes);
-  assert.equal(reloaded.getPageCount(), 1, "expected the in-place legend to still fit this region after the dot's offset moved");
-  const content = await readAllPageContentText(bytes, 0);
-  const generatorContent = content.slice(content.indexOf("/OC /"));
-  const roundedCount = (generatorContent.match(/0\.702 0\.149 0\.118 rg/gu) ?? []).length;
-  const fullPrecisionCount = (generatorContent.match(/0\.7019607843137254 0\.14901960784313725 0\.11764705882352941 rg/gu) ?? []).length;
-  assert.ok(roundedCount + fullPrecisionCount >= 2, "the dot (full-precision fill) and the real symbol (rounded fill) must both still be drawn, in the same category color");
+  assert.equal((legendContent.match(/0\.184\d+ 0\.560\d+ 0\.305\d+ RG/gu) ?? []).length, 1, "the GENDAI line stroke, once");
+  assert.equal((legendContent.match(/0\.184\d+ 0\.560\d+ 0\.305\d+ rg/gu) ?? []).length, 0, "no GENDAI fill (dot)");
 });

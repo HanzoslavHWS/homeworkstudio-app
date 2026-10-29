@@ -98,10 +98,10 @@ function hasAnyFieldOverride(config: TechnicalRasterComponentConfig): boolean {
  * migration, never touching domain/technicalRaster.ts's placement data at all (spec section 11).
  */
 export function resolveTechnicalRasterPresentation(
-  service: Readonly<{ category: string; externalLabel: string }>,
+  service: Readonly<{ category: string; externalLabel: string; quantity?: number }>,
   componentConfig?: TechnicalRasterComponentConfig,
 ): TechnicalServicePresentation {
-  const central = resolveTechnicalServicePresentation(service.category, service.externalLabel);
+  const central = resolveTechnicalServicePresentation(service.category, service.externalLabel, service.quantity);
   if (!componentConfig) return central;
 
   // Explicit suppression (spec batch 11 section 4) — forces "none", but every OTHER field still
@@ -117,6 +117,7 @@ export function resolveTechnicalRasterPresentation(
       displayLabel: componentConfig.displayLabel ?? central.displayLabel,
       color: componentConfig.color ?? central.color,
       legendLabel: componentConfig.legendLabel ?? central.legendLabel,
+      variantId: central.variantId,
       isFallback: false,
     };
   }
@@ -131,6 +132,7 @@ export function resolveTechnicalRasterPresentation(
     displayLabel: componentConfig.displayLabel ?? central.displayLabel,
     color: componentConfig.color ?? central.color,
     legendLabel: componentConfig.legendLabel ?? central.legendLabel,
+    variantId: central.variantId,
     // An unknown category/label with zero actual overrides is still exactly the central fallback;
     // a component that deliberately configured at least one field is no longer "unresolved", even
     // for an otherwise-unrecognized category — it now has a real, intentional presentation.

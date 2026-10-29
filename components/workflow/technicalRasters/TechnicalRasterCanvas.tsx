@@ -18,7 +18,19 @@ import { computeSymbolScreenStyle } from "../../../domain/technicalRasterSymbolM
 import { computeRealizationUnderlineScreenStyle } from "../../../domain/technicalRasterRealizationUnderline";
 import { computeNoElectricityMarkerScreenStyle } from "../../../domain/technicalRasterNoElectricityMarker";
 import type { TechnicalServicePresentation } from "../../../domain/technicalRasterServicePresentation";
-import { DRAWING_SIZES, drawingSizeOf, moveManualDrawing, type DrawingSize, type TechnicalRasterDrawing, type TechnicalRasterDrawingTool } from "../../../domain/technicalRasterDrawings";
+import {
+  DRAWING_NOTE_GAP_SCREEN_PX,
+  DRAWING_NOTE_SCREEN_PX,
+  DRAWING_SIZES,
+  drawingColorOf,
+  drawingPointShapeOf,
+  drawingSizeOf,
+  moveManualDrawing,
+  visibleDrawingNoteText,
+  type DrawingSize,
+  type TechnicalRasterDrawing,
+  type TechnicalRasterDrawingTool,
+} from "../../../domain/technicalRasterDrawings";
 import { ViewportToolbar } from "../../configurator/ViewportToolbar";
 
 const isDev = process.env.NODE_ENV !== "production";
@@ -76,6 +88,8 @@ export type TechnicalRasterServiceSymbolMarker = Readonly<{
   xNormalized: number;
   yNormalized: number;
   presentation: TechnicalServicePresentation;
+  /** Tooltip: the stand, the original ABRA service name and the category ("3A20 · Do 3kW 230V · ELEKTŘINA") — the marker itself shows only the short approved label. */
+  tooltip?: string;
   /** True for the ONE placement currently in "move" mode (spec section 9: "Přemístit") — draws the subtle selection ring, never a big red block. */
   isSelected?: boolean;
 }>;
@@ -528,7 +542,7 @@ export function TechnicalRasterCanvas({
       <div
         key={marker.id}
         className={marker.isSelected ? "technicalRasterServiceSymbol selected" : "technicalRasterServiceSymbol"}
-        title={marker.presentation.legendLabel}
+        title={marker.tooltip ?? marker.presentation.legendLabel}
         style={{
           left: `${marker.xNormalized * 100}%`,
           top: `${marker.yNormalized * 100}%`,
@@ -658,6 +672,11 @@ export function TechnicalRasterCanvas({
    * page space as every placement). Stroke widths and cross sizes are divided by the zoom so they
    * look the same on screen at any zoom (same rule as the other markers). Drawings are interactive
    * only with the "select" tool; otherwise the layer lets every click through to the page/services.
+   *
+   * HOTFIX-02 — a point is a dot ●, a cross × or (older drawings) the original "+"; the color comes
+   * from the drawing's category. A VISIBLE note is drawn right of a point / above a line's midpoint
+   * in the drawing's color — derived from the mark's own position, so it moves with it (also while
+   * dragging). Internal notes are never drawn.
    */
   function renderManualDrawings(stageWidthPx: number, stageHeightPx: number) {
     const drawings = (manualDrawings ?? []).filter((drawing) => drawing.page === activePage);
@@ -672,6 +691,8 @@ export function TechnicalRasterCanvas({
           const drawing = dragOffset && dragOffset.id === original.id ? moveManualDrawing(original, dragOffset.dx, dragOffset.dy) : original;
           const size = DRAWING_SIZES[drawingSizeOf(drawing)];
           const stroke = px(size.strokeScreenPx);
+          const color = drawingColorOf(drawing);
+          const noteText = visibleDrawingNoteText(drawing);
           const selected = drawing.id === selectedDrawingId;
           const groupProps = {
             className: interactive ? "technicalRasterDrawing interactive" : "technicalRasterDrawing",
@@ -690,12 +711,30 @@ export function TechnicalRasterCanvas({
             const cx = drawing.x * stageWidthPx;
             const cy = drawing.y * stageHeightPx;
             const half = px(size.crossHalfScreenPx);
+            const shape = drawingPointShapeOf(drawing);
+            const extent = shape === "dot" ? px(size.dotRadiusScreenPx) : half;
+            // A diagonal "×" spans the same box as the original "+".
+            const diagonal = half * Math.SQRT1_2;
             return (
               <g key={drawing.id} {...groupProps}>
-                {selected && <circle cx={cx} cy={cy} r={half + px(5)} className="technicalRasterDrawingSelection" strokeWidth={px(1.5)} />}
+                {selected && <circle cx={cx} cy={cy} r={extent + px(5)} className="technicalRasterDrawingSelection" strokeWidth={px(1.5)} />}
                 <circle cx={cx} cy={cy} r={px(DRAWING_HIT_SCREEN_PX)} className="technicalRasterDrawingHit" />
-                <line x1={cx - half} y1={cy} x2={cx + half} y2={cy} stroke={drawing.color} strokeWidth={stroke} strokeLinecap="round" />
-                <line x1={cx} y1={cy - half} x2={cx} y2={cy + half} stroke={drawing.color} strokeWidth={stroke} strokeLinecap="round" />
+                {shape === "dot" && <circle cx={cx} cy={cy} r={extent} fill={color} />}
+                {shape === "cross" && (
+                  <>
+                    <line x1={cx - diagonal} y1={cy - diagonal} x2={cx + diagonal} y2={cy + diagonal} stroke={color} strokeWidth={stroke} strokeLinecap="round" />
+                    <line x1={cx - diagonal} y1={cy + diagonal} x2={cx + diagonal} y2={cy - diagonal} stroke={color} strokeWidth={stroke} strokeLinecap="round" />
+                  </>
+                )}
+                {shape === "plus" && (
+                  <>
+                    <line x1={cx - half} y1={cy} x2={cx + half} y2={cy} stroke={color} strokeWidth={stroke} strokeLinecap="round" />
+                    <line x1={cx} y1={cy - half} x2={cx} y2={cy + half} stroke={color} strokeWidth={stroke} strokeLinecap="round" />
+                  </>
+                )}
+                {noteText && (
+                  <text x={cx + extent + px(DRAWING_NOTE_GAP_SCREEN_PX)} y={cy} dominantBaseline="central" className="technicalRasterDrawingNoteText" fill={color} stroke="#fff" strokeWidth={px(3)} paintOrder="stroke" fontSize={px(DRAWING_NOTE_SCREEN_PX)}>{noteText}</text>
+                )}
               </g>
             );
           }
@@ -707,7 +746,10 @@ export function TechnicalRasterCanvas({
             <g key={drawing.id} {...groupProps}>
               {selected && <line x1={x1} y1={y1} x2={x2} y2={y2} className="technicalRasterDrawingSelection" strokeWidth={stroke + px(6)} strokeLinecap="round" />}
               <line x1={x1} y1={y1} x2={x2} y2={y2} className="technicalRasterDrawingHit" strokeWidth={px(DRAWING_HIT_SCREEN_PX)} />
-              <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={drawing.color} strokeWidth={stroke} strokeLinecap="round" />
+              <line x1={x1} y1={y1} x2={x2} y2={y2} stroke={color} strokeWidth={stroke} strokeLinecap="round" />
+              {noteText && (
+                <text x={(x1 + x2) / 2} y={(y1 + y2) / 2 - stroke / 2 - px(DRAWING_NOTE_GAP_SCREEN_PX)} textAnchor="middle" className="technicalRasterDrawingNoteText" fill={color} stroke="#fff" strokeWidth={px(3)} paintOrder="stroke" fontSize={px(DRAWING_NOTE_SCREEN_PX)}>{noteText}</text>
+              )}
               {selected && [[x1, y1], [x2, y2]].map(([x, y], index) => (
                 <rect key={index} x={x! - px(3)} y={y! - px(3)} width={px(6)} height={px(6)} className="technicalRasterDrawingHandle" strokeWidth={px(1)} />
               ))}

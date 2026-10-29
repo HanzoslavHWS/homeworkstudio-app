@@ -90,7 +90,7 @@ async function main(): Promise<void> {
     console.log("page 1 size:", page1.getWidth().toFixed(1), "x", page1.getHeight().toFixed(1), "pt");
 
     console.log("\n-- Technical legend items selected (from the representative placement set) --");
-    for (const entry of legend) console.log(`  ${entry.legendLabel} (renderer=${entry.renderer}, color=${entry.color}, displayLabel=${entry.displayLabel ?? "(icon)"})`);
+    for (const entry of legend) console.log(`  ${entry.legendLabel} (color=${entry.color}, key=${entry.key})`);
 
     console.log("\n-- Realization legend items selected --");
     console.log("  (see the exported page count/behavior below — GENDAI/OSTATNÍ deliberately NOT used here, only CREATIV EXPO + MAC PRAHA)");
