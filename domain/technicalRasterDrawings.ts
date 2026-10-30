@@ -22,6 +22,7 @@
  * for such a drawing upgrades just that drawing.
  */
 import type { TechnicalRasterProject } from "./technicalRaster.ts";
+import { EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT } from "./technicalRasterExportSymbolSize.ts";
 import { TECHNICAL_RASTER_COLORS } from "./technicalRasterServicePresentation.ts";
 
 export type DrawingSize = "thin" | "medium" | "thick";
@@ -74,17 +75,18 @@ export const MAX_DRAWING_NOTE_LENGTH = 200;
 
 /**
  * One preset -> sizes. Editor sizes are SCREEN px (zoom-invariant, divided by zoom at render time,
- * same as every other marker in the editor); export sizes are PDF points.
+ * same as every other marker in the editor); export sizes are PDF points. A text's size preset
+ * changes it only in the editor — in the export every technical text is EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT.
  */
 export const DRAWING_SIZES: Readonly<Record<DrawingSize, Readonly<{ label: string; strokeScreenPx: number; crossHalfScreenPx: number; dotRadiusScreenPx: number; textScreenPx: number; strokePt: number; crossHalfPt: number; dotRadiusPt: number; textPt: number }>>> = {
-  thin: { label: "Tenká", strokeScreenPx: 1.5, crossHalfScreenPx: 6, dotRadiusScreenPx: 3, textScreenPx: 11, strokePt: 0.75, crossHalfPt: 3, dotRadiusPt: 1.2, textPt: 2.8 },
-  medium: { label: "Střední", strokeScreenPx: 3, crossHalfScreenPx: 8, dotRadiusScreenPx: 4.5, textScreenPx: 15, strokePt: 1.5, crossHalfPt: 4, dotRadiusPt: 1.8, textPt: 4.2 },
-  thick: { label: "Silná", strokeScreenPx: 5, crossHalfScreenPx: 10, dotRadiusScreenPx: 6, textScreenPx: 20, strokePt: 3, crossHalfPt: 5, dotRadiusPt: 2.6, textPt: 6 },
+  thin: { label: "Tenká", strokeScreenPx: 1.5, crossHalfScreenPx: 6, dotRadiusScreenPx: 3, textScreenPx: 11, strokePt: 0.75, crossHalfPt: 3, dotRadiusPt: 1.2, textPt: EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT },
+  medium: { label: "Střední", strokeScreenPx: 3, crossHalfScreenPx: 8, dotRadiusScreenPx: 4.5, textScreenPx: 15, strokePt: 1.5, crossHalfPt: 4, dotRadiusPt: 1.8, textPt: EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT },
+  thick: { label: "Silná", strokeScreenPx: 5, crossHalfScreenPx: 10, dotRadiusScreenPx: 6, textScreenPx: 20, strokePt: 3, crossHalfPt: 5, dotRadiusPt: 2.6, textPt: EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT },
 };
 
 /** Visible-note text size: screen px in the editor (zoom-invariant), PDF points in the export (= the technical marker text size). */
 export const DRAWING_NOTE_SCREEN_PX = 11;
-export const DRAWING_NOTE_FONT_SIZE_PT = 2.8;
+export const DRAWING_NOTE_FONT_SIZE_PT = EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT;
 /** Gap between a mark and its visible note (screen px / PDF points). */
 export const DRAWING_NOTE_GAP_SCREEN_PX = 4;
 export const DRAWING_NOTE_GAP_PT = 1;

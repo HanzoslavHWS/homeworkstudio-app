@@ -60,8 +60,13 @@ export function mmToPt(mm: number): number {
  * that already existed. EXPORT-ONLY: the editor's own on-screen sizes (domain/
  * technicalRasterSymbolMarker.ts) and the legend's own IN_PLACE_LEGEND_FONT_SIZE_PT
  * (lib/technicalRasterVectorPdf.ts) are untouched.
+ *
+ * UNIFIED TEXT SIZE: every technical text in the export (service and power labels, manual free texts
+ * and visible mark notes) is exactly `EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT`. Symbols (star, drop, WiFi
+ * arcs), the legend and the editor keep their own sizes.
  */
-export const EXPORT_TEXT_SYMBOL_FONT_SIZE_PT = 2.8;
+export const EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT = 2;
+export const EXPORT_TEXT_SYMBOL_FONT_SIZE_PT = EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT;
 /**
  * CORRECTIVE BATCH (4th, export-polish-only) — electricity's own "N kW"/"EL"/"C" (breaker) power-
  * label size, split off from the shared `EXPORT_TEXT_SYMBOL_FONT_SIZE_PT` above so it can be tuned
@@ -71,9 +76,9 @@ export const EXPORT_TEXT_SYMBOL_FONT_SIZE_PT = 2.8;
  * is an EXPORT-ONLY change; the editor's own on-screen power-label size is untouched.
  *
  * CORRECTIVE BATCH (5th, export-polish-only) section 9: cut a further ~15% (×0.85, 2.75pt -> 2.34pt)
- * — see this file's own top-of-section doc above.
+ * — see this file's own top-of-section doc above. Now unified with every other technical text (2pt).
  */
-export const EXPORT_POWER_LABEL_FONT_SIZE_PT = 2.34;
+export const EXPORT_POWER_LABEL_FONT_SIZE_PT = EXPORT_TECHNICAL_TEXT_FONT_SIZE_PT;
 /** The "refrigerated/non-stop" asterisk glyph gets its own, slightly larger size (a bare "*" reads smaller than a same-size digit at a glance). Reduced to ~47% alongside the text size above (section 7), then a further ~15% (CORRECTIVE BATCH 5th, section 9). */
 export const EXPORT_STAR_SYMBOL_FONT_SIZE_PT = 3.49;
 /** Target overall height (bounding box) for the vector water-drop shape. Reduced to ~47% alongside the text size above (section 7), then a further ~15% (CORRECTIVE BATCH 5th, section 9). */

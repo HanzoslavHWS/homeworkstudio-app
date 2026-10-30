@@ -222,8 +222,8 @@ test("HOTFIX-02 E/F, textMode \"text\" (DEFAULT): a technical label is a REAL PD
   const { bytes, textMode } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements, legend: [], showLegend: false, headerLine: "X" });
   assert.equal(textMode, "text");
   const overlay = await readPage1ContentEntryFromEnd(bytes);
-  assert.match(overlay, /q BT 0\.702 0\.149 0\.118 rg [\d.]+ [\d.]+ Td \/\S+ 2\.34 Tf <[0-9A-F]+> Tj ET Q/u, "5 kW: real text at the power-label size, in electricity red");
-  assert.match(overlay, /0\.102 0\.478 0\.298 rg [^\n]* 2\.8 Tf <[0-9A-F]+> Tj/u, "3 m³: real text in water green at the text-label size");
+  assert.match(overlay, /q BT 0\.702 0\.149 0\.118 rg [\d.]+ [\d.]+ Td \/\S+ 2 Tf <[0-9A-F]+> Tj ET Q/u, "5 kW: real text at the unified 2pt size, in electricity red");
+  assert.match(overlay, /0\.102 0\.478 0\.298 rg [^\n]* 2 Tf <[0-9A-F]+> Tj/u, "3 m³: real text in water green at the unified 2pt size");
   const { textContent } = await decodeForInspection(bytes);
   const strings = (textContent.items as { str: string }[]).map((item) => item.str);
   for (const label of ["5 kW", "3 m³", "El.rozvaděč"]) assert.ok(strings.includes(label), `"${label}" is extractable text, got ${JSON.stringify(strings)}`);
@@ -532,7 +532,7 @@ test("corrective batch 3) a text-label symbol's physical bounding box stays well
   }
 });
 
-test("CORRECTIVE BATCH (4th, export-polish-only): electricity power labels are drawn at the smaller EXPORT_POWER_LABEL_FONT_SIZE_PT, INT/IP stay at the unchanged EXPORT_TEXT_SYMBOL_FONT_SIZE_PT, and both remain genuine vector-outline fills (never PDF text-showing operators)", async () => {
+test("electricity power labels are drawn at EXPORT_POWER_LABEL_FONT_SIZE_PT, INT/IP at EXPORT_TEXT_SYMBOL_FONT_SIZE_PT (both the unified 2pt technical text size), and both remain genuine vector-outline fills (never PDF text-showing operators)", async () => {
   const source = await buildPlainFixture();
   const powerPlacement = placementItem({ placementId: "p-power", xNormalized: 0.3, yNormalized: 0.5, presentation: resolveTechnicalServicePresentation("electricity", "Do 2kW 230V") });
   const intPlacement = placementItem({ placementId: "p-int", xNormalized: 0.7, yNormalized: 0.5, presentation: resolveTechnicalServicePresentation("internet", "Internet") });
@@ -579,17 +579,16 @@ test("CORRECTIVE BATCH (4th, export-polish-only): electricity power labels are d
 
   const powerActual = actualHeightFromContent(powerChunk);
   const powerExpectedNew = expectedHeightAt("2 kW", EXPORT_POWER_LABEL_FONT_SIZE_PT);
-  const powerExpectedOld = expectedHeightAt("2 kW", EXPORT_TEXT_SYMBOL_FONT_SIZE_PT);
   assert.ok(
     Math.abs(powerActual - powerExpectedNew) < 0.05,
-    `power label rendered height ${powerActual.toFixed(3)}pt must match the NEW ${EXPORT_POWER_LABEL_FONT_SIZE_PT}pt size (expected ~${powerExpectedNew.toFixed(3)}pt), not the old ${EXPORT_TEXT_SYMBOL_FONT_SIZE_PT}pt size (~${powerExpectedOld.toFixed(3)}pt)`,
+    `power label rendered height ${powerActual.toFixed(3)}pt must match ${EXPORT_POWER_LABEL_FONT_SIZE_PT}pt (expected ~${powerExpectedNew.toFixed(3)}pt)`,
   );
 
   const intActual = actualHeightFromContent(intChunk);
   const intExpectedOld = expectedHeightAt("INT", EXPORT_TEXT_SYMBOL_FONT_SIZE_PT);
   assert.ok(
     Math.abs(intActual - intExpectedOld) < 0.05,
-    `INT label rendered height ${intActual.toFixed(3)}pt must stay at the UNCHANGED ${EXPORT_TEXT_SYMBOL_FONT_SIZE_PT}pt size (expected ~${intExpectedOld.toFixed(3)}pt) — INT must never be affected by the power-label-only size change`,
+    `INT label rendered height ${intActual.toFixed(3)}pt must match ${EXPORT_TEXT_SYMBOL_FONT_SIZE_PT}pt (expected ~${intExpectedOld.toFixed(3)}pt)`,
   );
 });
 
@@ -1540,9 +1539,8 @@ test("corrective batch 6) the copied source content is never split by an unneces
 // ============================================================================
 
 test("CORRECTIVE BATCH (5th): every export marker size constant is ~15% (×0.85) smaller than its pre-batch value — export only", () => {
+  // The two text sizes left this rule when every technical text was unified at 2pt (tests/exportTechnicalTextSize.test.ts).
   const PRE_BATCH_VALUES = {
-    EXPORT_TEXT_SYMBOL_FONT_SIZE_PT: 3.3,
-    EXPORT_POWER_LABEL_FONT_SIZE_PT: 2.75,
     EXPORT_STAR_SYMBOL_FONT_SIZE_PT: 4.1,
     EXPORT_WATER_DROP_HEIGHT_PT: 3.3,
     EXPORT_WIFI_SYMBOL_WIDTH_PT: 3.5,
@@ -1550,8 +1548,6 @@ test("CORRECTIVE BATCH (5th): every export marker size constant is ~15% (×0.85)
     EXPORT_SYMBOL_MAX_BOUNDING_HEIGHT_PT: 5.5,
   } as const;
   const CURRENT_VALUES = {
-    EXPORT_TEXT_SYMBOL_FONT_SIZE_PT,
-    EXPORT_POWER_LABEL_FONT_SIZE_PT,
     EXPORT_STAR_SYMBOL_FONT_SIZE_PT,
     EXPORT_WATER_DROP_HEIGHT_PT,
     EXPORT_WIFI_SYMBOL_WIDTH_PT,
