@@ -29,6 +29,7 @@ import {
   effectiveServiceSources,
   rematchStands,
   requiredPlacementCount,
+  type PlacementLossItem,
   type TechnicalImportServiceDiff,
   type TechnicalRasterImport,
   type TechnicalRasterProject,
@@ -117,16 +118,52 @@ function droppedPlacements(services: readonly TechnicalService[], target: number
   return adjustGroupQuantity(services, target).reduce((dropped, change) => dropped + change.droppedPlacements, 0);
 }
 
-/** New quantities for a group so its total becomes `target`: the difference goes to the first service (a decrease continues to the next ones). */
+/** The largest cut (≤ `limit`, in 0.001 steps) that still leaves room for every point already placed on the service. */
+function cutKeepingPlacements(service: TechnicalService, limit: number): number {
+  const placed = effectiveServicePlacements(service).length;
+  let low = 0;
+  let high = Math.round(limit * 1000);
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (requiredPlacementCount({ ...service, quantity: service.quantity - middle / 1000 }) >= placed) low = middle;
+    else high = middle - 1;
+  }
+  return low / 1000;
+}
+
+/**
+ * New quantities for a group so its total becomes `target`. An increase goes to the first service. A
+ * decrease removes NOT-YET-PLACED points first, on every service of the group; only what is still left
+ * after that cuts into placed points (services in order).
+ */
 function adjustGroupQuantity(services: readonly TechnicalService[], target: number): { service: TechnicalService; quantity: number; droppedPlacements: number }[] {
   let delta = Math.round((target - sum(services.map((service) => service.quantity))) * 1000) / 1000;
-  return services.map((service) => {
-    let quantity = service.quantity;
-    if (delta > 0) { quantity += delta; delta = 0; }
-    else if (delta < 0) { const cut = Math.min(quantity, -delta); quantity -= cut; delta += cut; }
+  const quantities = services.map((service) => service.quantity);
+  if (delta > 0 && quantities.length > 0) quantities[0] = quantities[0]! + delta;
+  if (delta < 0) {
+    services.forEach((service, index) => {
+      const cut = cutKeepingPlacements(service, Math.min(quantities[index]!, -delta));
+      quantities[index] = quantities[index]! - cut;
+      delta = Math.round((delta + cut) * 1000) / 1000;
+    });
+    services.forEach((_, index) => {
+      const cut = Math.min(quantities[index]!, -delta);
+      quantities[index] = quantities[index]! - cut;
+      delta = Math.round((delta + cut) * 1000) / 1000;
+    });
+  }
+  return services.map((service, index) => {
+    const quantity = Math.round(quantities[index]! * 1000) / 1000;
     const required = requiredPlacementCount({ ...service, quantity });
-    return { service, quantity: Math.round(quantity * 1000) / 1000, droppedPlacements: Math.max(0, effectiveServicePlacements(service).length - required) };
+    return { service, quantity, droppedPlacements: Math.max(0, effectiveServicePlacements(service).length - required) };
   });
+}
+
+/** Placed points the accepted order decisions would remove — the confirm button requires an explicit "yes" when this is not empty. */
+export function placementLossOfOrderDecisions(reconciliation: AbraOrderReconciliation, acceptedIds: ReadonlySet<string>): readonly PlacementLossItem[] {
+  return reconciliation.services
+    .filter((item) => item.kind === "quantityDiff" && item.placementsDroppedIfApplied > 0 && acceptedIds.has(item.id))
+    .map((item) => ({ standNumber: item.standNumber, externalLabel: item.externalLabel, previousQuantity: item.existingQuantity, quantity: item.orderQuantity, placementCount: item.placementsDroppedIfApplied }));
 }
 
 function findStand(project: TechnicalRasterProject, standNumber: string): TechnicalStand | undefined {

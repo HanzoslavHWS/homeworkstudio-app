@@ -228,5 +228,6 @@ test("IMPORT CONFIRM FAILURE: the upload runs before the merge, its error is sho
   const block = servicesStepBlock(source);
   const preview = block.slice(block.indexOf("pendingImport && (() => {"), block.indexOf("HISTORIE IMPORTŮ"));
   assert.match(preview, /\{importConfirmError && <p className="uploadError">\{importConfirmError\}<\/p>\}/u);
-  assert.match(preview, /className="primaryButton" disabled=\{isConfirmingImport\}/u);
+  // Also disabled until the import's safety confirmations are given (tests/importSafetyChecks.test.ts).
+  assert.match(preview, /className="primaryButton" disabled=\{isConfirmingImport \|\| !safetyConfirmed\(safety\)\}/u);
 });

@@ -286,6 +286,8 @@ export type TechnicalRasterImport = Readonly<{
   serviceDiff?: TechnicalImportServiceDiff;
   /** ABRA order import only: this source's OWN evidence — every technical line it contained (also lines the user did not add). */
   orderLines?: readonly TechnicalOrderSourceLine[];
+  /** ABRA order import only: the user's explicit confirmation that the file belongs to this project's fair (the PDF carries no fair identifier — domain/abraOrderFairCheck.ts). */
+  fairConfirmation?: Readonly<{ status: "unverifiable" | "conflict"; orderSeries: readonly string[]; targetEventLabel?: string; findings: readonly string[]; confirmedAt: string }>;
 }>;
 
 /** One technical line of an ABRA order import, as that source stated it. */
@@ -325,6 +327,20 @@ export type TechnicalImportServiceDiff = Readonly<{
   /** Every non-unchanged row, stand-number order. */
   changes: readonly TechnicalServiceChange[];
 }>;
+
+/** One service whose ALREADY PLACED points an import would remove (never without the user's explicit confirmation). */
+export type PlacementLossItem = Readonly<{ standNumber: string; externalLabel: string; previousQuantity: number; quantity: number; placementCount: number }>;
+
+/**
+ * Placed points a (dry-run) re-import diff would remove: a lower quantity whose remaining points no longer
+ * fit, or a service missing from the new report. Unplaced points are never counted — a decrease uses
+ * them up first (only surplus PLACED points end up in removedPlacementCount).
+ */
+export function placementLossOfDiff(diff: TechnicalImportServiceDiff | undefined): readonly PlacementLossItem[] {
+  return (diff?.changes ?? [])
+    .filter((change) => change.removedPlacementCount > 0)
+    .map((change) => ({ standNumber: change.standNumber, externalLabel: change.externalLabel, previousQuantity: change.previousQuantity, quantity: change.quantity, placementCount: change.removedPlacementCount }));
+}
 
 // ============================================================================
 // Technical services / notes (one row per parsed report line item)

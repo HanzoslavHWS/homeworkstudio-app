@@ -7231,3 +7231,40 @@ select:focus {
 .abraOrderCheckTable th, .abraOrderCheckTable td { text-align: left; padding: 2px 6px; border-bottom: 1px solid #ececec; vertical-align: top; }
 .abraOrderCheckTable th { color: #85898c; font-weight: 600; }
 .technicalStandServiceOrigin { margin: 0; font-size: 9px; }
+
+/* Import safety checks: placed points that would disappear, unverifiable fair of an ABRA order PDF */
+.technicalImportSafetyCheck {
+  margin: 12px 0;
+  padding: 10px 12px;
+  border: 1px solid #d97706;
+  border-left-width: 4px;
+  border-radius: 6px;
+  background: #fffbeb;
+}
+.technicalImportSafetyCheck.neutral {
+  border-color: #64748b;
+  background: #f8fafc;
+}
+.technicalImportSafetyCheck > strong {
+  display: block;
+  margin-bottom: 6px;
+}
+.technicalImportSafetyFacts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 2px 12px;
+  margin: 6px 0;
+}
+.technicalImportSafetyFacts dt {
+  font-weight: 600;
+}
+.technicalImportSafetyFacts dd {
+  margin: 0;
+}
+.technicalImportSafetyConfirm {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin-top: 8px;
+  font-weight: 600;
+}

@@ -37,6 +37,11 @@ Bez změny databázového schématu, bez migrace — import je běžný záznam 
 - Výjezd importovaný po objednávkách službu objednávek **potvrdí** (bez duplicitního bodu, rozdíl množství = varování) a jeho další verze nikdy neodebere službu, kterou obsahují aktivní objednávky. Jinak opakovaný import výjezdu nahrazuje svou předchozí verzi jako dosud.
 - Náhled před potvrzením (`AbraOrderImportCheckSummary.tsx`): počty (objednávky, rozpoznané služby, stánky, nové, shodné, jen v předchozích výjezdech, rozdílná množství, neznámé/bez kódu, bez stánku, nejednoznačné strany PDF), u každého rozdílu zdroj, zaškrtávání změn, tlačítko „Potvrdit vybrané změny“.
 
+## 3a. Bezpečnostní kontroly před potvrzením
+
+- **Snížení množství:** nižší množství nejdřív ubírá body, které ještě nejsou umístěné (i napříč shodnými službami jednoho stánku). Již umístěné body, které by zmizely (snížení pod počet umístěných bodů nebo služba chybějící v nové verzi výjezdu), náhled vypíše po stáncích a tlačítko potvrzení zůstane neaktivní, dokud uživatel výslovně nezaškrtne „Rozumím a souhlasím s odstraněním …“ (`TechnicalImportSafetyChecks.tsx`, `placementLossOfDiff`, `placementLossOfOrderDecisions`). Platí pro opakovaný import výjezdů i pro potvrzené rozdíly množství z objednávek.
+- **Příslušnost k veletrhu:** PDF objednávek neobsahuje identifikátor veletrhu (hlavička, položky ani metadata PDF); jediné údaje jsou řada dokladů (`V238`) a data vystavení. Veletrh se z nich neodvozuje. Náhled vždy ukáže zdrojový soubor (řada dokladů, data vystavení) a cílový veletrh projektu (veletrh, projekt, hala) a vyžaduje výslovné potvrzení. Jako **rozpor** se označí jen fakta: jiná řada dokladů než u dřívějšího importu objednávek v projektu, nebo žádný objednaný stánek v rastru projektu. Potvrzení se uloží k importu (`TechnicalRasterImport.fairConfirmation`, `domain/abraOrderFairCheck.ts`).
+
 ## 4. Skutečný soubor (PDF)
 
 127 objednávek, 151 stran (103 jednostránkových, 24 dvoustránkových), všech 151 stran přiřazeno, 0 nejednoznačných. 942 položek (935 s kódem), 207 poznámek. 88 objednávek se stánkem, 39 bez stánku, 17 prázdných.

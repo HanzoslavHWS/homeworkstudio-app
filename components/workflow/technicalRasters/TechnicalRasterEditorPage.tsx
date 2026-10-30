@@ -33,6 +33,7 @@ import {
   type TechnicalImportServiceDiff,
   type TechnicalRasterImport,
   type TechnicalRasterProject,
+  placementLossOfDiff,
   type TechnicalRasterProjectRepository,
 } from "../../../domain/technicalRaster";
 import { resolveTechnicalServiceProduct } from "../../../domain/technicalServiceProductMapping";
@@ -61,7 +62,11 @@ import { TechnicalRasterSymbolLayerPanel } from "./TechnicalRasterSymbolLayerPan
 import { TECHNICAL_IMPORT_PARSER_VERSIONS, TechnicalServiceImportPanel, type PendingTechnicalImport } from "./TechnicalServiceImportPanel";
 import { TechnicalExcelImportCheckSummary } from "./TechnicalExcelImportCheckSummary";
 import { AbraOrderImportCheckSummary } from "./AbraOrderImportCheckSummary";
-import { applyAbraOrderImport, reconcileAbraOrdersWithProject } from "../../../domain/abraOrderReconciliation";
+import { applyAbraOrderImport, placementLossOfOrderDecisions, reconcileAbraOrdersWithProject } from "../../../domain/abraOrderReconciliation";
+import { checkAbraOrderFairAffiliation, fairConfirmationOf } from "../../../domain/abraOrderFairCheck";
+import { resolveEditableEventId } from "../../../domain/technicalRasterProjectList";
+import type { Exhibition } from "../../../domain/organizations";
+import { AbraOrderFairConfirmation, PlacementLossConfirmation } from "./TechnicalImportSafetyChecks";
 import { TechnicalCatalogImportPanel } from "./TechnicalCatalogImportPanel";
 import { TechnicalStandBuffer } from "./TechnicalStandBuffer";
 import { TechnicalStandDetailPanel } from "./TechnicalStandDetailPanel";
@@ -125,8 +130,11 @@ export function TechnicalRasterEditorPage({
   onBackToList,
   autoContinuePlacement = false,
   onAutoContinuePlacementChange,
+  events = [],
 }: {
   projectId: string;
+  /** The admin's fairs — names the project's target fair in the ABRA order import's fair check. */
+  events?: readonly Exhibition[];
   projectRepository: TechnicalRasterProjectRepository;
   catalogPricingRepository: RemoteApiCatalogPricingRepository;
   onBackToList: () => void;
@@ -148,6 +156,9 @@ export function TechnicalRasterEditorPage({
   // ABRA order import: the user's choices in the control overview (undefined = the defaults: every new
   // service and every new "BEZ elektriky" pre-selected, no quantity change).
   const [orderDecisions, setOrderDecisions] = useState<ReadonlySet<string> | undefined>(undefined);
+  // Explicit "yes" before an import removes placed points / before an order PDF of unverifiable fair is applied.
+  const [placementLossConfirmed, setPlacementLossConfirmed] = useState(false);
+  const [fairConfirmed, setFairConfirmed] = useState(false);
   const [isConfirmingImport, setIsConfirmingImport] = useState(false);
   const [importConfirmError, setImportConfirmError] = useState("");
   /** "Report aktualizován" — the change summary of the last incremental re-import, until dismissed. */
@@ -457,9 +468,46 @@ export function TechnicalRasterEditorPage({
     setStep("assignment");
   }
 
+  /** The fair this project is assigned to, as shown to the user (undefined when it has none). */
+  function projectEventLabel(current: TechnicalRasterProject): string | undefined {
+    if (!current.eventId) return undefined;
+    const eventId = resolveEditableEventId(current.eventId, events.map((event) => event.id));
+    return events.find((event) => event.id === eventId)?.name ?? current.eventId;
+  }
+
+  /**
+   * What must be confirmed before this import may change the project: placed points it would remove
+   * (the dry run of the exact merge / the accepted order decisions) and, for the ABRA orders, the fair
+   * the file belongs to. Shared by the preview and handleConfirmImport, so they can never disagree.
+   */
+  function pendingImportSafety(current: TechnicalRasterProject, pending: PendingTechnicalImport) {
+    if (pending.orderImport) {
+      const reconciliation = reconcileAbraOrdersWithProject(current, pending.orderImport);
+      return {
+        placementLoss: placementLossOfOrderDecisions(reconciliation, orderDecisions ?? reconciliation.defaultAcceptedIds),
+        fairCheck: checkAbraOrderFairAffiliation({ project: current, orderImport: pending.orderImport, sourceFileName: pending.file.name, targetEventLabel: projectEventLabel(current) }),
+        diff: undefined,
+      };
+    }
+    const replacement = resolveTechnicalImportReplacement(current, pending.category);
+    if (!replacement) return { placementLoss: [], fairCheck: undefined, diff: undefined };
+    const previewRecord: TechnicalRasterImport = { id: "preview", category: pending.category, filename: pending.file.name, asset: { id: "preview", storageKey: "", originalFileName: pending.file.name, mimeType: browserFileMimeType(pending.file), size: 0, createdAt: "", category: "technical-raster-import" }, importedAt: "", parserVersion: TECHNICAL_IMPORT_PARSER_VERSIONS[pending.sourceFormat], parseStatus: "ok", standsFound: 0, servicesFound: 0, warnings: [] };
+    const diff = mergeTechnicalRasterImportWithDiff(current, previewRecord, pending.report, resolveProduct, replacement).diff;
+    return { placementLoss: placementLossOfDiff(diff), fairCheck: undefined, diff };
+  }
+
+  function safetyConfirmed(safety: ReturnType<typeof pendingImportSafety>): boolean {
+    return (safety.placementLoss.length === 0 || placementLossConfirmed) && (!safety.fairCheck || fairConfirmed);
+  }
+
   async function handleConfirmImport() {
     const current = projectRef.current;
     if (!current || !pendingImport) return;
+    const safety = pendingImportSafety(current, pendingImport);
+    if (!safetyConfirmed(safety)) {
+      setImportConfirmError("Import nebyl proveden: nejdřív potvrďte upozornění v náhledu (odstranění umístěných bodů / příslušnost k veletrhu).");
+      return;
+    }
     const { category, file, sourceFormat, report, parserVersion } = pendingImport;
     const replacement = resolveTechnicalImportReplacement(current, category);
     setImportConfirmError("");
@@ -480,6 +528,7 @@ export function TechnicalRasterEditorPage({
         standsFound,
         servicesFound,
         warnings: report.warnings.map((warning) => ({ ...warning, id: crypto.randomUUID() })),
+        ...(safety.fairCheck ? { fairConfirmation: fairConfirmationOf(safety.fairCheck) } : {}),
       };
       // Incremental: a re-import of an existing category keeps unchanged services and their placements
       // (see mergeTechnicalRasterImportWithDiff) and reports what changed.
@@ -961,7 +1010,7 @@ export function TechnicalRasterEditorPage({
 
       {step === "services" && (
         <div className="technicalRasterServicesStep">
-          <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={(pending) => { setImportConfirmError(""); setOrderDecisions(undefined); setPendingImport(pending); }} />
+          <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={(pending) => { setImportConfirmError(""); setOrderDecisions(undefined); setPlacementLossConfirmed(false); setFairConfirmed(false); setPendingImport(pending); }} />
 
           {pendingImport && (() => {
             const pendingReplacement = resolveTechnicalImportReplacement(project, pendingImport.category);
@@ -972,6 +1021,7 @@ export function TechnicalRasterEditorPage({
             // with the real result. "Mimo aktuální rastr" is informational, never styled like the
             // actionable Nespárováno/Nejednoznačné counts next to it.
             const scope = summarizeParsedReportScope(pendingImport.report, project.rasterStandLabels);
+            const safety = pendingImportSafety(project, pendingImport);
             return (
               <div className="workflowCard technicalImportPreview">
                 <div className="workflowCardHeader"><div><span>NÁHLED IMPORTU</span><strong>{technicalServiceCategoryLabel(pendingImport.category)} — {pendingImport.file.name}</strong></div></div>
@@ -996,7 +1046,7 @@ export function TechnicalRasterEditorPage({
                       orderImport={pendingImport.orderImport}
                       reconciliation={reconciliation}
                       accepted={accepted}
-                      onToggle={(id, value) => setOrderDecisions(() => { const next = new Set(accepted); if (value) next.add(id); else next.delete(id); return next; })}
+                      onToggle={(id, value) => { setPlacementLossConfirmed(false); setOrderDecisions(() => { const next = new Set(accepted); if (value) next.add(id); else next.delete(id); return next; }); }}
                     />
                   );
                 })()}
@@ -1016,10 +1066,8 @@ export function TechnicalRasterEditorPage({
                     <TechnicalImportParsedDataList groups={groupParsedReportByStand(pendingImport.report, resolveProductStatus)} />
                   </details>
                 )}
-                {pendingReplacement && (() => {
-                  // Dry run of the exact merge the confirm button will perform — the preview can never disagree with the result.
-                  const previewRecord: TechnicalRasterImport = { id: "preview", category: pendingImport.category, filename: pendingImport.file.name, asset: { id: "preview", storageKey: "", originalFileName: pendingImport.file.name, mimeType: browserFileMimeType(pendingImport.file), size: 0, createdAt: "", category: "technical-raster-import" }, importedAt: "", parserVersion: TECHNICAL_IMPORT_PARSER_VERSIONS[pendingImport.sourceFormat], parseStatus: "ok", standsFound: 0, servicesFound: 0, warnings: [] };
-                  const preview = mergeTechnicalRasterImportWithDiff(project, previewRecord, pendingImport.report, resolveProduct, pendingReplacement).diff;
+                {pendingReplacement && !pendingImport.orderImport && (() => {
+                  const preview = safety.diff;
                   const replacedImports = project.imports.filter((existing) => pendingReplacement.supersedeImportIds.includes(existing.id));
                   const partlyReplacedOrders = pendingReplacement.alsoReplaceService ? project.imports.find((existing) => existing.category === ABRA_ORDER_IMPORT_CATEGORY && !existing.supersededByImportId) : undefined;
                   return (
@@ -1029,9 +1077,12 @@ export function TechnicalRasterEditorPage({
                     </div>
                   );
                 })()}
+                {safety.fairCheck && <AbraOrderFairConfirmation check={safety.fairCheck} confirmed={fairConfirmed} onConfirmedChange={setFairConfirmed} />}
+                <PlacementLossConfirmation items={safety.placementLoss} confirmed={placementLossConfirmed} onConfirmedChange={setPlacementLossConfirmed} />
                 {importConfirmError && <p className="uploadError">{importConfirmError}</p>}
+                {!safetyConfirmed(safety) && <p className="fieldHint">Import čeká na potvrzení výše.</p>}
                 <div className="printSurfaceCreateFormActions">
-                  <button type="button" className="primaryButton" disabled={isConfirmingImport} onClick={() => void handleConfirmImport()}>{isConfirmingImport ? "Ukládám…" : pendingImport.orderImport ? "Potvrdit vybrané změny" : pendingReplacement ? "Aktualizovat report" : "Potvrdit import"}</button>
+                  <button type="button" className="primaryButton" disabled={isConfirmingImport || !safetyConfirmed(safety)} onClick={() => void handleConfirmImport()}>{isConfirmingImport ? "Ukládám…" : pendingImport.orderImport ? "Potvrdit vybrané změny" : pendingReplacement ? "Aktualizovat report" : "Potvrdit import"}</button>
                   <button type="button" disabled={isConfirmingImport} onClick={() => { setImportConfirmError(""); setPendingImport(undefined); }}>Zrušit</button>
                 </div>
               </div>

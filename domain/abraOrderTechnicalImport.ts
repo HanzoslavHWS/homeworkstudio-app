@@ -104,7 +104,25 @@ export type AbraOrderTechnicalImport = Readonly<{
   noElectricityLines: readonly AbraNoElectricityLine[];
   /** PDF pages that could not be assigned to an order (their items were not loaded). */
   ambiguousPages: readonly AbraAmbiguousPage[];
+  /** What the PDF says about itself — used to identify the source file (it carries no fair identifier). */
+  documents: Readonly<{
+    /** ABRA document series of the order numbers ("V238" of "V238-1/2026"), sorted. */
+    orderSeries: readonly string[];
+    /** Earliest / latest "Datum vystavení dokladu" (dd.mm.yyyy) of the orders. */
+    issueDateRange?: Readonly<{ from: string; to: string }>;
+  }>;
 }>;
+
+/** "V238-1/2026" -> "V238". */
+export function abraOrderSeries(orderNumber: string): string {
+  return orderNumber.split("-")[0] ?? orderNumber;
+}
+
+function issueDateRange(dates: readonly string[]): { from: string; to: string } | undefined {
+  const sortable = (date: string) => date.split(".").reverse().join("");
+  const sorted = dates.filter((date) => /^\d{2}\.\d{2}\.\d{4}$/u.test(date)).sort((a, b) => sortable(a).localeCompare(sortable(b)));
+  return sorted.length > 0 ? { from: sorted[0]!, to: sorted.at(-1)! } : undefined;
+}
 
 function technicalLine(order: AbraOrder, item: AbraOrderItem, mapping: AbraTechnicalCodeMapping): AbraOrderTechnicalLine {
   return {
@@ -231,5 +249,9 @@ export function buildAbraOrderTechnicalImport(parsed: ParsedAbraOrderForm): Abra
     importedLines,
     noElectricityLines,
     ambiguousPages: parsed.ambiguousPages,
+    documents: {
+      orderSeries: [...new Set(parsed.orders.map((order) => abraOrderSeries(order.orderNumber)))].sort(),
+      issueDateRange: issueDateRange(parsed.orders.flatMap((order) => (order.issueDate ? [order.issueDate] : []))),
+    },
   };
 }

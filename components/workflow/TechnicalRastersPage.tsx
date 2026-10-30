@@ -42,6 +42,7 @@ export function TechnicalRastersPage({
         onBackToList={() => setOpenProjectId(null)}
         autoContinuePlacement={autoContinuePlacement}
         onAutoContinuePlacementChange={setAutoContinuePlacement}
+        events={events}
       />
     );
   }
