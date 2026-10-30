@@ -1289,6 +1289,11 @@ function manualDrawingOperators(page: PDFPage, item: TechnicalRasterExportDrawin
   const toRaw = (x: number, y: number) => normalizedDisplayPointToRawPdfPoint(x, y, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
   const color = hexToRgbFraction(item.color);
   const parts: string[] = [];
+  if (item.kind === "text") {
+    // A free text: real (editable) text starting at its point, vertically centered on it — like the editor.
+    const origin = toRaw(item.x, item.y);
+    return renderer.operators(page, origin.x, origin.y - item.fontSizePt * 0.35, item.text, item.fontSizePt, color);
+  }
   if (item.kind === "point") {
     const center = toRaw(item.x, item.y);
     const half = item.crossHalfPt;
@@ -1318,7 +1323,7 @@ function manualDrawingOperators(page: PDFPage, item: TechnicalRasterExportDrawin
 }
 
 function isValidDrawingItem(item: TechnicalRasterExportDrawingItem): boolean {
-  return item.kind === "point"
+  return item.kind === "point" || item.kind === "text"
     ? isValidNormalizedCoordinate(item.x) && isValidNormalizedCoordinate(item.y)
     : [item.x1, item.y1, item.x2, item.y2].every(isValidNormalizedCoordinate);
 }

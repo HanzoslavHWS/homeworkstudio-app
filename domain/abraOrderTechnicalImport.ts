@@ -18,7 +18,7 @@
  * A zero price is a valid service. A cancellation fee (R99 STORNOPOPLATEK) does not cancel anything:
  * the order is listed for review and its services are imported as printed.
  */
-import type { AbraOrder, AbraOrderItem, ParsedAbraOrderForm } from "./abraOrderForm.ts";
+import type { AbraAmbiguousPage, AbraOrder, AbraOrderItem, ParsedAbraOrderForm } from "./abraOrderForm.ts";
 import { APPROVED_TECHNICAL_MARKER_ROWS } from "./technicalMarkerApprovedTable.ts";
 import { ABRA_ORDER_IMPORT_CATEGORY, type ParsedTechnicalReport, type ParsedTechnicalServiceRow } from "./technicalRaster.ts";
 import { resolveTechnicalServicePresentation } from "./technicalRasterServicePresentation.ts";
@@ -35,6 +35,12 @@ export const ABRA_TECHNICAL_CODE_MAP: ReadonlyMap<string, AbraTechnicalCodeMappi
 const TECHNICAL_CODE_FAMILIES = new Set([...ABRA_TECHNICAL_CODE_MAP.keys()].map((code) => code[0]!));
 
 export const ABRA_CANCELLATION_FEE_CODE = "R99";
+/**
+ * L63 "BEZ ELEKTRICKÉ ENERGIE" — not an electricity connection: it means the stand has NO electricity,
+ * i.e. the existing red "BEZ elektriky" X (TechnicalStand.hasNoElectricityAssignment). Never a marker
+ * service; reconciled separately (domain/abraOrderReconciliation.ts).
+ */
+export const ABRA_NO_ELECTRICITY_CODE = "L63";
 
 export type AbraOrderTechnicalLine = Readonly<{
   orderNumber: string;
@@ -53,7 +59,7 @@ export type AbraOrderTechnicalLine = Readonly<{
 }>;
 
 export type AbraOrderReviewItem = Readonly<{
-  kind: "cancellationFee" | "unreadableQuantity" | "nonPositiveQuantity" | "fractionalQuantity" | "unknownTechnicalCode" | "uncodedItem";
+  kind: "cancellationFee" | "unreadableQuantity" | "nonPositiveQuantity" | "fractionalQuantity" | "unknownTechnicalCode" | "uncodedItem" | "noElectricityWithElectricity";
   orderNumber: string;
   standNumber?: string;
   companyName?: string;
@@ -61,8 +67,13 @@ export type AbraOrderReviewItem = Readonly<{
   name: string;
   quantityRaw: string;
   unit: string;
+  /** The item's own note lines, verbatim. */
+  notes: readonly string[];
   message: string;
 }>;
+
+/** An L63 "BEZ ELEKTRICKÉ ENERGIE" item of an order. */
+export type AbraNoElectricityLine = Readonly<{ orderNumber: string; standNumber?: string; companyName?: string; notes: readonly string[] }>;
 
 export type AbraUnknownCode = Readonly<{ code: string; name: string; itemCount: number; orderNumbers: readonly string[] }>;
 
@@ -87,8 +98,12 @@ export type AbraOrderTechnicalImport = Readonly<{
   unknownTechnicalCodes: readonly AbraUnknownCode[];
   /** Cancellation fees and problematic items — shown for review, nothing is deleted. */
   reviewItems: readonly AbraOrderReviewItem[];
-  /** Every imported line, in order (for the preview "co se vloží do rastru"). */
+  /** Every line of an order WITH a stand (the candidates for the raster), in order. */
   importedLines: readonly AbraOrderTechnicalLine[];
+  /** L63 items — with or without a stand. */
+  noElectricityLines: readonly AbraNoElectricityLine[];
+  /** PDF pages that could not be assigned to an order (their items were not loaded). */
+  ambiguousPages: readonly AbraAmbiguousPage[];
 }>;
 
 function technicalLine(order: AbraOrder, item: AbraOrderItem, mapping: AbraTechnicalCodeMapping): AbraOrderTechnicalLine {
@@ -118,8 +133,9 @@ export function buildAbraOrderTechnicalImport(parsed: ParsedAbraOrderForm): Abra
   let ordersWithoutStandOrServices = 0;
   let ordersWithStandWithoutServices = 0;
 
+  const noElectricityLines: AbraNoElectricityLine[] = [];
   const review = (order: AbraOrder, item: AbraOrderItem, kind: AbraOrderReviewItem["kind"], message: string) => reviewItems.push({
-    kind, orderNumber: order.orderNumber, standNumber: order.standNumber, companyName: order.companyName, code: item.code, name: item.name, quantityRaw: item.quantityRaw, unit: item.unit, message,
+    kind, orderNumber: order.orderNumber, standNumber: order.standNumber, companyName: order.companyName, code: item.code, name: item.name, quantityRaw: item.quantityRaw, unit: item.unit, notes: item.notes, message,
   });
 
   for (const order of parsed.orders) {
@@ -128,6 +144,10 @@ export function buildAbraOrderTechnicalImport(parsed: ParsedAbraOrderForm): Abra
       if (item.code === ABRA_CANCELLATION_FEE_CODE) review(order, item, "cancellationFee", "Stornopoplatek — služby objednávky se nemažou, zkontrolujte objednávku ručně.");
       if (!item.code) {
         review(order, item, "uncodedItem", "Položka bez ABF kódu — do rastru se nepřevádí.");
+        continue;
+      }
+      if (item.code === ABRA_NO_ELECTRICITY_CODE) {
+        noElectricityLines.push({ orderNumber: order.orderNumber, standNumber: order.standNumber, companyName: order.companyName, notes: item.notes });
         continue;
       }
       const mapping = ABRA_TECHNICAL_CODE_MAP.get(item.code);
@@ -149,7 +169,13 @@ export function buildAbraOrderTechnicalImport(parsed: ParsedAbraOrderForm): Abra
         review(order, item, "fractionalQuantity", "Desetinné množství u služby, která se umisťuje po kusech — počet bodů se zaokrouhlí nahoru.");
       }
     }
+    const orderHasNoElectricity = order.items.some((item) => item.code === ABRA_NO_ELECTRICITY_CODE);
+    if (orderHasNoElectricity && lines.some((line) => line.category === "electricity")) {
+      const l63 = order.items.find((item) => item.code === ABRA_NO_ELECTRICITY_CODE)!;
+      review(order, l63, "noElectricityWithElectricity", "Objednávka má L63 „BEZ ELEKTRICKÉ ENERGIE“ a zároveň objednanou elektrickou přípojku — rozpor, zkontrolujte objednávku.");
+    }
     if (lines.length === 0) {
+      if (orderHasNoElectricity) { ordersWithTechnicalServices += 1; continue; }
       if (order.standNumber) ordersWithStandWithoutServices += 1;
       else ordersWithoutStandOrServices += 1;
       continue;
@@ -203,5 +229,7 @@ export function buildAbraOrderTechnicalImport(parsed: ParsedAbraOrderForm): Abra
     unknownTechnicalCodes: [...unknown.values()].map((entry) => ({ code: entry.code, name: entry.name, itemCount: entry.itemCount, orderNumbers: [...entry.orderNumbers] })).sort((a, b) => a.code.localeCompare(b.code)),
     reviewItems,
     importedLines,
+    noElectricityLines,
+    ambiguousPages: parsed.ambiguousPages,
   };
 }

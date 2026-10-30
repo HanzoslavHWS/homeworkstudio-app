@@ -97,10 +97,16 @@ async function main(): Promise<number> {
   const result = buildAbraOrderTechnicalImport(parsed);
   console.log(`PDF ${pdfName}`);
   console.log(`  ${JSON.stringify(result.counts)}`);
+  const pagesPerOrder = new Map<number, number>();
+  for (const order of parsed.orders) pagesPerOrder.set(order.pages.length, (pagesPerOrder.get(order.pages.length) ?? 0) + 1);
+  console.log(`  orders by page count: ${[...pagesPerOrder].sort(([a], [b]) => a - b).map(([pages, count]) => `${pages} str. ×${count}`).join(", ")}; pages assigned: ${parsed.orders.reduce((sum, order) => sum + order.pages.length, 0)}/${parsed.pageCount}`);
+  console.log(`  ambiguous pages: ${parsed.ambiguousPages.length}`);
+  for (const page of parsed.ambiguousPages) console.log(`    ⚠ s.${page.page} ${page.orderNumber ?? "?"} č.${page.pageOfOrder ?? "?"}: ${page.reason} — ${page.itemCount} položek (${page.itemCodes.join(", ")})`);
   console.log(`  parser warnings: ${parsed.warnings.length}`);
   for (const warning of parsed.warnings) console.log(`    ⚠ ${warning.orderNumber ?? ""} s.${warning.page}: ${warning.message} ${warning.rawText ?? ""}`);
   console.log(`  services without stand: ${result.servicesWithoutStand.length}`);
   for (const line of result.servicesWithoutStand) console.log(`    ${line.orderNumber} | ${line.companyName} | ${line.code} ${line.name} | ${line.quantityRaw} ${line.unit}`);
+  console.log(`  L63 BEZ ELEKTRICKÉ ENERGIE: ${result.noElectricityLines.map((line) => `${line.orderNumber} ${line.standNumber ?? "(bez stánku)"}`).join("; ") || "—"}`);
   console.log(`  unknown technical codes: ${result.unknownTechnicalCodes.map((code) => `${code.code} ${code.name} ×${code.itemCount} (${code.orderNumbers.join(", ")})`).join("; ") || "—"}`);
   for (const item of result.reviewItems.filter((entry) => entry.kind !== "unknownTechnicalCode")) console.log(`    review ${item.kind}: ${item.orderNumber} ${item.standNumber ?? "-"} ${item.code || "(bez kódu)"} ${item.name} ${item.quantityRaw}`);
   const perCategory = new Map<string, number>();

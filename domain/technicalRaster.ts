@@ -284,6 +284,21 @@ export type TechnicalRasterImport = Readonly<{
   supersededByImportId?: string;
   /** What this import changed compared with the import it replaced (incremental re-import). Absent for a first import of a category and for imports saved before this existed. */
   serviceDiff?: TechnicalImportServiceDiff;
+  /** ABRA order import only: this source's OWN evidence — every technical line it contained (also lines the user did not add). */
+  orderLines?: readonly TechnicalOrderSourceLine[];
+}>;
+
+/** One technical line of an ABRA order import, as that source stated it. */
+export type TechnicalOrderSourceLine = Readonly<{
+  orderNumber: string;
+  standNumber?: string;
+  companyName?: string;
+  abfCode: string;
+  itemName: string;
+  category: string;
+  externalLabel: string;
+  quantity: number;
+  notes: readonly string[];
 }>;
 
 export type TechnicalServiceChangeKind = "added" | "removed" | "quantityIncreased" | "quantityDecreased";
@@ -378,7 +393,28 @@ export type TechnicalService = Readonly<{
   sourceOrderNumber?: string;
   sourceItemName?: string;
   itemNotes?: readonly string[];
+  /**
+   * Every source that confirms this ONE drawn service (a per-category report, the ABRA orders, …) with
+   * that source's own quantity, codes and notes — so one service is shown once even when several
+   * sources list it, and its origin stays visible. Undefined for older services: then the service's
+   * own `sourceImportId`/`quantity` is its only source (see effectiveServiceSources).
+   */
+  sources?: readonly TechnicalServiceSource[];
 }>;
+
+/** One source's own record of a service (see TechnicalService.sources). */
+export type TechnicalServiceSource = Readonly<{
+  importId: string;
+  quantity: number;
+  abfCode?: string;
+  orderNumber?: string;
+  itemName?: string;
+  notes?: readonly string[];
+}>;
+
+export function effectiveServiceSources(service: TechnicalService): readonly TechnicalServiceSource[] {
+  return service.sources ?? [{ importId: service.sourceImportId, quantity: service.quantity }];
+}
 
 /** Applied wherever a service's placements are read — never a raw `service.placements` access elsewhere (spec section 54: older projects have this field undefined entirely). */
 export function effectiveServicePlacements(service: TechnicalService): readonly TechnicalServicePlacement[] {
@@ -532,6 +568,13 @@ export type TechnicalStand = Readonly<{
    * section 20).
    */
   hasNoElectricityAssignment?: boolean;
+  /**
+   * Who set hasNoElectricityAssignment: the electricity report ("report"), an ABRA order L63 item the
+   * user confirmed ("abra-orders"), or a person ("manual"). Undefined for older projects = "report".
+   * A report import only ever clears a flag it set itself; an order or manual value is never cleared
+   * automatically.
+   */
+  noElectricitySource?: "report" | "abra-orders" | "manual";
 }>;
 
 // ============================================================================
@@ -1167,25 +1210,33 @@ export function servicesShareIdentity(previous: Pick<TechnicalService, "category
 }
 
 /** Which imports/services a new import of `category` replaces in `project` (undefined = a first import, nothing replaced). */
+/**
+ * Which imports/services a new per-category report import of `category` replaces (undefined = a first
+ * import): only its own previous version. The ABRA order import never replaces anything — it is
+ * reconciled non-destructively (domain/abraOrderReconciliation.ts), so this is never called for it.
+ */
 export function resolveTechnicalImportReplacement(project: Pick<TechnicalRasterProject, "imports">, category: string): TechnicalImportReplacement | undefined {
-  const active = project.imports.filter((existing) => !existing.supersededByImportId);
-  if (category === ABRA_ORDER_IMPORT_CATEGORY) {
-    const replaced = active.filter((existing) => existing.category === ABRA_ORDER_IMPORT_CATEGORY || ABRA_ORDER_REPLACED_REPORT_CATEGORIES.includes(existing.category));
-    return replaced.length > 0 ? { supersedeImportIds: replaced.map((existing) => existing.id) } : undefined;
-  }
-  const previous = active.find((existing) => existing.category === category);
-  const activeOrders = active.find((existing) => existing.category === ABRA_ORDER_IMPORT_CATEGORY);
-  if (!previous && !activeOrders) return undefined;
-  return {
-    supersedeImportIds: previous ? [previous.id] : [],
-    ...(activeOrders ? { alsoReplaceService: (service: TechnicalService) => service.sourceImportId === activeOrders.id && service.category === category } : {}),
-  };
+  if (category === ABRA_ORDER_IMPORT_CATEGORY) return undefined;
+  const previous = project.imports.find((existing) => !existing.supersededByImportId && existing.category === category);
+  return previous ? { supersedeImportIds: [previous.id] } : undefined;
 }
 
 /** Import category of the ABRA order form ("3. Formulář objednávky přijaté ABF") — one import holding services of every technical category. */
 export const ABRA_ORDER_IMPORT_CATEGORY = "abra-orders";
-/** The per-category report imports an order import takes over (it is the primary source of these services). */
-export const ABRA_ORDER_REPLACED_REPORT_CATEGORIES: readonly string[] = ["electricity", "internet", "water", "waste", "cleaning"];
+/** The technical categories an ABRA order import reconciles. */
+export const ABRA_ORDER_TECHNICAL_CATEGORIES: readonly string[] = ["electricity", "internet", "water", "waste", "cleaning"];
+
+/**
+ * "BEZ elektriky" after an electricity report row: an explicit all-zero row sets it (source "report");
+ * otherwise the report clears only a flag it set itself — a value confirmed from the ABRA orders or set
+ * by hand stays. Non-electricity imports never touch it.
+ */
+function noElectricityAfterReport(stand: TechnicalStand, isElectricityImport: boolean, explicitNoElectricity: boolean): Pick<TechnicalStand, "hasNoElectricityAssignment" | "noElectricitySource"> {
+  if (!isElectricityImport) return { hasNoElectricityAssignment: stand.hasNoElectricityAssignment, noElectricitySource: stand.noElectricitySource };
+  if (explicitNoElectricity) return { hasNoElectricityAssignment: true, noElectricitySource: stand.noElectricitySource === "manual" || stand.noElectricitySource === "abra-orders" ? stand.noElectricitySource : "report" };
+  if (stand.hasNoElectricityAssignment && (stand.noElectricitySource === "abra-orders" || stand.noElectricitySource === "manual")) return { hasNoElectricityAssignment: true, noElectricitySource: stand.noElectricitySource };
+  return { hasNoElectricityAssignment: false, noElectricitySource: undefined };
+}
 
 function findStandIndex(stands: readonly TechnicalStand[], standNumber: string): number {
   return stands.findIndex((stand) => stand.standNumber === standNumber);
@@ -1243,16 +1294,24 @@ export function mergeTechnicalRasterImportWithDiff(
 
   // Old services of the replaced import(s), per stand, in their stored order — the pool re-import pairs against.
   const previousByStand = new Map<string, TechnicalService[]>();
+  // ABRA order imports that are still active: a service they back is never removed by a report.
+  const activeOrderImportIds = new Set(project.imports.filter((existing) => existing.category === ABRA_ORDER_IMPORT_CATEGORY && !existing.supersededByImportId).map((existing) => existing.id));
+  const backedByOrders = (service: TechnicalService) => effectiveServiceSources(service).some((source) => activeOrderImportIds.has(source.importId));
   if (replacement) {
     const superseded = new Set(replacement.supersedeImportIds);
-    const isReplaced = (service: TechnicalService) => superseded.has(service.sourceImportId) || (replacement.alsoReplaceService?.(service) ?? false);
+    // A report service the current orders also contain stays (it only loses the old report's evidence) —
+    // the new report version then confirms it again below, or it is listed as missing from the report.
+    const isReplaced = (service: TechnicalService) => (superseded.has(service.sourceImportId) || (replacement.alsoReplaceService?.(service) ?? false)) && !backedByOrders(service);
     for (const stand of stands) {
       const previous = stand.services.filter(isReplaced);
       if (previous.length > 0) previousByStand.set(stand.standNumber, [...previous]);
     }
     imports = imports.map((existing) => (superseded.has(existing.id) ? { ...existing, supersededByImportId: importRecord.id } : existing));
     stands = stands.map((stand) => {
-      const services = stand.services.filter((service) => !isReplaced(service));
+      // Services that stay lose only the superseded imports' evidence (e.g. a report that confirmed an order service).
+      const services = stand.services.filter((service) => !isReplaced(service)).map((service) => (service.sources?.some((source) => superseded.has(source.importId))
+        ? { ...service, sources: service.sources.filter((source) => !superseded.has(source.importId)) }
+        : service));
       return {
         ...stand,
         services,
@@ -1307,10 +1366,28 @@ export function mergeTechnicalRasterImportWithDiff(
     return taken;
   }
 
+  /**
+   * A report row with no partner in its own previous version may be a service the ABRA orders already
+   * added. It then CONFIRMS that service (adds this report as a source) instead of creating a duplicate;
+   * the order service, its quantity and placements are never changed by a report.
+   */
+  const orderImportIds = new Set(project.imports.filter((existing) => existing.category === ABRA_ORDER_IMPORT_CATEGORY).map((existing) => existing.id));
+  const claimed = new Map<string, TechnicalServiceSource[]>();
+  const importWarnings: Omit<TechnicalRasterImportWarning, "id">[] = [];
+  function claimOrderService(standNumber: string, service: Pick<TechnicalService, "category" | "externalLabel" | "abfCode" | "quantity">): boolean {
+    if (orderImportIds.size === 0) return false;
+    const stand = nextStands.find((candidate) => candidate.standNumber === standNumber);
+    const target = stand?.services.find((candidate) => (orderImportIds.has(candidate.sourceImportId) || backedByOrders(candidate)) && !claimed.has(candidate.id) && servicesShareIdentity(candidate, service));
+    if (!target) return false;
+    claimed.set(target.id, [{ importId: importRecord.id, quantity: service.quantity }]);
+    if (target.quantity !== service.quantity) importWarnings.push({ message: `${standNumber}: ${service.externalLabel} — výjezd uvádí ${service.quantity}, objednávky ${target.quantity}; množství se nezměnilo, zkontrolujte.` });
+    return true;
+  }
+
   let nextStands = [...stands];
   for (const row of report.rows) {
     const standNumber = normalizeStandNumber(row.standNumber);
-    const services: TechnicalService[] = row.services.map((service) => {
+    const services: TechnicalService[] = row.services.flatMap((service): TechnicalService[] => {
       const resolution = resolveProduct(service.category, service.externalLabel);
       const fresh = {
         ...service,
@@ -1322,9 +1399,13 @@ export function mergeTechnicalRasterImportWithDiff(
       const previous = replacement ? takePrevious(standNumber, service) : undefined;
       if (!previous) {
         const fromLeftovers = replacement ? takeLeftoverPlacements(standNumber, { ...fresh, id: "" }) : [];
+        if (fromLeftovers.length === 0 && claimOrderService(standNumber, fresh)) {
+          unchangedCount += 1;
+          return [];
+        }
         const created: TechnicalService = { ...fresh, id: crypto.randomUUID(), ...(fromLeftovers.length > 0 ? { placements: fromLeftovers } : {}) };
         if (replacement) changes.push({ kind: "added", standNumber, category: created.category, externalLabel: created.externalLabel, serviceId: created.id, previousQuantity: 0, quantity: created.quantity, removedPlacementCount: 0 });
-        return created;
+        return [created];
       }
       const kept: TechnicalService = { ...fresh, id: previous.id };
       const previousPlacements = effectiveServicePlacements(previous);
@@ -1349,7 +1430,7 @@ export function mergeTechnicalRasterImportWithDiff(
         if (leftover) leftover.change = change;
         changes.push(change);
       }
-      return updated;
+      return [updated];
     });
     const notes: TechnicalNote[] = row.notes.map((note) => ({ ...note, id: crypto.randomUUID(), sourceImportId: importRecord.id }));
     const explicitNoElectricity = isElectricityImport && row.explicitNoServiceAssignment === true;
@@ -1365,6 +1446,7 @@ export function mergeTechnicalRasterImportWithDiff(
         placement: UNASSIGNED_PLACEMENT,
         sourceImportIds: [importRecord.id],
         hasNoElectricityAssignment: isElectricityImport ? explicitNoElectricity : undefined,
+        ...(isElectricityImport && explicitNoElectricity ? { noElectricitySource: "report" as const } : {}),
       });
     } else {
       const existing = nextStands[existingIndex]!;
@@ -1378,7 +1460,7 @@ export function mergeTechnicalRasterImportWithDiff(
         // row — never leaves a stale `true` from an older, now-superseded electricity import (the
         // superseded services were already stripped above via `replaceImportId`). A non-electricity
         // import's own row never touches this field either way.
-        hasNoElectricityAssignment: isElectricityImport ? explicitNoElectricity : existing.hasNoElectricityAssignment,
+        ...noElectricityAfterReport(existing, isElectricityImport, explicitNoElectricity),
       };
     }
   }
@@ -1401,9 +1483,18 @@ export function mergeTechnicalRasterImportWithDiff(
     }
     : undefined;
 
+  // Order services this report confirmed get the report as an additional source.
+  if (claimed.size > 0) {
+    nextStands = nextStands.map((stand) => (stand.services.some((service) => claimed.has(service.id))
+      ? { ...stand, services: stand.services.map((service) => (claimed.has(service.id) ? { ...service, sources: [...effectiveServiceSources(service), ...claimed.get(service.id)!] } : service)) }
+      : stand));
+  }
+  const recordWithWarnings: TechnicalRasterImport = importWarnings.length > 0
+    ? { ...importRecord, warnings: [...importRecord.warnings, ...importWarnings.map((warning, index) => ({ ...warning, id: `${importRecord.id}-order-link-${index}` }))] }
+    : importRecord;
   const project2: TechnicalRasterProject = {
     ...project,
-    imports: [...imports, diff ? { ...importRecord, serviceDiff: diff } : importRecord],
+    imports: [...imports, diff ? { ...recordWithWarnings, serviceDiff: diff } : recordWithWarnings],
     stands: nextStands,
     updatedAt: new Date().toISOString(),
   };

@@ -6680,6 +6680,7 @@ select:focus {
 .technicalRasterDrawingNoteToggle { display: flex; align-items: center; gap: 6px; font-size: 10px; cursor: pointer; }
 .technicalRasterDrawingNoteToggle input { width: auto; height: auto; margin: 0; }
 .technicalRasterDrawingNoteText { font-family: inherit; font-weight: 700; pointer-events: none; user-select: none; }
+.technicalRasterDrawingText { font-family: inherit; font-weight: 700; pointer-events: none; user-select: none; }
 
 /* CORRECTIVE BATCH (multi-hall imports) — MIMO AKTUÁLNÍ RASTR: deliberately a neutral/informational
    tone, never the ambiguous group's red/error treatment above — these are valid records, not

@@ -51,11 +51,26 @@ test("editor: the marker tooltip carries the original ABRA name; the drawing too
   // The selected mark's detail/note sits in the RIGHT sidebar: a toolbar growing above the canvas on
   // selection shifted the canvas mid-drag (found in the browser test).
   const sidebar = editor.slice(editor.indexOf(`<div className="technicalRasterSidebar">`));
-  assert.match(sidebar, /\{selectedDrawing && <TechnicalRasterDrawingDetailPanel drawing=\{selectedDrawing\} onNoteChange=\{handleDrawingNoteChange\} \/>\}/u);
+  assert.match(sidebar, /\{selectedDrawing && \(\s*<TechnicalRasterDrawingDetailPanel\s+drawing=\{selectedDrawing\}\s+onNoteChange=\{handleDrawingNoteChange\}/u);
   const toolbar = await read("components/workflow/technicalRasters/TechnicalRasterDrawingToolbar.tsx");
   const toolbarComponent = toolbar.slice(toolbar.indexOf("export function TechnicalRasterDrawingToolbar("), toolbar.indexOf("export function TechnicalRasterDrawingDetailPanel("));
   assert.ok(!/DrawingNoteEditor/u.test(toolbarComponent), "no note editor inside the toolbar above the canvas");
-  assert.match(editor, /createPointDrawing\(page, x, y, \{ category: drawingCategory, size: drawingSize, pointStyle: drawingPointStyle \}\)/u);
+  assert.match(editor, /addDrawingAndSelect\(createPointDrawing\(page, x, y, \{ category: drawingCategory, size: drawingSize, pointStyle: drawingPointStyle \}\)\)/u);
+});
+
+test("AUTO-OPEN DETAIL: a just-placed dot/cross/line/text is selected and its detail opens with the field focused — without scrolling, without switching to Vybrat, the tool stays active", async () => {
+  const editor = await read("components/workflow/technicalRasters/TechnicalRasterEditorPage.tsx");
+  const add = editor.slice(editor.indexOf("function addDrawingAndSelect("), editor.indexOf("function handleDrawingClick("));
+  assert.match(add, /setSelectedDrawingId\(drawing\.id\);/u);
+  assert.match(add, /setJustPlacedDrawingId\(drawing\.id\);/u);
+  assert.ok(!/setDrawingTool|setZoom|fitTo|scrollIntoView/u.test(add), "no tool switch, no zoom, no scroll");
+  const click = editor.slice(editor.indexOf("function handleDrawingClick("), editor.indexOf("function handleDrawingTextChange("));
+  assert.equal((click.match(/addDrawingAndSelect\(/gu) ?? []).length, 3, "point, text and line all go through it");
+  assert.match(editor, /const selectedDrawing = drawingTool !== "off" \? effectiveManualDrawings\(project\)\.find/u, "the detail shows for any drawing tool, not only Vybrat");
+  assert.match(editor, /focusOnMount=\{selectedDrawing\.id === justPlacedDrawingId\}/u);
+  const toolbar = await read("components/workflow/technicalRasters/TechnicalRasterDrawingToolbar.tsx");
+  assert.match(toolbar, /ref\.current\?\.focus\(\{ preventScroll: true \}\)/u, "focus never scrolls the page");
+  assert.match(toolbar, /\{ id: "text", label: "Text" \}/u, "the Text tool");
 });
 
 test("export panel: real text by default, 'Texty jako křivky (záložní režim)' as the explicit per-export fallback; manual drawings feed the legend", async () => {

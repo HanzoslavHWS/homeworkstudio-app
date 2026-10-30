@@ -1,6 +1,6 @@
 /**
- * Technické rastry — MANUAL technical drawings: a free point ("Bod" — a dot ● or a cross ×) and a
- * straight line A–B ("Čára"). A completely separate layer of project data
+ * Technické rastry — MANUAL technical drawings: a free point ("Bod" — a dot ● or a cross ×), a
+ * straight line A–B ("Čára") and a free text ("Text", real editable text in the PDF). A completely separate layer of project data
  * (`TechnicalRasterProject.manualDrawings`): never a service, never a placement, never touched by a
  * report (re-)import, no link/snapping to service markers.
  *
@@ -41,9 +41,14 @@ export type DrawingNote = Readonly<{
 
 export type TechnicalRasterDrawing =
   | Readonly<{ id: string; type: "point"; page: number; x: number; y: number; color: string; size?: DrawingSize; category?: DrawingCategory; pointStyle?: DrawingPointStyle; note?: DrawingNote }>
-  | Readonly<{ id: string; type: "line"; page: number; x1: number; y1: number; x2: number; y2: number; color: string; width?: DrawingSize; category?: DrawingCategory; note?: DrawingNote }>;
+  | Readonly<{ id: string; type: "line"; page: number; x1: number; y1: number; x2: number; y2: number; color: string; width?: DrawingSize; category?: DrawingCategory; note?: DrawingNote }>
+  /** A free text: (x, y) is its left end, vertically centered; `size` picks the font size. */
+  | Readonly<{ id: string; type: "text"; page: number; x: number; y: number; text: string; color: string; size?: DrawingSize; category?: DrawingCategory; note?: DrawingNote }>;
 
-export type TechnicalRasterDrawingTool = "off" | "select" | "point" | "line";
+export type TechnicalRasterDrawingTool = "off" | "select" | "point" | "line" | "text";
+
+/** The text a new "Text" object starts with — the user types over it in the detail panel. */
+export const DEFAULT_DRAWING_TEXT = "Text";
 
 /** The color categories, in toolbar/legend order — colors straight from the shared technical palette. */
 export const DRAWING_CATEGORIES: readonly Readonly<{ id: DrawingCategory; label: string; color: string }>[] = [
@@ -71,10 +76,10 @@ export const MAX_DRAWING_NOTE_LENGTH = 200;
  * One preset -> sizes. Editor sizes are SCREEN px (zoom-invariant, divided by zoom at render time,
  * same as every other marker in the editor); export sizes are PDF points.
  */
-export const DRAWING_SIZES: Readonly<Record<DrawingSize, Readonly<{ label: string; strokeScreenPx: number; crossHalfScreenPx: number; dotRadiusScreenPx: number; strokePt: number; crossHalfPt: number; dotRadiusPt: number }>>> = {
-  thin: { label: "Tenká", strokeScreenPx: 1.5, crossHalfScreenPx: 6, dotRadiusScreenPx: 3, strokePt: 0.75, crossHalfPt: 3, dotRadiusPt: 1.2 },
-  medium: { label: "Střední", strokeScreenPx: 3, crossHalfScreenPx: 8, dotRadiusScreenPx: 4.5, strokePt: 1.5, crossHalfPt: 4, dotRadiusPt: 1.8 },
-  thick: { label: "Silná", strokeScreenPx: 5, crossHalfScreenPx: 10, dotRadiusScreenPx: 6, strokePt: 3, crossHalfPt: 5, dotRadiusPt: 2.6 },
+export const DRAWING_SIZES: Readonly<Record<DrawingSize, Readonly<{ label: string; strokeScreenPx: number; crossHalfScreenPx: number; dotRadiusScreenPx: number; textScreenPx: number; strokePt: number; crossHalfPt: number; dotRadiusPt: number; textPt: number }>>> = {
+  thin: { label: "Tenká", strokeScreenPx: 1.5, crossHalfScreenPx: 6, dotRadiusScreenPx: 3, textScreenPx: 11, strokePt: 0.75, crossHalfPt: 3, dotRadiusPt: 1.2, textPt: 2.8 },
+  medium: { label: "Střední", strokeScreenPx: 3, crossHalfScreenPx: 8, dotRadiusScreenPx: 4.5, textScreenPx: 15, strokePt: 1.5, crossHalfPt: 4, dotRadiusPt: 1.8, textPt: 4.2 },
+  thick: { label: "Silná", strokeScreenPx: 5, crossHalfScreenPx: 10, dotRadiusScreenPx: 6, textScreenPx: 20, strokePt: 3, crossHalfPt: 5, dotRadiusPt: 2.6, textPt: 6 },
 };
 
 /** Visible-note text size: screen px in the editor (zoom-invariant), PDF points in the export (= the technical marker text size). */
@@ -118,7 +123,7 @@ export function sanitizeDrawingNoteText(text: string): string | undefined {
 }
 
 export function drawingSizeOf(drawing: TechnicalRasterDrawing): DrawingSize {
-  return (drawing.type === "point" ? drawing.size : drawing.width) ?? DEFAULT_DRAWING_SIZE;
+  return (drawing.type === "line" ? drawing.width : drawing.size) ?? DEFAULT_DRAWING_SIZE;
 }
 
 /** The drawing's category; an older drawing without one counts as "neutral" only when it was the old neutral black, otherwise it has none (kept in its own stored color, not explained by the legend). */
@@ -136,8 +141,9 @@ export function drawingPointShapeOf(drawing: Extract<TechnicalRasterDrawing, { t
   return drawing.pointStyle ?? "plus";
 }
 
-/** The note, only when it should be drawn (editor + PDF). */
+/** The note, only when it should be drawn (editor + PDF). A text object IS its text — it has no separate note. */
 export function visibleDrawingNoteText(drawing: TechnicalRasterDrawing): string | undefined {
+  if (drawing.type === "text") return undefined;
   return drawing.note?.visible ? drawing.note.text : undefined;
 }
 
@@ -159,6 +165,10 @@ export function normalizeManualDrawings(value: unknown): readonly TechnicalRaste
     const common = { ...(isCategory(raw.category) ? { category: raw.category } : {}), ...(note ? { note } : {}) };
     if (raw.type === "point" && isFiniteNumber(raw.x) && isFiniteNumber(raw.y)) {
       result.push({ id: raw.id, type: "point", page: raw.page as number, x: clamp01(raw.x), y: clamp01(raw.y), color, ...(isSize(raw.size) ? { size: raw.size } : {}), ...(isPointStyle(raw.pointStyle) ? { pointStyle: raw.pointStyle } : {}), ...common });
+    } else if (raw.type === "text" && isFiniteNumber(raw.x) && isFiniteNumber(raw.y)) {
+      const textValue = typeof raw.text === "string" ? sanitizeDrawingNoteText(raw.text) : undefined;
+      if (!textValue) continue;
+      result.push({ id: raw.id, type: "text", page: raw.page as number, x: clamp01(raw.x), y: clamp01(raw.y), text: textValue, color, ...(isSize(raw.size) ? { size: raw.size } : {}), ...common });
     } else if (raw.type === "line" && [raw.x1, raw.y1, raw.x2, raw.y2].every(isFiniteNumber)) {
       result.push({ id: raw.id, type: "line", page: raw.page as number, x1: clamp01(raw.x1 as number), y1: clamp01(raw.y1 as number), x2: clamp01(raw.x2 as number), y2: clamp01(raw.y2 as number), color, ...(isSize(raw.width) ? { width: raw.width } : {}), ...common });
     }
@@ -178,6 +188,17 @@ export function createPointDrawing(page: number, x: number, y: number, style: Ne
 
 export function createLineDrawing(page: number, a: Readonly<{ x: number; y: number }>, b: Readonly<{ x: number; y: number }>, style: NewDrawingStyle, id: string = crypto.randomUUID()): TechnicalRasterDrawing {
   return { id, type: "line", page, x1: clamp01(a.x), y1: clamp01(a.y), x2: clamp01(b.x), y2: clamp01(b.y), color: drawingCategoryColor(style.category), width: style.size, category: style.category };
+}
+
+export function createTextDrawing(page: number, x: number, y: number, style: NewDrawingStyle, text: string = DEFAULT_DRAWING_TEXT, id: string = crypto.randomUUID()): TechnicalRasterDrawing {
+  return { id, type: "text", page, x: clamp01(x), y: clamp01(y), text: sanitizeDrawingNoteText(text) ?? DEFAULT_DRAWING_TEXT, color: drawingCategoryColor(style.category), size: style.size, category: style.category };
+}
+
+/** Changes a text object's text (single line, capped like a note). Empty text is refused — delete the object instead. */
+export function withManualDrawingText(project: TechnicalRasterProject, drawingId: string, text: string): TechnicalRasterProject {
+  const cleaned = sanitizeDrawingNoteText(text);
+  if (!cleaned) return project;
+  return withOneDrawing(project, drawingId, (drawing) => (drawing.type === "text" && drawing.text !== cleaned ? { ...drawing, text: cleaned } : drawing));
 }
 
 /** A line whose two clicks landed on the same spot draws nothing visible — never stored. */
@@ -211,7 +232,7 @@ export function withManualDrawingRemoved(project: TechnicalRasterProject, drawin
  * The note has no coordinates of its own, so it always moves with its mark.
  */
 export function moveManualDrawing(drawing: TechnicalRasterDrawing, dx: number, dy: number): TechnicalRasterDrawing {
-  if (drawing.type === "point") return { ...drawing, x: clamp01(drawing.x + dx), y: clamp01(drawing.y + dy) };
+  if (drawing.type === "point" || drawing.type === "text") return { ...drawing, x: clamp01(drawing.x + dx), y: clamp01(drawing.y + dy) };
   const limit = (delta: number, a: number, b: number) => Math.min(Math.max(delta, -Math.min(a, b)), 1 - Math.max(a, b));
   const ldx = limit(dx, drawing.x1, drawing.x2);
   const ldy = limit(dy, drawing.y1, drawing.y2);
@@ -228,6 +249,7 @@ export function withManualDrawingStyle(project: TechnicalRasterProject, drawingI
   return withOneDrawing(project, drawingId, (drawing) => {
     const categoryFields = style.category ? { category: style.category, color: drawingCategoryColor(style.category) } : {};
     if (drawing.type === "point") return { ...drawing, ...categoryFields, size: style.size ?? drawing.size, ...(style.pointStyle ? { pointStyle: style.pointStyle } : {}) };
+    if (drawing.type === "text") return { ...drawing, ...categoryFields, size: style.size ?? drawing.size };
     return { ...drawing, ...categoryFields, width: style.size ?? drawing.width };
   });
 }
@@ -250,7 +272,8 @@ export type TechnicalRasterExportDrawingNote = Readonly<{ text: string; fontSize
 
 export type TechnicalRasterExportDrawingItem =
   | Readonly<{ id: string; kind: "point"; shape: DrawingPointShape; x: number; y: number; color: string; category?: DrawingCategory; strokePt: number; crossHalfPt: number; dotRadiusPt: number; note?: TechnicalRasterExportDrawingNote }>
-  | Readonly<{ id: string; kind: "line"; x1: number; y1: number; x2: number; y2: number; color: string; category?: DrawingCategory; strokePt: number; note?: TechnicalRasterExportDrawingNote }>;
+  | Readonly<{ id: string; kind: "line"; x1: number; y1: number; x2: number; y2: number; color: string; category?: DrawingCategory; strokePt: number; note?: TechnicalRasterExportDrawingNote }>
+  | Readonly<{ id: string; kind: "text"; x: number; y: number; text: string; color: string; category?: DrawingCategory; fontSizePt: number }>;
 
 /** Internal notes are never part of the export — only a visible note becomes an item's `note`. */
 export function buildManualDrawingExportItems(drawings: readonly TechnicalRasterDrawing[], page: number): readonly TechnicalRasterExportDrawingItem[] {
@@ -260,6 +283,7 @@ export function buildManualDrawingExportItems(drawings: readonly TechnicalRaster
     const note = noteText ? { note: { text: noteText, fontSizePt: DRAWING_NOTE_FONT_SIZE_PT, gapPt: DRAWING_NOTE_GAP_PT } } : {};
     const category = drawingCategoryOf(drawing);
     const common = { id: drawing.id, color: drawingColorOf(drawing), ...(category ? { category } : {}), strokePt: size.strokePt, ...note };
+    if (drawing.type === "text") return { id: drawing.id, kind: "text" as const, x: drawing.x, y: drawing.y, text: drawing.text, color: drawingColorOf(drawing), ...(category ? { category } : {}), fontSizePt: size.textPt };
     return drawing.type === "point"
       ? { ...common, kind: "point" as const, shape: drawingPointShapeOf(drawing), x: drawing.x, y: drawing.y, crossHalfPt: size.crossHalfPt, dotRadiusPt: size.dotRadiusPt }
       : { ...common, kind: "line" as const, x1: drawing.x1, y1: drawing.y1, x2: drawing.x2, y2: drawing.y2 };

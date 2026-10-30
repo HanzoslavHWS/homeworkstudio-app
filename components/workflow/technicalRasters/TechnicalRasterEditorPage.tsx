@@ -61,6 +61,7 @@ import { TechnicalRasterSymbolLayerPanel } from "./TechnicalRasterSymbolLayerPan
 import { TECHNICAL_IMPORT_PARSER_VERSIONS, TechnicalServiceImportPanel, type PendingTechnicalImport } from "./TechnicalServiceImportPanel";
 import { TechnicalExcelImportCheckSummary } from "./TechnicalExcelImportCheckSummary";
 import { AbraOrderImportCheckSummary } from "./AbraOrderImportCheckSummary";
+import { applyAbraOrderImport, reconcileAbraOrdersWithProject } from "../../../domain/abraOrderReconciliation";
 import { TechnicalCatalogImportPanel } from "./TechnicalCatalogImportPanel";
 import { TechnicalStandBuffer } from "./TechnicalStandBuffer";
 import { TechnicalStandDetailPanel } from "./TechnicalStandDetailPanel";
@@ -70,6 +71,8 @@ import { TechnicalRasterDrawingDetailPanel, TechnicalRasterDrawingToolbar } from
 import {
   createLineDrawing,
   createPointDrawing,
+  createTextDrawing,
+  withManualDrawingText,
   DEFAULT_DRAWING_CATEGORY,
   DEFAULT_DRAWING_POINT_STYLE,
   DEFAULT_DRAWING_SIZE,
@@ -84,6 +87,7 @@ import {
   type DrawingCategory,
   type DrawingPointStyle,
   type DrawingSize,
+  type TechnicalRasterDrawing,
   type TechnicalRasterDrawingTool,
 } from "../../../domain/technicalRasterDrawings";
 import { TechnicalImportDiffSummary } from "./TechnicalImportDiffSummary";
@@ -141,6 +145,9 @@ export function TechnicalRasterEditorPage({
   const [selectedStandId, setSelectedStandId] = useState<string | undefined>(undefined);
   const [assignmentActiveStandId, setAssignmentActiveStandId] = useState<string | undefined>(undefined);
   const [pendingImport, setPendingImport] = useState<PendingTechnicalImport | undefined>(undefined);
+  // ABRA order import: the user's choices in the control overview (undefined = the defaults: every new
+  // service and every new "BEZ elektriky" pre-selected, no quantity change).
+  const [orderDecisions, setOrderDecisions] = useState<ReadonlySet<string> | undefined>(undefined);
   const [isConfirmingImport, setIsConfirmingImport] = useState(false);
   const [importConfirmError, setImportConfirmError] = useState("");
   /** "Report aktualizován" — the change summary of the last incremental re-import, until dismissed. */
@@ -162,6 +169,8 @@ export function TechnicalRasterEditorPage({
   const [drawingPointStyle, setDrawingPointStyle] = useState<DrawingPointStyle>(DEFAULT_DRAWING_POINT_STYLE);
   const [drawingSize, setDrawingSize] = useState<DrawingSize>(DEFAULT_DRAWING_SIZE);
   const [selectedDrawingId, setSelectedDrawingId] = useState<string | undefined>(undefined);
+  // The mark placed last: its detail opens with the field focused (cleared when another mark is selected).
+  const [justPlacedDrawingId, setJustPlacedDrawingId] = useState<string | undefined>(undefined);
   /** Point A of a line being drawn ("Čára" after the first click). */
   const [lineDraft, setLineDraft] = useState<Readonly<{ page: number; x: number; y: number }> | undefined>(undefined);
 
@@ -474,7 +483,10 @@ export function TechnicalRasterEditorPage({
       };
       // Incremental: a re-import of an existing category keeps unchanged services and their placements
       // (see mergeTechnicalRasterImportWithDiff) and reports what changed.
-      const { project: next, diff } = mergeTechnicalRasterImportWithDiff(current, importRecord, report, resolveProduct, replacement);
+      // The ABRA order import never replaces anything: only the confirmed decisions are applied (domain/abraOrderReconciliation.ts).
+      const { project: next, diff } = pendingImport.orderImport
+        ? applyAbraOrderImport(current, importRecord, pendingImport.orderImport, orderDecisions ?? reconcileAbraOrdersWithProject(current, pendingImport.orderImport).defaultAcceptedIds)
+        : mergeTechnicalRasterImportWithDiff(current, importRecord, report, resolveProduct, replacement);
       updateProject(next);
       setPendingImport(undefined);
       setLastImportDiff(diff ? { diff, category, filename: file.name } : undefined);
@@ -612,17 +624,30 @@ export function TechnicalRasterEditorPage({
   function handleDrawingToolChange(tool: TechnicalRasterDrawingTool) {
     setDrawingTool(tool);
     setLineDraft(undefined);
-    if (tool !== "select") setSelectedDrawingId(undefined);
+    // Switching to Vybrat keeps the selection (edit the just-placed mark). Switching to another placing
+    // tool or off clears it: the toolbar's color/size then set the NEXT mark and never restyle the last one.
+    if (tool !== "select" && tool !== drawingTool) setSelectedDrawingId(undefined);
     if (tool !== "off") {
       setPlacementMode(undefined);
       setAssignmentActiveStandId(undefined);
     }
   }
 
-  /** "Bod": one click = one point. "Čára": first click = A (preview follows the pointer), second click = B. */
+  /** Adds a just-drawn mark, selects it and opens its detail (the tool stays active for the next one; the canvas does not move). */
+  function addDrawingAndSelect(drawing: TechnicalRasterDrawing) {
+    setProject((current) => (current ? withManualDrawingAdded(current, drawing) : current));
+    setSelectedDrawingId(drawing.id);
+    setJustPlacedDrawingId(drawing.id);
+  }
+
+  /** "Bod": one click = one point. "Čára": first click = A (preview follows the pointer), second click = B. "Text": one click = one text. */
   function handleDrawingClick(page: number, x: number, y: number) {
     if (drawingTool === "point") {
-      setProject((current) => (current ? withManualDrawingAdded(current, createPointDrawing(page, x, y, { category: drawingCategory, size: drawingSize, pointStyle: drawingPointStyle })) : current));
+      addDrawingAndSelect(createPointDrawing(page, x, y, { category: drawingCategory, size: drawingSize, pointStyle: drawingPointStyle }));
+      return;
+    }
+    if (drawingTool === "text") {
+      addDrawingAndSelect(createTextDrawing(page, x, y, { category: drawingCategory, size: drawingSize }));
       return;
     }
     if (drawingTool !== "line") return;
@@ -630,7 +655,16 @@ export function TechnicalRasterEditorPage({
     const a = lineDraft;
     setLineDraft(undefined);
     if (isDegenerateLine(a, { x, y })) return;
-    setProject((current) => (current ? withManualDrawingAdded(current, createLineDrawing(page, a, { x, y }, { category: drawingCategory, size: drawingSize })) : current));
+    addDrawingAndSelect(createLineDrawing(page, a, { x, y }, { category: drawingCategory, size: drawingSize }));
+  }
+
+  function handleDrawingTextChange(drawingId: string, text: string) {
+    setProject((current) => (current ? withManualDrawingText(current, drawingId, text) : current));
+  }
+
+  function handleDeleteDrawing(drawingId: string) {
+    if (selectedDrawingId === drawingId) setSelectedDrawingId(undefined);
+    setProject((current) => (current ? withManualDrawingRemoved(current, drawingId) : current));
   }
 
   function handleDeleteSelectedDrawing() {
@@ -663,7 +697,7 @@ export function TechnicalRasterEditorPage({
   shortcutHandlersRef.current = {
     placementActive: Boolean(placementMode) || Boolean(lineDraft),
     shortcutsEnabled: step === "assignment",
-    drawingSelected: drawingTool === "select" && Boolean(selectedDrawingId),
+    drawingSelected: drawingTool !== "off" && Boolean(selectedDrawingId),
     run: (action) => {
       if (action === "cancelPlacement") handleCancelPlacement();
       else if (action === "deleteDrawing") handleDeleteSelectedDrawing();
@@ -728,7 +762,7 @@ export function TechnicalRasterEditorPage({
   // ============================================================================
   const hiddenServiceCategories = effectiveHiddenServiceCategories(project.rasterSettings);
   // The selected manual mark ("Vybrat" tool only) — its detail/note panel sits in the right sidebar.
-  const selectedDrawing = drawingTool === "select" ? effectiveManualDrawings(project).find((drawing) => drawing.id === selectedDrawingId) : undefined;
+  const selectedDrawing = drawingTool !== "off" ? effectiveManualDrawings(project).find((drawing) => drawing.id === selectedDrawingId) : undefined;
   const servicePlacementMarkers: TechnicalRasterServiceSymbolMarker[] = [];
   for (const stand of project.stands) {
     if (stand.placement.status !== "matched_auto" && stand.placement.status !== "matched_manual") continue;
@@ -927,7 +961,7 @@ export function TechnicalRasterEditorPage({
 
       {step === "services" && (
         <div className="technicalRasterServicesStep">
-          <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={(pending) => { setImportConfirmError(""); setPendingImport(pending); }} />
+          <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={(pending) => { setImportConfirmError(""); setOrderDecisions(undefined); setPendingImport(pending); }} />
 
           {pendingImport && (() => {
             const pendingReplacement = resolveTechnicalImportReplacement(project, pendingImport.category);
@@ -954,7 +988,18 @@ export function TechnicalRasterEditorPage({
                   <span className={summary.unknownProductCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Neznámé produkty <strong>{summary.unknownProductCount}</strong></span>
                 </div>
                 {pendingImport.excelCheck && <TechnicalExcelImportCheckSummary check={pendingImport.excelCheck} />}
-                {pendingImport.orderImport && <AbraOrderImportCheckSummary orderImport={pendingImport.orderImport} />}
+                {pendingImport.orderImport && (() => {
+                  const reconciliation = reconcileAbraOrdersWithProject(project, pendingImport.orderImport);
+                  const accepted = orderDecisions ?? reconciliation.defaultAcceptedIds;
+                  return (
+                    <AbraOrderImportCheckSummary
+                      orderImport={pendingImport.orderImport}
+                      reconciliation={reconciliation}
+                      accepted={accepted}
+                      onToggle={(id, value) => setOrderDecisions(() => { const next = new Set(accepted); if (value) next.add(id); else next.delete(id); return next; })}
+                    />
+                  );
+                })()}
                 {pendingImport.report.warnings.length > 0 && (
                   <div className="technicalImportWarnings">
                     <strong>Upozornění ({pendingImport.report.warnings.length}):</strong>
@@ -965,10 +1010,12 @@ export function TechnicalRasterEditorPage({
                     </ul>
                   </div>
                 )}
-                <details className="technicalImportPreviewDetails">
-                  <summary>Zobrazit nalezená data</summary>
-                  <TechnicalImportParsedDataList groups={groupParsedReportByStand(pendingImport.report, resolveProductStatus)} />
-                </details>
+                {!pendingImport.orderImport && (
+                  <details className="technicalImportPreviewDetails">
+                    <summary>Zobrazit nalezená data</summary>
+                    <TechnicalImportParsedDataList groups={groupParsedReportByStand(pendingImport.report, resolveProductStatus)} />
+                  </details>
+                )}
                 {pendingReplacement && (() => {
                   // Dry run of the exact merge the confirm button will perform — the preview can never disagree with the result.
                   const previewRecord: TechnicalRasterImport = { id: "preview", category: pendingImport.category, filename: pendingImport.file.name, asset: { id: "preview", storageKey: "", originalFileName: pendingImport.file.name, mimeType: browserFileMimeType(pendingImport.file), size: 0, createdAt: "", category: "technical-raster-import" }, importedAt: "", parserVersion: TECHNICAL_IMPORT_PARSER_VERSIONS[pendingImport.sourceFormat], parseStatus: "ok", standsFound: 0, servicesFound: 0, warnings: [] };
@@ -984,7 +1031,7 @@ export function TechnicalRasterEditorPage({
                 })()}
                 {importConfirmError && <p className="uploadError">{importConfirmError}</p>}
                 <div className="printSurfaceCreateFormActions">
-                  <button type="button" className="primaryButton" disabled={isConfirmingImport} onClick={() => void handleConfirmImport()}>{isConfirmingImport ? "Ukládám…" : pendingReplacement ? "Aktualizovat report" : "Potvrdit import"}</button>
+                  <button type="button" className="primaryButton" disabled={isConfirmingImport} onClick={() => void handleConfirmImport()}>{isConfirmingImport ? "Ukládám…" : pendingImport.orderImport ? "Potvrdit vybrané změny" : pendingReplacement ? "Aktualizovat report" : "Potvrdit import"}</button>
                   <button type="button" disabled={isConfirmingImport} onClick={() => { setImportConfirmError(""); setPendingImport(undefined); }}>Zrušit</button>
                 </div>
               </div>
@@ -1091,7 +1138,7 @@ export function TechnicalRasterEditorPage({
               lineDraft={lineDraft}
               draftStyle={{ color: drawingCategoryColor(drawingCategory), size: drawingSize }}
               onDrawingClick={handleDrawingClick}
-              onSelectDrawing={setSelectedDrawingId}
+              onSelectDrawing={(drawingId) => { setSelectedDrawingId(drawingId); setJustPlacedDrawingId(undefined); }}
               onMoveDrawing={(drawingId, dx, dy) => setProject((current) => (current ? withManualDrawingMoved(current, drawingId, dx, dy) : current))}
             />
             {/* Right panel priority (manual acceptance batch, section 5): 1) PRÁVĚ UMISŤUJI,
@@ -1122,7 +1169,15 @@ export function TechnicalRasterEditorPage({
                 <span className="technicalRasterPlacementWorkflowHint">Zkratky: <kbd>U</kbd> umístit další · <kbd>Esc</kbd> zrušit umisťování</span>
                 {placementNotice && <span className="technicalRasterPlacementWorkflowNotice" role="status">{placementNotice}</span>}
               </div>
-              {selectedDrawing && <TechnicalRasterDrawingDetailPanel drawing={selectedDrawing} onNoteChange={handleDrawingNoteChange} />}
+              {selectedDrawing && (
+                <TechnicalRasterDrawingDetailPanel
+                  drawing={selectedDrawing}
+                  onNoteChange={handleDrawingNoteChange}
+                  onTextChange={handleDrawingTextChange}
+                  onDelete={handleDeleteDrawing}
+                  focusOnMount={selectedDrawing.id === justPlacedDrawingId}
+                />
+              )}
               {!placementMode && assignmentActiveStandId && activeAssignmentStand && (
                 <p className="technicalRasterAssignHint">Spárujte stánek <strong>{activeAssignmentStand.standNumber}</strong> kliknutím do rastru.</p>
               )}

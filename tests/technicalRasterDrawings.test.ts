@@ -7,7 +7,9 @@ import {
   buildManualDrawingExportItems,
   createLineDrawing,
   createPointDrawing,
+  createTextDrawing,
   DEFAULT_DRAWING_COLOR,
+  DEFAULT_DRAWING_TEXT,
   DRAWING_CATEGORIES,
   DRAWING_NOTE_FONT_SIZE_PT,
   DRAWING_SIZES,
@@ -23,6 +25,7 @@ import {
   withManualDrawingNote,
   withManualDrawingRemoved,
   withManualDrawingStyle,
+  withManualDrawingText,
   type DrawingCategory,
   type DrawingPointStyle,
   type DrawingSize,
@@ -183,7 +186,7 @@ test("NOTES move with their mark: moving the mark never leaves the note behind (
   assert.deepEqual([moved!.type === "point" && moved!.x, moved!.type === "point" && moved!.y], [0.6, 0.6]);
   assert.deepEqual(moved!.note, { text: "Přívod elektřiny ze stropu", visible: true });
   const [item] = buildManualDrawingExportItems([moved!], 1);
-  assert.deepEqual([item!.kind === "point" && item!.x, item!.kind === "point" && item!.y, item!.note?.text], [0.6, 0.6, "Přívod elektřiny ze stropu"]);
+  assert.deepEqual([item!.kind === "point" && item!.x, item!.kind === "point" && item!.y, item!.kind === "point" ? item!.note?.text : undefined], [0.6, 0.6, "Přívod elektřiny ze stropu"]);
 });
 
 test("EXPORT ITEMS: an internal note never reaches the export; a visible note does, at the technical text size", () => {
@@ -192,8 +195,8 @@ test("EXPORT ITEMS: an internal note never reaches the export; a visible note do
   project = withManualDrawingNote(project, "internal", { text: "jen pro nás" });
   project = withManualDrawingNote(project, "visible", { text: "Přívod ze stropu", visible: true });
   const [internal, visible] = buildManualDrawingExportItems(effectiveManualDrawings(project), 1);
-  assert.equal(internal!.note, undefined);
-  assert.deepEqual(visible!.note, { text: "Přívod ze stropu", fontSizePt: DRAWING_NOTE_FONT_SIZE_PT, gapPt: 1 });
+  assert.equal(internal!.kind === "point" && internal!.note, undefined);
+  assert.deepEqual(visible!.kind === "point" && visible!.note, { text: "Přívod ze stropu", fontSizePt: DRAWING_NOTE_FONT_SIZE_PT, gapPt: 1 });
 });
 
 test("LEGEND: manual drawing categories count as used categories; neutral black appears ONLY with a neutral drawing", () => {
@@ -287,7 +290,7 @@ test("MODES (editor wiring): tools and service work are mutually exclusive; serv
   const editor = await readFile(new URL("../components/workflow/technicalRasters/TechnicalRasterEditorPage.tsx", import.meta.url), "utf8");
   const canvas = await readFile(new URL("../components/workflow/technicalRasters/TechnicalRasterCanvas.tsx", import.meta.url), "utf8");
   assert.match(editor, /if \(!placementMode && !assignmentActiveStandId\) return;\s*setDrawingTool\("off"\);/u, "starting a placement/pairing switches drawing off");
-  const toolChange = editor.slice(editor.indexOf("function handleDrawingToolChange("), editor.indexOf("function handleDrawingClick("));
+  const toolChange = editor.slice(editor.indexOf("function handleDrawingToolChange("), editor.indexOf("function addDrawingAndSelect("));
   assert.match(toolChange, /setPlacementMode\(undefined\);/u, "turning a tool on cancels an in-progress placement (never deletes placements)");
   assert.ok(!/removeTechnicalServicePlacement|setProject/u.test(toolChange), "switching tools never modifies project data");
   const cancel = editor.slice(editor.indexOf("function handleCancelPlacement()"), editor.indexOf("function handleDrawingToolChange("));
@@ -484,7 +487,8 @@ for (const file of ["Hala 1.pdf", "Hala 3_2026- ver.12_NOVY_3.pdf"]) {
     const geometry = await resolveSourcePageGeometry(source, 1);
     const ln = mkLine(1, { x: 0.3, y: 0.3 }, { x: 0.6, y: 0.5 }, "water", "medium", "l");
     const pt = { ...mkPoint(1, 0.5, 0.5, "electricity", "medium", "p"), note: { text: "Přívod elektřiny ze stropu", visible: true } };
-    const { bytes, technicalLayerStatus } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", manualDrawings: buildManualDrawingExportItems([pt, ln], 1) });
+    const label = createTextDrawing(1, 0.4, 0.6, { category: "internet", size: "medium" }, "Rozvaděč u zdi", "t");
+    const { bytes, technicalLayerStatus } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", manualDrawings: buildManualDrawingExportItems([pt, ln, label], 1) });
     assert.equal(technicalLayerStatus, "created");
     const block = await technicalLayerBlock(bytes, 0);
     const a = normalizedDisplayPointToRawPdfPoint(0.3, 0.3, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
@@ -492,9 +496,62 @@ for (const file of ["Hala 1.pdf", "Hala 3_2026- ver.12_NOVY_3.pdf"]) {
     assert.ok(block!.segments.some((segment) => near(segment, [a.x, a.y, b.x, b.y])));
     assert.ok(block!.colors.some((color) => near(color, hexToFractions(GREEN))));
     assert.ok((await viewerText(bytes)).includes("Přívod elektřiny ze stropu"));
+    assert.ok((await viewerText(bytes)).includes("Rozvaděč u zdi"), "the Text object is real text");
+    assert.equal(block!.textShows, 2, "note + Text object, both inside ABF – TECHNICKÉ ZNAČKY");
     const layers = await viewerLayers(bytes);
     assert.deepEqual([...layers.keys()], [...sourceLayers.keys(), "ABF – TECHNICKÉ ZNAČKY"], "every source layer in its order, then exactly one layer of ours");
     for (const [name, visible] of sourceLayers) assert.equal(layers.get(name), visible, `${name} keeps its state`);
     assert.equal(layers.get("ABF – TECHNICKÉ ZNAČKY"), true);
   });
 }
+
+// =========================================================================================
+// TEXT tool — a free text object: editable, recolorable, resizable, movable, deletable, saved in the
+// project, and real editable text in the PDF inside "ABF – TECHNICKÉ ZNAČKY".
+// =========================================================================================
+
+test("TEXT: created at the click with the current category/size and a default text; text, style and position editable; deletable", () => {
+  const created = createTextDrawing(1, 0.4, 0.5, { category: "water", size: "thick" }, undefined, "t");
+  assert.deepEqual(created, { id: "t", type: "text", page: 1, x: 0.4, y: 0.5, text: DEFAULT_DRAWING_TEXT, color: TECHNICAL_RASTER_COLORS.water, size: "thick", category: "water" });
+  let project = withManualDrawingAdded(baseProject(), created);
+  project = withManualDrawingText(project, "t", "  Přívod   vody ze stropu ");
+  const edited = effectiveManualDrawings(project)[0]!;
+  assert.equal(edited.type === "text" && edited.text, "Přívod vody ze stropu", "a clean single line");
+  assert.equal(withManualDrawingText(project, "t", "   "), project, "an empty text is refused — delete the object instead");
+  project = withManualDrawingStyle(project, "t", { category: "electricity", size: "thin" });
+  const restyled = effectiveManualDrawings(project)[0]!;
+  assert.deepEqual([drawingCategoryOf(restyled), drawingColorOf(restyled), restyled.type === "text" && restyled.size], ["electricity", RED, "thin"]);
+  project = withManualDrawingMoved(project, "t", 0.1, -0.2);
+  const moved = effectiveManualDrawings(project)[0]!;
+  assert.ok(moved.type === "text" && Math.abs(moved.x - 0.5) < 1e-9 && Math.abs(moved.y - 0.3) < 1e-9);
+  assert.equal(moveManualDrawing(moved, 5, 5).type === "text" && (moveManualDrawing(moved, 5, 5) as { x: number }).x, 1, "clamped to the page");
+  assert.deepEqual(effectiveManualDrawings(withManualDrawingRemoved(project, "t")), []);
+});
+
+test("TEXT SAVE + RELOAD: text, color, size, category and position survive the real repository mapping; an empty text entry is dropped", () => {
+  let project = withManualDrawingAdded(baseProject(), createTextDrawing(2, 0.25, 0.75, { category: "cleaning", size: "medium" }, "Úklid 3 m³", "t"));
+  project = withManualDrawingAdded(project, mkPoint(1, 0.5, 0.5, "neutral", "thin", "p"));
+  const reloaded = saveAndReload(project);
+  assert.deepEqual(effectiveManualDrawings(reloaded), effectiveManualDrawings(project));
+  assert.deepEqual(normalizeManualDrawings([{ id: "e", type: "text", page: 1, x: 0.5, y: 0.5, text: "   ", color: RED }]), []);
+});
+
+test("TEXT EXPORT: real, extractable text (Czech + ³) in its color and size, at its position, inside ABF – TECHNICKÉ ZNAČKY; never a note; 'outlines' fallback has no text object", async () => {
+  const source = await buildSource();
+  const geometry = await resolveSourcePageGeometry(source, 1);
+  const drawing = createTextDrawing(1, 0.3, 0.4, { category: "water", size: "thick" }, "Přípojka vody 3 m³", "t");
+  const items = buildManualDrawingExportItems([drawing], 1);
+  assert.deepEqual(items, [{ id: "t", kind: "text", x: 0.3, y: 0.4, text: "Přípojka vody 3 m³", color: TECHNICAL_RASTER_COLORS.water, category: "water", fontSizePt: DRAWING_SIZES.thick.textPt }]);
+  const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", manualDrawings: items });
+  assert.ok((await viewerText(bytes)).includes("Přípojka vody 3 m³"));
+  const block = await technicalLayerBlock(bytes, 0);
+  assert.equal(block!.textShows, 1);
+  assert.ok(block!.fills.some((color) => near(color, hexToFractions(TECHNICAL_RASTER_COLORS.water))), "in the category color");
+  const origin = normalizedDisplayPointToRawPdfPoint(0.3, 0.4, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
+  const position = /(-?[\d.]+) (-?[\d.]+) Td/u.exec(block!.block);
+  assert.ok(position, "the text is positioned");
+  const [tx, ty] = [Number(position![1]), Number(position![2])];
+  assert.ok(Math.abs(tx - origin.x) < 0.5 && Math.abs(ty - (origin.y - DRAWING_SIZES.thick.textPt * 0.35)) < 0.5, `starts at its point (${tx}, ${ty}) vs (${origin.x}, ${origin.y})`);
+  const { bytes: outlined } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", manualDrawings: items, textMode: "outlines" });
+  assert.equal((await technicalLayerBlock(outlined, 0))!.textShows, 0);
+});

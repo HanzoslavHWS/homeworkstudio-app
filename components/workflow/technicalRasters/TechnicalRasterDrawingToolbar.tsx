@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   DRAWING_CATEGORIES,
   DRAWING_POINT_STYLES,
@@ -18,6 +18,7 @@ const TOOLS: readonly Readonly<{ id: Exclude<TechnicalRasterDrawingTool, "off">;
   { id: "select", label: "Vybrat" },
   { id: "point", label: "Bod" },
   { id: "line", label: "Čára" },
+  { id: "text", label: "Text" },
 ];
 
 /** What the next click does — shown as text so the active tool is never ambiguous (not color alone). */
@@ -25,8 +26,9 @@ function describeTool(tool: TechnicalRasterDrawingTool, hasLineDraft: boolean, h
   switch (tool) {
     case "off": return "Kreslení je vypnuté — rastr slouží ke službám.";
     case "select": return hasSelection ? "Vybráno: tažením přesunete (i s poznámkou), Delete / Smazat odstraní, kategorie, tvar a tloušťka se změní." : "Klikněte na ruční značku pro výběr.";
-    case "point": return "Bod: klikněte do rastru.";
+    case "point": return "Bod: klikněte do rastru — detail nové značky se otevře vpravo, můžete pokračovat dalším bodem.";
     case "line": return hasLineDraft ? "Čára: klikněte na bod B (Esc zruší rozkreslenou čáru)." : "Čára: klikněte na bod A.";
+    case "text": return "Text: klikněte do rastru — text napíšete vpravo v detailu.";
   }
 }
 
@@ -35,7 +37,17 @@ function describeTool(tool: TechnicalRasterDrawingTool, hasLineDraft: boolean, h
  * keystroke would trim the space the user is about to type between words). `key` = drawing id, so
  * selecting another drawing starts from that drawing's own note.
  */
-function DrawingNoteEditor({ drawing, onNoteChange }: { drawing: TechnicalRasterDrawing; onNoteChange: (note: Readonly<{ text: string; visible: boolean }>) => void }) {
+/** Focuses the field right after a mark was placed — without scrolling the page; the canvas never moves. */
+function useFocusOnMount(focus: boolean) {
+  const ref = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (focus) ref.current?.focus({ preventScroll: true });
+  }, [focus]);
+  return ref;
+}
+
+function DrawingNoteEditor({ drawing, onNoteChange, focusOnMount }: { drawing: TechnicalRasterDrawing; onNoteChange: (note: Readonly<{ text: string; visible: boolean }>) => void; focusOnMount: boolean }) {
+  const inputRef = useFocusOnMount(focusOnMount);
   const [draft, setDraft] = useState(drawing.note?.text ?? "");
   const visible = drawing.note?.visible ?? false;
   const commit = (nextVisible: boolean) => {
@@ -47,6 +59,7 @@ function DrawingNoteEditor({ drawing, onNoteChange }: { drawing: TechnicalRaster
       <label className="technicalRasterDrawingNoteField">
         <span>Poznámka</span>
         <input
+          ref={inputRef}
           type="text"
           value={draft}
           maxLength={MAX_DRAWING_NOTE_LENGTH}
@@ -65,8 +78,31 @@ function DrawingNoteEditor({ drawing, onNoteChange }: { drawing: TechnicalRaster
   );
 }
 
+/** The text of a "Text" object — same draft/commit-on-blur behavior as the note; an empty text is not saved. */
+function DrawingTextEditor({ drawing, onTextChange, focusOnMount }: { drawing: Extract<TechnicalRasterDrawing, { type: "text" }>; onTextChange: (text: string) => void; focusOnMount: boolean }) {
+  const inputRef = useFocusOnMount(focusOnMount);
+  const [draft, setDraft] = useState(drawing.text);
+  const commit = () => { if (draft.trim() && draft.trim() !== drawing.text) onTextChange(draft); };
+  return (
+    <label className="technicalRasterDrawingNoteField">
+      <span>Text</span>
+      <input
+        ref={inputRef}
+        type="text"
+        value={draft}
+        maxLength={MAX_DRAWING_NOTE_LENGTH}
+        onFocus={(event) => { if (focusOnMount) event.target.select(); }}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => { if (event.key === "Enter") commit(); }}
+      />
+      <span className="fieldHint">Exportuje se do PDF jako upravitelný text ve vrstvě „ABF – TECHNICKÉ ZNAČKY“. Barvu a velikost změníte v liště Ruční značky.</span>
+    </label>
+  );
+}
+
 /**
- * RUČNÍ ZNAČKY — manual point/line tools. Clicking the active tool again switches drawing off (back to
+ * RUČNÍ ZNAČKY — manual point/line/text tools. Clicking the active tool again switches drawing off (back to
  * normal service work). Picking a category, shape or thickness also restyles the selected drawing.
  * Colors are the technical service categories (Elektřina red, Internet gold, …) — never a separate palette.
  */
@@ -172,16 +208,24 @@ export function TechnicalRasterDrawingToolbar({
 }
 
 /**
- * DETAIL RUČNÍ ZNAČKY — the selected manual mark's detail with its note, in the RIGHT sidebar (never in
- * the toolbar above the canvas: a toolbar that grows on selection would push the whole canvas down
- * mid-drag, found in the browser test).
+ * DETAIL RUČNÍ ZNAČKY — the selected manual mark's detail with its note (a text object: its text), in the
+ * RIGHT sidebar (never in the toolbar above the canvas: a toolbar that grows on selection would push the
+ * whole canvas down mid-drag, found in the browser test). Opens automatically for a just-placed mark,
+ * with the field focused so the user can type at once.
  */
 export function TechnicalRasterDrawingDetailPanel({
   drawing,
   onNoteChange,
+  onTextChange,
+  onDelete,
+  focusOnMount = false,
 }: {
   drawing: TechnicalRasterDrawing;
   onNoteChange: (drawingId: string, note: Readonly<{ text: string; visible: boolean }>) => void;
+  onTextChange: (drawingId: string, text: string) => void;
+  onDelete: (drawingId: string) => void;
+  /** True right after the mark was placed: the note/text field takes the focus. */
+  focusOnMount?: boolean;
 }) {
   const category = DRAWING_CATEGORIES.find((entry) => entry.id === drawingCategoryOf(drawing));
   const shape = drawing.type === "point" ? DRAWING_POINT_STYLES.find((entry) => entry.id === drawing.pointStyle) : undefined;
@@ -190,10 +234,13 @@ export function TechnicalRasterDrawingDetailPanel({
       <div className="workflowCardHeader">
         <div>
           <span>DETAIL RUČNÍ ZNAČKY</span>
-          <strong>{drawing.type === "point" ? `Bod${shape ? ` ${shape.glyph} ${shape.label.toLowerCase()}` : ""}` : "Čára"} · {category?.label ?? "původní barva"}</strong>
+          <strong>{drawing.type === "point" ? `Bod${shape ? ` ${shape.glyph} ${shape.label.toLowerCase()}` : ""}` : drawing.type === "text" ? "Text" : "Čára"} · {category?.label ?? "původní barva"}</strong>
         </div>
+        <button type="button" className="technicalActionButton destructive compact" onClick={() => onDelete(drawing.id)}>Smazat</button>
       </div>
-      <DrawingNoteEditor key={drawing.id} drawing={drawing} onNoteChange={(note) => onNoteChange(drawing.id, note)} />
+      {drawing.type === "text"
+        ? <DrawingTextEditor key={drawing.id} drawing={drawing} onTextChange={(text) => onTextChange(drawing.id, text)} focusOnMount={focusOnMount} />
+        : <DrawingNoteEditor key={drawing.id} drawing={drawing} onNoteChange={(note) => onNoteChange(drawing.id, note)} focusOnMount={focusOnMount} />}
     </div>
   );
 }

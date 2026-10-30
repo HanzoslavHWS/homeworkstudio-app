@@ -1,7 +1,16 @@
 "use client";
 
 import { technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
-import { effectiveServicePlacements, requiredPlacementCount, type RasterStandLabel, type TechnicalRasterImport, type TechnicalService, type TechnicalStand } from "../../../domain/technicalRaster";
+import { ABRA_ORDER_IMPORT_CATEGORY, effectiveServicePlacements, effectiveServiceSources, requiredPlacementCount, type RasterStandLabel, type TechnicalRasterImport, type TechnicalService, type TechnicalServiceSource, type TechnicalStand } from "../../../domain/technicalRaster";
+
+/** "Výjezd Elektrická energie 2×" / "Objednávka V238-4/2026 · L03 1× (rampa)" — where a service comes from. */
+function serviceSourceLabel(source: TechnicalServiceSource, imports: readonly TechnicalRasterImport[]): string {
+  const record = imports.find((entry) => entry.id === source.importId);
+  if (record?.category === ABRA_ORDER_IMPORT_CATEGORY || source.orderNumber) {
+    return `Objednávka ${source.orderNumber ?? record?.filename ?? ""}${source.abfCode ? ` · ${source.abfCode}` : ""} ${source.quantity}×${source.notes && source.notes.length > 0 ? ` (${source.notes.join(" / ")})` : ""}`;
+  }
+  return `Výjezd ${record ? technicalServiceCategoryLabel(record.category) : "?"} ${source.quantity}×`;
+}
 import { resolveServicePresentation } from "../../../domain/technicalRasterServicePresentation";
 import { resolveNextPlacementTarget } from "../../../domain/technicalRasterWorkQueue";
 import { resolveTechnicalRealizationGroup, technicalRealizationGroupInfo } from "../../../domain/technicalRasterRealization";
@@ -113,6 +122,11 @@ export function TechnicalStandDetailPanel({
           </div>
         </div>
         {stand.companyName && <p className="technicalStandCompanyName">{stand.companyName}</p>}
+        {stand.hasNoElectricityAssignment && (
+          <p className="fieldHint technicalStandNoElectricity">
+            BEZ elektriky — {stand.noElectricitySource === "abra-orders" ? "z objednávek (L63)" : stand.noElectricitySource === "manual" ? "nastaveno ručně" : "z výjezdu elektřiny"}
+          </p>
+        )}
         <p className={`stageBadge technicalStandPlacementBadge ${stand.placement.status}`}>{placementLabel[stand.placement.status] ?? stand.placement.status}</p>
         {tolerantMatchLabel && (
           <p className="fieldHint technicalStandToleranceDetail">{stand.standNumber} → {tolerantMatchLabel} ✓ automaticky — normalizováno</p>
@@ -142,10 +156,10 @@ export function TechnicalStandDetailPanel({
                   <span>{service.abfCode ? `${service.abfCode} · ` : ""}{service.externalLabel}</span>
                   <strong>{service.quantity}×</strong>
                 </div>
-                {service.sourceOrderNumber && (
+                {(service.sources || service.sourceOrderNumber) && (
                   <p className="fieldHint technicalStandServiceOrigin">
-                    Objednávka {service.sourceOrderNumber}{service.sourceItemName ? ` — ${service.sourceItemName}` : ""}
-                    {service.itemNotes && service.itemNotes.length > 0 && <><br />Poznámka: {service.itemNotes.join(" / ")}</>}
+                    Zdroje: {effectiveServiceSources(service).map((source) => serviceSourceLabel(source, imports)).join(" · ")}
+                    {service.sourceItemName && <><br />{service.sourceItemName}</>}
                   </p>
                 )}
 

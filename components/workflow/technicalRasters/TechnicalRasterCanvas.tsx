@@ -394,7 +394,7 @@ export function TechnicalRasterCanvas({
     if (suppressNextClickRef.current) { suppressNextClickRef.current = false; return; }
     // Manual drawing tools take the click; they are mutually exclusive with placement/assignment
     // (the editor switches the tool off whenever a placement or pairing starts).
-    if (drawingTool === "point" || drawingTool === "line") {
+    if (drawingTool === "point" || drawingTool === "line" || drawingTool === "text") {
       const point = toNormalized(event.clientX, event.clientY);
       if (point) onDrawingClick?.(activePage, point.x, point.y);
       return;
@@ -735,6 +735,21 @@ export function TechnicalRasterCanvas({
                 {noteText && (
                   <text x={cx + extent + px(DRAWING_NOTE_GAP_SCREEN_PX)} y={cy} dominantBaseline="central" className="technicalRasterDrawingNoteText" fill={color} stroke="#fff" strokeWidth={px(3)} paintOrder="stroke" fontSize={px(DRAWING_NOTE_SCREEN_PX)}>{noteText}</text>
                 )}
+              </g>
+            );
+          }
+          if (drawing.type === "text") {
+            // A free text: starts at its point, vertically centered — the same anchor the PDF export uses.
+            const tx = drawing.x * stageWidthPx;
+            const ty = drawing.y * stageHeightPx;
+            const fontSize = px(size.textScreenPx);
+            // Approximate box (bold sans ≈ 0.62 em per character) — only for the hit area and the selection frame.
+            const width = Math.max(fontSize, drawing.text.length * fontSize * 0.62);
+            return (
+              <g key={drawing.id} {...groupProps}>
+                {selected && <rect x={tx - px(3)} y={ty - fontSize * 0.7} width={width + px(6)} height={fontSize * 1.4} className="technicalRasterDrawingSelection" strokeWidth={px(1.5)} fill="none" />}
+                <rect x={tx - px(3)} y={ty - fontSize * 0.7} width={width + px(6)} height={fontSize * 1.4} className="technicalRasterDrawingHit" />
+                <text x={tx} y={ty} dominantBaseline="central" className="technicalRasterDrawingText" fill={color} stroke="#fff" strokeWidth={px(3)} paintOrder="stroke" fontSize={fontSize}>{drawing.text}</text>
               </g>
             );
           }
