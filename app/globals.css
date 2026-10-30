@@ -7223,3 +7223,10 @@ select:focus {
   .customerCatalogSplit { grid-template-columns: 1fr; }
   .customerCatalogOptionGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* ABRA order form import — control overview in the import preview. */
+.abraOrderCheck { display: grid; gap: 6px; }
+.abraOrderCheckTable { width: 100%; border-collapse: collapse; font-size: 10px; }
+.abraOrderCheckTable th, .abraOrderCheckTable td { text-align: left; padding: 2px 6px; border-bottom: 1px solid #ececec; vertical-align: top; }
+.abraOrderCheckTable th { color: #85898c; font-weight: 600; }
+.technicalStandServiceOrigin { margin: 0; font-size: 9px; }

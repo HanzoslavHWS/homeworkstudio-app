@@ -1,8 +1,10 @@
 /**
  * Technické rastry — HOTFIX-02: the APPROVED technical marker table, transcribed verbatim from
- * `_IMPORT/TECHNICKE_ZNACKY/Generator_ABF_Revize_technickych_znacek.xlsx` (sheet "Technické značky",
- * every row "Schváleno"): B = ABRA name, K = NOVÝ popisek v rastru (identical to L, NOVÝ text v PDF),
- * N = NOVÁ barva (HEX), P = NOVÉ pravidlo počtu bodů.
+ * `_IMPORT/TECHNICKE_ZNACKY/Generator_ABF_Technicke_znacky_s_ABF_kody.xlsx` (sheet "Technické
+ * značky", every row "Schváleno"; the earlier "…_Revize_technickych_znacek.xlsx" without column S):
+ * B = ABRA name, K = NOVÝ popisek v rastru (identical to L, NOVÝ text v PDF), N = NOVÁ barva (HEX),
+ * P = NOVÉ pravidlo počtu bodů, S = ABF kód (31 of 34 rows; "+ kW", "Odvoz odpadu" and the
+ * "Stěhování nábytku" example have none and are never matched from an order).
  *
  * This is REFERENCE data, not configuration: domain/technicalRasterServicePresentation.ts is the
  * implementation, tests/technicalRasterServicePresentation.test.ts asserts it against this table,
@@ -24,6 +26,8 @@ export type ApprovedTechnicalMarkerRow = Readonly<{
   color: string;
   /** Excel column P. */
   rule: ApprovedMarkerPointRule;
+  /** Excel column S — the ABF code an ABRA order uses for this service; undefined when the approved table has none. */
+  abfCode?: string;
 }>;
 
 /** Excel column A (Czech category name) -> category id. */
@@ -36,7 +40,41 @@ export const APPROVED_MARKER_CATEGORY_IDS: Readonly<Record<string, string>> = {
   "Ostatní": "other",
 };
 
-const row = (category: string, abraName: string, label: string, color: string, rule: ApprovedMarkerPointRule): ApprovedTechnicalMarkerRow => ({ category, abraName, label, color, rule });
+const ABF_CODES: Readonly<Record<string, string>> = {
+  "Do 2kW 230V": "L02",
+  "Do 3kW 230V": "L03",
+  "Do 5kW 230V": "L05",
+  "Do 6kW 230V": "L06",
+  "Do 9kW 400V": "L09",
+  "Do 15kW 400V": "L15",
+  "Do 21kW 400V": "L21",
+  "Do 40kW 400V": "L40",
+  "Rozvaděč 9-21kW": "L51",
+  "EET 0.5KW": "L01",
+  "Vrchní přívod": "L60",
+  "Osvětlení": "L61",
+  "Jistič C": "L80",
+  "Jistič D": "L81",
+  "Lednicový okruh": "L55",
+  "Non stop": "L97",
+  "Pevná IP": "I30",
+  "Internet": "I10",
+  "Další přípojka": "I11",
+  "RJ 2 EEt": "I12",
+  "Router zapůjčení": "I40",
+  "WIFI": "I20",
+  "Další WIFI přípojka": "I21",
+  "WIFI 2 EEt": "I22",
+  "Voda, odpad": "W21",
+  "Bazén - přípojka": "W31",
+  "Bazén - objem": "W32",
+  "Kontejn 1100 l": "U10",
+  "vana 3 m3": "U12",
+  "Denní úklid": "U01",
+  "Generální úklid": "U05"
+};
+
+const row = (category: string, abraName: string, label: string, color: string, rule: ApprovedMarkerPointRule): ApprovedTechnicalMarkerRow => ({ category, abraName, label, color, rule, ...(ABF_CODES[abraName] ? { abfCode: ABF_CODES[abraName] } : {}) });
 
 export const APPROVED_TECHNICAL_MARKER_ROWS: readonly ApprovedTechnicalMarkerRow[] = [
   row("electricity", "Do 2kW 230V", "2 kW", "#b3261e", "Podle množství"),

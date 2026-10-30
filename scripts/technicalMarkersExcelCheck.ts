@@ -1,9 +1,10 @@
 /**
  * Technické rastry — HOTFIX-02 real-file check: the approved technical marker Excel
- * (`_IMPORT/TECHNICKE_ZNACKY/Generator_ABF_Revize_technickych_znacek.xlsx`, git-ignored, never
+ * (`_IMPORT/TECHNICKE_ZNACKY/Generator_ABF_Technicke_znacky_s_ABF_kody.xlsx`, git-ignored, never
  * committed) against domain/technicalMarkerApprovedTable.ts AND the live presentation
  * (domain/technicalRasterServicePresentation.ts). For every approved row it compares the ABRA name
- * (B), the raster label (K), the PDF text (L), the color (N) and the point rule (P).
+ * (B), the raster label (K), the PDF text (L), the color (N), the point rule (P) and the ABF code (S,
+ * when the sheet has that column).
  *
  * SKIP-SAFE: exits 0 with a message when the Excel is missing. Exits 1 on any difference — run it
  * after the Excel is revised, before changing the table by hand.
@@ -21,7 +22,7 @@ import { APPROVED_MARKER_CATEGORY_IDS, APPROVED_TECHNICAL_MARKER_ROWS } from "..
 import { resolveTechnicalServicePresentation } from "../domain/technicalRasterServicePresentation.ts";
 
 const repoRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
-const excelPath = path.resolve(repoRoot, process.argv[2] ?? "_IMPORT/TECHNICKE_ZNACKY/Generator_ABF_Revize_technickych_znacek.xlsx");
+const excelPath = path.resolve(repoRoot, process.argv[2] ?? "_IMPORT/TECHNICKE_ZNACKY/Generator_ABF_Technicke_znacky_s_ABF_kody.xlsx");
 const SAMPLE_QUANTITY = 3;
 
 function cellText(value: ExcelJS.CellValue): string {
@@ -45,13 +46,14 @@ async function main(): Promise<number> {
   }
 
   const problems: string[] = [];
-  const excelRows: { category: string; abraName: string; label: string; pdfText: string; color: string; rule: string; approval: string }[] = [];
+  const excelRows: { category: string; abraName: string; label: string; pdfText: string; color: string; rule: string; approval: string; abfCode: string }[] = [];
+  const hasCodeColumn = cellText(sheet.getRow(1).getCell("S").value).startsWith("ABF kód");
   sheet.eachRow((excelRow, rowNumber) => {
     if (rowNumber === 1) return;
     const text = (column: string) => cellText(excelRow.getCell(column).value);
     const categoryName = text("A");
     if (!categoryName) return;
-    excelRows.push({ category: APPROVED_MARKER_CATEGORY_IDS[categoryName] ?? `?${categoryName}`, abraName: text("B"), label: text("K"), pdfText: text("L"), color: text("N").toLowerCase(), rule: text("P"), approval: text("Q") });
+    excelRows.push({ category: APPROVED_MARKER_CATEGORY_IDS[categoryName] ?? `?${categoryName}`, abraName: text("B"), label: text("K"), pdfText: text("L"), color: text("N").toLowerCase(), rule: text("P"), approval: text("Q"), abfCode: hasCodeColumn ? text("S") : "" });
   });
 
   if (excelRows.length !== APPROVED_TECHNICAL_MARKER_ROWS.length) problems.push(`počet řádků: Excel ${excelRows.length} × tabulka ${APPROVED_TECHNICAL_MARKER_ROWS.length}`);
@@ -60,6 +62,7 @@ async function main(): Promise<number> {
     const where = `ř. ${index + 2} „${excel.abraName}“`;
     if (excel.approval !== "Schváleno") problems.push(`${where}: stav „${excel.approval}“, ne „Schváleno“`);
     if (excel.label !== excel.pdfText) problems.push(`${where}: popisek v rastru „${excel.label}“ ≠ text v PDF „${excel.pdfText}“`);
+    if (hasCodeColumn && (approved?.abfCode ?? "") !== excel.abfCode) problems.push(`${where}: ABF kód v kódu „${approved?.abfCode ?? ""}“ × Excel „${excel.abfCode}“`);
     if (!approved || approved.abraName !== excel.abraName || approved.category !== excel.category || approved.label !== excel.label || approved.color !== excel.color || approved.rule !== excel.rule) {
       problems.push(`${where}: tabulka v kódu se liší (${JSON.stringify(approved)} × ${JSON.stringify(excel)})`);
     }
@@ -72,7 +75,7 @@ async function main(): Promise<number> {
   });
 
   for (const problem of problems) console.log(`✖ ${problem}`);
-  console.log(problems.length === 0 ? `✔ ${excelRows.length} schválených technických značek odpovídá generátoru (popisek, PDF text, barva, počet bodů)` : `✖ ${problems.length} rozdílů`);
+  console.log(problems.length === 0 ? `✔ ${excelRows.length} schválených technických značek odpovídá generátoru (popisek, PDF text, barva, počet bodů${hasCodeColumn ? `, ABF kód — ${excelRows.filter((row) => row.abfCode).length} s kódem` : ""})` : `✖ ${problems.length} rozdílů`);
   return problems.length === 0 ? 0 : 1;
 }
 

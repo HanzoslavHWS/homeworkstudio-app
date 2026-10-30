@@ -1,8 +1,10 @@
 "use client";
 
 import { useState } from "react";
-import { TECHNICAL_SERVICE_CATEGORIES, technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
-import type { ParsedTechnicalReport, TechnicalRasterImport } from "../../../domain/technicalRaster";
+import { TECHNICAL_IMPORT_SOURCES, TECHNICAL_SERVICE_CATEGORIES, technicalServiceCategoryLabel } from "../../../domain/technicalServiceCatalog";
+import { ABRA_ORDER_IMPORT_CATEGORY, type ParsedTechnicalReport, type TechnicalRasterImport } from "../../../domain/technicalRaster";
+import { parseAbraOrderFormPdf } from "../../../domain/abraOrderForm";
+import { buildAbraOrderTechnicalImport, type AbraOrderTechnicalImport } from "../../../domain/abraOrderTechnicalImport";
 import type { TechnicalExcelImportCheck } from "../../../domain/technicalReportExcelTable";
 import { getTechnicalReportParser, detectLikelyTechnicalReportCategory } from "../../../domain/technicalReportParsers";
 import { loadPdfDocument } from "../../../lib/pdf/pdfDocumentLoader";
@@ -17,11 +19,21 @@ export type PendingTechnicalImport = Readonly<{
   report: ParsedTechnicalReport;
   /** Excel only: what was read from which sheet/columns and whether the sums match the report's own "Celkem" row. */
   excelCheck?: TechnicalExcelImportCheck;
-  /** Set when an import of this SAME category already exists — user must explicitly confirm replacing it (spec section 24). */
-  replaceImportId?: string;
+  /** ABRA order form only: the control overview (orders, services without stand, unknown codes, review items). */
+  orderImport?: AbraOrderTechnicalImport;
+  /** Overrides TECHNICAL_IMPORT_PARSER_VERSIONS (the order form has its own parser). */
+  parserVersion?: string;
 }>;
 
 export const TECHNICAL_IMPORT_PARSER_VERSIONS: Readonly<Record<TechnicalImportSourceFormat, string>> = { pdf: "v1", xlsx: "xlsx-v1" };
+export const ABRA_ORDER_FORM_PARSER_VERSION = "abra-orders-pdf-v1";
+
+/**
+ * The ABRA Excel export of "3. Formulář objednávky přijaté ABF" is not importable: the real export holds
+ * fragments of only 3 of 127 orders and mixes one order's header with another order's items and stand
+ * (docs/ABRA_ORDER_IMPORT.md). Reading it would put services on the wrong stands, so it is refused.
+ */
+export const ABRA_ORDER_EXCEL_REFUSAL = "Excel export formuláře objednávek z ABRA nelze bezpečně načíst — obsahuje jen část objednávek a míchá hlavičku jedné objednávky s položkami jiné. Nahrajte stejnou sestavu jako PDF.";
 
 const XLSX_MIME_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet";
 
@@ -52,6 +64,17 @@ async function parsePdfReport(file: File, category: string): Promise<ParsedTechn
   const parser = getTechnicalReportParser(category);
   if (!parser) throw new Error(`Pro kategorii "${technicalServiceCategoryLabel(category)}" zatím neexistuje parser.`);
   return { report: parser.parse(items), hint: detectLikelyTechnicalReportCategory(sampleText) };
+}
+
+async function parseOrderFormPdf(file: File): Promise<AbraOrderTechnicalImport> {
+  const document = await loadPdfDocument({ data: await file.arrayBuffer() });
+  try {
+    const parsed = parseAbraOrderFormPdf(await extractPdfTextItems(document));
+    if (parsed.orders.length === 0) throw new Error("V PDF nebyla nalezena žádná objednávka (očekávána sestava „3. Formulář objednávky přijaté ABF“).");
+    return buildAbraOrderTechnicalImport(parsed);
+  } finally {
+    void document.destroy();
+  }
 }
 
 /** Excel is parsed server-side (exceljs needs Node) — the route only parses, nothing is stored until the user confirms the preview. */
@@ -101,19 +124,27 @@ export function TechnicalServiceImportPanel({
       return;
     }
 
+    if (category === ABRA_ORDER_IMPORT_CATEGORY && format === "xlsx") {
+      setError(ABRA_ORDER_EXCEL_REFUSAL);
+      return;
+    }
+
     setIsParsing(true);
     try {
+      if (category === ABRA_ORDER_IMPORT_CATEGORY) {
+        const orderImport = await parseOrderFormPdf(file);
+        onPendingImportReady({ category, file, sourceFormat: format, report: orderImport.report, orderImport, parserVersion: ABRA_ORDER_FORM_PARSER_VERSION });
+        return;
+      }
       const parsed = format === "xlsx" ? await parseExcelReport(file, category) : await parsePdfReport(file, category);
       if (parsed.hint && parsed.hint !== category) setDetectedHint(parsed.hint);
 
-      const existing = existingImportsByCategory.get(category);
       onPendingImportReady({
         category,
         file,
         sourceFormat: format,
         report: parsed.report,
         excelCheck: parsed.check,
-        replaceImportId: existing?.id,
       });
     } catch (parseError) {
       setError(parseError instanceof Error ? parseError.message : format === "xlsx" ? "Excel se nepodařilo zpracovat." : "PDF se nepodařilo zpracovat.");
@@ -130,6 +161,9 @@ export function TechnicalServiceImportPanel({
           <span>Typ</span>
           <select value={category} onChange={(event) => setCategory(event.target.value)}>
             {TECHNICAL_SERVICE_CATEGORIES.map((option) => <option key={option.id} value={option.id}>{option.labelCz}</option>)}
+            <optgroup label="Více kategorií najednou">
+              {TECHNICAL_IMPORT_SOURCES.map((option) => <option key={option.id} value={option.id}>{option.labelCz}</option>)}
+            </optgroup>
           </select>
         </label>
         <label className="filePicker">
@@ -147,7 +181,9 @@ export function TechnicalServiceImportPanel({
         </label>
       </div>
       {detectedHint && <p className="fieldHint">Podle obsahu souboru vypadá spíš jako: {technicalServiceCategoryLabel(detectedHint)} — zkontrolujte vybraný typ.</p>}
-      {existingImportsByCategory.has(category) && <p className="fieldHint">Pro tuto kategorii už existuje dřívější import — nahrání nového souboru nabídne jeho nahrazení.</p>}
+      {category === ABRA_ORDER_IMPORT_CATEGORY
+        ? <p className="fieldHint">Sestava „3. Formulář objednávky přijaté ABF“ jako PDF. Je primárním zdrojem technických služeb: služby se rozpoznají podle ABF kódu a nahradí dosavadní importy elektřiny, internetu, vody, odpadu a úklidu (umístění shodných služeb zůstanou).</p>
+        : existingImportsByCategory.has(category) && <p className="fieldHint">Pro tuto kategorii už existuje dřívější import — nahrání nového souboru nabídne jeho nahrazení.</p>}
       {error && <p className="uploadError">{error}</p>}
     </div>
   );

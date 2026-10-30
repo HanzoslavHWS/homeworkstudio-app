@@ -5,6 +5,8 @@ import {
   assignStandManually,
   clearStandAssignment,
   mergeTechnicalRasterImportWithDiff,
+  resolveTechnicalImportReplacement,
+  ABRA_ORDER_IMPORT_CATEGORY,
   moveTechnicalServicePlacement,
   nextUnassignedStand,
   placeTechnicalService,
@@ -58,6 +60,7 @@ import { TechnicalRasterLayerPanel } from "./TechnicalRasterLayerPanel";
 import { TechnicalRasterSymbolLayerPanel } from "./TechnicalRasterSymbolLayerPanel";
 import { TECHNICAL_IMPORT_PARSER_VERSIONS, TechnicalServiceImportPanel, type PendingTechnicalImport } from "./TechnicalServiceImportPanel";
 import { TechnicalExcelImportCheckSummary } from "./TechnicalExcelImportCheckSummary";
+import { AbraOrderImportCheckSummary } from "./AbraOrderImportCheckSummary";
 import { TechnicalCatalogImportPanel } from "./TechnicalCatalogImportPanel";
 import { TechnicalStandBuffer } from "./TechnicalStandBuffer";
 import { TechnicalStandDetailPanel } from "./TechnicalStandDetailPanel";
@@ -448,7 +451,8 @@ export function TechnicalRasterEditorPage({
   async function handleConfirmImport() {
     const current = projectRef.current;
     if (!current || !pendingImport) return;
-    const { category, file, sourceFormat, report, replaceImportId } = pendingImport;
+    const { category, file, sourceFormat, report, parserVersion } = pendingImport;
+    const replacement = resolveTechnicalImportReplacement(current, category);
     setImportConfirmError("");
     setIsConfirmingImport(true);
     try {
@@ -462,7 +466,7 @@ export function TechnicalRasterEditorPage({
         filename: file.name,
         asset,
         importedAt: new Date().toISOString(),
-        parserVersion: TECHNICAL_IMPORT_PARSER_VERSIONS[sourceFormat],
+        parserVersion: parserVersion ?? TECHNICAL_IMPORT_PARSER_VERSIONS[sourceFormat],
         parseStatus: report.warnings.length > 0 ? "ok_with_warnings" : "ok",
         standsFound,
         servicesFound,
@@ -470,7 +474,7 @@ export function TechnicalRasterEditorPage({
       };
       // Incremental: a re-import of an existing category keeps unchanged services and their placements
       // (see mergeTechnicalRasterImportWithDiff) and reports what changed.
-      const { project: next, diff } = mergeTechnicalRasterImportWithDiff(current, importRecord, report, resolveProduct, replaceImportId);
+      const { project: next, diff } = mergeTechnicalRasterImportWithDiff(current, importRecord, report, resolveProduct, replacement);
       updateProject(next);
       setPendingImport(undefined);
       setLastImportDiff(diff ? { diff, category, filename: file.name } : undefined);
@@ -926,6 +930,7 @@ export function TechnicalRasterEditorPage({
           <TechnicalServiceImportPanel existingImportsByCategory={existingImportsByCategory} onPendingImportReady={(pending) => { setImportConfirmError(""); setPendingImport(pending); }} />
 
           {pendingImport && (() => {
+            const pendingReplacement = resolveTechnicalImportReplacement(project, pendingImport.category);
             const summary = summarizeParsedReport(pendingImport.report, resolveProductStatus);
             // CORRECTIVE BATCH (multi-hall imports) section 9 — a combined report (e.g. Hala 3 +
             // Hala 4 rows in ONE electricity export) previewed BEFORE commit, using the exact same
@@ -949,6 +954,7 @@ export function TechnicalRasterEditorPage({
                   <span className={summary.unknownProductCount > 0 ? "technicalImportPreviewSummaryWarn" : undefined}>Neznámé produkty <strong>{summary.unknownProductCount}</strong></span>
                 </div>
                 {pendingImport.excelCheck && <TechnicalExcelImportCheckSummary check={pendingImport.excelCheck} />}
+                {pendingImport.orderImport && <AbraOrderImportCheckSummary orderImport={pendingImport.orderImport} />}
                 {pendingImport.report.warnings.length > 0 && (
                   <div className="technicalImportWarnings">
                     <strong>Upozornění ({pendingImport.report.warnings.length}):</strong>
@@ -963,20 +969,22 @@ export function TechnicalRasterEditorPage({
                   <summary>Zobrazit nalezená data</summary>
                   <TechnicalImportParsedDataList groups={groupParsedReportByStand(pendingImport.report, resolveProductStatus)} />
                 </details>
-                {pendingImport.replaceImportId && (() => {
+                {pendingReplacement && (() => {
                   // Dry run of the exact merge the confirm button will perform — the preview can never disagree with the result.
                   const previewRecord: TechnicalRasterImport = { id: "preview", category: pendingImport.category, filename: pendingImport.file.name, asset: { id: "preview", storageKey: "", originalFileName: pendingImport.file.name, mimeType: browserFileMimeType(pendingImport.file), size: 0, createdAt: "", category: "technical-raster-import" }, importedAt: "", parserVersion: TECHNICAL_IMPORT_PARSER_VERSIONS[pendingImport.sourceFormat], parseStatus: "ok", standsFound: 0, servicesFound: 0, warnings: [] };
-                  const preview = mergeTechnicalRasterImportWithDiff(project, previewRecord, pendingImport.report, resolveProduct, pendingImport.replaceImportId).diff;
+                  const preview = mergeTechnicalRasterImportWithDiff(project, previewRecord, pendingImport.report, resolveProduct, pendingReplacement).diff;
+                  const replacedImports = project.imports.filter((existing) => pendingReplacement.supersedeImportIds.includes(existing.id));
+                  const partlyReplacedOrders = pendingReplacement.alsoReplaceService ? project.imports.find((existing) => existing.category === ABRA_ORDER_IMPORT_CATEGORY && !existing.supersededByImportId) : undefined;
                   return (
                     <div className="technicalImportUpdateNotice">
-                      <p className="fieldHint">Pro tuto kategorii už existuje import — nový report ho <strong>aktualizuje</strong>. Nezměněné služby si ponechají své umístění v rastru; nové a navýšené kusy se objeví v K UMÍSTĚNÍ. Původní záznam zůstane v historii.</p>
+                      <p className="fieldHint">Nový soubor <strong>nahradí</strong> {replacedImports.map((existing) => `${technicalServiceCategoryLabel(existing.category)} (${existing.filename})`).join(", ") || "nic"}{partlyReplacedOrders ? ` a služby kategorie ${technicalServiceCategoryLabel(pendingImport.category)} z importu objednávek (${partlyReplacedOrders.filename})` : ""}. Shodné služby si ponechají své umístění v rastru; nové a navýšené kusy se objeví v K UMÍSTĚNÍ. Původní záznamy zůstanou v historii.</p>
                       {preview && <TechnicalImportDiffSummary diff={preview} compact />}
                     </div>
                   );
                 })()}
                 {importConfirmError && <p className="uploadError">{importConfirmError}</p>}
                 <div className="printSurfaceCreateFormActions">
-                  <button type="button" className="primaryButton" disabled={isConfirmingImport} onClick={() => void handleConfirmImport()}>{isConfirmingImport ? "Ukládám…" : pendingImport.replaceImportId ? "Aktualizovat report" : "Potvrdit import"}</button>
+                  <button type="button" className="primaryButton" disabled={isConfirmingImport} onClick={() => void handleConfirmImport()}>{isConfirmingImport ? "Ukládám…" : pendingReplacement ? "Aktualizovat report" : "Potvrdit import"}</button>
                   <button type="button" disabled={isConfirmingImport} onClick={() => { setImportConfirmError(""); setPendingImport(undefined); }}>Zrušit</button>
                 </div>
               </div>

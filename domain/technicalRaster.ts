@@ -368,6 +368,16 @@ export type TechnicalService = Readonly<{
   rawRow?: string;
   status: TechnicalServiceStatus;
   placements?: readonly TechnicalServicePlacement[];
+  /**
+   * ABRA order import only (domain/abraOrderTechnicalImport.ts) — the item's ABF code ("L03"), the
+   * ABRA order it came from ("V238-12/2026"), the item name exactly as printed in the order, and the
+   * item's own note lines. Optional: services from the per-category reports have none. A re-import
+   * pairs services by ABF code first (see servicesShareIdentity).
+   */
+  abfCode?: string;
+  sourceOrderNumber?: string;
+  sourceItemName?: string;
+  itemNotes?: readonly string[];
 }>;
 
 /** Applied wherever a service's placements are read — never a raw `service.placements` access elsewhere (spec section 54: older projects have this field undefined entirely). */
@@ -393,7 +403,8 @@ export function effectiveServicePlacements(service: TechnicalService): readonly 
 export function requiredPlacementCount(service: TechnicalService): number {
   const presentation = resolveServicePresentation(service);
   if (presentation.placementBehavior !== "point") return 0;
-  return presentation.placementCardinality === "perQuantity" ? service.quantity : 1;
+  // A decimal quantity (ABRA orders can print e.g. "1,500") still needs whole points — rounded up, never down.
+  return presentation.placementCardinality === "perQuantity" ? Math.max(0, Math.ceil(service.quantity)) : 1;
 }
 
 /** A free-text note attached to a stand from a report (spec section 13: e.g. a "doobjednáno telefonicky..." line under a waste-report row) — never discarded. */
@@ -1123,6 +1134,59 @@ export type ParsedTechnicalReport = Readonly<{
   warnings: readonly Omit<TechnicalRasterImportWarning, "id">[];
 }>;
 
+/**
+ * What a confirmed import replaces (incremental re-import):
+ *   - a plain import id — the previous import of the same category (the original behavior);
+ *   - or several imports at once plus, optionally, single services of a still-active import. The ABRA
+ *     order import replaces the previous order import AND the active per-category reports; a later
+ *     per-category report replaces only that category's services of an active order import.
+ * Every replaced service is paired with the new rows, so placements carry over (see
+ * mergeTechnicalRasterImportWithDiff).
+ */
+export type TechnicalImportReplacement = Readonly<{
+  /** Imports marked superseded; all of their services and notes are replaced. */
+  supersedeImportIds: readonly string[];
+  /** Additional services (of imports that stay active) replaced by this import. */
+  alsoReplaceService?: (service: TechnicalService) => boolean;
+}>;
+
+function normalizeReplacement(replace: string | TechnicalImportReplacement | undefined): TechnicalImportReplacement | undefined {
+  if (replace === undefined) return undefined;
+  return typeof replace === "string" ? { supersedeImportIds: [replace] } : replace;
+}
+
+/**
+ * Same logical service on the same stand? ABF code first: two services that both carry an ABF code
+ * (ABRA orders) are the same service only with the same code. Otherwise (a per-category report on
+ * either side) the category + variant identity (resolveServiceIdentityKey) decides — that is what
+ * lets an order import take over the placements of an earlier report import.
+ */
+export function servicesShareIdentity(previous: Pick<TechnicalService, "category" | "externalLabel" | "abfCode">, next: Pick<TechnicalService, "category" | "externalLabel" | "abfCode">): boolean {
+  if (previous.abfCode && next.abfCode) return previous.abfCode === next.abfCode;
+  return resolveServiceIdentityKey(previous.category, previous.externalLabel) === resolveServiceIdentityKey(next.category, next.externalLabel);
+}
+
+/** Which imports/services a new import of `category` replaces in `project` (undefined = a first import, nothing replaced). */
+export function resolveTechnicalImportReplacement(project: Pick<TechnicalRasterProject, "imports">, category: string): TechnicalImportReplacement | undefined {
+  const active = project.imports.filter((existing) => !existing.supersededByImportId);
+  if (category === ABRA_ORDER_IMPORT_CATEGORY) {
+    const replaced = active.filter((existing) => existing.category === ABRA_ORDER_IMPORT_CATEGORY || ABRA_ORDER_REPLACED_REPORT_CATEGORIES.includes(existing.category));
+    return replaced.length > 0 ? { supersedeImportIds: replaced.map((existing) => existing.id) } : undefined;
+  }
+  const previous = active.find((existing) => existing.category === category);
+  const activeOrders = active.find((existing) => existing.category === ABRA_ORDER_IMPORT_CATEGORY);
+  if (!previous && !activeOrders) return undefined;
+  return {
+    supersedeImportIds: previous ? [previous.id] : [],
+    ...(activeOrders ? { alsoReplaceService: (service: TechnicalService) => service.sourceImportId === activeOrders.id && service.category === category } : {}),
+  };
+}
+
+/** Import category of the ABRA order form ("3. Formulář objednávky přijaté ABF") — one import holding services of every technical category. */
+export const ABRA_ORDER_IMPORT_CATEGORY = "abra-orders";
+/** The per-category report imports an order import takes over (it is the primary source of these services). */
+export const ABRA_ORDER_REPLACED_REPORT_CATEGORIES: readonly string[] = ["electricity", "internet", "water", "waste", "cleaning"];
+
 function findStandIndex(stands: readonly TechnicalStand[], standNumber: string): number {
   return stands.findIndex((stand) => stand.standNumber === standNumber);
 }
@@ -1140,7 +1204,7 @@ export function mergeTechnicalRasterImport(
   importRecord: TechnicalRasterImport,
   report: ParsedTechnicalReport,
   resolveProduct: (category: string, externalLabel: string) => { internalProductId?: string; internalProductCode?: string; status: TechnicalServiceStatus },
-  replaceImportId?: string,
+  replaceImportId?: string | TechnicalImportReplacement,
 ): TechnicalRasterProject {
   return mergeTechnicalRasterImportWithDiff(project, importRecord, report, resolveProduct, replaceImportId).project;
 }
@@ -1171,35 +1235,47 @@ export function mergeTechnicalRasterImportWithDiff(
   importRecord: TechnicalRasterImport,
   report: ParsedTechnicalReport,
   resolveProduct: (category: string, externalLabel: string) => { internalProductId?: string; internalProductCode?: string; status: TechnicalServiceStatus },
-  replaceImportId?: string,
+  replaceImportId?: string | TechnicalImportReplacement,
 ): Readonly<{ project: TechnicalRasterProject; diff?: TechnicalImportServiceDiff }> {
   let stands = project.stands;
   let imports = project.imports;
+  const replacement = normalizeReplacement(replaceImportId);
 
-  // Old services of the replaced import, per stand, in their stored order — the pool re-import pairs against.
+  // Old services of the replaced import(s), per stand, in their stored order — the pool re-import pairs against.
   const previousByStand = new Map<string, TechnicalService[]>();
-  if (replaceImportId) {
+  if (replacement) {
+    const superseded = new Set(replacement.supersedeImportIds);
+    const isReplaced = (service: TechnicalService) => superseded.has(service.sourceImportId) || (replacement.alsoReplaceService?.(service) ?? false);
     for (const stand of stands) {
-      const previous = stand.services.filter((service) => service.sourceImportId === replaceImportId);
+      const previous = stand.services.filter(isReplaced);
       if (previous.length > 0) previousByStand.set(stand.standNumber, [...previous]);
     }
-    imports = imports.map((existing) => (existing.id === replaceImportId ? { ...existing, supersededByImportId: importRecord.id } : existing));
-    stands = stands.map((stand) => ({
-      ...stand,
-      services: stand.services.filter((service) => service.sourceImportId !== replaceImportId),
-      notes: stand.notes.filter((note) => note.sourceImportId !== replaceImportId),
-      sourceImportIds: stand.sourceImportIds.filter((id) => id !== replaceImportId),
-    }));
+    imports = imports.map((existing) => (superseded.has(existing.id) ? { ...existing, supersededByImportId: importRecord.id } : existing));
+    stands = stands.map((stand) => {
+      const services = stand.services.filter((service) => !isReplaced(service));
+      return {
+        ...stand,
+        services,
+        notes: stand.notes.filter((note) => !superseded.has(note.sourceImportId)),
+        // An import stays a source of the stand while any of its services is still there.
+        sourceImportIds: stand.sourceImportIds.filter((id) => !superseded.has(id) && (services.some((service) => service.sourceImportId === id) || stand.notes.some((note) => note.sourceImportId === id))),
+      };
+    });
   }
 
   const changes: TechnicalServiceChange[] = [];
   let unchangedCount = 0;
 
-  /** Takes (and removes from the pool) the first old service on this stand with the same identity. */
-  function takePrevious(standNumber: string, identity: string): TechnicalService | undefined {
+  /**
+   * Takes (and removes from the pool) the first old service on this stand that is the same service
+   * (servicesShareIdentity) — preferring one from the same ABRA order, so two equal items of
+   * different orders on one stand each keep their own placements.
+   */
+  function takePrevious(standNumber: string, next: Pick<TechnicalService, "category" | "externalLabel" | "abfCode" | "sourceOrderNumber">): TechnicalService | undefined {
     const pool = previousByStand.get(standNumber);
     if (!pool) return undefined;
-    const index = pool.findIndex((service) => resolveServiceIdentityKey(service.category, service.externalLabel) === identity);
+    const sameOrder = next.sourceOrderNumber ? pool.findIndex((service) => service.sourceOrderNumber === next.sourceOrderNumber && servicesShareIdentity(service, next)) : -1;
+    const index = sameOrder >= 0 ? sameOrder : pool.findIndex((service) => servicesShareIdentity(service, next));
     if (index < 0) return undefined;
     return pool.splice(index, 1)[0];
   }
@@ -1209,6 +1285,27 @@ export function mergeTechnicalRasterImportWithDiff(
   // row-level explicitNoServiceAssignment (always undefined for non-electricity parsers today
   // anyway) is simply never consulted below.
   const isElectricityImport = importRecord.category === "electricity";
+
+  /**
+   * Placements a paired service had beyond its new required count, per stand. They go to the next NEW
+   * service of the same identity on that stand instead of being dropped — e.g. a report row "Do 3kW"
+   * ×2 (2 points) becomes two separate L03 order lines of quantity 1: one point each. `change` is the
+   * diff entry that counted them as removed; it is corrected when they are handed over.
+   */
+  type Leftover = { from: TechnicalService; placements: TechnicalServicePlacement[]; change?: { removedPlacementCount: number } };
+  const leftoversByStand = new Map<string, Leftover[]>();
+  function takeLeftoverPlacements(standNumber: string, service: TechnicalService): TechnicalServicePlacement[] {
+    const taken: TechnicalServicePlacement[] = [];
+    const required = requiredPlacementCount(service);
+    for (const leftover of leftoversByStand.get(standNumber) ?? []) {
+      if (taken.length >= required) break;
+      if (!servicesShareIdentity(leftover.from, service)) continue;
+      const moved = leftover.placements.splice(0, required - taken.length);
+      taken.push(...moved);
+      if (leftover.change) leftover.change.removedPlacementCount -= moved.length;
+    }
+    return taken;
+  }
 
   let nextStands = [...stands];
   for (const row of report.rows) {
@@ -1222,20 +1319,24 @@ export function mergeTechnicalRasterImportWithDiff(
         internalProductCode: resolution.internalProductCode,
         status: resolution.status,
       };
-      const previous = replaceImportId ? takePrevious(standNumber, resolveServiceIdentityKey(service.category, service.externalLabel)) : undefined;
+      const previous = replacement ? takePrevious(standNumber, service) : undefined;
       if (!previous) {
-        const created: TechnicalService = { ...fresh, id: crypto.randomUUID() };
-        if (replaceImportId) changes.push({ kind: "added", standNumber, category: created.category, externalLabel: created.externalLabel, serviceId: created.id, previousQuantity: 0, quantity: created.quantity, removedPlacementCount: 0 });
+        const fromLeftovers = replacement ? takeLeftoverPlacements(standNumber, { ...fresh, id: "" }) : [];
+        const created: TechnicalService = { ...fresh, id: crypto.randomUUID(), ...(fromLeftovers.length > 0 ? { placements: fromLeftovers } : {}) };
+        if (replacement) changes.push({ kind: "added", standNumber, category: created.category, externalLabel: created.externalLabel, serviceId: created.id, previousQuantity: 0, quantity: created.quantity, removedPlacementCount: 0 });
         return created;
       }
       const kept: TechnicalService = { ...fresh, id: previous.id };
       const previousPlacements = effectiveServicePlacements(previous);
       const keptPlacements = previousPlacements.slice(0, requiredPlacementCount(kept));
       const updated: TechnicalService = previousPlacements.length > 0 ? { ...kept, placements: keptPlacements } : kept;
-      if (updated.quantity === previous.quantity) {
+      const surplus = previousPlacements.slice(keptPlacements.length);
+      const leftover: Leftover | undefined = surplus.length > 0 ? { from: previous, placements: [...surplus] } : undefined;
+      if (leftover) leftoversByStand.set(standNumber, [...(leftoversByStand.get(standNumber) ?? []), leftover]);
+      if (updated.quantity === previous.quantity && !leftover) {
         unchangedCount += 1;
       } else {
-        changes.push({
+        const change: { -readonly [K in keyof TechnicalServiceChange]: TechnicalServiceChange[K] } = {
           kind: updated.quantity > previous.quantity ? "quantityIncreased" : "quantityDecreased",
           standNumber,
           category: updated.category,
@@ -1244,7 +1345,9 @@ export function mergeTechnicalRasterImportWithDiff(
           previousQuantity: previous.quantity,
           quantity: updated.quantity,
           removedPlacementCount: previousPlacements.length - keptPlacements.length,
-        });
+        };
+        if (leftover) leftover.change = change;
+        changes.push(change);
       }
       return updated;
     });
@@ -1287,7 +1390,7 @@ export function mergeTechnicalRasterImportWithDiff(
     }
   }
 
-  const diff: TechnicalImportServiceDiff | undefined = replaceImportId
+  const diff: TechnicalImportServiceDiff | undefined = replacement
     ? {
       unchanged: unchangedCount,
       added: changes.filter((change) => change.kind === "added").length,

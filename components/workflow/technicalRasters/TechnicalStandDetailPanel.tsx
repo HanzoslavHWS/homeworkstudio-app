@@ -139,9 +139,15 @@ export function TechnicalStandDetailPanel({
             return (
               <div key={service.id} className="technicalStandServiceRow">
                 <div className="technicalStandServiceRowMain">
-                  <span>{service.externalLabel}</span>
+                  <span>{service.abfCode ? `${service.abfCode} · ` : ""}{service.externalLabel}</span>
                   <strong>{service.quantity}×</strong>
                 </div>
+                {service.sourceOrderNumber && (
+                  <p className="fieldHint technicalStandServiceOrigin">
+                    Objednávka {service.sourceOrderNumber}{service.sourceItemName ? ` — ${service.sourceItemName}` : ""}
+                    {service.itemNotes && service.itemNotes.length > 0 && <><br />Poznámka: {service.itemNotes.join(" / ")}</>}
+                  </p>
+                )}
 
                 {presentation.placementBehavior === "informational" && (
                   <p className="fieldHint technicalStandServiceInformationalHint">Bez umístění</p>

@@ -21,8 +21,19 @@ export const TECHNICAL_SERVICE_CATEGORIES: readonly TechnicalServiceCategory[] =
   { id: "other", labelCz: "Jiný / budoucí" },
 ];
 
+/**
+ * Import SOURCES that are not a single service category: the ABRA order form holds services of every
+ * category in one import (domain/abraOrderTechnicalImport.ts). Deliberately kept out of
+ * TECHNICAL_SERVICE_CATEGORIES, which drives the marker filters, legend and export checkboxes.
+ */
+export const TECHNICAL_IMPORT_SOURCES: readonly TechnicalServiceCategory[] = [
+  { id: "abra-orders", labelCz: "Formulář objednávek ABRA (všechny technické služby)" },
+];
+
 export function technicalServiceCategoryLabel(categoryId: string): string {
-  return TECHNICAL_SERVICE_CATEGORIES.find((category) => category.id === categoryId)?.labelCz ?? categoryId;
+  return TECHNICAL_SERVICE_CATEGORIES.find((category) => category.id === categoryId)?.labelCz
+    ?? TECHNICAL_IMPORT_SOURCES.find((source) => source.id === categoryId)?.labelCz
+    ?? categoryId;
 }
 
 export function isKnownTechnicalServiceCategory(categoryId: string): boolean {
