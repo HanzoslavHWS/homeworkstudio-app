@@ -233,7 +233,7 @@ Three independent, real-production fixes:
   already-verified normalized meaning. Auto-positioned next to the matched stand's own label (same
   matched_auto/matched_manual safety gate as realization underlines), visible automatically in the
   editor, export-gated by `rasterSettings.includeNoElectricityMarkersInExport` (default OFF), drawn
-  as two plain vector diagonal strokes (never a text glyph) inside TECHNICKÉ SLUŽBY (HOTFIX-02; was
+  as two plain vector diagonal strokes (never a text glyph) inside ABF – TECHNICKÉ ZNAČKY (HOTFIX-02; was
   GENERÁTOR DATA).
 - **WiFi cardinality** — `resolveTechnicalServicePresentation`'s WiFi variant is now
   `placementCardinality: "onePerRecord"` (was `"perQuantity"`): exactly ONE required marker
@@ -254,7 +254,7 @@ Three independent, real-production fixes:
 - Starting any service work (Umístit, U, Přemístit, pairing) switches drawing off. Service symbols are
   clickable only while drawing is off. Pan (middle button / space + drag) always works.
 - Persisted inside the project `document` JSON, so no migration is needed. Exported as vector shapes in
-  the TECHNICKÉ SLUŽBY layer together with the service markers (HOTFIX-02; the separate "RUČNÍ ZNAČKY"
+  the ABF – TECHNICKÉ ZNAČKY layer together with the service markers (HOTFIX-02; the separate "RUČNÍ ZNAČKY"
   layer is gone). OCG names outside Latin-1 are written as UTF-16, so "Š"/"Č" are not lost.
 
 ## Incremental report re-import (new version of an already imported report)
@@ -442,11 +442,12 @@ CorelDRAW check: [TECHNICAL_MARKERS_HOTFIX02.md](TECHNICAL_MARKERS_HOTFIX02.md).
   Czech letters and "³", `/ToUnicode`, whole font program as `/FontFile2`) — deliberately not pdf-lib's
   Type0/CID `drawText`, the shape CorelDRAW 2018 dropped. Export option "Texty jako křivky (záložní režim)"
   keeps the previous outline rendering (`textMode: "outlines"`).
-- **One layer.** Every automatic and manual technical element is inside ONE `/OC … BDC … EMC` bracket of the
-  OCG "TECHNICKÉ SLUŽBY": the source raster's own layer when the page has it (both real hall rasters do),
-  otherwise one new shared layer; it is forced ON when it receives content and never duplicated.
-  GENERÁTOR DATA keeps only realization underlines and the in-place legend and is created only when used.
-  All overlay content is written as raw operators into one buffer per page (pdf-lib's `drawLine` writes
-  into one lazily placed stream, which could land outside the bracket).
+- **One own layer.** Every automatic and manual technical element is inside ONE `/OC … BDC … EMC` bracket of
+  the generator's own OCG "ABF – TECHNICKÉ ZNAČKY", created once per export, shared by every page, ON,
+  appended after the source layers and drawn after the source content. The source raster's own
+  "TECHNICKÉ SLUŽBY" layer is never used, re-registered or switched (reusing it made CorelDRAW 2018 show
+  two layers with that name). GENERÁTOR DATA keeps only realization underlines and the in-place legend and
+  is created only when used. All overlay content is written as raw operators into one buffer per page
+  (pdf-lib's `drawLine` writes into one lazily placed stream, which could land outside the bracket).
 - **Legend** explains category colors only ("● ELEKTŘINA", "● INTERNET / WiFi", …), lists only categories
   used by placements or manual marks, and shows NEUTRÁLNÍ only for neutral manual marks.

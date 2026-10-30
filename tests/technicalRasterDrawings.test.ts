@@ -47,7 +47,7 @@ import type { StoredAsset } from "../domain/assets.ts";
 // =========================================================================================
 // RUČNÍ ZNAČKY — manual points ("Bod" — dot ● / cross ×) and lines A–B ("Čára"): a separate project
 // layer (project.manualDrawings), same normalized page space as placements. HOTFIX-02: technical
-// color categories, notes (internal / visible), exported inside the TECHNICKÉ SLUŽBY layer.
+// color categories, notes (internal / visible), exported inside the ABF – TECHNICKÉ ZNAČKY layer.
 // =========================================================================================
 
 const RED = TECHNICAL_RASTER_COLORS.electricity;
@@ -297,7 +297,7 @@ test("MODES (editor wiring): tools and service work are mutually exclusive; serv
 });
 
 // =========================================================================================
-// Export — HOTFIX-02: every manual mark is vector geometry inside the ONE "TECHNICKÉ SLUŽBY" layer
+// Export — HOTFIX-02: every manual mark is vector geometry inside the ONE "ABF – TECHNICKÉ ZNAČKY" layer
 // (shared with the service markers), a visible note is a real PDF text object.
 // =========================================================================================
 
@@ -319,14 +319,14 @@ async function pageContent(bytes: Uint8Array, pageIndex: number): Promise<string
   return streams.map((stream) => (stream instanceof PDFRawStream ? new TextDecoder("latin1").decode(decodePDFRawStream(stream).decode()) : "")).join("\n");
 }
 
-/** The "TECHNICKÉ SLUŽBY" marked-content block of a page, plus every stroked segment (m … l), stroke color (RG), fill color (rg), line width (w) and real text show (Tj) in it. */
+/** The "ABF – TECHNICKÉ ZNAČKY" marked-content block of a page, plus every stroked segment (m … l), stroke color (RG), fill color (rg), line width (w) and real text show (Tj) in it. */
 async function technicalLayerBlock(bytes: Uint8Array, pageIndex: number) {
   const doc = await PDFDocument.load(bytes);
   const properties = (doc.getPage(pageIndex).node.lookup(PDFName.of("Resources")) as PDFDict).lookup(PDFName.of("Properties")) as PDFDict | undefined;
   const key = properties?.keys().find((candidate) => {
     const ocg = doc.context.lookup(properties.get(candidate));
     const name = ocg instanceof PDFDict ? ocg.lookup(PDFName.of("Name")) : undefined;
-    return (name instanceof PDFString || name instanceof PDFHexString) && name.decodeText() === "TECHNICKÉ SLUŽBY";
+    return (name instanceof PDFString || name instanceof PDFHexString) && name.decodeText() === "ABF – TECHNICKÉ ZNAČKY";
   });
   if (!key) return undefined;
   const content = await pageContent(bytes, pageIndex);
@@ -377,17 +377,17 @@ function legacyPlusPoint(page: number, x: number, y: number, color: string, id: 
 }
 
 for (const rotate of [0, 90]) {
-  test(`EXPORT (page rotation ${rotate}°): older "+" point = two strokes crossing at its position, × point = two diagonals, line = one stroke A->B — all in the ON "TECHNICKÉ SLUŽBY" layer`, async () => {
+  test(`EXPORT (page rotation ${rotate}°): older "+" point = two strokes crossing at its position, × point = two diagonals, line = one stroke A->B — all in the ON "ABF – TECHNICKÉ ZNAČKY" layer`, async () => {
     const source = await buildSource({ rotate });
     const geometry = await resolveSourcePageGeometry(source, 1);
     const plus = legacyPlusPoint(1, 0.25, 0.4, RED, "p");
     const cross = mkPoint(1, 0.6, 0.6, "neutral", "medium", "x", "cross");
     const ln = mkLine(1, { x: 0.1, y: 0.8 }, { x: 0.9, y: 0.2 }, "internet", "thick", "l");
     const { bytes, technicalLayerStatus } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", manualDrawings: buildManualDrawingExportItems([plus, cross, ln], 1) });
-    assert.equal(technicalLayerStatus, "created", "a source without the layer gets one new TECHNICKÉ SLUŽBY layer");
+    assert.equal(technicalLayerStatus, "created", "a source without the layer gets one new ABF – TECHNICKÉ ZNAČKY layer");
 
     const block = await technicalLayerBlock(bytes, 0);
-    assert.ok(block, "TECHNICKÉ SLUŽBY layer exists on the page");
+    assert.ok(block, "ABF – TECHNICKÉ ZNAČKY layer exists on the page");
     const raw = (x: number, y: number) => { const p = normalizedDisplayPointToRawPdfPoint(x, y, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform); return [p.x, p.y]; };
     const center = raw(0.25, 0.4);
     const half = DRAWING_SIZES.medium.crossHalfPt;
@@ -403,7 +403,7 @@ for (const rotate of [0, 90]) {
     assert.ok(block!.colors.some((color) => near(color, hexToFractions(BLUE))), "internet-gold line");
     assert.ok(block!.widths.includes(DRAWING_SIZES.thick.strokePt), "thick line width");
     const layers = await viewerLayers(bytes);
-    assert.equal(layers.get("TECHNICKÉ SLUŽBY"), true);
+    assert.equal(layers.get("ABF – TECHNICKÉ ZNAČKY"), true);
     assert.equal(layers.has("RUČNÍ ZNAČKY"), false, "manual marks never get a separate layer any more");
     assert.equal(layers.has("GENERÁTOR DATA"), false, "no empty generator layer when there is nothing else to put in it");
   });
@@ -423,7 +423,7 @@ test("EXPORT: a dot ● is a filled vector circle in the category color, centere
   assert.equal(block!.segments.length, 0, "a dot has no strokes");
 });
 
-test("EXPORT notes: a VISIBLE note is a real, extractable PDF text object (Czech + ³) in TECHNICKÉ SLUŽBY; an INTERNAL note is not in the PDF at all", async () => {
+test("EXPORT notes: a VISIBLE note is a real, extractable PDF text object (Czech + ³) in ABF – TECHNICKÉ ZNAČKY; an INTERNAL note is not in the PDF at all", async () => {
   let project = withManualDrawingAdded(baseProject(), mkPoint(1, 0.3, 0.3, "electricity", "medium", "visible"));
   project = withManualDrawingAdded(project, mkLine(1, { x: 0.5, y: 0.5 }, { x: 0.8, y: 0.5 }, "water", "medium", "line"));
   project = withManualDrawingAdded(project, mkPoint(1, 0.7, 0.7, "neutral", "medium", "internal", "cross"));
@@ -450,13 +450,13 @@ test("EXPORT notes in the 'outlines' fallback: the visible note becomes vector g
   assert.ok(!(await viewerText(bytes)).some((item) => item.includes("Přívod")));
 });
 
-test("EXPORT without drawings: no TECHNICKÉ SLUŽBY or RUČNÍ ZNAČKY layer at all (existing exports unchanged)", async () => {
+test("EXPORT without drawings: no ABF – TECHNICKÉ ZNAČKY or RUČNÍ ZNAČKY layer at all (existing exports unchanged)", async () => {
   const layers = await viewerLayers((await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: await buildSource(), page: 1, placements: [], legend: [], showLegend: false, headerLine: "X" })).bytes);
   assert.equal(layers.has("RUČNÍ ZNAČKY"), false);
-  assert.equal(layers.has("TECHNICKÉ SLUŽBY"), false);
+  assert.equal(layers.has("ABF – TECHNICKÉ ZNAČKY"), false);
 });
 
-test("EXPORT multi-page: each drawing lands on its own page; ONE shared TECHNICKÉ SLUŽBY layer", async () => {
+test("EXPORT multi-page: each drawing lands on its own page; ONE shared ABF – TECHNICKÉ ZNAČKY layer", async () => {
   const drawings = [mkPoint(2, 0.5, 0.5, "water", "thin", "p2", "cross"), mkLine(1, { x: 0.2, y: 0.2 }, { x: 0.4, y: 0.4 }, "electricity", "medium", "l1")];
   const { bytes } = await buildTechnicalRasterMultiPageVectorExportPdf({
     sourcePdfBytes: await buildSource({ pages: 3 }),
@@ -470,22 +470,22 @@ test("EXPORT multi-page: each drawing lands on its own page; ONE shared TECHNICK
   assert.equal(page2!.segments.length, 2, "point (cross) on page 2");
   assert.equal(page3, undefined, "no drawings on page 3");
   const layers = await viewerLayers(bytes);
-  assert.equal(layers.get("TECHNICKÉ SLUŽBY"), true);
-  assert.equal([...layers.keys()].filter((name) => name === "TECHNICKÉ SLUŽBY").length, 1);
+  assert.equal(layers.get("ABF – TECHNICKÉ ZNAČKY"), true);
+  assert.equal([...layers.keys()].filter((name) => name === "ABF – TECHNICKÉ ZNAČKY").length, 1);
 });
 
-// Real hall rasters — skip-safe (gitignored _IMPORT/ customer files). Both carry their OWN empty,
-// ON "TECHNICKÉ SLUŽBY" layer: the export must reuse it, never add a second one.
+// Real hall rasters — skip-safe (gitignored _IMPORT/ customer files). Both carry their OWN
+// "TECHNICKÉ SLUŽBY" layer: it must stay untouched; our marks go into ONE new "ABF – TECHNICKÉ ZNAČKY".
 for (const file of ["Hala 1.pdf", "Hala 3_2026- ver.12_NOVY_3.pdf"]) {
   const filePath = new URL(`../_IMPORT/${file}`, import.meta.url);
-  test(`REAL ${file}: manual marks + visible note go into the raster's OWN TECHNICKÉ SLUŽBY layer — every source layer kept, no duplicate name`, { skip: !existsSync(filePath) }, async () => {
+  test(`REAL ${file}: manual marks + visible note go into ONE new "ABF – TECHNICKÉ ZNAČKY" layer, appended after every untouched source layer`, { skip: !existsSync(filePath) }, async () => {
     const source = new Uint8Array(await readFile(filePath));
     const sourceLayers = await viewerLayers(source);
     const geometry = await resolveSourcePageGeometry(source, 1);
     const ln = mkLine(1, { x: 0.3, y: 0.3 }, { x: 0.6, y: 0.5 }, "water", "medium", "l");
     const pt = { ...mkPoint(1, 0.5, 0.5, "electricity", "medium", "p"), note: { text: "Přívod elektřiny ze stropu", visible: true } };
     const { bytes, technicalLayerStatus } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", manualDrawings: buildManualDrawingExportItems([pt, ln], 1) });
-    assert.equal(technicalLayerStatus, "reused_source_layer");
+    assert.equal(technicalLayerStatus, "created");
     const block = await technicalLayerBlock(bytes, 0);
     const a = normalizedDisplayPointToRawPdfPoint(0.3, 0.3, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
     const b = normalizedDisplayPointToRawPdfPoint(0.6, 0.5, geometry.displayWidthPt, geometry.displayHeightPt, geometry.viewportTransform);
@@ -493,7 +493,8 @@ for (const file of ["Hala 1.pdf", "Hala 3_2026- ver.12_NOVY_3.pdf"]) {
     assert.ok(block!.colors.some((color) => near(color, hexToFractions(GREEN))));
     assert.ok((await viewerText(bytes)).includes("Přívod elektřiny ze stropu"));
     const layers = await viewerLayers(bytes);
-    assert.deepEqual([...layers.keys()], [...sourceLayers.keys()], "exactly the source layers, same order — nothing added, nothing lost");
-    assert.equal(layers.get("TECHNICKÉ SLUŽBY"), true);
+    assert.deepEqual([...layers.keys()], [...sourceLayers.keys(), "ABF – TECHNICKÉ ZNAČKY"], "every source layer in its order, then exactly one layer of ours");
+    for (const [name, visible] of sourceLayers) assert.equal(layers.get(name), visible, `${name} keeps its state`);
+    assert.equal(layers.get("ABF – TECHNICKÉ ZNAČKY"), true);
   });
 }

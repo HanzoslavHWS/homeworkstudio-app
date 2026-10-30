@@ -507,11 +507,11 @@ function ensureGeneratorDataOcg(newDoc: PDFDocument, copiedPage: PDFPage, existi
   return ensureOverlayOcg(newDoc, copiedPage, existingRef, GENERATOR_DATA_OCG_NAME, "GenData");
 }
 
-/** Same mechanics as ensureGeneratorDataOcg, for any named overlay layer (GENERÁTOR DATA, TECHNICKÉ SLUŽBY). */
+/** Same mechanics as ensureGeneratorDataOcg, for any named overlay layer (GENERÁTOR DATA, ABF – TECHNICKÉ ZNAČKY). */
 function ensureOverlayOcg(newDoc: PDFDocument, copiedPage: PDFPage, existingRef: PDFRef | undefined, ocgName: string, propertyKeyPrefix: string): Readonly<{ ref: PDFRef; propertyName: string }> {
   const ctx = newDoc.context;
-  // PDFString only carries PDFDocEncoding: "Á" in "GENERÁTOR DATA" survives, but "Š" in
-  // "TECHNICKÉ SLUŽBY" would be silently dropped. Names outside Latin-1 are therefore
+  // PDFString only carries PDFDocEncoding: "Á" in "GENERÁTOR DATA" survives, but "–"/"Č" in
+  // "ABF – TECHNICKÉ ZNAČKY" would be silently dropped. Names outside Latin-1 are therefore
   // written as a UTF-16 hex string; GENERÁTOR DATA keeps its existing, byte-identical encoding.
   const nameObject = /^[ -~ -ÿ]*$/u.test(ocgName) ? PDFString.of(ocgName) : PDFHexString.fromText(ocgName);
   const ref = existingRef ?? ctx.register(ctx.obj({ Type: "OCG", Name: nameObject }));
@@ -1256,7 +1256,7 @@ function realizationUnderlineOperators(item: TechnicalRasterExportRealizationUnd
 // ============================================================================
 // "BEZ elektriky" automatic red X (PRODUCTION BATCH, part B) — two plain vector strokes centered on
 // domain/technicalRasterNoElectricityMarker.ts's geometry. An automatic technical marker, so it
-// lives in the TECHNICKÉ SLUŽBY layer (HOTFIX-02).
+// lives in the ABF – TECHNICKÉ ZNAČKY layer (HOTFIX-02).
 // ============================================================================
 
 export type TechnicalRasterExportNoElectricityMarkerItem = Readonly<{
@@ -1282,7 +1282,7 @@ function noElectricityMarkerOperators(item: TechnicalRasterExportNoElectricityMa
 // drawing's category color, positioned through the SAME rotation-aware normalized -> raw PDF
 // transform as every placement: a dot (filled circle), a cross × (two diagonal strokes), the original
 // "+" of an older point, or a line A–B. A VISIBLE note is real text right of a point / above a
-// line's midpoint (internal notes never reach this code). All inside TECHNICKÉ SLUŽBY (HOTFIX-02).
+// line's midpoint (internal notes never reach this code). All inside ABF – TECHNICKÉ ZNAČKY (HOTFIX-02).
 // ============================================================================
 
 function manualDrawingOperators(page: PDFPage, item: TechnicalRasterExportDrawingItem, geometry: SourcePageGeometry, renderer: ExportTextRenderer): string {
@@ -1544,81 +1544,23 @@ function inPlaceLegendOperators(
 // ============================================================================
 // One source page's overlay (HOTFIX-02, phase 6) — the two generator layers:
 //
-//   TECHNICKÉ SLUŽBY — EVERY automatic and manual technical element: service labels, "BEZ
-//     elektriky", manual dots/crosses/lines and their VISIBLE notes. The source raster's OWN
-//     "TECHNICKÉ SLUŽBY" layer is reused when the page has it (both real hall rasters do — an empty,
-//     ON layer prepared for exactly this) — never a second layer with the same name; otherwise one
-//     is created once and shared by every page. Forced ON when it receives content.
+//   ABF – TECHNICKÉ ZNAČKY — the generator's OWN layer for EVERY automatic and manual technical
+//     element: service labels, "BEZ elektriky", manual dots/crosses/lines and their VISIBLE notes.
+//     Created once per export, shared by every page, registered ON and appended LAST to /Order.
+//     The source raster's own "TECHNICKÉ SLUŽBY" layer is never used, re-registered or switched:
+//     CorelDRAW 2018 showed the source layer and our content as two layers with the SAME name, so
+//     our layer has its own, distinct name (HOTFIX-02 follow-up, 30. 10. 2026).
 //   GENERÁTOR DATA — the rest of the generator's additions (realization underlines, the in-place
-//     legend) — created only when there is something to put in it.
+//     legend with its white cover) — created only when there is something to put in it.
 //
-// The source page's own content and layers are never modified here.
+// Both are drawn AFTER the copied source content, so they are always on top of the raster; the
+// source page's own content and layers are never modified here.
 // ============================================================================
 
-export const TECHNICAL_SERVICES_OCG_NAME = "TECHNICKÉ SLUŽBY";
+export const TECHNICAL_MARKERS_OCG_NAME = "ABF – TECHNICKÉ ZNAČKY";
 
-/** How the technical layer was obtained: the source raster's own layer, a newly created one, or not needed (nothing to draw). */
-export type TechnicalServicesLayerStatus = "reused_source_layer" | "created" | "not_needed";
-
-function propertyKeyForRef(page: PDFPage, ref: PDFRef): string | undefined {
-  const resources = page.node.lookup(PDFName.of("Resources"));
-  const properties = resources instanceof PDFDict ? resources.lookup(PDFName.of("Properties")) : undefined;
-  if (!(properties instanceof PDFDict)) return undefined;
-  return properties.keys().find((key) => properties.get(key)?.toString() === ref.toString())?.decodeText();
-}
-
-function orderContainsRef(array: PDFArray, ref: PDFRef, ctx: PDFContext): boolean {
-  for (let i = 0; i < array.size(); i += 1) {
-    const entry = array.get(i);
-    if (entry?.toString() === ref.toString()) return true;
-    const nested = entry ? ctx.lookup(entry) : undefined;
-    if (nested instanceof PDFArray && orderContainsRef(nested, ref, ctx)) return true;
-  }
-  return false;
-}
-
-/** Registers `ref` in /OCGs, /D/ON and /D/Order (never duplicating a nested /Order entry) and removes it from /D/OFF — the layer that carries the technical data must be visible by default. */
-function registerOcgDefaultOn(newDoc: PDFDocument, ref: PDFRef): void {
-  const ctx = newDoc.context;
-  const ocProps = ensureDictChild(newDoc.catalog, ctx, "OCProperties");
-  pushRefIfAbsent(ensureArrayChild(ocProps, ctx, "OCGs"), ref);
-  const dDict = ensureDictChild(ocProps, ctx, "D");
-  if (!(dDict.lookup(PDFName.of("BaseState")) instanceof PDFName)) dDict.set(PDFName.of("BaseState"), PDFName.of("ON"));
-  pushRefIfAbsent(ensureArrayChild(dDict, ctx, "ON"), ref);
-  const off = dDict.lookup(PDFName.of("OFF"));
-  if (off instanceof PDFArray) {
-    for (let i = off.size() - 1; i >= 0; i -= 1) if (off.get(i)?.toString() === ref.toString()) off.remove(i);
-  }
-  const order = ensureArrayChild(dDict, ctx, "Order");
-  if (!orderContainsRef(order, ref, ctx)) order.push(ref);
-}
-
-/**
- * Removes every OTHER OCG named TECHNICKÉ SLUŽBY from the catalog lists, so a viewer never shows the
- * layer twice. Only relevant for a multi-page source (each page is copied separately, so each page
- * brings its own copy of the source layer object); the copies' content — if any — stays on the page.
- */
-function dropDuplicateTechnicalLayerRegistrations(newDoc: PDFDocument, keep: PDFRef): void {
-  const ctx = newDoc.context;
-  const ocProps = newDoc.catalog.lookup(PDFName.of("OCProperties"));
-  if (!(ocProps instanceof PDFDict)) return;
-  const isDuplicate = (entry: unknown): boolean => {
-    if (!(entry instanceof PDFRef) || entry.toString() === keep.toString()) return false;
-    const ocg = ctx.lookup(entry);
-    return ocg instanceof PDFDict && decodePdfTextLike(ocg.lookup(PDFName.of("Name"))) === TECHNICAL_SERVICES_OCG_NAME;
-  };
-  const prune = (array: unknown): void => {
-    if (!(array instanceof PDFArray)) return;
-    for (let i = array.size() - 1; i >= 0; i -= 1) {
-      const entry = array.get(i);
-      if (isDuplicate(entry)) { array.remove(i); continue; }
-      prune(entry ? ctx.lookup(entry) : undefined);
-    }
-  };
-  prune(ocProps.lookup(PDFName.of("OCGs")));
-  const dDict = ocProps.lookup(PDFName.of("D"));
-  if (dDict instanceof PDFDict) for (const key of ["ON", "OFF", "Order", "Locked"]) prune(dDict.lookup(PDFName.of(key)));
-}
+/** Whether the export needed (and therefore created) its own technical layer. */
+export type TechnicalServicesLayerStatus = "created" | "not_needed";
 
 type SourcePageOverlayInput = Readonly<{
   newDoc: PDFDocument;
@@ -1631,15 +1573,13 @@ type SourcePageOverlayInput = Readonly<{
   /** Set only when the in-place legend targets THIS page. */
   inPlaceLegend?: Readonly<{ box: Readonly<{ x: number; y: number; width: number; height: number }>; legend: readonly TechnicalRasterExportLegendEntry[]; usedRealizationGroups: readonly TechnicalRealizationGroupInfo[] }>;
   renderer: ExportTextRenderer;
-  /** The TECHNICKÉ SLUŽBY ref already used on an earlier page (shared across the whole export), and whether it is the source raster's own layer. */
+  /** Our own technical layer, once an earlier page created it (shared across the whole export). */
   technicalLayerRef: PDFRef | undefined;
-  technicalLayerIsSourceLayer: boolean;
   generatorDataRef: PDFRef | undefined;
 }>;
 
 type SourcePageOverlayResult = Readonly<{
   technicalLayerRef: PDFRef | undefined;
-  technicalLayerIsSourceLayer: boolean;
   generatorDataRef: PDFRef | undefined;
   skippedInvalidPlacementCount: number;
   inPlaceLegendDrawn: boolean;
@@ -1681,31 +1621,20 @@ function drawSourcePageOverlay(input: SourcePageOverlayInput): SourcePageOverlay
     }
   }
 
-  // TECHNICKÉ SLUŽBY first, GENERÁTOR DATA on top (the in-place legend's white cover must stay
+  // Our technical layer first, GENERÁTOR DATA on top (the in-place legend's white cover must stay
   // readable even where a marker happens to sit inside its region — same stacking as before).
+  // ensureOverlayOcg creates the layer once (reusing the shared ref on later pages) and registers it
+  // in /OCGs, /D/ON and at the END of /D/Order — never touching any source layer.
   let technicalLayerRef = input.technicalLayerRef;
-  let technicalLayerIsSourceLayer = input.technicalLayerIsSourceLayer;
   if (!technical.isEmpty) {
-    // Prefer the source raster's own layer; once the export has a technical layer, every later page
-    // reuses that SAME object (never a second layer with the same name).
-    const sourceRef = buildOcgNameToCopiedRefMap(newDoc, page).get(TECHNICAL_SERVICES_OCG_NAME);
-    if (!technicalLayerRef && sourceRef) {
-      technicalLayerRef = sourceRef;
-      technicalLayerIsSourceLayer = true;
-    }
-    let propertyName = technicalLayerRef ? propertyKeyForRef(page, technicalLayerRef) : undefined;
-    if (!propertyName) {
-      const layer = ensureOverlayOcg(newDoc, page, technicalLayerRef, TECHNICAL_SERVICES_OCG_NAME, "TechSluzby");
-      technicalLayerRef = layer.ref;
-      propertyName = layer.propertyName;
-    }
-    registerOcgDefaultOn(newDoc, technicalLayerRef!);
-    appendRawContentChunk(newDoc.context, page, `/OC /${propertyName} BDC`);
+    const layer = ensureOverlayOcg(newDoc, page, technicalLayerRef, TECHNICAL_MARKERS_OCG_NAME, "AbfTechnicalMarkers");
+    technicalLayerRef = layer.ref;
+    appendRawContentChunk(newDoc.context, page, `/OC /${layer.propertyName} BDC`);
     technical.flush(page);
     appendRawContentChunk(newDoc.context, page, "EMC");
   } else if (technicalLayerRef) {
     // Re-register after this page's own OCProperties rebuild (see reconstructOcProperties).
-    registerOcgDefaultOn(newDoc, technicalLayerRef);
+    appendGeneratorDataOcgToCatalog(newDoc, technicalLayerRef);
   }
 
   let generatorDataRef = input.generatorDataRef;
@@ -1719,7 +1648,7 @@ function drawSourcePageOverlay(input: SourcePageOverlayInput): SourcePageOverlay
     appendGeneratorDataOcgToCatalog(newDoc, generatorDataRef);
   }
 
-  return { technicalLayerRef, technicalLayerIsSourceLayer, generatorDataRef, skippedInvalidPlacementCount, inPlaceLegendDrawn };
+  return { technicalLayerRef, generatorDataRef, skippedInvalidPlacementCount, inPlaceLegendDrawn };
 }
 
 // ============================================================================
@@ -1748,7 +1677,7 @@ export type TechnicalRasterVectorExportInput = Readonly<{
   legendPlacement?: TechnicalLegendPlacement;
   /** The project's actual source-layer ON/OFF state -> the exported PDF's default OCG state (see reconstructOcProperties). Omitted keeps the source PDF's own defaults. */
   sourceLayerVisibility?: readonly TechnicalRasterExportSourceLayerVisibility[];
-  /** Manual points/lines on THIS page (domain/technicalRasterDrawings.ts buildManualDrawingExportItems) — drawn in TECHNICKÉ SLUŽBY. */
+  /** Manual points/lines on THIS page (domain/technicalRasterDrawings.ts buildManualDrawingExportItems) — drawn in ABF – TECHNICKÉ ZNAČKY. */
   manualDrawings?: readonly TechnicalRasterExportDrawingItem[];
   /** HOTFIX-02 — "text" (default): real editable text; "outlines": the previous vector-outline labels (fallback). */
   textMode?: TechnicalRasterExportTextMode;
@@ -1763,7 +1692,7 @@ export type TechnicalRasterVectorExportResult = Readonly<{
   whiteModeDiagnostic: VectorWhiteModeDiagnostic;
   /** PRODUCTION BATCH, part A — one diagnostic per requested `input.textScales` entry. */
   textScaleDiagnostics: readonly TechnicalRasterTextScaleDiagnostic[];
-  /** HOTFIX-02 — where the technical data went (the source's own TECHNICKÉ SLUŽBY layer, a new one, or nowhere because nothing was drawn). */
+  /** HOTFIX-02 — whether the export created its own "ABF – TECHNICKÉ ZNAČKY" layer ("not_needed" = nothing technical was drawn). */
   technicalLayerStatus: TechnicalServicesLayerStatus;
   textMode: TechnicalRasterExportTextMode;
 }>;
@@ -1771,7 +1700,7 @@ export type TechnicalRasterVectorExportResult = Readonly<{
 /**
  * The single-page export entry point (spec batch 9). Source page copied 1:1 (no rasterization, no
  * resize/rescale) -> OCG catalog reconstructed -> "Pracovní — bílé" / text scale applied to the copied
- * page's own content stream if requested -> technical overlay in TECHNICKÉ SLUŽBY (+ GENERÁTOR DATA)
+ * page's own content stream if requested -> technical overlay in ABF – TECHNICKÉ ZNAČKY (+ GENERÁTOR DATA)
  * -> a separate legend page unless the in-place legend fits -> saved. Never mutates `sourcePdfBytes`.
  */
 export async function buildTechnicalRasterVectorExportPdf(input: TechnicalRasterVectorExportInput): Promise<TechnicalRasterVectorExportResult> {
@@ -1813,7 +1742,7 @@ export type TechnicalRasterVectorExportPageInput = Readonly<{
   realizationUnderlines?: readonly TechnicalRasterExportRealizationUnderlineItem[];
   /** PRODUCTION BATCH, part B section 17/18 — every "BEZ elektriky" red-X marker on THIS page. */
   noElectricityMarkers?: readonly TechnicalRasterExportNoElectricityMarkerItem[];
-  /** Manual points/lines on THIS page — drawn in TECHNICKÉ SLUŽBY. */
+  /** Manual points/lines on THIS page — drawn in ABF – TECHNICKÉ ZNAČKY. */
   manualDrawings?: readonly TechnicalRasterExportDrawingItem[];
 }>;
 
@@ -1873,7 +1802,6 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
   // ONE shared ref per generator layer across every exported page (reconstructOcProperties rebuilds
   // /OCProperties per page; the overlay re-registers both layers after each rebuild).
   let technicalLayerRef: PDFRef | undefined;
-  let technicalLayerIsSourceLayer = false;
   let generatorDataRef: PDFRef | undefined;
   const textScaleDiagnostics: TechnicalRasterTextScaleDiagnostic[] = [];
 
@@ -1908,17 +1836,14 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
         : undefined,
       renderer,
       technicalLayerRef,
-      technicalLayerIsSourceLayer,
       generatorDataRef,
     });
     technicalLayerRef = overlay.technicalLayerRef;
-    technicalLayerIsSourceLayer = overlay.technicalLayerIsSourceLayer;
     generatorDataRef = overlay.generatorDataRef;
     skippedInvalidPlacementCount += overlay.skippedInvalidPlacementCount;
     // A region that cannot hold the legend draws NOTHING here; the separate page below takes over.
     if (overlay.inPlaceLegendDrawn) inPlaceLegendPageNumber = exportPageNumber;
   }
-  if (technicalLayerRef) dropDuplicateTechnicalLayerRegistrations(newDoc, technicalLayerRef);
 
   let legendPageNumber: number;
   if (inPlaceLegendPageNumber !== undefined) {
@@ -1931,6 +1856,6 @@ export async function buildTechnicalRasterMultiPageVectorExportPdf(input: Techni
 
   renderer.finalize();
   const bytes = await newDoc.save();
-  const technicalLayerStatus: TechnicalServicesLayerStatus = !technicalLayerRef ? "not_needed" : technicalLayerIsSourceLayer ? "reused_source_layer" : "created";
+  const technicalLayerStatus: TechnicalServicesLayerStatus = technicalLayerRef ? "created" : "not_needed";
   return { bytes, ocgDiagnosticsByPage, skippedInvalidPlacementCount, legendPageNumber, whiteModeDiagnosticsByPage, textScaleDiagnostics, technicalLayerStatus, textMode: renderer.mode };
 }

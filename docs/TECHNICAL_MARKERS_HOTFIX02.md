@@ -1,7 +1,7 @@
 # Technické rastry — HOTFIX-02: technické značky, ruční kreslení a PDF export
 
 Pracovní dokument hotfixu pro WEB verzi (větev `hotfix/technical-markers-pdf` z `master` 9abd0a0, 29. 10. 2026).
-Zadání: schválené technické značky, sbalitelné nespárované položky, ruční značky s poznámkami, upravitelné texty v PDF, jedna vrstva `TECHNICKÉ SLUŽBY`, zjednodušená legenda.
+Zadání: schválené technické značky, sbalitelné nespárované položky, ruční značky s poznámkami, upravitelné texty v PDF, vlastní vrstva `ABF – TECHNICKÉ ZNAČKY`, zjednodušená legenda.
 Bez změny databázového schématu, bez migrace — vše žije v existujícím JSON dokumentu projektu.
 
 ## 1. Technické značky podle schváleného Excelu
@@ -44,11 +44,11 @@ Identity, které nikdy nekolidovaly (`2kw`, `wifi`, `fixed-ip`, `cleaning:daily`
 - Záložní režim: ve Výstupech „Texty jako křivky (záložní režim)“ = dosavadní chování.
 - Znak, který font neobsahuje (např. emoji v poznámce), se nahradí „?“.
 
-## 5. Jedna vrstva `TECHNICKÉ SLUŽBY`
+## 5. Vlastní vrstva `ABF – TECHNICKÉ ZNAČKY`
 
-- Všechny automatické i ruční technické prvky (popisky služeb, červené X „BEZ elektriky“, ruční puntíky/křížky/čáry, viditelné poznámky) jsou v jednom bloku `/OC … BDC … EMC` vrstvy `TECHNICKÉ SLUŽBY`.
-- Oba reálné rastry (Hala 1, Hala 3) tuto vrstvu mají → použije se ta zdrojová (stejný objekt, žádná nová vrstva se stejným názvem). Zdrojová vrstva v Hale 1 už obsahuje vlastní kresbu — zůstane, naše značky se přidají za ni. Rastr bez vrstvy dostane jednu novou, sdílenou všemi stránkami.
-- Vrstva s technickými daty se v exportu vždy zapne (ON), i když ji měl projekt vypnutou; bez technických dat se stav projektu respektuje.
+- Všechny automatické i ruční technické prvky (popisky služeb, červené X „BEZ elektriky“, ruční puntíky/křížky/čáry, viditelné poznámky) jsou v jednom bloku `/OC … BDC … EMC` vlastní vrstvy generátoru `ABF – TECHNICKÉ ZNAČKY`.
+- Úprava 30. 10. 2026 po testu v CorelDRAW 2018: původně se značky vkládaly do zdrojové vrstvy `TECHNICKÉ SLUŽBY` a Corel pak ukázal dvě vrstvy stejného jména. Nově se původní vrstva `TECHNICKÉ SLUŽBY` (i se svou kresbou a stavem ON/OFF) **nikdy nepoužívá ani nemění**. Naše vrstva vzniká jednou na export, sdílí ji všechny stránky, je zapnutá a v seznamu vrstev je za všemi zdrojovými. Obsah je vykreslen za zdrojovým obsahem, takže je vždy nad rastrem.
+- Export bez technických dat žádnou vlastní vrstvu nepřidá.
 - Samostatná vrstva `RUČNÍ ZNAČKY` zanikla. `GENERÁTOR DATA` zůstává jen pro podtržení realizací a legendu v rastru a vzniká jen tehdy, když má obsah.
 - Ostatní zdrojové vrstvy: názvy, pořadí, vnoření i stavy ON/OFF beze změny (testy na obou reálných rastrech).
 - Technicky: veškerý obsah překryvu se zapisuje jako vlastní operátory do jednoho bufferu na stránku. `page.drawLine()` z pdf-lib zapisuje do jednoho proudu umístěného tam, kde byl poprvé použit, a mohl by tak skončit mimo hranice vrstvy.
@@ -59,7 +59,7 @@ Identity, které nikdy nekolidovaly (`2kw`, `wifi`, `fixed-ip`, `cleaning:daily`
 
 ## 7. Testy a ověření
 
-- `npm test`: 3 067 testů — 3 065 prošlo, 0 chyb, 2 přeskočené (chybí soukromý `KODY.xlsm`, nesouvisí). Typecheck čistý, `next build` v pořádku.
+- `npm test`: 3 069 testů — 3 067 prošlo, 0 chyb, 2 přeskočené (chybí soukromý `KODY.xlsm`, nesouvisí). Typecheck čistý, `next build` v pořádku.
 - Nové testy: `technicalRasterServiceIdentity`, `pdfSimpleTrueTypeText`, `technicalRasterHotfix02Ui`, schválená tabulka v `technicalRasterServicePresentation`; přepracované testy ručních značek, legendy a PDF (kontroly geometrie písma běží v režimu „křivky“, nové kontroly skutečného textu v režimu „text“).
 - Testy na reálných rastrech Hala 1 a Hala 3 (z git-ignorovaného `_IMPORT/`) proběhly.
 - Prohlížeč (lokální server bez Supabase/R2, náhradní API, syntetický rastr, reálné Excely FOR BEAUTY): import elektřiny a vody, Nespárované položky (177) sbalené/rozbalené s posuvníkem, umístění služeb stánku 4C06 přes UI („El.rozvaděč“, „21 kW“, „40 kW“, „D“), ruční puntík/křížek/čára, viditelná a interní poznámka, přesun značky i s poznámkou, uložení a znovunačtení, stažený export (text, vrstvy, legenda, interní poznámka v PDF není). Nalezená a opravená chyba: detail značky v liště nad plátnem při výběru posunul plátno → přesunut do pravého panelu.
@@ -67,14 +67,14 @@ Identity, které nikdy nekolidovaly (`2kw`, `wifi`, `fixed-ip`, `cleaning:daily`
 ## 8. Kontrola v CorelDRAW (Windows)
 
 Vzorky (reálný rastr Hala 1, jen lokálně, ne v Gitu): `_IMPORT/TECHNICKE_ZNACKY/KONTROLA_COREL/`
-- `Kontrola_Corel_Hala1_TEXT.pdf` — výchozí režim: všech 34 schválených popisků (s množstvím 5), ruční puntík s poznámkou, křížek s interní poznámkou (nesmí být vidět), čára s poznámkou „Odpad vody 3 m³“, X „BEZ elektriky“, legenda.
-- `Kontrola_Corel_Hala1_KRIVKY_zaloha.pdf` — záložní režim pro porovnání.
+- `Kontrola_Corel_Hala1_TEXT_v2.pdf` (30. 10. 2026, vlastní vrstva) — výchozí režim: 33 schválených popisků služeb (s množstvím 5; bez umělého příkladu „Ostatní“), ruční puntík s poznámkou, křížek s interní poznámkou (nesmí být vidět), čára s poznámkou „Odpad vody 3 m³“, X „BEZ elektriky“, legenda v rastru přes bílé krytí původní legendy (jako výchozí export z UI).
+- `Kontrola_Corel_Hala1_KRIVKY_zaloha_v2.pdf` — záložní režim pro porovnání.
 
 Ověřit:
 1. Import PDF do CorelDRAW: popisky jsou vidět (nezmizely jako dřív).
 2. Popisek jde označit jako text a přepsat („5 kW“ → „9 kW“), česká diakritika a „³“ zůstanou.
-3. Správce objektů: vrstva `TECHNICKÉ SLUŽBY` jen jednou, obsahuje popisky, ruční značky, poznámky i X; ostatní vrstvy rastru zachované.
-4. Vypnutí vrstvy `TECHNICKÉ SLUŽBY` skryje všechna technická data.
+3. Správce objektů: vrstva `ABF – TECHNICKÉ ZNAČKY` jen jednou, obsahuje popisky, ruční značky, poznámky i X; původní `TECHNICKÉ SLUŽBY` a ostatní vrstvy rastru zachované beze změny.
+4. Vypnutí vrstvy `ABF – TECHNICKÉ ZNAČKY` skryje všechna naše technická data; legenda s bílým krytím je ve vrstvě `GENERÁTOR DATA`.
 5. Pokud Corel nahradí font (NotoSans-Bold není nainstalovaný), poznamenat jak — případně nainstalovat Noto Sans Bold.
 
 ## 9. Zpětná kompatibilita
@@ -85,8 +85,6 @@ Ověřit:
 ## 10. Nevyřešené / k rozhodnutí
 
 - Skutečnou editovatelnost v CorelDRAW lze ověřit jen na Windows (kap. 8).
-- Vícestránkový zdroj, kde každá strana nese vlastní kopii vrstvy `TECHNICKÉ SLUŽBY`: export použije jednu a duplicitní registrace odstraní; obsah ostatních kopií zůstává na stránce, ale bez přepínání (stejné omezení jako u ostatních zdrojových vrstev ve vícestránkovém exportu). Reálné rastry jsou jednostránkové.
-- Zapnutí zdrojové vrstvy `TECHNICKÉ SLUŽBY` při exportu zviditelní i její původní obsah z rastru.
 - Starší ruční značky v barvách bez kategorie (modrá, oranžová, …) legenda nevysvětluje, dokud se jim nepřiřadí kategorie.
 - Úprava popisků v administraci (`TechnicalRasterComponentConfig`) zůstává nenapojená — mimo rozsah hotfixu.
 

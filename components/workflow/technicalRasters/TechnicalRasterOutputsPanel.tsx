@@ -187,7 +187,7 @@ export function TechnicalRasterOutputsPanel({
         placements: buildTechnicalRasterExportPlacements(project, pageNumber, excludedCategories),
         realizationUnderlines: underlinesByPage.get(pageNumber) ?? [],
         noElectricityMarkers: noElectricityMarkersByPage.get(pageNumber) ?? [],
-        // Manual points/lines (+ their VISIBLE notes) — always exported, in TECHNICKÉ SLUŽBY together with the service markers.
+        // Manual points/lines (+ their VISIBLE notes) — always exported, in the own "ABF – TECHNICKÉ ZNAČKY" layer together with the service markers.
         manualDrawings: buildManualDrawingExportItems(effectiveManualDrawings(project), pageNumber),
       }));
       const legend = buildTechnicalRasterExportLegend(pages.flatMap((pageInput) => pageInput.placements), pages.flatMap((pageInput) => pageInput.manualDrawings));
@@ -337,7 +337,7 @@ export function TechnicalRasterOutputsPanel({
                 Texty jako křivky (záložní režim)
               </label>
             </div>
-            <p className="fieldHint">Technické popisky a viditelné poznámky se exportují jako upravitelný text do vrstvy „TECHNICKÉ SLUŽBY“. Záložní režim je převede na křivky (nelze je pak přepsat).</p>
+            <p className="fieldHint">Technické popisky a viditelné poznámky se exportují jako upravitelný text do vlastní vrstvy „ABF – TECHNICKÉ ZNAČKY“ (původní vrstvy rastru zůstávají beze změny). Záložní režim je převede na křivky (nelze je pak přepsat).</p>
 
             {exportError && <p className="uploadError">{exportError}</p>}
 

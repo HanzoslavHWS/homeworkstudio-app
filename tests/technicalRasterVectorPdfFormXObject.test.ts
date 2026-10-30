@@ -556,10 +556,10 @@ test("COMBINED REAL-PRODUCTION REGRESSION: H3-style source (page-level ca=0.76 b
   const pageText = await readAllPage1ContentTextLocal(bytes);
   assert.match(pageText, /\/GSSource76 gs\s*\r?\n\/\S+ gs/u, "our own opacity gs must be reasserted IMMEDIATELY after the source's real ca=0.76 gs, before /Fm1 Do ever runs");
 
-  // 3) Generator layers: the ONE source OCG (STÁNKY ***) + one TECHNICKÉ SLUŽBY (marker) + one GENERÁTOR DATA (underline).
+  // 3) Generator layers: the ONE source OCG (STÁNKY ***) + one ABF – TECHNICKÉ ZNAČKY (marker) + one GENERÁTOR DATA (underline).
   const ocProps = reloaded.catalog.lookup(PDFName.of("OCProperties")) as PDFDict;
   const ocgsArr = ocProps.lookup(PDFName.of("OCGs")) as PDFArray;
-  assert.equal(ocgsArr.size(), 3, "STÁNKY *** + exactly one TECHNICKÉ SLUŽBY + exactly one GENERÁTOR DATA — never duplicated, never lost");
+  assert.equal(ocgsArr.size(), 3, "STÁNKY *** + exactly one ABF – TECHNICKÉ ZNAČKY + exactly one GENERÁTOR DATA — never duplicated, never lost");
 
   // 4) The technical service marker's own vector fill (its real presentation color) is present.
   assert.match(pageText, /0\.702 0\.149 0\.118 rg/u, "the electricity marker's own real presentation color (#b3261e)");

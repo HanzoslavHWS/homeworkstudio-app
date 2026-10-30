@@ -2,9 +2,10 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFRawStream, PDFRef, PDFString, decodePDFRawStream } from "pdf-lib";
+import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFRawStream, type PDFObject, PDFRef, PDFString, decodePDFRawStream } from "pdf-lib";
 import { buildTechnicalRasterMultiPageVectorExportPdf, buildTechnicalRasterVectorExportPdf } from "../lib/technicalRasterVectorPdf.ts";
 import { resolveTechnicalServicePresentation } from "../domain/technicalRasterServicePresentation.ts";
+import { buildManualDrawingExportItems, createLineDrawing, createPointDrawing } from "../domain/technicalRasterDrawings.ts";
 import {
   createTechnicalRasterProject,
   effectiveHiddenLayerIds,
@@ -137,6 +138,9 @@ async function page1ContentText(bytes: Uint8Array): Promise<string> {
   return streams.map((stream) => (stream instanceof PDFRawStream ? new TextDecoder().decode(decodePDFRawStream(stream).decode()) : "")).join("\n");
 }
 
+const SOURCE_TECHNICAL = "TECHNICKÉ SLUŽBY";
+const OUR_LAYER = "ABF – TECHNICKÉ ZNAČKY";
+
 const MARKER = {
   standId: "s1", standNumber: "1A01", serviceId: "svc", placementId: "pl", xNormalized: 0.5, yNormalized: 0.5,
   presentation: resolveTechnicalServicePresentation("electricity", "Do 3kW 230V"), category: "electricity",
@@ -211,13 +215,13 @@ test("E) source /OCGs order and nested /Order (heading + subgroup) are preserved
   assert.deepEqual(oc.order.filter((node) => node !== "GENERÁTOR DATA"), ["«SKUPINA»", [STAND, TEXT], GRID, DIMS]);
 });
 
-test("F) the generator's own layers (TECHNICKÉ SLUŽBY + GENERÁTOR DATA) are registered and ON, independent of source layers being OFF", async () => {
+test("F) the generator's own layers (ABF – TECHNICKÉ ZNAČKY + GENERÁTOR DATA) are registered and ON, independent of source layers being OFF", async () => {
   const { bytes } = await exportWith([STAND, TEXT, GRID, DIMS].map((ocgName) => ({ ocgName, visible: false })), {
     placements: [MARKER],
     realizationUnderlines: [{ standId: "s1", xNormalized: 0.4, yNormalized: 0.5, widthNormalized: 0.08, color: "#2f8f4e" }],
   });
   const oc = await readOcProperties(bytes);
-  for (const name of ["TECHNICKÉ SLUŽBY", "GENERÁTOR DATA"]) {
+  for (const name of ["ABF – TECHNICKÉ ZNAČKY", "GENERÁTOR DATA"]) {
     assert.ok(oc.ocgs.includes(name), name);
     assert.ok(oc.on.has(name) && !oc.off.has(name), name);
     assert.equal((await readViewerVisibility(bytes)).get(name), true, name);
@@ -288,19 +292,119 @@ for (const file of ["Hala 1.pdf", "Hala 3_2026- ver.12_NOVY_3.pdf"]) {
     assert.ok(oc.ocgs.includes(target), "disabled layer still present");
   });
 
-  test(`REAL ${file} (HOTFIX-02): technical data goes into the raster's OWN TECHNICKÉ SLUŽBY layer — forced ON even when the project had it OFF; never a duplicate; all other layer states kept`, { skip: !existsSync(filePath) }, async () => {
+  test(`REAL ${file} (HOTFIX-02): the raster's own TECHNICKÉ SLUŽBY layer is never used or switched — our data goes into ONE new "ABF – TECHNICKÉ ZNAČKY" layer`, { skip: !existsSync(filePath) }, async () => {
     const source = new Uint8Array(await readFile(filePath));
     const sourceViewer = await readViewerVisibility(source);
-    const technical = "TECHNICKÉ SLUŽBY";
-    assert.ok(sourceViewer.has(technical), "the real raster has its own TECHNICKÉ SLUŽBY layer");
-    const visibility = [...sourceViewer.keys()].map((ocgName) => ({ ocgName, visible: ocgName === technical ? false : sourceViewer.get(ocgName)! }));
-    const withoutData = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X", sourceLayerVisibility: visibility });
-    assert.equal((await readViewerVisibility(withoutData.bytes)).get(technical), false, "nothing to draw -> the project's own OFF is respected");
+    assert.ok(sourceViewer.has(SOURCE_TECHNICAL), "the real raster has its own TECHNICKÉ SLUŽBY layer");
+    const visibility = [...sourceViewer.keys()].map((ocgName) => ({ ocgName, visible: ocgName === SOURCE_TECHNICAL ? false : sourceViewer.get(ocgName)! }));
     const { bytes, technicalLayerStatus } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [MARKER], legend: [], showLegend: false, headerLine: "X", sourceLayerVisibility: visibility });
-    assert.equal(technicalLayerStatus, "reused_source_layer");
+    assert.equal(technicalLayerStatus, "created");
     const viewer = await readViewerVisibility(bytes);
-    assert.equal(viewer.get(technical), true, "the layer that carries the technical data is ON");
-    assert.deepEqual([...viewer.keys()], [...sourceViewer.keys()], "same layers, same order, no duplicate");
-    for (const name of sourceViewer.keys()) if (name !== technical) assert.equal(viewer.get(name), sourceViewer.get(name), `${name} keeps its state`);
+    assert.equal(viewer.get(SOURCE_TECHNICAL), false, "the project's OFF for the source layer is respected — it is not ours to switch");
+    assert.equal(viewer.get(OUR_LAYER), true);
+    assert.deepEqual([...viewer.keys()], [...sourceViewer.keys(), OUR_LAYER], "source layers unchanged and in order, then exactly one layer of ours");
+    for (const name of sourceViewer.keys()) if (name !== SOURCE_TECHNICAL) assert.equal(viewer.get(name), sourceViewer.get(name), `${name} keeps its state`);
   });
 }
+
+// =========================================================================================
+// HOTFIX-02 follow-up (CorelDRAW 2018 showed TWO layers named "TECHNICKÉ SLUŽBY"): the source
+// raster's own "TECHNICKÉ SLUŽBY" layer is never used or modified; every technical element of ours
+// goes into exactly ONE new layer "ABF – TECHNICKÉ ZNAČKY", appended after the source layers and
+// drawn after the source content (on top). Synthetic fixture shaped like the real ABF rasters, so
+// this runs everywhere (the real-raster variants above are skip-safe).
+// =========================================================================================
+
+/** One page: a source "TECHNICKÉ SLUŽBY" layer WITH its own content (a blue line) + a "RASTR" layer; the source layer is OFF by default. */
+async function buildSourceWithTechnicalLayer(pages = 1): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const ctx = doc.context;
+  const technical = ctx.register(ctx.obj({ Type: "OCG", Name: PDFHexString.fromText(SOURCE_TECHNICAL) }));
+  const raster = ctx.register(ctx.obj({ Type: "OCG", Name: PDFHexString.fromText("RASTR") }));
+  for (let index = 0; index < pages; index += 1) {
+    const page = doc.addPage([400, 300]);
+    const props = PDFDict.withContext(ctx);
+    props.set(PDFName.of("Pr47"), technical);
+    props.set(PDFName.of("Pr12"), raster);
+    (page.node.lookup(PDFName.of("Resources")) as PDFDict).set(PDFName.of("Properties"), props);
+    page.node.set(PDFName.of("Contents"), ctx.register(ctx.stream("/OC /Pr12 BDC 0 0 0 RG 0 150 m 400 150 l S EMC\n/OC /Pr47 BDC 0 0 1 RG 10 10 m 390 290 l S EMC\n", {})));
+  }
+  const arr = (refs: PDFRef[]) => { const a = PDFArray.withContext(ctx); refs.forEach((ref) => a.push(ref)); return a; };
+  doc.catalog.set(PDFName.of("OCProperties"), ctx.obj({ OCGs: arr([technical, raster]), D: ctx.obj({ BaseState: "ON", ON: arr([raster]), OFF: arr([technical]), Order: arr([technical, raster]) }) }));
+  return doc.save();
+}
+
+async function namedOcgRefs(bytes: Uint8Array, name: string): Promise<string[]> {
+  const doc = await PDFDocument.load(bytes);
+  const ocgs = (doc.catalog.lookup(PDFName.of("OCProperties")) as PDFDict).lookup(PDFName.of("OCGs")) as PDFArray;
+  return ocgs.asArray().filter((ref) => ocgNameOf(doc, ref) === name).map((ref) => ref.toString());
+}
+
+test("OWN LAYER: the source TECHNICKÉ SLUŽBY layer is preserved exactly (name, OFF state, its own content, its page key) and EXACTLY ONE new 'ABF – TECHNICKÉ ZNAČKY' layer carries all our technical elements", async () => {
+  const source = await buildSourceWithTechnicalLayer();
+  const drawings = buildManualDrawingExportItems([
+    { ...createPointDrawing(1, 0.3, 0.3, { category: "electricity", size: "medium", pointStyle: "dot" }, "d"), note: { text: "Přívod ze stropu", visible: true } },
+    createLineDrawing(1, { x: 0.1, y: 0.7 }, { x: 0.5, y: 0.7 }, { category: "water", size: "thick" }, "l"),
+  ], 1);
+  const { bytes, technicalLayerStatus } = await buildTechnicalRasterVectorExportPdf({
+    sourcePdfBytes: source, page: 1, placements: [MARKER], legend: [], showLegend: false, headerLine: "X",
+    noElectricityMarkers: [{ standId: "s2", xNormalized: 0.8, yNormalized: 0.8 }], manualDrawings: drawings,
+  });
+  assert.equal(technicalLayerStatus, "created");
+
+  // Layer list: the two source layers untouched and in their order, ours exactly once, LAST, ON.
+  const viewer = await readViewerVisibility(bytes);
+  assert.deepEqual([...viewer.entries()], [[SOURCE_TECHNICAL, false], ["RASTR", true], [OUR_LAYER, true]]);
+  assert.equal((await namedOcgRefs(bytes, SOURCE_TECHNICAL)).length, 1, "the source layer exists once — never duplicated");
+  assert.equal((await namedOcgRefs(bytes, OUR_LAYER)).length, 1, "exactly one layer of ours");
+  const oc = await readOcProperties(bytes);
+  assert.ok(oc.off.has(SOURCE_TECHNICAL) && !oc.on.has(SOURCE_TECHNICAL), "the source layer's OFF state is never switched");
+  assert.deepEqual(oc.order, [SOURCE_TECHNICAL, "RASTR", OUR_LAYER], "ours appended after the source layers");
+
+  // Content: the source layer keeps exactly its own content; everything of ours is in OUR bracket, after the source content.
+  const content = await page1ContentText(bytes);
+  assert.equal((content.match(/\/OC \/Pr47 BDC/gu) ?? []).length, 1, "nothing of ours is tagged with the source layer's key");
+  assert.match(content, /\/OC \/Pr47 BDC 0 0 1 RG 10 10 m 390 290 l S EMC/u, "the source layer's own drawing is byte-identical");
+  const doc = await PDFDocument.load(bytes);
+  const props = (doc.getPage(0).node.lookup(PDFName.of("Resources")) as PDFDict).lookup(PDFName.of("Properties")) as PDFDict;
+  const ourKey = props.keys().find((key) => ocgNameOf(doc, props.get(key)!) === OUR_LAYER)!;
+  assert.ok(ourKey, "our layer is referenced from the page resources");
+  const start = content.lastIndexOf(`/OC ${ourKey.toString()} BDC`);
+  assert.ok(start > content.indexOf("/OC /Pr47 BDC"), "our content comes after (= above) the source content");
+  const ours = content.slice(start, content.indexOf("EMC", start));
+  assert.match(ours, /0\.702 0\.149 0\.118 rg [^\n]* Tj ET Q/u, "the service label is real text inside our layer");
+  assert.equal((ours.match(/\bTj\b/gu) ?? []).length, 2, "service label + visible note");
+  assert.match(ours, /0\.756863 0\.070588 0\.121569 RG/u, "BEZ elektriky X inside our layer");
+  assert.match(ours, /0\.101961 0\.478431 0\.298039 RG/u, "manual line inside our layer");
+});
+
+function ocgNameOf(doc: PDFDocument, ref: PDFObject): string | undefined {
+  const ocg = doc.context.lookup(ref);
+  const name = ocg instanceof PDFDict ? ocg.lookup(PDFName.of("Name")) : undefined;
+  return name instanceof PDFString || name instanceof PDFHexString ? name.decodeText() : undefined;
+}
+
+test("OWN LAYER: no technical data -> no layer of ours, source layers exactly as they were; repeated and multi-page exports never duplicate our layer", async () => {
+  const empty = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: await buildSourceWithTechnicalLayer(), page: 1, placements: [], legend: [], showLegend: false, headerLine: "X" });
+  assert.equal(empty.technicalLayerStatus, "not_needed");
+  assert.deepEqual([...(await readViewerVisibility(empty.bytes)).entries()], [[SOURCE_TECHNICAL, false], ["RASTR", true]]);
+
+  const source = await buildSourceWithTechnicalLayer();
+  for (let run = 0; run < 3; run += 1) {
+    const { bytes } = await buildTechnicalRasterVectorExportPdf({ sourcePdfBytes: source, page: 1, placements: [MARKER], legend: [], showLegend: false, headerLine: "X" });
+    assert.equal((await namedOcgRefs(bytes, OUR_LAYER)).length, 1, `export #${run + 1}: one layer of ours`);
+  }
+
+  const multi = await buildTechnicalRasterMultiPageVectorExportPdf({
+    sourcePdfBytes: await buildSourceWithTechnicalLayer(2),
+    pages: [{ page: 1, placements: [MARKER] }, { page: 2, placements: [MARKER] }],
+    legend: [], showLegend: false, headerLine: "X",
+  });
+  assert.equal((await namedOcgRefs(multi.bytes, OUR_LAYER)).length, 1, "one shared layer of ours across pages");
+  const reloaded = await PDFDocument.load(multi.bytes);
+  const refsOnPages = [0, 1].map((index) => {
+    const props = (reloaded.getPage(index).node.lookup(PDFName.of("Resources")) as PDFDict).lookup(PDFName.of("Properties")) as PDFDict;
+    return props.keys().map((key) => props.get(key)!).find((ref) => ocgNameOf(reloaded, ref) === OUR_LAYER)?.toString();
+  });
+  assert.ok(refsOnPages[0] && refsOnPages[0] === refsOnPages[1], "both pages point at the SAME layer object");
+});

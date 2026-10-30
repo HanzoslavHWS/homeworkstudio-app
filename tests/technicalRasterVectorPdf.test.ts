@@ -412,7 +412,7 @@ test("OCG: a source PDF WITH OCGs has its OCG names/order/state reconstructed at
   assert.equal(ocgDiagnostic.reconstructedOcgCount, 2);
   assert.deepEqual(ocgDiagnostic.unmatchedOcgNames, []);
 
-  // HOTFIX-02 — an export with nothing generated adds NO layer of its own (TECHNICKÉ SLUŽBY /
+  // HOTFIX-02 — an export with nothing generated adds NO layer of its own (ABF – TECHNICKÉ ZNAČKY /
   // GENERÁTOR DATA are only created when they receive content): exactly the source layers.
   const { ocConfig } = await decodeForInspection(bytes);
   const order = ocConfig.getOrder();
@@ -949,7 +949,7 @@ test("part A) textScales composes correctly with white mode active for a DIFFERE
 // PRODUCTION BATCH, PART B — "BEZ elektriky" automatic red X, export side.
 // ============================================================================
 
-test("part B) noElectricityMarkers: draws two red vector diagonal strokes (never a text glyph), inside TECHNICKÉ SLUŽBY (HOTFIX-02)", async () => {
+test("part B) noElectricityMarkers: draws two red vector diagonal strokes (never a text glyph), inside ABF – TECHNICKÉ ZNAČKY (HOTFIX-02)", async () => {
   const source = await buildPlainFixture();
   const { bytes } = await buildTechnicalRasterVectorExportPdf({
     sourcePdfBytes: source, page: 1, placements: [], legend: [], showLegend: false, headerLine: "X",
@@ -1191,8 +1191,8 @@ test("GENERÁTOR DATA: created exactly once, appears in /OCGs, appears in /D/Ord
   const ocProps = reloaded.catalog.lookup(PDFName.of("OCProperties"));
   assert.ok(ocProps instanceof PDFDict, "a fresh /OCProperties structure must be created even for a source with none");
   const ocgsArr = (ocProps as PDFDict).lookup(PDFName.of("OCGs")) as PDFArray;
-  // HOTFIX-02 — the marker goes into a (new) TECHNICKÉ SLUŽBY layer, the underline into GENERÁTOR DATA: one of each, never duplicated.
-  assert.equal(ocgsArr.size(), 2, "exactly TECHNICKÉ SLUŽBY + GENERÁTOR DATA");
+  // HOTFIX-02 — the marker goes into a (new) ABF – TECHNICKÉ ZNAČKY layer, the underline into GENERÁTOR DATA: one of each, never duplicated.
+  assert.equal(ocgsArr.size(), 2, "exactly ABF – TECHNICKÉ ZNAČKY + GENERÁTOR DATA");
 
   const d = (ocProps as PDFDict).lookup(PDFName.of("D")) as PDFDict;
   assert.equal(d.lookup(PDFName.of("BaseState"))?.toString(), "/ON");
@@ -1204,7 +1204,7 @@ test("GENERÁTOR DATA: created exactly once, appears in /OCGs, appears in /D/Ord
   assert.ok(!(offArr instanceof PDFArray) || offArr.size() === 0, "never placed in /D/OFF");
 
   const { ocConfig } = await decodeForInspection(bytes);
-  assert.deepEqual(ocConfig.getOrder()!.map((id) => ocConfig.getGroup(id)?.name), ["TECHNICKÉ SLUŽBY", "GENERÁTOR DATA"]);
+  assert.deepEqual(ocConfig.getOrder()!.map((id) => ocConfig.getGroup(id)?.name), ["ABF – TECHNICKÉ ZNAČKY", "GENERÁTOR DATA"]);
 });
 
 test("GENERÁTOR DATA: original source OCGs remain untouched, and generator overlay content is actually marked as belonging to it (real /OC BDC ... EMC span in the content stream, resolvable via the page's own /Resources/Properties)", async () => {
@@ -1252,7 +1252,7 @@ test("GENERÁTOR DATA: source raster content is never accidentally moved into it
   // generator's own separate BDC bracket — never merged/moved into the GENERÁTOR DATA span itself.
   assert.match(firstText, /\/OC \/MC0 BDC/u, "the SOURCE's own marked-content span is untouched");
   assert.match(firstText, /0 0 0 rg 5 5 15 15 re f/u, "content outside the source's own OCG span is untouched and stays in the original stream");
-  assert.ok(!/GenData|TechSluzby/u.test(firstText), "the original content is never itself tagged with a generator layer's own property key");
+  assert.ok(!/GenData|AbfTechnicalMarkers/u.test(firstText), "the original content is never itself tagged with a generator layer's own property key");
 });
 
 test("GENERÁTOR DATA: white-mode's own rewrite of source stand fills stays OUTSIDE the GENERÁTOR DATA span — white mode transforms EXISTING content, it is never generator-added content", async () => {
