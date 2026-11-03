@@ -9,7 +9,7 @@
  * same functions the rest of the app already trusts. No parallel readiness logic.
  */
 import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type CatalogItemType, type ComponentDefinition, type PricingEntry } from "./models.ts";
-import { evaluateCatalogReadiness, isGeneratorEligible, isValidCatalogItemStatus, type ReadinessResult } from "./catalogReadiness.ts";
+import { evaluateCatalogReadiness, isGeneratorEligible, isValidCatalogItemStatus, withColumnInternalCode, type ReadinessResult } from "./catalogReadiness.ts";
 import {
   defaultItemTypeForKind,
   defaultKindForItemType,
@@ -22,7 +22,9 @@ import type { CatalogPackageItem } from "./catalogPackages.ts";
 import { catalogUnitByCode, normalizeCatalogUnit } from "./catalogUnits.ts";
 import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
-import { SOURCE_ASSET_KINDS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "./assets.ts";
+import { isKnownTechnicalServiceCategory } from "./technicalServiceCatalog.ts";
+import { BUILT_IN_CATALOG_CATEGORIES } from "./catalogClassification.ts";
+import { isValidStorageKey, SOURCE_ASSET_KINDS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "./assets.ts";
 import { resolveBoothAssetDefinition } from "./boothAssets.ts";
 import { TECHNICAL_SERVICE_PLACEMENT_BEHAVIORS, TECHNICAL_SERVICE_SYMBOL_RENDERERS, type TechnicalRasterComponentConfig } from "./technicalRasterComponentPresentation.ts";
 
@@ -31,8 +33,8 @@ export const CATALOG_ITEM_KIND_LABELS_CS: Readonly<Record<CatalogItemKind, strin
   booth_component: "Komponenta stánku",
   construction: "Konstrukce / Octanorm",
   furniture: "Mobiliář",
-  technical_point: "Technický bod",
-  service: "Služba",
+  technical_point: "Technický bod (umístění, neúčtuje se)",
+  service: "Technická služba",
   graphics_service: "Grafická služba",
   floor_finish: "Podlahová krytina",
   other: "Ostatní",
@@ -73,7 +75,8 @@ export const CATALOG_ITEM_CATEGORY_OPTIONS: readonly Readonly<{ value: string; l
 /** Never hides/crashes on an unlisted value — falls back to the raw canonical string, same defensive spirit as categoryOptions()'s existing fallback in domain/catalogCategories.ts. */
 export function categoryLabelCs(value: string | null): string {
   if (!value) return "—";
-  return CATALOG_ITEM_CATEGORY_OPTIONS.find((option) => option.value === value)?.label ?? value;
+  // Existing values keep their established labels (the customer catalog groups and orders by them); only new register categories use the register name.
+  return CATALOG_ITEM_CATEGORY_OPTIONS.find((option) => option.value === value)?.label ?? BUILT_IN_CATALOG_CATEGORIES.find((category) => category.id === value)?.name ?? value;
 }
 
 /** The document JSONB column stores EITHER a full ComponentDefinition OR a BoothType payload (see the catalog_items migration comment) — never assume one shape here, only read named fields defensively. */
@@ -103,6 +106,8 @@ export type CatalogItemAdmin = Readonly<{
   unit: string | null;
   /** Unit from the shared register (catalog_units.code). See catalogUnitLabel(). */
   unitCode?: string | null;
+  /** catalog_items.price_category (V1-DATA-05). Undefined when read from a database without the column. */
+  priceCategory?: "standard" | "electricity";
   document: CatalogItemAdminDocument;
   createdAt: string;
   updatedAt: string;
@@ -139,6 +144,8 @@ export function documentItemTypeNeedsReview(document: CatalogItemAdminDocument):
  * (TechnicalRasterSection) — never duplicated here.
  */
 export type ServiceTechnicalMetadata = Readonly<{
+  /** Technical service category — an id of the technical-raster registry (domain/technicalServiceCatalog.ts). Derived from the card's Kategorie (domain/catalogClassification.ts), never chosen separately. */
+  serviceCategory?: string;
   powerKw?: number;
   parameters?: readonly Readonly<{ key: string; value: string }>[];
 }>;
@@ -150,7 +157,8 @@ const SERVICE_PARAMETERS_MAX = 30;
 function parseServiceTechnical(value: unknown): ServiceTechnicalMetadata | undefined {
   if (!value || typeof value !== "object") return undefined;
   const candidate = value as Record<string, unknown>;
-  const result: { powerKw?: number; parameters?: { key: string; value: string }[] } = {};
+  const result: { serviceCategory?: string; powerKw?: number; parameters?: { key: string; value: string }[] } = {};
+  if (typeof candidate.serviceCategory === "string" && isKnownTechnicalServiceCategory(candidate.serviceCategory)) result.serviceCategory = candidate.serviceCategory;
   if (typeof candidate.powerKw === "number" && Number.isFinite(candidate.powerKw) && candidate.powerKw >= 0) result.powerKw = candidate.powerKw;
   if (Array.isArray(candidate.parameters)) {
     const parameters = candidate.parameters
@@ -412,6 +420,19 @@ function isStoredAssetShape(value: unknown): value is StoredAsset {
   );
 }
 
+/** Further photos of the card (gallery) — validly-shaped entries only. The main photo stays documentPhotoAsset(). */
+export function documentGalleryPhotoAssets(document: CatalogItemAdminDocument): readonly StoredAsset[] {
+  const value = document.galleryPhotoAssets;
+  return Array.isArray(value) ? value.filter(isStoredAssetShape) : [];
+}
+
+const MAX_ASSETS_PER_EDIT = 50;
+
+/** A batch entry must be an R2 asset of the expected upload category with a valid key — never a foreign object. */
+function isCatalogAssetOf(value: unknown, category: StoredAsset["category"]): value is StoredAsset {
+  return isStoredAssetShape(value) && value.category === category && isValidStorageKey(value.storageKey);
+}
+
 /** The R2-backed photo reference, if the document has a validly-shaped one — never a signed URL, only the stable storageKey-bearing StoredAsset. */
 export function documentPhotoAsset(document: CatalogItemAdminDocument): StoredAsset | undefined {
   return isStoredAssetShape(document.photoAsset) ? document.photoAsset : undefined;
@@ -612,16 +633,16 @@ export function documentBasePricing(document: CatalogItemAdminDocument): Documen
 }
 
 /** Adapts a document (ComponentDefinition- or BoothType-shaped) + its real lifecycle_status column into the shape evaluateCatalogReadiness/isGeneratorEligible expect — same spread+cast technique already established by domain/catalogPricing.ts's computeGeneratorEligible. */
-function toReadinessAdapter(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus">): ComponentDefinition {
-  return { ...item.document, lifecycleStatus: item.lifecycleStatus } as ComponentDefinition;
+function toReadinessAdapter(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus"> & Partial<Pick<CatalogItemAdmin, "internalCode">>): ComponentDefinition {
+  return { ...withColumnInternalCode(item.document as Partial<ComponentDefinition>, item.internalCode), lifecycleStatus: item.lifecycleStatus } as ComponentDefinition;
 }
 
-export function computeReadiness(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus" | "kind">): ReadinessResult {
+export function computeReadiness(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode">>): ReadinessResult {
   return evaluateCatalogReadiness(toReadinessAdapter(item), item.kind);
 }
 
 /** NEVER stored — always live-computed, so a stale flag can never drift from the real rules. */
-export function computeGeneratorEligibleLive(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus" | "kind">): boolean {
+export function computeGeneratorEligibleLive(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode">>): boolean {
   return isGeneratorEligible(toReadinessAdapter(item), item.kind);
 }
 
@@ -817,6 +838,17 @@ export type CatalogItemAdminEdit = Readonly<{
    */
   addSourceAsset?: Readonly<{ kind: SourceAssetKind; label?: string; asset: StoredAsset }>;
   removeSourceAssetId?: string;
+  /** Batch upload ("Nahrát více souborů"): appends several source files in ONE edit. Never removes any. */
+  addSourceAssets?: readonly Readonly<{ kind: SourceAssetKind; label?: string; asset: StoredAsset }>[];
+  /**
+   * Photo gallery (document.galleryPhotoAssets) — further photos next to the MAIN photo
+   * (photoAsset, which every reader of the card keeps using). Append several / remove one by id
+   * (metadata only) / promote one to main (the previous main photo moves into the gallery, so no
+   * photo is ever lost by promoting).
+   */
+  addGalleryPhotoAssets?: readonly StoredAsset[];
+  removeGalleryPhotoAssetId?: string;
+  promoteGalleryPhotoAssetId?: string;
   /**
    * Sets/clears ONE variant's own GLB or photo by its stable `id` — never a wholesale replace of
    * the variants array, and never able to create/remove a variant itself (that's a structural
@@ -862,6 +894,13 @@ export type CatalogItemAdminEdit = Readonly<{
    * by it) — the repository rejects a fill on a card that already has one.
    */
   fillInternalCode?: string;
+  /**
+   * Explicit change of an EXISTING generator code (from = the code the user saw). The repository
+   * allows it only when nothing keys by the old code — not a system code (services, type booths,
+   * legacy seeds) and not stored in any saved project — and the new code is free. UUID-based links
+   * (prices, aliases, kits, files) are unaffected.
+   */
+  changeInternalCode?: Readonly<{ from: string; to: string }>;
   /** Catalog card type. If the current kind doesn't fit the new type, kind moves to the type's default kind. */
   itemType?: CatalogItemType;
   /** Readiness profile — must be compatible with the (resulting) item type. */
@@ -942,6 +981,21 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
     }
   }
   if (typeof raw.removeSourceAssetId === "string" && raw.removeSourceAssetId) edit.removeSourceAssetId = raw.removeSourceAssetId;
+  if (Array.isArray(raw.addSourceAssets)) {
+    const entries = raw.addSourceAssets.slice(0, MAX_ASSETS_PER_EDIT).flatMap((value) => {
+      if (!value || typeof value !== "object") return [];
+      const candidate = value as Record<string, unknown>;
+      if (!(SOURCE_ASSET_KINDS as readonly string[]).includes(candidate.kind as string) || !isCatalogAssetOf(candidate.asset, "catalog-source")) return [];
+      return [{ kind: candidate.kind as SourceAssetKind, asset: candidate.asset, label: typeof candidate.label === "string" ? candidate.label : undefined }];
+    });
+    if (entries.length) edit.addSourceAssets = entries;
+  }
+  if (Array.isArray(raw.addGalleryPhotoAssets)) {
+    const photos = raw.addGalleryPhotoAssets.slice(0, MAX_ASSETS_PER_EDIT).filter((value): value is StoredAsset => isCatalogAssetOf(value, "catalog-photo"));
+    if (photos.length) edit.addGalleryPhotoAssets = photos;
+  }
+  if (typeof raw.removeGalleryPhotoAssetId === "string" && raw.removeGalleryPhotoAssetId) edit.removeGalleryPhotoAssetId = raw.removeGalleryPhotoAssetId;
+  if (typeof raw.promoteGalleryPhotoAssetId === "string" && raw.promoteGalleryPhotoAssetId) edit.promoteGalleryPhotoAssetId = raw.promoteGalleryPhotoAssetId;
   for (const key of ["setVariantModelAsset", "setVariantPhotoAsset"] as const) {
     const value = raw[key];
     if (!value || typeof value !== "object") continue;
@@ -990,6 +1044,12 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
     const normalized = normalizeInternalCode(raw.fillInternalCode);
     if (!normalized) throw new InvalidCatalogItemAdminEditError("fillInternalCode", "Generátorový kód smí obsahovat jen písmena, číslice a . _ / + - (bez mezer a uvozovek), nejvýše 64 znaků.");
     edit.fillInternalCode = normalized;
+  }
+  if (raw.changeInternalCode && typeof raw.changeInternalCode === "object") {
+    const candidate = raw.changeInternalCode as Record<string, unknown>;
+    const to = normalizeInternalCode(candidate.to);
+    if (typeof candidate.from !== "string" || !candidate.from.trim() || !to) throw new InvalidCatalogItemAdminEditError("changeInternalCode", "Generátorový kód smí obsahovat jen písmena, číslice a . _ / + - (bez mezer a uvozovek), nejvýše 64 znaků.");
+    edit.changeInternalCode = { from: candidate.from.trim(), to };
   }
   if (raw.itemType !== undefined) {
     if (!isCatalogItemType(raw.itemType)) throw new InvalidCatalogItemAdminEditError("itemType", "Neplatný typ katalogové karty.");
@@ -1053,11 +1113,11 @@ export function resolveTypeAndKindEdit(
  * active if it still passes readiness today; otherwise — and for legacy archives without the
  * stored status — it lands on needs_review, never silently active.
  */
-export function resolveRestoreStatus(item: Pick<CatalogItemAdmin, "document" | "kind">): CatalogItemStatus {
+export function resolveRestoreStatus(item: Pick<CatalogItemAdmin, "document" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode">>): CatalogItemStatus {
   const previous = item.document.archivedFromStatus;
   if (typeof previous !== "string" || !isValidCatalogItemStatus(previous) || previous === "archived") return "needs_review";
   if (previous === "active") {
-    const readiness = evaluateCatalogReadiness({ ...item.document, lifecycleStatus: "active" } as ComponentDefinition, item.kind);
+    const readiness = evaluateCatalogReadiness({ ...withColumnInternalCode(item.document as Partial<ComponentDefinition>, item.internalCode), lifecycleStatus: "active" } as ComponentDefinition, item.kind);
     return readiness.ready ? "active" : "needs_review";
   }
   return previous;
@@ -1115,7 +1175,29 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
   else if (edit.photoAsset !== undefined) next.photoAsset = edit.photoAsset;
   if (edit.modelAsset === null) delete next.modelAsset;
   else if (edit.modelAsset !== undefined) next.modelAsset = edit.modelAsset;
-  if (edit.addSourceAsset || edit.removeSourceAssetId !== undefined) {
+  if (edit.addGalleryPhotoAssets || edit.removeGalleryPhotoAssetId !== undefined || edit.promoteGalleryPhotoAssetId !== undefined) {
+    let gallery = documentGalleryPhotoAssets(document);
+    if (edit.removeGalleryPhotoAssetId !== undefined) gallery = gallery.filter((photo) => photo.id !== edit.removeGalleryPhotoAssetId);
+    if (edit.addGalleryPhotoAssets) {
+      const known = new Set([...gallery.map((photo) => photo.storageKey), ...(isStoredAssetShape(next.photoAsset) ? [next.photoAsset.storageKey] : [])]);
+      for (const photo of edit.addGalleryPhotoAssets) {
+        if (known.has(photo.storageKey)) continue;
+        known.add(photo.storageKey);
+        gallery = [...gallery, photo];
+      }
+    }
+    if (edit.promoteGalleryPhotoAssetId !== undefined) {
+      const promoted = gallery.find((photo) => photo.id === edit.promoteGalleryPhotoAssetId);
+      if (promoted) {
+        const previousMain = isStoredAssetShape(next.photoAsset) ? next.photoAsset : undefined;
+        gallery = [...(previousMain ? [previousMain] : []), ...gallery.filter((photo) => photo.id !== promoted.id)];
+        next.photoAsset = promoted;
+      }
+    }
+    if (gallery.length) next.galleryPhotoAssets = gallery;
+    else delete next.galleryPhotoAssets;
+  }
+  if (edit.addSourceAsset || edit.addSourceAssets || edit.removeSourceAssetId !== undefined) {
     const existing: readonly SourceAssetEntry[] = Array.isArray(document.sourceAssets)
       ? (document.sourceAssets as readonly SourceAssetEntry[])
       : [];
@@ -1125,6 +1207,9 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
     }
     if (edit.addSourceAsset) {
       updated = [...updated, { id: crypto.randomUUID(), kind: edit.addSourceAsset.kind, label: edit.addSourceAsset.label, asset: edit.addSourceAsset.asset }];
+    }
+    for (const entry of edit.addSourceAssets ?? []) {
+      updated = [...updated, { id: crypto.randomUUID(), kind: entry.kind, label: entry.label, asset: entry.asset }];
     }
     next.sourceAssets = updated;
   }

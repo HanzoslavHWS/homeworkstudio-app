@@ -6,6 +6,7 @@ import { isPriceVersionConflict, purchasePriceVersionsApi, type PurchasePriceReg
 import type { PricingCatalogItem } from "../../../lib/db/priceVersions.supabase";
 import { comparePriceItemsByCode, matchesPriceItemSearch } from "../../../domain/priceVersions";
 import { amountText, ItemCodeCell, ListForm, PublishCheckView, StatusBadge, VersionActions, VersionHeaderForm, VersionTable, versionTitle } from "./PriceVersionParts";
+import type { PriceVersionsPreselect } from "./PriceVersionsPage";
 
 const EMPTY: PurchasePriceRegister = { lists: [], versions: [], links: [], companies: [], items: [] };
 
@@ -22,14 +23,14 @@ type Api = ReturnType<typeof purchasePriceVersionsApi>;
  * prices.purchase.*), never from the sale routes, the customer catalog or any export. One shared
  * versioned list for the realization firms linked to it (Creativ Expo, Gendai, MAC Praha today).
  */
-export function PurchasePricesPanel({ actorName }: { actorName?: string }) {
+export function PurchasePricesPanel({ actorName, preselect }: { actorName?: string; preselect?: PriceVersionsPreselect }) {
   const api = useMemo(() => purchasePriceVersionsApi(() => actorName), [actorName]);
   const [register, setRegister] = useState<PurchasePriceRegister>(EMPTY);
   const [loadError, setLoadError] = useState("");
   const [loaded, setLoaded] = useState(false);
-  const [selectedListId, setSelectedListId] = useState<string | undefined>();
+  const [selectedListId, setSelectedListId] = useState<string | undefined>(preselect?.listId);
   const [editingList, setEditingList] = useState<"new" | "edit" | undefined>();
-  const [selectedVersionId, setSelectedVersionId] = useState<string | undefined>();
+  const [selectedVersionId, setSelectedVersionId] = useState<string | undefined>(preselect?.versionId);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -78,7 +79,7 @@ export function PurchasePricesPanel({ actorName }: { actorName?: string }) {
   if (!loaded) return <p className="workspaceEmpty">Načítám…</p>;
   return (
     <>
-      <p className="temporaryNotice">Interní údaje. Nákupní ceny se nikdy nezobrazují v zákaznickém katalogu, nabídce ani zákaznických exportech. Podle aktuální smlouvy mají Creativ Expo, Gendai a MAC Praha stejné nákupní ceny, proto stačí jeden společný ceník. Názvy, kódy a jednotky firem zůstávají v aliasech katalogu.</p>
+      <p className="temporaryNotice">Interní údaje. Nákupní ceny se nikdy nezobrazují v zákaznickém katalogu, nabídce ani zákaznických exportech. Jeden společný nákupní ceník pro realizační firmy (Creativ Expo, Gendai a MAC Praha mají podle smlouvy stejné ceny), ABF a ostatní dodavatele. Nákupní cena není povinná — chybějící cena znamená „Nezadáno“, ne 0 Kč. Názvy, kódy a jednotky firem zůstávají v aliasech katalogu.</p>
       {loadError && <p className="uploadError">{loadError}</p>}
       <div className="adminSplit">
         <div className="adminList">
@@ -163,7 +164,7 @@ export function PurchasePricesPanel({ actorName }: { actorName?: string }) {
                   />
                 </div>
                 <PublishCheckView check={check} />
-                <PurchaseVersionEditor key={version.id} version={version} items={register.items} api={api} onChanged={reload} />
+                <PurchaseVersionEditor key={version.id} version={version} items={register.items} api={api} onChanged={reload} initialFilter={version.id === preselect?.versionId ? preselect.itemFilter : undefined} />
               </div>
             </section>
           )}
@@ -177,7 +178,7 @@ type RowDraft = Readonly<{ key: string; catalogItemId: string; purchaseCzk: stri
 
 let rowCounter = 0;
 
-function PurchaseVersionEditor({ version, items, api, onChanged }: { version: PriceListVersion; items: readonly PricingCatalogItem[]; api: Api; onChanged: () => Promise<void> }) {
+function PurchaseVersionEditor({ version, items, api, onChanged, initialFilter }: { version: PriceListVersion; items: readonly PricingCatalogItem[]; api: Api; onChanged: () => Promise<void>; initialFilter?: string }) {
   const [rows, setRows] = useState<readonly RowDraft[]>([]);
   const [loading, setLoading] = useState(true);
   const [dirty, setDirty] = useState(false);
@@ -185,7 +186,7 @@ function PurchaseVersionEditor({ version, items, api, onChanged }: { version: Pr
   const [error, setError] = useState("");
   const [conflict, setConflict] = useState(false);
   const [newItemId, setNewItemId] = useState("");
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState(initialFilter ?? "");
   const [revision, setRevision] = useState(version.revision);
   const [reloadKey, setReloadKey] = useState(0);
   const editable = version.status === "draft";

@@ -56,6 +56,9 @@ import {
 
 type Tab = "sale" | "events" | "electricity" | "test" | "purchase";
 
+/** Opening the page from a catalog card ("Otevřít v ceníku"): which list/version to show, filtered to the item. Navigation only — nothing is written. */
+export type PriceVersionsPreselect = Readonly<{ tab: "sale" | "purchase"; listId?: string; versionId?: string; itemFilter?: string }>;
+
 const TAB_LABELS: Readonly<Record<Tab, string>> = {
   sale: "Prodejní ceníky",
   events: "Veletrhy – přiřazení verzí",
@@ -96,9 +99,10 @@ function itemLabel(item: PricingCatalogItem | undefined, fallback = "—"): stri
  * permission — the internal purchase price list. The legacy "Ceníky" / "Správa cen" pages are
  * unchanged and keep serving the generator until V1-DATA-07.
  */
-export function PriceVersionsPage({ actorName }: { actorName?: string }) {
+export function PriceVersionsPage({ actorName, preselect }: { actorName?: string; preselect?: PriceVersionsPreselect }) {
   const api = useMemo(() => salePriceVersionsApi(() => actorName), [actorName]);
-  const [tab, setTab] = useState<Tab>("sale");
+  const [tab, setTab] = useState<Tab>(preselect?.tab ?? "sale");
+  const salePreselect = preselect?.tab === "sale" ? preselect : undefined;
   const [register, setRegister] = useState<SalePriceRegister>(EMPTY_REGISTER);
   const [loadError, setLoadError] = useState("");
   const [loaded, setLoaded] = useState(false);
@@ -130,11 +134,11 @@ export function PriceVersionsPage({ actorName }: { actorName?: string }) {
         ))}
       </div>
       {!loaded && <p className="workspaceEmpty">Načítám…</p>}
-      {loaded && tab === "sale" && <SaleListsTab register={register} api={api} onChanged={reload} />}
+      {loaded && tab === "sale" && <SaleListsTab register={register} api={api} onChanged={reload} preselect={salePreselect} />}
       {loaded && tab === "events" && <EventAssignmentsTab register={register} api={api} onChanged={reload} />}
       {loaded && tab === "electricity" && <ElectricityCategoryTab register={register} api={api} onChanged={reload} />}
       {loaded && tab === "test" && <TestResolveTab register={register} api={api} />}
-      {tab === "purchase" && <PurchasePricesPanel actorName={actorName} />}
+      {tab === "purchase" && <PurchasePricesPanel actorName={actorName} preselect={preselect?.tab === "purchase" ? preselect : undefined} />}
     </div>
   );
 }
@@ -145,10 +149,10 @@ type SaleApi = ReturnType<typeof salePriceVersionsApi>;
 // Sale lists and versions
 // ============================================================================
 
-function SaleListsTab({ register, api, onChanged }: { register: SalePriceRegister; api: SaleApi; onChanged: () => Promise<void> }) {
-  const [selectedListId, setSelectedListId] = useState<string | undefined>(register.lists[0]?.id);
+function SaleListsTab({ register, api, onChanged, preselect }: { register: SalePriceRegister; api: SaleApi; onChanged: () => Promise<void>; preselect?: PriceVersionsPreselect }) {
+  const [selectedListId, setSelectedListId] = useState<string | undefined>(preselect?.listId && register.lists.some((candidate) => candidate.id === preselect.listId) ? preselect.listId : register.lists[0]?.id);
   const [editingList, setEditingList] = useState<"new" | "edit" | undefined>(register.lists.length ? undefined : "new");
-  const [selectedVersionId, setSelectedVersionId] = useState<string | undefined>();
+  const [selectedVersionId, setSelectedVersionId] = useState<string | undefined>(preselect?.versionId);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
@@ -254,7 +258,7 @@ function SaleListsTab({ register, api, onChanged }: { register: SalePriceRegiste
               {editorDirty && <p className="fieldHint">Akce verze jsou zablokované, dokud neuložíte nebo nezahodíte změny řádků — jinak by se publikoval nebo zkopíroval jiný stav, než vidíte.</p>}
               <PublishCheckView check={check} />
               <p className="fieldHint">Revize konceptu: {version.revision}. Každé uložení ověří, že koncept mezitím nezměnil nikdo jiný.</p>
-              <SaleVersionEditor key={version.id} version={version} register={register} api={api} onChanged={onChanged} onDirtyChange={setEditorDirty} />
+              <SaleVersionEditor key={version.id} version={version} register={register} api={api} onChanged={onChanged} onDirtyChange={setEditorDirty} initialFilter={version.id === preselect?.versionId ? preselect.itemFilter : undefined} />
             </div>
           </section>
         )}
@@ -350,7 +354,7 @@ function EurSkCell({ czk, mode, eur, rule, disabled, onMode, onEur }: { czk: str
   );
 }
 
-function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange }: { version: PriceListVersion; register: SalePriceRegister; api: SaleApi; onChanged: () => Promise<void>; onDirtyChange?: (dirty: boolean) => void }) {
+function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, initialFilter }: { version: PriceListVersion; register: SalePriceRegister; api: SaleApi; onChanged: () => Promise<void>; onDirtyChange?: (dirty: boolean) => void; initialFilter?: string }) {
   const [entries, setEntries] = useState<readonly EntryDraft[]>([]);
   /** Revision the loaded rows belong to; every save states it (optimistic concurrency). */
   const [revision, setRevision] = useState(version.revision);
@@ -363,7 +367,7 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange }:
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState("");
-  const [filter, setFilter] = useState("");
+  const [filter, setFilter] = useState(initialFilter ?? "");
   const [sort, setSort] = useState<RowSort>({ key: "code", direction: 1 });
   const [newItemId, setNewItemId] = useState("");
   const editable = version.status === "draft";

@@ -12,7 +12,9 @@ import {
   documentFootprint2D,
   documentEffectiveModelReference,
   documentModelAsset,
+  documentGalleryPhotoAssets,
   documentPhotoAsset,
+  documentServiceTechnical,
   documentPhotoUrl,
   documentReviewedAt,
   documentSourceAssets,
@@ -37,7 +39,7 @@ import {
 } from "../../domain/catalogItemsAdmin";
 import { CATALOG_ITEM_KINDS_BY_TYPE, CATALOG_ITEM_TYPE_HINTS_CS, CATALOG_ITEM_TYPE_LABELS_CS, itemTypeExpectsAbfCode } from "../../domain/catalogItemTypes";
 import type { CatalogPackageItem, CatalogPackageItemInput } from "../../domain/catalogPackages";
-import { AbfImportPanel, CatalogItemCreateForm, CatalogPublicationSection, ServiceTechnicalSection } from "./CatalogAdminPanels";
+import { AbfImportPanel, CatalogItemCreateForm, CatalogPublicationSection } from "./CatalogAdminPanels";
 import { KitContentsSection, VariantSetsPanel } from "./CatalogKitPanels";
 import type { CatalogVariantSet, CatalogVariantSetInput } from "../../domain/catalogVariants";
 
@@ -55,6 +57,14 @@ import { catalogTypeHasField } from "../../domain/catalogItemFields";
 import { CatalogAliasesSection } from "./CatalogAliasesSection";
 import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
 import { useAssetUrl } from "../../hooks/useAssetUrl";
+import { CatalogCardPrices } from "./CatalogCardPrices";
+import { categoriesForGroup, classificationIssue, classificationTarget, COMPONENT_GROUP_HINTS_CS, COMPONENT_GROUP_LABELS_CS, COMPONENT_GROUP_TARGETS, COMPONENT_GROUPS, derivedPriceCategory, findCategory, groupOfCard, isComponentGroup, type CardGroup, type ComponentGroup } from "../../domain/catalogClassification";
+import { useCatalogCategories } from "../../lib/db/catalogCategories.remoteApi.client";
+import { CatalogBatchUpload } from "./CatalogBatchUpload";
+import { CatalogCategoriesPanel } from "./CatalogCategoriesPanel";
+import { activeRecommendedParameters, parameterProblem, recommendedParameterKey, setParameterValue } from "../../domain/catalogParameters";
+import { CatalogDocumentsSection, CatalogHiddenAttachments } from "./CatalogDocumentsSection";
+import type { PriceVersionsPreselect } from "./priceVersions/PriceVersionsPage";
 
 const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp";
 const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
@@ -85,6 +95,17 @@ const SCENE_CAPABILITY_KINDS: readonly CatalogItemKind[] = ["furniture", "techni
  */
 const SOURCE_ASSET_APPLICABLE_KINDS: readonly CatalogItemKind[] = ["furniture", "booth", "booth_component", "construction", "technical_point", "floor_finish", "other"];
 
+/**
+ * Kinds whose "Použití v generátoru" 2D/3D checkboxes are shown. Services are included so a service
+ * that ever legitimately has a 3D model can switch 3D on explicitly; for them the flags only decide
+ * which attachments the card offers (service readiness never reads them).
+ */
+const CAPABILITY_TOGGLE_KINDS: readonly CatalogItemKind[] = [...SCENE_CAPABILITY_KINDS, "service", "graphics_service"];
+/** Kinds that always carry a 3D model (readiness requires it), whatever the 3D checkbox says. */
+const ALWAYS_3D_KINDS: readonly CatalogItemKind[] = ["booth", "booth_component"];
+/** Kinds where CAD sources (SKP/DWG/DXF) are relevant only together with 3D — a technical point is a 2D placement. */
+const CAD_ONLY_WITH_3D_KINDS: readonly CatalogItemKind[] = ["technical_point"];
+
 function hasAllowedExtension(fileName: string, allowed: readonly string[]): boolean {
   const extension = fileName.toLowerCase().split(".").pop();
   return Boolean(extension) && allowed.includes(extension!);
@@ -101,16 +122,19 @@ function hasAllowedExtension(fileName: string, allowed: readonly string[]): bool
 export function ComponentAdminPage({
   repository,
   onOpenPricing,
+  onOpenPriceVersion,
 }: {
   repository: RemoteApiCatalogItemsAdminRepository;
   /** Section 17 — hands off to the existing Pricing Administration matrix, preselected for one item. Never a second/duplicate price editor. */
   onOpenPricing: (catalogItemId: string) => void;
+  /** Opens Ceníky (verze) on the list/version/item viewed in the card's price section — navigation only. */
+  onOpenPriceVersion?: (preselect: PriceVersionsPreselect) => void;
 }) {
   const [items, setItems] = useState<readonly CatalogItemAdmin[] | null>(null);
   const [loadError, setLoadError] = useState("");
   const [selectedId, setSelectedId] = useState<string | undefined>(undefined);
   const [filters, setFilters] = useState<CatalogItemAdminFilters>({});
-  const [panel, setPanel] = useState<"none" | "create" | "import" | "variants">("none");
+  const [panel, setPanel] = useState<"none" | "create" | "import" | "variants" | "categories">("none");
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState("");
@@ -297,6 +321,9 @@ export function ComponentAdminPage({
             <button type="button" className="secondaryButton" onClick={() => setPanel(panel === "variants" ? "none" : "variants")}>
               Vzorníky
             </button>
+            <button type="button" className="secondaryButton" onClick={() => setPanel(panel === "categories" ? "none" : "categories")}>
+              Kategorie
+            </button>
             {needsTypeReviewCount > 0 && (
               <button type="button" className="secondaryButton" onClick={() => setFilters({ ...filters, needsTypeReview: true, onlyArchived: false })}>
                 K zařazení: {needsTypeReviewCount}
@@ -306,6 +333,7 @@ export function ComponentAdminPage({
 
           {panel === "create" && <CatalogItemCreateForm repository={repository} onCancel={() => setPanel("none")} onCreated={handleCreated} />}
           {panel === "import" && <AbfImportPanel repository={repository} onClose={() => setPanel("none")} onApplied={() => void reload()} />}
+          {panel === "categories" && <CatalogCategoriesPanel onClose={() => setPanel("none")} />}
           {panel === "variants" && <VariantSetsPanel variantSets={variantSets} allItems={allItems} onSave={handleSaveVariantSet} onClose={() => setPanel("none")} />}
           {variantSetsError && <p className="uploadError">{variantSetsError}</p>}
 
@@ -350,6 +378,7 @@ export function ComponentAdminPage({
                 onSaveAliases={handleSaveAliases}
                 onDuplicate={handleDuplicate}
                 onOpenPricing={() => onOpenPricing(selected.id)}
+                onOpenPriceVersion={onOpenPriceVersion}
               />
             )}
           </div>
@@ -509,6 +538,7 @@ export function ComponentAdminDetail({
   onSaveAliases,
   onDuplicate,
   onOpenPricing,
+  onOpenPriceVersion,
 }: {
   item: CatalogItemAdmin;
   /** Whole catalog — needed for the BOOTH/KIT package editor (child item picker). */
@@ -524,6 +554,7 @@ export function ComponentAdminDetail({
   onSaveAliases?: (aliases: readonly CatalogItemAliasInput[]) => Promise<readonly CatalogItemAlias[]>;
   onDuplicate?: () => Promise<void>;
   onOpenPricing: () => void;
+  onOpenPriceVersion?: (preselect: PriceVersionsPreselect) => void;
 }) {
   const itemDocument = item.document;
   const currentItemType = itemTypeOf(item);
@@ -540,6 +571,8 @@ export function ComponentAdminDetail({
   const legacyPhotoUrl = documentPhotoUrl(itemDocument);
   const hasPhoto = Boolean(photoAsset || legacyPhotoUrl);
   const photoResolved = useAssetUrl(photoAsset, legacyPhotoUrl);
+  const galleryPhotos = documentGalleryPhotoAssets(itemDocument);
+  const [galleryBusyId, setGalleryBusyId] = useState<string | undefined>(undefined);
 
   const modelAsset = documentModelAsset(itemDocument);
   const effectiveModel = documentEffectiveModelReference(itemDocument);
@@ -600,6 +633,19 @@ export function ComponentAdminDetail({
       await onSave({ photoAsset: null });
     } catch (removeError) {
       setPhotoActionError(removeError instanceof Error ? removeError.message : "Odebrání fotografie selhalo.");
+    }
+  }
+
+  async function handleGalleryAction(photoId: string, edit: CatalogItemAdminEdit) {
+    setPhotoActionError("");
+    setGalleryBusyId(photoId);
+    try {
+      // Metadata only — a removed gallery photo stays in R2 (no automatic deletes).
+      await onSave(edit);
+    } catch (galleryError) {
+      setPhotoActionError(galleryError instanceof Error ? galleryError.message : "Úprava galerie selhala.");
+    } finally {
+      setGalleryBusyId(undefined);
     }
   }
 
@@ -728,15 +774,42 @@ export function ComponentAdminDetail({
   const [color, setColor] = useState(initialAttributes.color ?? "");
   const [material, setMaterial] = useState(initialAttributes.material ?? "");
   const [extraParams, setExtraParams] = useState<readonly { key: string; value: string }[]>(initialAttributes.extra ?? []);
+  // Service cards: power (kW) and parameters stay in the EXISTING structured service metadata
+  // (document.serviceTechnical.powerKw / .parameters — read by the customer catalog too). They are
+  // edited in "Parametry komponenty" and saved by the card's normal "Uložit", never separately.
+  const initialService = documentServiceTechnical(itemDocument);
+  const [powerKw, setPowerKw] = useState(initialService?.powerKw !== undefined ? String(initialService.powerKw) : "");
+  const [serviceParams, setServiceParams] = useState<readonly { key: string; value: string }[]>(initialService?.parameters ?? []);
+  const isServiceCard = currentItemType === "SERVICE";
   const [widthMm, setWidthMm] = useState(initialWidth);
   const [depthMm, setDepthMm] = useState(initialDepth);
   const [heightMm, setHeightMm] = useState(initialHeight);
   const [showIn2D, setShowIn2D] = useState(initialShowIn2D);
   const [showIn3D, setShowIn3D] = useState(initialShowIn3D);
   const [abfCode, setAbfCode] = useState(item.abfCode ?? "");
-  const [internalCodeDraft, setInternalCodeDraft] = useState("");
-  const [itemType, setItemType] = useState<CatalogItemType>(currentItemType);
-  const [kind, setKind] = useState<CatalogItemKind>(item.kind);
+  // Generator code: the ONE canonical value is catalog_items.internal_code. "Stejný jako ABF kód" is
+  // not stored anywhere — it starts checked only when the two codes really are equal (or, for a card
+  // without a code, when an ABF code exists), so opening a historical card never changes its data.
+  const [codeSameAsAbf, setCodeSameAsAbf] = useState(item.internalCode ? codesMatch(item.internalCode, item.abfCode) : Boolean(item.abfCode));
+  const [codeDraft, setCodeDraft] = useState(item.internalCode ?? "");
+  const codeDerivedFromAbf = codeSameAsAbf && Boolean(abfCode.trim());
+  const resultingCode = codeDerivedFromAbf ? abfCode.trim().toUpperCase() : codeDraft.trim();
+  const codeWillChange = Boolean(item.internalCode && resultingCode && resultingCode !== item.internalCode);
+  // Druh komponenty → Kategorie (domain/catalogClassification.ts). The user picks the group and a
+  // category of it; the internal card type and kind follow from the category. Typové stánky and
+  // komplety keep their own type/kind (specialized administration).
+  const categoryRegister = useCatalogCategories();
+  const storedGroup = groupOfCard(currentItemType, item.kind);
+  const isSpecialCard = storedGroup === "booth" || storedGroup === "kit";
+  const [group, setGroup] = useState<CardGroup>(storedGroup);
+  const categoryDef = findCategory(categoryRegister.categories, category);
+  const classificationTargetForCategory = !isSpecialCard && categoryDef && categoryDef.group === group ? classificationTarget(categoryDef, item.kind) : undefined;
+  const itemType: CatalogItemType = isSpecialCard ? currentItemType : classificationTargetForCategory?.itemType ?? (isComponentGroup(group) ? COMPONENT_GROUP_TARGETS[group].itemType : currentItemType);
+  const kind: CatalogItemKind = isSpecialCard ? item.kind : classificationTargetForCategory?.kind ?? item.kind;
+  const classificationChanged = !isSpecialCard && (category !== (item.category ?? "") || group !== storedGroup);
+  const classificationProblem = classificationChanged ? classificationIssue(categoryRegister.categories, { itemType, kind, category: category || null }, { requireActive: category !== (item.category ?? "") }) : undefined;
+  const storedClassificationIssue = isSpecialCard ? undefined : classificationIssue(categoryRegister.categories, { itemType: currentItemType, kind: item.kind, category: item.category });
+  const storedCategoryDef = findCategory(categoryRegister.categories, item.category);
   const [note, setNote] = useState(documentNote(itemDocument));
   const [duplicateBusy, setDuplicateBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
@@ -747,7 +820,7 @@ export function ComponentAdminDetail({
     const edit: { -readonly [K in keyof CatalogItemAdminEdit]?: CatalogItemAdminEdit[K] } = {};
     if (displayName !== item.displayName) edit.displayName = displayName;
     if (name !== initialName) edit.name = name;
-    if (category !== (item.category ?? "")) edit.category = category;
+    if (category !== (item.category ?? "") && (isSpecialCard || category)) edit.category = category;
     if (unitCode !== (item.unitCode ?? "")) edit.unitCode = unitCode || null;
     if (officialName.trim() !== (item.officialName ?? "")) edit.officialName = officialName.trim() || null;
     if (officialNameEn.trim() !== (item.officialNameEn ?? "")) edit.officialNameEn = officialNameEn.trim() || null;
@@ -770,17 +843,52 @@ export function ComponentAdminDetail({
     if (showIn2D !== initialShowIn2D) edit.showIn2D = showIn2D;
     if (showIn3D !== initialShowIn3D) edit.showIn3D = showIn3D;
     if (abfCode.trim() !== (item.abfCode ?? "")) edit.abfCode = abfCode.trim() ? abfCode.trim() : null;
-    if (!item.internalCode && internalCodeDraft.trim()) edit.fillInternalCode = internalCodeDraft.trim();
-    if (itemType !== currentItemType) edit.itemType = itemType;
-    if (kind !== item.kind) edit.kind = kind;
+    if (!item.internalCode && resultingCode) edit.fillInternalCode = resultingCode;
+    if (item.internalCode && codeWillChange) edit.changeInternalCode = { from: item.internalCode, to: resultingCode };
+    if (!isSpecialCard && classificationChanged) {
+      if (itemType !== currentItemType) edit.itemType = itemType;
+      if (kind !== item.kind) edit.kind = kind;
+    }
     if (note !== documentNote(itemDocument)) edit.note = note;
+    if (isServiceCard) {
+      const draft = serviceTechnicalDraft();
+      if (JSON.stringify(draft) !== JSON.stringify(initialService ?? null)) edit.serviceTechnical = draft;
+    }
     return edit;
   }
 
-  function handleItemTypeChange(next: CatalogItemType) {
-    setItemType(next);
-    // Keep the kind valid for the new type (default kind of that type) — mirrors the server rule.
-    if (!CATALOG_ITEM_KINDS_BY_TYPE[next].includes(kind)) setKind(CATALOG_ITEM_KINDS_BY_TYPE[next][0]!);
+  /** The service metadata as the form currently has it — the technical category (derived from Kategorie) is kept as stored. */
+  function serviceTechnicalDraft() {
+    const draft: { serviceCategory?: string; powerKw?: number; parameters?: { key: string; value: string }[] } = {};
+    if (initialService?.serviceCategory) draft.serviceCategory = initialService.serviceCategory;
+    const parsedPower = Number(powerKw.trim().replace(",", "."));
+    if (powerKw.trim() && Number.isFinite(parsedPower) && parsedPower >= 0) draft.powerKw = parsedPower;
+    const cleaned = serviceParams.map((entry) => ({ key: entry.key.trim(), value: entry.value.trim() })).filter((entry) => entry.key);
+    if (cleaned.length > 0) draft.parameters = cleaned;
+    return Object.keys(draft).length > 0 ? draft : null;
+  }
+  const powerProblem = isServiceCard && powerKw.trim() && !(Number.isFinite(Number(powerKw.trim().replace(",", "."))) && Number(powerKw.trim().replace(",", ".")) >= 0) ? "Výkon musí být nezáporné číslo v kW (např. 2 nebo 2,5)." : undefined;
+
+  // "Parametry komponenty": ONE generic list per card (services: serviceTechnical.parameters, others:
+  // attributes.extra) holds the category's recommended parameters and the user's own ones.
+  const parameterStore = isServiceCard ? serviceParams : extraParams;
+  const setParameterStore = (next: readonly { key: string; value: string }[]) => { if (isServiceCard) setServiceParams(next); else setExtraParams(next); setDirty(true); };
+  const recommendedTemplates = activeRecommendedParameters(categoryDef?.recommendedParameters);
+  const recommendedKeys = new Set(recommendedTemplates.map(recommendedParameterKey));
+  const showDimensions = catalogTypeHasField(itemType, "width_mm") || Boolean(initialWidth || initialDepth || initialHeight);
+  const showMaterial = catalogTypeHasField(itemType, "color") || catalogTypeHasField(itemType, "material") || Boolean(initialAttributes.color || initialAttributes.material);
+  const showPower = isServiceCard && (categoryDef?.serviceCategory === "electricity" || initialService?.powerKw !== undefined);
+  const parametersProblem = parameterProblem({
+    recommended: recommendedTemplates.map((parameter) => ({ parameter, value: parameterStore.find((entry) => entry.key === recommendedParameterKey(parameter))?.value ?? "" })),
+    own: parameterStore.filter((entry) => !recommendedKeys.has(entry.key)),
+    dimensions: showDimensions ? [{ label: "Šířka", value: widthMm }, { label: "Hloubka", value: depthMm }, { label: "Výška", value: heightMm }] : [],
+  });
+  const formProblem = classificationProblem ?? powerProblem ?? parametersProblem;
+
+  function handleGroupChange(next: ComponentGroup) {
+    setGroup(next);
+    // A category of another group is never carried over and nothing is preselected — the user chooses.
+    if (categoryDef?.group !== next) setCategory("");
     setDirty(true);
   }
 
@@ -807,6 +915,10 @@ export function ComponentAdminDetail({
   }
 
   async function handleSaveClick() {
+    if (formProblem) {
+      setError(formProblem);
+      return;
+    }
     setBusy("saving");
     setError("");
     try {
@@ -826,6 +938,10 @@ export function ComponentAdminDetail({
   }
 
   async function handleActivate() {
+    if (formProblem) {
+      setError(formProblem);
+      return;
+    }
     setBusy("activating");
     setError("");
     try {
@@ -845,6 +961,18 @@ export function ComponentAdminDetail({
   }
 
   const stateLabel = dirty ? "dirty" : busy === "saving" ? "saving" : "saved";
+
+  // Mode of the card from the EXISTING 2D/3D flags (the checkbox state, so switching shows/hides at
+  // once). Hiding a section never deletes anything — hidden files are listed separately below.
+  const model3DMode = ALWAYS_3D_KINDS.includes(item.kind) || (CAPABILITY_TOGGLE_KINDS.includes(item.kind) ? showIn3D : true);
+  const cadMode = SOURCE_ASSET_APPLICABLE_KINDS.includes(item.kind) && !(CAD_ONLY_WITH_3D_KINDS.includes(item.kind) && !showIn3D);
+  const cadSourceAssets = sourceAssets.filter((entry) => entry.kind !== "pdf");
+  const documentAssets = sourceAssets.filter((entry) => entry.kind === "pdf");
+  /** Batch upload targets follow the SAME gates as the sections they fill (no parent GLB/source files on a variant line). */
+  const batchHasModel = hasModel && !isVariantBooth;
+  const batchModelAllowed = model3DMode && !isVariantBooth;
+  const batchCadAllowed = cadMode && !isVariantBooth;
+  const batchDocumentsAllowed = !isVariantBooth;
 
   return (
     <div className="adminDetail catalogAdminDetail">
@@ -868,17 +996,54 @@ export function ComponentAdminDetail({
       <div className="catalogDetailSections">
         <section className="catalogDetailSection">
           <h3>Identita</h3>
+          {storedClassificationIssue && !classificationChanged && (
+            <p className="fieldWarning catalogClassificationWarning">
+              Uložené zařazení neodpovídá pravidlům katalogu: {storedClassificationIssue} Zvolte platný Druh komponenty a Kategorii. Do té doby se karta ukládá beze změny zařazení — nic se samo nepřepisuje.
+            </p>
+          )}
+          {!storedClassificationIssue && storedCategoryDef && !storedCategoryDef.isActive && !classificationChanged && (
+            <p className="fieldHint">Kategorie „{storedCategoryDef.name}“ je neaktivní (historická). {storedCategoryDef.description ?? ""}</p>
+          )}
           <dl>
-            <EditRow label="Generátorový kód">
-              {item.internalCode ? (
-                <span className="readOnlyField" title="Stabilní identita položky v generátoru a cenách — nelze měnit, lze jen doplnit chybějící.">
-                  {item.internalCode}{item.abfCode && item.abfCode === item.internalCode ? " (= ABF kód)" : ""}
-                </span>
+            <EditRow label="Druh komponenty">
+              {isSpecialCard ? (
+                <span className="readOnlyField">{CATALOG_ITEM_TYPE_LABELS_CS[currentItemType]} <small className="fieldHint">— specializovaná karta (obsah, zahrnuté položky, náhrady); druh se zde nemění.</small></span>
               ) : (
-                <span className="inlineFieldWithAction">
-                  <input value={internalCodeDraft} onChange={(event) => { setInternalCodeDraft(event.target.value); setDirty(true); }} placeholder="Doplnit (např. INT-PANEL-950)" />
-                  {abfCode.trim() && <button type="button" className="secondaryButton" onClick={() => { setInternalCodeDraft(abfCode.trim().toUpperCase()); setDirty(true); }}>Použít ABF kód</button>}
-                </span>
+                <>
+                  <select
+                    aria-label="Druh komponenty"
+                    value={isComponentGroup(group) ? group : ""}
+                    onChange={(event) => handleGroupChange(event.target.value as ComponentGroup)}
+                    disabled={item.lifecycleStatus === "active"}
+                    title={item.lifecycleStatus === "active" ? "Aktivní položce nelze měnit druh — používá ji generátor." : undefined}
+                  >
+                    {COMPONENT_GROUPS.map((value) => <option key={value} value={value}>{COMPONENT_GROUP_LABELS_CS[value]}</option>)}
+                  </select>
+                  {isComponentGroup(group) && <small className="fieldHint">{COMPONENT_GROUP_HINTS_CS[group]}</small>}
+                  {group !== storedGroup && <small className="fieldWarning">Změna druhu změní interní typ karty a její cenové zařazení; formulář pak nabídne jiné sekce. Žádné přílohy ani údaje se nesmažou.</small>}
+                </>
+              )}
+            </EditRow>
+            <EditRow label="Kategorie">
+              {isSpecialCard ? (
+                <select value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
+                  {category && !CATALOG_ITEM_CATEGORY_OPTIONS.some((option) => option.value === category) && <option value={category}>{category} (zachována)</option>}
+                  {!category && <option value="">— nevybráno —</option>}
+                  {CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              ) : (
+                <>
+                  <select aria-label="Kategorie" value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
+                    <option value="">— vyberte kategorii —</option>
+                    {item.category && category === item.category && (!storedCategoryDef || storedCategoryDef.group !== group || !storedCategoryDef.isActive) && (
+                      <option value={item.category}>{storedCategoryDef?.name ?? item.category} (uloženo — {storedCategoryDef ? (storedCategoryDef.isActive ? `patří k druhu ${COMPONENT_GROUP_LABELS_CS[storedCategoryDef.group]}` : "neaktivní") : "není v registru"})</option>
+                    )}
+                    {isComponentGroup(group) && categoriesForGroup(categoryRegister.categories, group).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
+                  </select>
+                  {classificationChanged && classificationProblem && <small className="fieldWarning">{classificationProblem}</small>}
+                  {categoryDef && derivedPriceCategory(categoryDef) === "electricity" && <small className="fieldHint">Cenové zařazení: Elektřina → ceník elektřiny.</small>}
+                  {categoryDef?.group === "technical_point" && <small className="fieldHint">Technický bod se samostatně neúčtuje.</small>}
+                </>
               )}
             </EditRow>
             <EditRow label="ABF kód">
@@ -888,15 +1053,32 @@ export function ComponentAdminDetail({
                 placeholder={itemTypeExpectsAbfCode(itemType) ? "Bez ABF kódu" : "Interní komponenta — ABF kód není potřeba"}
               />
             </EditRow>
-            <EditRow label="Typ karty">
-              <select
-                value={itemType}
-                onChange={(event) => handleItemTypeChange(event.target.value as CatalogItemType)}
-                disabled={item.lifecycleStatus === "active"}
-                title={item.lifecycleStatus === "active" ? "Aktivní položce nelze měnit typ — používá ji generátor." : undefined}
-              >
-                {CATALOG_ITEM_TYPES.map((value) => <option key={value} value={value}>{CATALOG_ITEM_TYPE_LABELS_CS[value]}</option>)}
-              </select>
+            <EditRow label="Interní / generátorový kód">
+              <input
+                aria-label="Interní / generátorový kód"
+                className={codeDerivedFromAbf ? "derivedCodeField" : undefined}
+                value={codeDerivedFromAbf ? resultingCode : codeDraft}
+                readOnly={codeDerivedFromAbf}
+                onChange={(event) => { setCodeDraft(event.target.value); setDirty(true); }}
+                placeholder={abfCode.trim() ? "Vlastní kód" : "Vlastní kód interní komponenty, např. INT-SLOUPEK-2500"}
+              />
+              {abfCode.trim() && (
+                <label className="checkboxRow">
+                  <input type="checkbox" checked={codeSameAsAbf} onChange={(event) => { setCodeSameAsAbf(event.target.checked); if (!event.target.checked && !codeDraft.trim()) setCodeDraft(abfCode.trim().toUpperCase()); setDirty(true); }} />
+                  Stejný jako ABF kód
+                </label>
+              )}
+              {codeWillChange ? (
+                <small className="fieldWarning">
+                  Po uložení se generátorový kód změní z {item.internalCode} na {resultingCode}. Server změnu odmítne, pokud starý kód používá aplikace (služby, typové stánky, starý generátor) nebo uložený projekt. Ceny, aliasy a soubory jsou vázané na kartu, ne na kód.
+                </small>
+              ) : item.internalCode ? (
+                <small className="fieldHint">Uloženo: {item.internalCode} · {codeModeLabel(item.internalCode, item.abfCode)}. Stabilní identita položky v generátoru a cenách.</small>
+              ) : resultingCode ? (
+                <small className="fieldHint">Po uložení: {resultingCode} · {codeModeLabel(resultingCode, abfCode.trim() || null)}.</small>
+              ) : (
+                <small className="fieldHint">{abfCode.trim() ? "Zadejte vlastní kód, nebo zaškrtněte „Stejný jako ABF kód“." : "Interní komponenta nepotřebuje ABF kód — stačí vlastní generátorový kód."}</small>
+              )}
             </EditRow>
             <EditRow label="Oficiální název ABF (CZ)">
               <input value={officialName} onChange={(event) => { setOfficialName(event.target.value); setDirty(true); }} placeholder={itemTypeExpectsAbfCode(itemType) ? "Podle KODY.xlsm" : "Interní komponenta — obvykle bez ABF názvu"} />
@@ -909,22 +1091,6 @@ export function ComponentAdminDetail({
             </EditRow>
             <EditRow label="CZ název (interní)">
               <input value={name} onChange={(event) => { setName(event.target.value); setDirty(true); }} />
-            </EditRow>
-            <EditRow label="Druh (pravidla readiness)">
-              <select value={kind} onChange={(event) => { setKind(event.target.value as CatalogItemKind); setDirty(true); }} disabled={item.lifecycleStatus === "active"}>
-                {CATALOG_ITEM_KINDS_BY_TYPE[itemType].map((value) => <option key={value} value={value}>{CATALOG_ITEM_KIND_LABELS_CS[value]}</option>)}
-              </select>
-            </EditRow>
-            <EditRow label="Kategorie">
-              <select value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
-                {category && !CATALOG_ITEM_CATEGORY_OPTIONS.some((option) => option.value === category) && (
-                  <option value={category}>{category} (nerozpoznaná hodnota, zachována)</option>
-                )}
-                {!category && <option value="">— nevybráno —</option>}
-                {CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </select>
             </EditRow>
             <EditRow label="Měrná jednotka">
               <select value={unitCode} onChange={(event) => { setUnitCode(event.target.value); setDirty(true); }}>
@@ -953,47 +1119,75 @@ export function ComponentAdminDetail({
         </section>
 
         <section className="catalogDetailSection">
-          <h3>Rozměry</h3>
+          <h3>Parametry komponenty</h3>
           <dl>
-            <EditRow label="Šířka (mm)">
-              <input type="number" value={widthMm} onChange={(event) => { setWidthMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
-            </EditRow>
-            <EditRow label="Hloubka (mm)">
-              <input type="number" value={depthMm} onChange={(event) => { setDepthMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
-            </EditRow>
-            <EditRow label="Výška (mm)">
-              <input type="number" value={heightMm} onChange={(event) => { setHeightMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
-            </EditRow>
+            {/* System parameters — bound to their structured fields (generator, 2D/3D, customer catalog). */}
+            {showDimensions && (
+              <>
+                <EditRow label="Šířka (mm)">
+                  <input type="number" min="0" value={widthMm} onChange={(event) => { setWidthMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
+                </EditRow>
+                <EditRow label="Hloubka (mm)">
+                  <input type="number" min="0" value={depthMm} onChange={(event) => { setDepthMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
+                </EditRow>
+                <EditRow label="Výška (mm)">
+                  <input type="number" min="0" value={heightMm} onChange={(event) => { setHeightMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
+                </EditRow>
+              </>
+            )}
+            {showMaterial && (
+              <>
+                <EditRow label="Barva">
+                  <input value={color} onChange={(event) => { setColor(event.target.value); setDirty(true); }} placeholder="např. černá, RAL 9016" />
+                </EditRow>
+                <EditRow label="Materiál">
+                  <input value={material} onChange={(event) => { setMaterial(event.target.value); setDirty(true); }} placeholder="např. lamino, hliník" />
+                </EditRow>
+              </>
+            )}
+            {showPower && (
+              <EditRow label="Výkon (kW)">
+                <span className="inlineFieldWithAction">
+                  <input aria-label="Výkon (kW)" inputMode="decimal" value={powerKw} onChange={(event) => { setPowerKw(event.target.value); setDirty(true); }} placeholder="např. 2" />
+                  <span className="fieldHint">kW</span>
+                </span>
+                {powerProblem && <small className="fieldWarning">{powerProblem}</small>}
+              </EditRow>
+            )}
+            {/* Recommended parameters of the category (category administration) — always optional. */}
+            {recommendedTemplates.map((parameter) => {
+              const key = recommendedParameterKey(parameter);
+              return (
+                <EditRow key={parameter.id} label={parameter.unit ? `${parameter.name} (${parameter.unit})` : parameter.name}>
+                  <input
+                    aria-label={key}
+                    inputMode={parameter.valueType === "number" ? "decimal" : undefined}
+                    value={parameterStore.find((entry) => entry.key === key)?.value ?? ""}
+                    onChange={(event) => setParameterStore(setParameterValue(parameterStore, key, event.target.value))}
+                    placeholder={parameter.valueType === "number" ? "číslo (nepovinné)" : "nepovinné"}
+                  />
+                </EditRow>
+              );
+            })}
+            {/* The card's own parameters (and historical values of renamed / deactivated recommended parameters). */}
+            {parameterStore.map((param, index) => recommendedKeys.has(param.key) ? null : (
+              <EditRow key={index} label="Vlastní parametr">
+                <span className="inlineFieldWithAction">
+                  <input aria-label="Název parametru" value={param.key} onChange={(event) => setParameterStore(parameterStore.map((entry, entryIndex) => entryIndex === index ? { ...entry, key: event.target.value } : entry))} placeholder="Název (např. napětí)" />
+                  <input aria-label="Hodnota parametru" value={param.value} onChange={(event) => setParameterStore(parameterStore.map((entry, entryIndex) => entryIndex === index ? { ...entry, value: event.target.value } : entry))} placeholder="Hodnota (např. 230 V)" />
+                  <button type="button" className="secondaryButton" onClick={() => setParameterStore(parameterStore.filter((_, entryIndex) => entryIndex !== index))}>Odebrat</button>
+                </span>
+              </EditRow>
+            ))}
           </dl>
+          <div className="assetActions">
+            <button type="button" className="secondaryButton" onClick={() => setParameterStore([...parameterStore, { key: "", value: "" }])}>+ Přidat parametr</button>
+          </div>
+          {parametersProblem && <small className="fieldWarning">{parametersProblem}</small>}
+          <p className="fieldHint">Vše se uloží tlačítkem Uložit spolu s ostatními údaji karty. Nevyplněné parametry nejsou povinné.</p>
         </section>
 
-        {(catalogTypeHasField(itemType, "color") || catalogTypeHasField(itemType, "material")) && (
-          <section className="catalogDetailSection">
-            <h3>Parametry</h3>
-            <dl>
-              <EditRow label="Barva">
-                <input value={color} onChange={(event) => { setColor(event.target.value); setDirty(true); }} placeholder="např. černá, RAL 9016" />
-              </EditRow>
-              <EditRow label="Materiál">
-                <input value={material} onChange={(event) => { setMaterial(event.target.value); setDirty(true); }} placeholder="např. lamino, hliník" />
-              </EditRow>
-              {extraParams.map((param, index) => (
-                <EditRow key={index} label={`Parametr ${index + 1}`}>
-                  <span className="inlineFieldWithAction">
-                    <input aria-label="Název parametru" value={param.key} onChange={(event) => { setExtraParams(extraParams.map((entry, entryIndex) => entryIndex === index ? { ...entry, key: event.target.value } : entry)); setDirty(true); }} placeholder="Název" />
-                    <input aria-label="Hodnota parametru" value={param.value} onChange={(event) => { setExtraParams(extraParams.map((entry, entryIndex) => entryIndex === index ? { ...entry, value: event.target.value } : entry)); setDirty(true); }} placeholder="Hodnota" />
-                    <button type="button" className="secondaryButton" onClick={() => { setExtraParams(extraParams.filter((_, entryIndex) => entryIndex !== index)); setDirty(true); }}>Odebrat</button>
-                  </span>
-                </EditRow>
-              ))}
-            </dl>
-            <div className="assetActions">
-              <button type="button" className="secondaryButton" onClick={() => setExtraParams([...extraParams, { key: "", value: "" }])}>+ Další parametr</button>
-            </div>
-          </section>
-        )}
-
-        {SCENE_CAPABILITY_KINDS.includes(item.kind) && (
+        {CAPABILITY_TOGGLE_KINDS.includes(item.kind) && (
           <section className="catalogDetailSection">
             <h3>Použití v generátoru</h3>
             <label className="checkboxRow">
@@ -1015,7 +1209,10 @@ export function ComponentAdminDetail({
               </p>
             )}
             <p className="fieldHint">
-              Aspoň jedno zaškrtnutí je nutné pro generator readiness (jinak "Chybí nastavení zobrazení ve 2D/3D"). Zobrazení ve 3D vyžaduje nahraný 3D model.
+              {SCENE_CAPABILITY_KINDS.includes(item.kind)
+                ? 'Aspoň jedno zaškrtnutí je nutné pro generator readiness (jinak "Chybí nastavení zobrazení ve 2D/3D"). Zobrazení ve 3D vyžaduje nahraný 3D model.'
+                : "U služby 2D/3D jen určuje, které přílohy karta nabízí (bez 3D se nenabízí GLB). Připravenost služby na nich nezávisí."}
+              {" "}Vypnutí 3D žádný soubor nemaže.
             </p>
           </section>
         )}
@@ -1070,13 +1267,39 @@ export function ComponentAdminDetail({
           {archiveError && <small className="uploadError">{archiveError}</small>}
         </section>
 
+        <CatalogBatchUpload
+          ownerId={ownerId}
+          hasMainPhoto={hasPhoto}
+          hasModel={batchHasModel}
+          modelAllowed={batchModelAllowed}
+          cadAllowed={batchCadAllowed}
+          documentsAllowed={batchDocumentsAllowed}
+          currentMainPhoto={photoAsset}
+          formDirty={dirty}
+          onSave={onSave}
+        />
+
         <section className="catalogDetailSection">
           <h3>Fotografie</h3>
           <dl>
             <Row label="Stav" value={hasPhoto ? "Fotografie existuje" : "Fotografie chybí"} />
-            <Row label="Soubor" value={photoAsset?.originalFileName ?? (legacyPhotoUrl ? legacyPhotoUrl.split("/").pop() : undefined)} />
+            <Row label="Hlavní fotografie" value={photoAsset?.originalFileName ?? (legacyPhotoUrl ? legacyPhotoUrl.split("/").pop() : undefined)} />
+            <Row label="Další fotografie" value={galleryPhotos.length ? `${galleryPhotos.length} v galerii` : "žádné"} />
           </dl>
-          {photoResolved.url && <img className="catalogPhotoPreview" src={photoResolved.url} alt={`Fotografie ${item.displayName}`} />}
+          {photoResolved.url && <figure className="catalogMainPhoto"><img className="catalogPhotoPreview" src={photoResolved.url} alt={`Fotografie ${item.displayName}`} /><figcaption>Hlavní fotografie</figcaption></figure>}
+          {galleryPhotos.length > 0 && (
+            <ul className="catalogGallery">
+              {galleryPhotos.map((photo) => (
+                <GalleryPhoto
+                  key={photo.id}
+                  photo={photo}
+                  busy={galleryBusyId === photo.id}
+                  onPromote={() => void handleGalleryAction(photo.id, { promoteGalleryPhotoAssetId: photo.id })}
+                  onRemove={() => void handleGalleryAction(photo.id, { removeGalleryPhotoAssetId: photo.id })}
+                />
+              ))}
+            </ul>
+          )}
           <div className="assetActions">
             <label className="smallUploadButton">
               {hasPhoto ? "Nahradit" : "Nahrát"}
@@ -1108,7 +1331,7 @@ export function ComponentAdminDetail({
         {/* See isVariantBooth above — a multi-variant type-booth line has no parent-level
             runtime model at all; showing "Nahrát GLB" here would upload an asset nothing ever
             reads. A booth WITHOUT variants (P86, P87, ...) keeps this section as before. */}
-        {!isVariantBooth && (
+        {!isVariantBooth && model3DMode && (
         <section className="catalogDetailSection">
           <h3>3D model</h3>
           <dl>
@@ -1161,15 +1384,15 @@ export function ComponentAdminDetail({
         {/* See isVariantBooth above — a multi-variant type-booth line's SKP/DWG/DXF/PDF/Other
             files belong to each variant individually (see the "Varianty" section below), never
             to the parent; showing this section here would be confusing/orphaned data. */}
-        {SOURCE_ASSET_APPLICABLE_KINDS.includes(item.kind) && !isVariantBooth && (
+        {SOURCE_ASSET_APPLICABLE_KINDS.includes(item.kind) && !isVariantBooth && cadMode && (
         <section className="catalogDetailSection">
           <h3>Zdrojové a výrobní soubory</h3>
           <dl>
             <Row label="SKP (zdrojový soubor)" value={hasSketchupSource ? "Nahrán" : "Chybí"} />
           </dl>
-          {sourceAssets.length > 0 && (
+          {cadSourceAssets.length > 0 && (
             <ul className="sourceAssetList">
-              {sourceAssets.map((entry) => (
+              {cadSourceAssets.map((entry) => (
                 <li key={entry.id} className="sourceAssetListItem">
                   <span className="sourceAssetKindBadge">{SOURCE_ASSET_KIND_LABELS_CS[entry.kind]}</span>
                   <span>{entry.label || entry.asset.originalFileName}</span>
@@ -1182,7 +1405,7 @@ export function ComponentAdminDetail({
           )}
           <div className="assetActions">
             <select value={sourceAssetKind} onChange={(event) => setSourceAssetKind(event.target.value as SourceAssetKind)}>
-              {SOURCE_ASSET_KINDS.map((kind) => (
+              {SOURCE_ASSET_KINDS.filter((kind) => kind !== "pdf").map((kind) => (
                 <option key={kind} value={kind}>{SOURCE_ASSET_KIND_LABELS_CS[kind]}</option>
               ))}
             </select>
@@ -1214,17 +1437,25 @@ export function ComponentAdminDetail({
         </section>
         )}
 
-        <section className="catalogDetailSection">
-          <h3>Ceny</h3>
-          <dl>
-            <Row label="Base cena CZK" value={pricing.czk !== null ? `${pricing.czk.toLocaleString("cs-CZ")} Kč` : "Cena není nastavena"} />
-            <Row label="Base cena EUR" value={pricing.eur !== null ? `${pricing.eur.toLocaleString("cs-CZ")} €` : "Cena není nastavena"} />
-          </dl>
-          <button type="button" className="secondaryButton" onClick={onOpenPricing}>Upravit ceny</button>
-        </section>
+        {!isVariantBooth && <CatalogDocumentsSection entries={documentAssets} ownerId={ownerId} onSave={onSave} />}
+
+        {!isVariantBooth && (
+          <CatalogHiddenAttachments
+            model={!model3DMode && effectiveModel ? { fileName: effectiveModel.fileName ?? modelAsset?.originalFileName ?? "3D model", ...(modelAsset ? { asset: modelAsset } : {}) } : undefined}
+            sources={cadMode ? [] : cadSourceAssets}
+          />
+        )}
+
+        <CatalogCardPrices
+          refreshKey={item.updatedAt}
+          catalogItemId={item.id}
+          itemFilter={item.abfCode ?? item.internalCode ?? item.displayName}
+          legacy={pricing}
+          onOpenPriceVersion={onOpenPriceVersion}
+          onOpenLegacyPricing={onOpenPricing}
+        />
 
         <CatalogPublicationSection item={item} ownerId={ownerId} onSave={onSave} />
-        {currentItemType === "SERVICE" && <ServiceTechnicalSection item={item} onSave={onSave} />}
         {aliasRegister && onSaveAliases && <CatalogAliasesSection key={item.id} item={item} register={aliasRegister} onSave={onSaveAliases} />}
         {!aliasRegister && aliasLoadError && <p className="uploadError">{aliasLoadError}</p>}
         {(currentItemType === "BOOTH" || currentItemType === "KIT") && onSavePackage && allItems && (
@@ -1670,6 +1901,30 @@ function VariantRow({
         <p className="fieldHint">SKP je u variant typové řady povinný pro aktivaci (spolu s GLB). DWG, DXF, PDF a Ostatní nejsou nikdy vyžadované.</p>
       </div>
     </div>
+  );
+}
+
+function codesMatch(internalCode: string, abfCode: string | null | undefined): boolean {
+  return Boolean(abfCode) && abfCode!.trim().toLocaleUpperCase("cs") === internalCode.trim().toLocaleUpperCase("cs");
+}
+
+/** Generator code mode, read from the real stored values — the column code is the identity (also when it was taken over from the ABF code). */
+function codeModeLabel(internalCode: string, abfCode: string | null | undefined): string {
+  if (codesMatch(internalCode, abfCode)) return "stejný jako ABF kód";
+  return abfCode ? `vlastní generátorový kód (ABF kód ${abfCode})` : "vlastní generátorový kód";
+}
+
+function GalleryPhoto({ photo, busy, onPromote, onRemove }: { photo: StoredAsset; busy: boolean; onPromote: () => void; onRemove: () => void }) {
+  const resolved = useAssetUrl(photo, undefined);
+  return (
+    <li className="catalogGalleryItem">
+      {resolved.url ? <img src={resolved.url} alt={photo.originalFileName} /> : <span className="catalogThumbnailPlaceholder" aria-hidden="true" />}
+      <small title={photo.originalFileName}>{photo.originalFileName}</small>
+      <span className="assetActions">
+        <button type="button" className="linkButton" disabled={busy} onClick={onPromote}>Nastavit jako hlavní</button>
+        <button type="button" className="dangerText" disabled={busy} onClick={onRemove}>Odebrat</button>
+      </span>
+    </li>
   );
 }
 

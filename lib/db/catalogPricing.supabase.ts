@@ -1,3 +1,4 @@
+import { withColumnInternalCode } from "../../domain/catalogReadiness.ts";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { ComponentDefinition } from "../../domain/models.ts";
 import { computeGeneratorEligible, type CatalogItemSummary, type PricingEntrySummary } from "../../domain/catalogPricing.ts";
@@ -29,7 +30,7 @@ export async function readCatalogItems(client: SupabaseClient): Promise<readonly
       displayName: row.display_name,
       category: row.category,
       unit: row.unit,
-      generatorEligible: computeGeneratorEligible(document, lifecycleStatus, kind),
+      generatorEligible: computeGeneratorEligible(withColumnInternalCode(document, row.internal_code), lifecycleStatus, kind),
     } satisfies CatalogItemSummary;
   });
 }

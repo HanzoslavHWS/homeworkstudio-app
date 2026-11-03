@@ -17,6 +17,9 @@ import type { CatalogPackageItemInput } from "../../domain/catalogPackages";
 import type { CatalogVariantSet } from "../../domain/catalogVariants";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
 import { ComponentAdminDetail, ComponentAdminList, type SavedKitContents } from "./ComponentAdminPage";
+import type { PriceVersionsPreselect } from "./priceVersions/PriceVersionsPage";
+import { categoriesForGroup } from "../../domain/catalogClassification";
+import { useCatalogCategories } from "../../lib/db/catalogCategories.remoteApi.client";
 
 const BOOTH_ADMIN_TABS: readonly Readonly<{ kind: CatalogItemKind; label: string; hint: string }>[] = [
   { kind: "booth", label: "Typové stánky", hint: "Kompletní typové stánky (P86 a další) — vlastní master 2D/3D model, vlastní rozměry." },
@@ -35,10 +38,12 @@ const BOOTH_ADMIN_TABS: readonly Readonly<{ kind: CatalogItemKind; label: string
 export function BoothAdminPage({
   repository,
   onOpenPricing,
+  onOpenPriceVersion,
 }: {
   repository: RemoteApiCatalogItemsAdminRepository;
   /** Section 17 precedent — hands off to the existing Pricing Administration matrix, preselected for one item. */
   onOpenPricing: (catalogItemId: string) => void;
+  onOpenPriceVersion?: (preselect: PriceVersionsPreselect) => void;
 }) {
   const [items, setItems] = useState<readonly CatalogItemAdmin[] | null>(null);
   const [loadError, setLoadError] = useState("");
@@ -174,6 +179,7 @@ export function BoothAdminPage({
                 variantSets={variantSets}
                 onDuplicate={handleDuplicate}
                 onOpenPricing={() => onOpenPricing(selected.id)}
+                onOpenPriceVersion={onOpenPriceVersion}
               />
             )}
           </div>
@@ -201,6 +207,9 @@ function BoothComponentCreateForm({
   const [displayName, setDisplayName] = useState("");
   const [internalCode, setInternalCode] = useState("");
   const [category, setCategory] = useState("");
+  // Booth components are internal components — only categories of that group allowing kind booth_component.
+  const categoryRegister = useCatalogCategories();
+  const componentCategories = categoriesForGroup(categoryRegister.categories, "internal_component").filter((option) => option.kinds.includes("booth_component"));
   const [unit, setUnit] = useState("");
   const [widthMm, setWidthMm] = useState("");
   const [depthMm, setDepthMm] = useState("");
@@ -258,8 +267,8 @@ function BoothComponentCreateForm({
           <dd>
             <select value={category} onChange={(event) => setCategory(event.target.value)}>
               <option value="">— vyberte —</option>
-              {CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
+              {componentCategories.map((option) => (
+                <option key={option.id} value={option.id}>{option.name}</option>
               ))}
             </select>
           </dd>

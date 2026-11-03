@@ -29,6 +29,8 @@ import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient"
 import { useAssetUrl } from "../../hooks/useAssetUrl";
 import { CATALOG_UNITS } from "../../domain/catalogUnits";
 import { catalogTypeHasField } from "../../domain/catalogItemFields";
+import { categoriesForGroup, COMPONENT_GROUP_HINTS_CS, COMPONENT_GROUP_LABELS_CS, COMPONENT_GROUP_TARGETS, COMPONENT_GROUPS, type ComponentGroup } from "../../domain/catalogClassification";
+import { useCatalogCategories } from "../../lib/db/catalogCategories.remoteApi.client";
 
 /** Types whose cards physically exist (dimensions make sense). SERVICE never needs them. */
 const TYPES_WITH_DIMENSIONS: readonly CatalogItemType[] = ["PRODUCT", "BOOTH", "INTERNAL_COMPONENT"];
@@ -55,8 +57,10 @@ export function CatalogItemCreateForm({
   onCancel: () => void;
   onCreated: (created: CatalogItemAdmin) => void;
 }) {
-  const [itemType, setItemType] = useState<CatalogItemType | "">("");
-  const [kind, setKind] = useState<CatalogItemKind | "">("");
+  // Druh komponenty (five groups) or one of the two specialized card types (Typový stánek / Komplet).
+  const [pick, setPick] = useState<ComponentGroup | "BOOTH" | "KIT" | "">("");
+  const categoryRegister = useCatalogCategories();
+  const itemType: CatalogItemType | "" = pick === "" ? "" : pick === "BOOTH" || pick === "KIT" ? pick : COMPONENT_GROUP_TARGETS[pick].itemType;
   const [displayName, setDisplayName] = useState("");
   const [internalCode, setInternalCode] = useState("");
   const [abfCode, setAbfCode] = useState("");
@@ -74,11 +78,16 @@ export function CatalogItemCreateForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const canSubmit = Boolean(itemType) && displayName.trim().length > 0 && category.trim().length > 0 && !busy;
+  const isGroup = pick !== "" && pick !== "BOOTH" && pick !== "KIT";
+  const groupCategories = isGroup ? categoriesForGroup(categoryRegister.categories, pick) : [];
+  const categoryDef = isGroup ? groupCategories.find((candidate) => candidate.id === category) : undefined;
+  const kind: CatalogItemKind | "" = !itemType ? "" : isGroup ? categoryDef?.kinds[0] ?? "" : CATALOG_ITEM_KINDS_BY_TYPE[itemType][0]!;
+  const canSubmit = Boolean(itemType) && Boolean(kind) && displayName.trim().length > 0 && category.trim().length > 0 && !busy;
 
-  function selectType(next: CatalogItemType) {
-    setItemType(next);
-    setKind(CATALOG_ITEM_KINDS_BY_TYPE[next][0]!);
+  function selectPick(next: ComponentGroup | "BOOTH" | "KIT") {
+    setPick(next);
+    // Never carry a category over into another group, never preselect one — the user chooses.
+    setCategory("");
   }
 
   async function handleSubmit() {
@@ -122,12 +131,18 @@ export function CatalogItemCreateForm({
   return (
     <div className="catalogDetailSection adminDetail catalogCreatePanel">
       <h3>Nová katalogová položka</h3>
-      <p className="fieldHint">Nejdřív vyberte typ karty — podle něj se zobrazí relevantní pole. Nová položka vzniká ve stavu „K doplnění“.</p>
-      <div className="catalogTypePicker" role="radiogroup" aria-label="Typ položky">
-        {CATALOG_ITEM_TYPES.map((value) => (
-          <button key={value} type="button" role="radio" aria-checked={itemType === value} className={itemType === value ? "active" : ""} onClick={() => selectType(value)}>
+      <p className="fieldHint">Nejdřív vyberte druh komponenty a pak kategorii — podle nich se zobrazí relevantní pole a odvodí cenové zařazení. Nová položka vzniká ve stavu „K doplnění“.</p>
+      <div className="catalogTypePicker" role="radiogroup" aria-label="Druh komponenty">
+        {COMPONENT_GROUPS.map((value) => (
+          <button key={value} type="button" role="radio" aria-checked={pick === value} className={pick === value ? "active" : ""} onClick={() => selectPick(value)}>
+            <strong>{COMPONENT_GROUP_LABELS_CS[value]}</strong>
+            <small>{COMPONENT_GROUP_HINTS_CS[value]}</small>
+          </button>
+        ))}
+        {(["BOOTH", "KIT"] as const).map((value) => (
+          <button key={value} type="button" role="radio" aria-checked={pick === value} className={pick === value ? "active" : ""} onClick={() => selectPick(value)}>
             <strong>{CATALOG_ITEM_TYPE_LABELS_CS[value]}</strong>
-            <small>{CATALOG_ITEM_TYPE_HINTS_CS[value]}</small>
+            <small>{CATALOG_ITEM_TYPE_HINTS_CS[value]} Specializovaná správa obsahu.</small>
           </button>
         ))}
       </div>
@@ -164,20 +179,13 @@ export function CatalogItemCreateForm({
           <Field label="Kategorie *">
             <select value={category} onChange={(event) => setCategory(event.target.value)}>
               <option value="">— vyberte —</option>
-              {CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
+              {isGroup
+                ? groupCategories.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)
+                : CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
+            {categoryDef?.priceCategory === "electricity" && <small className="fieldHint">Cenové zařazení: Elektřina → ceník elektřiny.</small>}
+            {isGroup && pick === "technical_point" && <small className="fieldHint">Technický bod se samostatně neúčtuje.</small>}
           </Field>
-          {CATALOG_ITEM_KINDS_BY_TYPE[itemType].length > 1 && (
-            <Field label="Druh (pravidla readiness)">
-              <select value={kind} onChange={(event) => setKind(event.target.value as CatalogItemKind)}>
-                {CATALOG_ITEM_KINDS_BY_TYPE[itemType].map((value) => (
-                  <option key={value} value={value}>{CATALOG_ITEM_KIND_LABELS_CS[value]}</option>
-                ))}
-              </select>
-            </Field>
-          )}
           <Field label="Měrná jednotka">
             <select aria-label="Měrná jednotka" value={unitCode} onChange={(event) => setUnitCode(event.target.value)}>
               <option value="">— nevybráno —</option>
@@ -213,66 +221,6 @@ export function CatalogItemCreateForm({
       </div>
       {error && <small className="uploadError">{error}</small>}
     </div>
-  );
-}
-
-// ============================================================================
-// SERVICE TECHNICAL METADATA — power + free parameters (placement/marker/icon stay in the
-// "Technické rastry" section, never duplicated here).
-// ============================================================================
-
-export function ServiceTechnicalSection({ item, onSave }: { item: CatalogItemAdmin; onSave: (edit: CatalogItemAdminEdit) => Promise<void> }) {
-  const existing = documentServiceTechnical(item.document);
-  const [powerKw, setPowerKw] = useState(existing?.powerKw !== undefined ? String(existing.powerKw) : "");
-  const [parameters, setParameters] = useState<readonly { key: string; value: string }[]>(existing?.parameters ?? []);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-
-  function buildDraft() {
-    const draft: { powerKw?: number; parameters?: { key: string; value: string }[] } = {};
-    const parsedPower = Number(powerKw.replace(",", "."));
-    if (powerKw.trim() && Number.isFinite(parsedPower) && parsedPower >= 0) draft.powerKw = parsedPower;
-    const cleaned = parameters.map((entry) => ({ key: entry.key.trim(), value: entry.value.trim() })).filter((entry) => entry.key);
-    if (cleaned.length > 0) draft.parameters = cleaned;
-    return Object.keys(draft).length > 0 ? draft : null;
-  }
-
-  const dirty = JSON.stringify(buildDraft()) !== JSON.stringify(existing ?? null);
-
-  async function handleSave() {
-    setBusy(true);
-    setError("");
-    try {
-      await onSave({ serviceTechnical: buildDraft() });
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Uložení selhalo.");
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <section className="catalogDetailSection">
-      <h3>Technická metadata služby</h3>
-      <dl>
-        <Field label="Výkon (kW)">
-          <input inputMode="decimal" value={powerKw} onChange={(event) => setPowerKw(event.target.value)} placeholder="Nevyplněno" />
-        </Field>
-      </dl>
-      {parameters.map((entry, index) => (
-        <div key={index} className="catalogPackageLine">
-          <input aria-label="Parametr" placeholder="Parametr (např. napětí)" value={entry.key} onChange={(event) => setParameters((current) => current.map((candidate, i) => (i === index ? { ...candidate, key: event.target.value } : candidate)))} />
-          <input aria-label="Hodnota" placeholder="Hodnota (např. 230 V)" value={entry.value} onChange={(event) => setParameters((current) => current.map((candidate, i) => (i === index ? { ...candidate, value: event.target.value } : candidate)))} />
-          <button type="button" className="dangerText" onClick={() => setParameters((current) => current.filter((_, i) => i !== index))}>Odebrat</button>
-        </div>
-      ))}
-      <div className="assetActions">
-        <button type="button" className="secondaryButton" onClick={() => setParameters((current) => [...current, { key: "", value: "" }])}>+ Parametr</button>
-        <button type="button" className="primaryButton" onClick={() => void handleSave()} disabled={!dirty || busy}>{busy ? "Ukládám…" : "Uložit metadata"}</button>
-      </div>
-      <p className="fieldHint">Umístění v technickém rastru, značka a ikona se nastavují v sekci „Technické rastry“.</p>
-      {error && <small className="uploadError">{error}</small>}
-    </section>
   );
 }
 

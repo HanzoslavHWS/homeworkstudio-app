@@ -249,3 +249,8 @@ export function buildContentDispositionHeader(fileName: string, disposition: "at
   const encoded = encodeURIComponent(safeName).replace(/[!'()*]/gu, (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`);
   return `${disposition}; filename="${asciiFallback}"; filename*=UTF-8''${encoded}`;
 }
+
+/** Size ceiling of a category (the same rule the server enforces) — lets an upload dialog flag an oversized file before sending it. */
+export function assetCategoryMaxBytes(category: AssetCategory): number {
+  return CATEGORY_RULES[category].maxBytes;
+}

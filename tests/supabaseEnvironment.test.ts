@@ -73,6 +73,16 @@ test("R2: mimo produkci je úložiště vypnuté, dokud R2_EXPECTED_BUCKET výsl
   assert.equal(readR2Config(full).bucketName, "homeworkstudio-prod", "bez proměnných prostředí = produkce, jako dosud");
 });
 
+test("R2: mimo produkci se nepoužije bucket bez DEV označení, ani když ho obě proměnné potvrdí", async () => {
+  const { readR2Config, R2ConfigurationError, isNonProductionBucketName } = await import("../lib/storage/r2Config.ts");
+  const full = { R2_ACCOUNT_ID: "a", R2_ACCESS_KEY_ID: "k", R2_SECRET_ACCESS_KEY: "SECRET_DO_NOT_LEAK", R2_ENDPOINT: "https://endpoint.example", NEXT_PUBLIC_APP_ENV: "development" };
+  for (const bucket of ["homeworkstudio", "homeworkstudio-prod", "devices", "homeworkstudiodev"]) {
+    assert.throws(() => readR2Config({ ...full, R2_BUCKET_NAME: bucket, R2_EXPECTED_BUCKET: bucket }), (error) => error instanceof R2ConfigurationError && /nevypadá jako DEV bucket/u.test(error.message) && !error.message.includes("SECRET_DO_NOT_LEAK"));
+  }
+  for (const bucket of ["homeworkstudio-dev", "hws.test", "dev-assets", "homeworkstudio_preview"]) assert.equal(isNonProductionBucketName(bucket), true, bucket);
+  assert.equal(readR2Config({ ...full, R2_BUCKET_NAME: "homeworkstudio", NEXT_PUBLIC_APP_ENV: "production" }).bucketName, "homeworkstudio", "produkce název neomezuje");
+});
+
 test("ochrany: develop se na Vercelu nenasazuje; migrační skript vždy cílí přes --db-url a blokuje produkci", async () => {
   const vercel = JSON.parse(await readFile(new URL("../vercel.json", import.meta.url), "utf8")) as { git?: { deploymentEnabled?: Record<string, boolean> } };
   assert.equal(vercel.git?.deploymentEnabled?.develop, false);

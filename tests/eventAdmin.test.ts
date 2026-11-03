@@ -355,8 +355,10 @@ test("migrace V1-DATA-06: jen přidává, nic existujícího nepřepisuje ani ne
 
 test("migrace jednoho seznamu realizaček: poslední, nic nemaže, firmy z jiných rolí přenese, historie zůstane", async () => {
   const migrations = readdirSync(new URL("../supabase/migrations/", import.meta.url)).filter((name) => name.endsWith(".sql")).sort();
-  assert.equal(migrations.at(-1), "20261022160000_event_realization_single_list.sql");
-  assert.equal(migrations.at(-2), "20261022150000_events_admin.sql");
+  // Ordered right after the events admin migration (later stages may add newer migrations after it).
+  const index = migrations.indexOf("20261022160000_event_realization_single_list.sql");
+  assert.ok(index > 0);
+  assert.equal(migrations[index - 1], "20261022150000_events_admin.sql");
   const sql = (await readFile(new URL("../supabase/migrations/20261022160000_event_realization_single_list.sql", import.meta.url), "utf8")).toLowerCase();
   assert.doesNotMatch(sql, /delete\s+from|drop\s+(table|column|function|index)|truncate/u, "nic se nemaže");
   assert.match(sql, /insert into event_realization_companies[\s\S]*'construction'[\s\S]*on conflict \(event_id, realization_company_id, role\) do update set is_active = true/u, "firma z jiné role se přenese do seznamu");

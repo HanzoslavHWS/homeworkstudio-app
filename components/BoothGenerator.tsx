@@ -225,7 +225,7 @@ import { RemoteApiPrintSurfaceExportRepository } from "../lib/db/printSurfaceExp
 import { TechnicalRastersPage } from "./workflow/TechnicalRastersPage";
 import { SettlementChecksPage } from "./workflow/settlement/SettlementChecksPage";
 import { RealizationCompaniesPage } from "./workflow/RealizationCompaniesPage";
-import { PriceVersionsPage } from "./workflow/priceVersions/PriceVersionsPage";
+import { PriceVersionsPage, type PriceVersionsPreselect } from "./workflow/priceVersions/PriceVersionsPage";
 import { eventConfigApi } from "../lib/db/eventConfig.remoteApi.client";
 import { suggestedTaskRealizationCompany, type EventRealizationLink } from "../domain/eventAdmin";
 import type { PersistedExhibition, RemoteEventRepository } from "../domain/remotePersistence";
@@ -337,6 +337,8 @@ export default function BoothGenerator() {
   // Same read-once-at-mount preselect convention as printSurfaceProjectPreselect below.
   const [technicalRasterProjectPreselect, setTechnicalRasterProjectPreselect] = useState<string | undefined>(undefined);
   const [eventPreselect, setEventPreselect] = useState<string | undefined>(undefined);
+  /** "Otevřít v ceníku" from a catalog card — which list/version/item to show. Navigation only. */
+  const [priceVersionsPreselect, setPriceVersionsPreselect] = useState<{ value: PriceVersionsPreselect; key: number } | undefined>(undefined);
   useEffect(() => {
     realizationCompanyRepositoryRef.current.list().then(setTaskRealizationCompanies).catch(() => setTaskRealizationCompanies([]));
   }, []);
@@ -689,7 +691,7 @@ export default function BoothGenerator() {
     return !eventDirty || window.confirm("Máte neuložené změny. Opravdu chcete pokračovat?");
   }
 
-  function navigateWorkspace(section: typeof workspaceSection, payload?: { catalogItemId?: string; printSurfaceProjectId?: string; technicalRasterProjectId?: string; eventId?: string; tasksIntent?: TasksPageIntent }) {
+  function navigateWorkspace(section: typeof workspaceSection, payload?: { catalogItemId?: string; printSurfaceProjectId?: string; technicalRasterProjectId?: string; eventId?: string; tasksIntent?: TasksPageIntent; priceVersions?: PriceVersionsPreselect }) {
     if (workspaceSection === "events" && section !== "events" && !confirmLeaveEvent()) return;
     if (workspaceSection === "events" && section !== "events" && eventDirty) {
       eventRepositoryRef.current?.list().then((events) => setAdminEvents([...events]));
@@ -701,6 +703,7 @@ export default function BoothGenerator() {
     setTechnicalRasterProjectPreselect(section === "technicalRasters" ? payload?.technicalRasterProjectId : undefined);
     setEventPreselect(section === "events" ? payload?.eventId : undefined);
     setTasksIntent(section === "tasks" ? payload?.tasksIntent : undefined);
+    setPriceVersionsPreselect(section === "priceVersions" && payload?.priceVersions ? { value: payload.priceVersions, key: Date.now() } : undefined);
     if (section === "projects") {
       repositoryRef.current?.list().then((projects) => setSavedProjects([...projects]));
     }
@@ -2801,6 +2804,7 @@ export default function BoothGenerator() {
           <BoothAdminPage
             repository={catalogItemsAdminRepositoryRef.current}
             onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
+            onOpenPriceVersion={(preselect) => navigateWorkspace("priceVersions", { priceVersions: preselect })}
           />
         )}
 
@@ -2808,6 +2812,7 @@ export default function BoothGenerator() {
           <ComponentAdminPage
             repository={catalogItemsAdminRepositoryRef.current}
             onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
+            onOpenPriceVersion={(preselect) => navigateWorkspace("priceVersions", { priceVersions: preselect })}
           />
         )}
 
@@ -2921,7 +2926,7 @@ export default function BoothGenerator() {
 
         {workspaceSection === "realizationCompanies" && <RealizationCompaniesPage />}
 
-        {workspaceSection === "priceVersions" && <PriceVersionsPage actorName={taskStore.actorName} />}
+        {workspaceSection === "priceVersions" && <PriceVersionsPage key={priceVersionsPreselect?.key ?? "default"} actorName={taskStore.actorName} preselect={priceVersionsPreselect?.value} />}
 
         {taskDetail && (
           <TaskDetailPanel

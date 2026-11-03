@@ -340,3 +340,15 @@ export function assertUniqueInternalCode(existingItems: readonly Pick<ComponentD
   const collision = existingItems.some((item) => item.internalCode && item.internalCode.trim().toLocaleUpperCase("cs") === normalized);
   if (collision) throw new DuplicateInternalCodeError(candidateCode);
 }
+
+/**
+ * The generator code lives in the catalog_items.internal_code COLUMN (the single source of truth
+ * the generator, prices and uniqueness checks read). Cards created in the admin never copy it into
+ * the JSON document, so readiness must be evaluated on the document WITH the column code laid
+ * over it — otherwise a card showing "M57 (= ABF kód)" still reports "Chybí interní kód".
+ * Older imported documents that carry their own internalCode keep it when the column is empty.
+ */
+export function withColumnInternalCode<T extends Partial<ComponentDefinition>>(document: T, internalCode: string | null | undefined): T {
+  const code = internalCode?.trim();
+  return code ? { ...document, internalCode: code } : document;
+}

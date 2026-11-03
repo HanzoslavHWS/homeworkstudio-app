@@ -1,14 +1,19 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { assertCanActivate, assertUniqueInternalCode, DuplicateInternalCodeError, evaluateCatalogReadiness } from "../../domain/catalogReadiness.ts";
+import { assertCanActivate, assertUniqueInternalCode, DuplicateInternalCodeError, evaluateCatalogReadiness, withColumnInternalCode } from "../../domain/catalogReadiness.ts";
+import { documentReferencesCode, internalCodeChangeIssue } from "../../domain/catalogCodeChange.ts";
+import { classificationIssue, derivedPriceCategory, findCategory } from "../../domain/catalogClassification.ts";
+import { readCatalogCategoryRegister } from "./catalogCategories.supabase.ts";
 import { ConcurrencyConflictError } from "./concurrency.ts";
 import {
   applyCatalogItemEdit,
+  documentServiceTechnical,
   buildCatalogItemCreateDocument,
   buildCatalogItemDuplicateDocument,
   CatalogItemAdminNotFoundError,
   duplicateDisplayName,
   InvalidCatalogItemAdminEditError,
   itemTypeOf,
+  InvalidCatalogItemAdminCreateInputError,
   planBulkLifecycle,
   resolveRestoreStatus,
   resolveTypeAndKindEdit,
@@ -67,6 +72,8 @@ const LEGACY_ADMIN_COLUMNS = "id, internal_code, kind, lifecycle_status, display
 const ADMIN_COLUMNS_V2 = `${LEGACY_ADMIN_COLUMNS}, abf_code, item_type`;
 /** 20261021120000 (V1-DATA-03: official_name_en, unit_code). Reads fall back V3 -> V2 -> legacy. */
 const ADMIN_COLUMNS = `${ADMIN_COLUMNS_V2}, official_name_en, unit_code`;
+/** 20261022120000 (V1-DATA-05: price_category). Reads fall back V4 -> V3 -> V2 -> legacy. */
+const ADMIN_COLUMNS_V4 = `${ADMIN_COLUMNS}, price_category`;
 const ALIAS_COLUMNS = "id, catalog_item_id, realization_company_id, alias_kind, alias_text, normalized_text, unit_code, source, status, note, is_active";
 const LEGACY_PACKAGE_COLUMNS = "id, package_item_id, child_item_id, quantity, included_in_package, sort_order, note";
 /** 20261021130000 (V1-DATA-04: kit lines). Reads fall back to the legacy column set. */
@@ -88,6 +95,7 @@ type CatalogItemAdminDbRow = Readonly<{
   category: string | null;
   unit: string | null;
   unit_code?: string | null;
+  price_category?: string | null;
   document: unknown;
   created_at: string;
   updated_at: string;
@@ -181,6 +189,7 @@ function rowToAdmin(row: CatalogItemAdminDbRow, packageItems?: readonly CatalogP
     category: row.category,
     unit: row.unit,
     unitCode: row.unit_code ?? null,
+    ...(row.price_category === "electricity" || row.price_category === "standard" ? { priceCategory: row.price_category } : {}),
     document: (row.document ?? {}) as CatalogItemAdminDocument,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -229,7 +238,8 @@ async function selectCatalogRows(client: SupabaseClient, id?: string): Promise<C
     const base = client.from("catalog_items").select(columns);
     return id ? base.eq("id", id) : base;
   };
-  let { data, error } = await run(ADMIN_COLUMNS);
+  let { data, error } = await run(ADMIN_COLUMNS_V4);
+  if (error && isMissingSchemaError(error)) ({ data, error } = await run(ADMIN_COLUMNS));
   if (error && isMissingSchemaError(error)) ({ data, error } = await run(ADMIN_COLUMNS_V2));
   if (error && isMissingSchemaError(error)) ({ data, error } = await run(LEGACY_ADMIN_COLUMNS));
   if (error) throw error;
@@ -322,7 +332,15 @@ export async function createCatalogItemAdmin(client: SupabaseClient, input: Cata
   if (input.abfCode) await assertAbfCodeFree(client, input.abfCode);
   assertNoCrossCodeCollision(existing, { internalCode: input.internalCode, abfCode: input.abfCode });
 
-  const document = buildCatalogItemCreateDocument(input);
+  // Druh komponenty → Kategorie: a new card must have a valid, active combination.
+  const itemType = input.itemType ?? defaultItemTypeForKind(input.kind);
+  const { categories } = await readCatalogCategoryRegister(client);
+  const classification = classificationIssue(categories, { itemType, kind: input.kind, category: input.category }, { requireActive: true });
+  if (classification) throw new InvalidCatalogItemAdminCreateInputError("category", classification);
+  const category = findCategory(categories, input.category);
+
+  let document = buildCatalogItemCreateDocument(input);
+  if (category?.serviceCategory) document = { ...document, serviceTechnical: { serviceCategory: category.serviceCategory } };
   const row: Record<string, unknown> = {
     internal_code: input.internalCode?.trim() || null,
     kind: input.kind,
@@ -332,8 +350,9 @@ export async function createCatalogItemAdmin(client: SupabaseClient, input: Cata
     category: input.category,
     unit: input.unit ?? null,
     document,
-    item_type: input.itemType ?? defaultItemTypeForKind(input.kind),
+    item_type: itemType,
   };
+  if (category && derivedPriceCategory(category) === "electricity") row.price_category = "electricity";
   if (input.abfCode) row.abf_code = input.abfCode;
   if (input.officialNameEn) row.official_name_en = input.officialNameEn;
   if (input.unitCode) row.unit_code = input.unitCode;
@@ -436,9 +455,26 @@ export async function saveCatalogItemAdmin(
     if (edit.abfCode) await assertAbfCodeFree(client, edit.abfCode, id);
     columnPatch.abf_code = edit.abfCode;
   }
-  if (typeof columnPatch.abf_code === "string" || edit.fillInternalCode !== undefined) {
+  const changedInternalCode = edit.changeInternalCode && edit.changeInternalCode.to !== current.internalCode ? edit.changeInternalCode : undefined;
+  if (changedInternalCode) {
+    const { data: projectRows, error: projectError } = await client.from("projects").select("id, document");
+    if (projectError) throw projectError;
+    const referencingProjects = ((projectRows ?? []) as { id: string; document: { name?: string } | null }[])
+      .filter((row) => documentReferencesCode(row.document, changedInternalCode.from))
+      .map((row) => row.document?.name || row.id);
+    const issue = internalCodeChangeIssue({ currentCode: current.internalCode, from: changedInternalCode.from, to: changedInternalCode.to, referencingProjects });
+    if (issue) throw new InvalidCatalogItemAdminEditError("changeInternalCode", issue);
+    const { data: codeRows, error: codeError } = await client.from("catalog_items").select("id, internal_code");
+    if (codeError) throw codeError;
+    assertUniqueInternalCode(
+      ((codeRows ?? []) as { id: string; internal_code: string | null }[]).filter((row) => row.id !== id).map((row) => ({ internalCode: row.internal_code ?? undefined })),
+      changedInternalCode.to,
+    );
+    columnPatch.internal_code = changedInternalCode.to;
+  }
+  if (typeof columnPatch.abf_code === "string" || edit.fillInternalCode !== undefined || changedInternalCode) {
     const others = (await selectCatalogRows(client)).map((row) => ({ id: row.id, internalCode: row.internal_code, abfCode: row.abf_code ?? null, displayName: row.display_name }));
-    assertNoCrossCodeCollision(others, { internalCode: edit.fillInternalCode ?? current.internalCode, abfCode: (columnPatch.abf_code as string | undefined) ?? current.abfCode }, id);
+    assertNoCrossCodeCollision(others, { internalCode: changedInternalCode?.to ?? edit.fillInternalCode ?? current.internalCode, abfCode: (columnPatch.abf_code as string | undefined) ?? current.abfCode }, id);
   }
   if (edit.officialName !== undefined && edit.officialName !== current.officialName) columnPatch.official_name = edit.officialName;
   if (edit.officialNameEn !== undefined && edit.officialNameEn !== (current.officialNameEn ?? null)) columnPatch.official_name_en = edit.officialNameEn;
@@ -458,6 +494,8 @@ export async function saveCatalogItemAdmin(
     );
     columnPatch.internal_code = edit.fillInternalCode;
   }
+  // The generator code readiness must see: the column (just filled, or already stored) — never only the JSON document.
+  const resultingInternalCode = (columnPatch.internal_code as string | undefined) ?? current.internalCode;
 
   // Archive / restore bookkeeping. Archiving remembers the status it came from; "Obnovit"
   // (restoreFromArchive) returns to it via resolveRestoreStatus — a previously-active item only
@@ -488,7 +526,7 @@ export async function saveCatalogItemAdmin(
   // guard — only a genuine transition into "active" does, so routine edits to M57/L02/P86 are
   // unaffected.
   if (edit.lifecycleStatus === "active" && current.lifecycleStatus !== "active") {
-    assertCanActivate({ ...nextDocument, lifecycleStatus: "active" } as ComponentDefinition, kindForEdit);
+    assertCanActivate({ ...withColumnInternalCode(nextDocument as Partial<ComponentDefinition>, resultingInternalCode), lifecycleStatus: "active" } as ComponentDefinition, kindForEdit);
   }
 
   // Section 8/9 (asset + capability workflow spec): removing a photo/model reference, OR
@@ -524,9 +562,27 @@ export async function saveCatalogItemAdmin(
     edit.setVariantPhotoAsset !== undefined ||
     edit.addVariantSourceAsset !== undefined ||
     edit.removeVariantSourceAssetId !== undefined;
+  // Druh komponenty → Kategorie (domain/catalogClassification.ts). Only a save that changes the
+  // classification is validated (opening / editing other fields of a historical card never is), and
+  // the category is then the single source of the derived data: price_category and the technical
+  // service category. Never a silent fallback — an invalid combination is refused.
+  if (edit.category !== undefined || typeAndKind) {
+    const resultingCategory = (nextDocument.category as string | undefined) ?? current.category;
+    const { categories } = await readCatalogCategoryRegister(client);
+    const issue = classificationIssue(categories, { itemType: typeAndKind?.itemType ?? itemTypeOf(current), kind: kindForEdit, category: resultingCategory }, { requireActive: resultingCategory !== current.category });
+    if (issue) throw new InvalidCatalogItemAdminEditError("category", issue);
+    const category = findCategory(categories, resultingCategory);
+    if (category) {
+      const price = derivedPriceCategory(category);
+      if (price && price !== current.priceCategory) columnPatch.price_category = price;
+      if (category.serviceCategory && documentServiceTechnical(nextDocument)?.serviceCategory !== category.serviceCategory) {
+        nextDocument = { ...nextDocument, serviceTechnical: { ...(documentServiceTechnical(nextDocument) ?? {}), serviceCategory: category.serviceCategory } };
+      }
+    }
+  }
   const resultingStatus = (nextDocument.lifecycleStatus as CatalogItemStatus | undefined) ?? current.lifecycleStatus;
   if (mightAffectReadiness && resultingStatus === "active") {
-    const readiness = evaluateCatalogReadiness({ ...nextDocument, lifecycleStatus: "active" } as ComponentDefinition, kindForEdit);
+    const readiness = evaluateCatalogReadiness({ ...withColumnInternalCode(nextDocument as Partial<ComponentDefinition>, resultingInternalCode), lifecycleStatus: "active" } as ComponentDefinition, kindForEdit);
     if (!readiness.ready) {
       nextDocument = { ...nextDocument, lifecycleStatus: "needs_review" };
     }
@@ -545,12 +601,17 @@ export async function saveCatalogItemAdmin(
   // a routine save against a not-yet-migrated DB must keep working.
   const touchesV2Columns = "item_type" in columnPatch || "abf_code" in columnPatch;
   const touchesV3Columns = "official_name_en" in columnPatch || "unit_code" in columnPatch;
+  const touchesV4Columns = "price_category" in columnPatch;
   const runUpdate = async (columns: string) => {
     let query = client.from("catalog_items").update(patch).eq("id", id);
     if (expectedUpdatedAt !== null) query = query.eq("updated_at", expectedUpdatedAt);
     return query.select(columns);
   };
-  let { data, error } = await runUpdate(ADMIN_COLUMNS);
+  let { data, error } = await runUpdate(ADMIN_COLUMNS_V4);
+  if (error && isMissingSchemaError(error)) {
+    if (touchesV4Columns) throw new CatalogSchemaNotMigratedError();
+    ({ data, error } = await runUpdate(ADMIN_COLUMNS));
+  }
   if (error && isMissingSchemaError(error)) {
     if (touchesV3Columns) throw new CatalogSchemaNotMigratedError();
     ({ data, error } = await runUpdate(ADMIN_COLUMNS_V2));

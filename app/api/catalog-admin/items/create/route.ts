@@ -46,6 +46,7 @@ export async function handleCatalogAdminItemsCreate(
     const created = await create(input);
     return NextResponse.json({ catalogItem: created });
   } catch (error) {
+    if (error instanceof InvalidCatalogItemAdminCreateInputError) return NextResponse.json({ error: error.message }, { status: 400 });
     if (error instanceof DuplicateInternalCodeError || error instanceof DuplicateAbfCodeError || error instanceof CrossCodeCollisionError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof CatalogSchemaNotMigratedError) return NextResponse.json({ error: error.message }, { status: 409 });
     if (error instanceof SupabaseConfigurationError) return NextResponse.json({ error: error.message }, { status: 503 });

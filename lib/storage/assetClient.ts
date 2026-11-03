@@ -7,12 +7,12 @@ export type RasterImageDimensions = Readonly<{ widthPx: number; heightPx: number
 
 export async function uploadAsset(
   file: File,
-  target: Readonly<{ category: AssetCategory; ownerId: string; displayName?: string }>,
+  target: Readonly<{ category: AssetCategory; ownerId: string; displayName?: string; /** Overrides the browser-reported type (e.g. DWG/DXF reported inconsistently across systems). The server still validates it. */ mimeType?: string }>,
   onProgress?: (progress: UploadProgress) => void,
 ): Promise<StoredAsset> {
   onProgress?.({ state: "uploading", percent: 0 });
   try {
-    const mimeType = browserFileMimeType(file);
+    const mimeType = target.mimeType ?? browserFileMimeType(file);
     const presignResponse = await fetch("/api/assets/presign", {
       method: "POST",
       headers: { "Content-Type": "application/json" },

@@ -31,6 +31,11 @@ export class R2ConfigurationError extends Error {
   }
 }
 
+/** "homeworkstudio-dev", "hws.test", "dev-assets" → true; "homeworkstudio", "devices" → false. */
+export function isNonProductionBucketName(bucketName: string): boolean {
+  return bucketName.toLowerCase().split(/[-._]/u).some((segment) => segment === "dev" || segment === "test" || segment === "preview");
+}
+
 /**
  * Outside production, file storage stays OFF unless R2_EXPECTED_BUCKET explicitly names the
  * configured bucket — a dedicated DEV bucket. Without it every upload/download answers 503, so a
@@ -44,6 +49,11 @@ export function readR2Config(environment: R2Environment): R2Config {
     const bucket = environment.R2_BUCKET_NAME?.trim();
     if (!expected || expected !== bucket) {
       throw new R2ConfigurationError([], `Nahrávání a stahování souborů je v prostředí ${appEnvironment} vypnuté, dokud nebude nastavený samostatný DEV bucket (R2_BUCKET_NAME = R2_EXPECTED_BUCKET). Produkční úložiště se ve vývoji nepoužívá.`);
+    }
+    // Second, independent guard: even with both variables accidentally set to the production
+    // bucket, a non-production environment only accepts a bucket whose name says it is not one.
+    if (!isNonProductionBucketName(bucket)) {
+      throw new R2ConfigurationError([], `Bucket „${bucket}“ nevypadá jako DEV bucket. Mimo produkci musí název obsahovat samostatný segment „dev“, „test“ nebo „preview“ (např. homeworkstudio-dev).`);
     }
   }
   const names = ["R2_ACCOUNT_ID", "R2_ACCESS_KEY_ID", "R2_SECRET_ACCESS_KEY", "R2_BUCKET_NAME", "R2_ENDPOINT"] as const;

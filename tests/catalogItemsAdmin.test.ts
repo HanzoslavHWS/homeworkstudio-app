@@ -1141,9 +1141,13 @@ test("UI: filters cover search/kind/lifecycle/readiness/asset (section 5)", () =
 
 test("UI: detail sections match Identita/Rozměry/Lifecycle/Fotografie/3D model/Zdrojové a výrobní soubory/Ceny (section 6, extended with the asset + source-file workflow)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  for (const heading of ["Identita", "Rozměry", "Lifecycle", "Fotografie", "3D model", "Zdrojové a výrobní soubory", "Ceny"]) {
+  // V1-CATALOG: dimensions live in the common "Parametry komponenty" section (same structured fields).
+  for (const heading of ["Identita", "Parametry komponenty", "Lifecycle", "Fotografie", "3D model", "Zdrojové a výrobní soubory"]) {
     assert.match(source, new RegExp(`<h3>${heading}</h3>`), `missing detail section "${heading}"`);
   }
+  // Ceny: own component reading the versioned price lists (reference card M57).
+  assert.match(source, /<CatalogCardPrices\b/u);
+  assert.match(readFileSync(new URL("../components/workflow/CatalogCardPrices.tsx", import.meta.url), "utf8"), /<h3>Ceny<\/h3>/u);
 });
 
 test("UI: source-file upload reuses the existing uploadAsset infrastructure with category 'catalog-source' — never a second/parallel upload system", () => {
@@ -1175,17 +1179,23 @@ test("UI: a furniture item (e.g. a chair) is allowed to show the source-file sec
   assert.match(constMatch, /"furniture"/u);
 });
 
-test("UI: an existing internalCode is rendered read-only (span); an input is offered only to FILL a missing one (section 7, catalog revision)", () => {
+test("UI: the generator code is its own visible field under the ABF code; a missing code is FILLED, an existing one only CHANGED explicitly (guarded server-side)", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /\{item\.internalCode \? \(\s*<span className="readOnlyField"[^>]*>\s*\{item\.internalCode\}/u);
-  assert.match(source, /if \(!item\.internalCode && internalCodeDraft\.trim\(\)\) edit\.fillInternalCode/u);
+  assert.ok(source.indexOf('<EditRow label="ABF kód">') < source.indexOf('<EditRow label="Interní / generátorový kód">'), "ABF kód first, then the generator code");
+  assert.match(source, /Stejný jako ABF kód/u);
+  assert.match(source, /if \(!item\.internalCode && resultingCode\) edit\.fillInternalCode = resultingCode;/u);
+  assert.match(source, /if \(item\.internalCode && codeWillChange\) edit\.changeInternalCode = \{ from: item\.internalCode, to: resultingCode \};/u);
+  assert.doesNotMatch(source, /edit\.internalCode =/u, "never a plain internalCode write");
 });
 
-test("UI: 'Upravit ceny' hands off to the existing Pricing Administration via onOpenPricing — no second price editor is defined in this file", () => {
+test("UI: prices are edited only in the existing price administrations (Ceníky (verze) / old Správa cen) — no second price editor on the card", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /Upravit ceny/u);
-  assert.match(source, /onClick=\{onOpenPricing\}/u);
+  const prices = readFileSync(new URL("../components/workflow/CatalogCardPrices.tsx", import.meta.url), "utf8");
+  assert.match(source, /onOpenLegacyPricing=\{onOpenPricing\}/u);
+  assert.match(prices, /Upravit cenu v ceníku/u);
+  assert.match(prices, /onClick=\{onOpenLegacyPricing\}/u);
   assert.doesNotMatch(source, /PricingMatrix/u);
+  assert.doesNotMatch(prices, /<input/u);
 });
 
 test("UI: 'Aktivovat' is disabled when readiness.ready is false — never a parallel readiness rule", () => {
@@ -1195,8 +1205,9 @@ test("UI: 'Aktivovat' is disabled when readiness.ready is false — never a para
 });
 
 test("UI: missing base price is shown as text, never rendered as 0", () => {
-  const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /Cena není nastavena/u);
+  const prices = readFileSync(new URL("../components/workflow/CatalogCardPrices.tsx", import.meta.url), "utf8");
+  assert.match(prices, /K nacenění/u);
+  assert.match(prices, /není nastavena/u);
 });
 
 test("PricingAdminPage: accepts initialCatalogItemId and opens the matrix preselected on mount", () => {
@@ -1762,11 +1773,13 @@ test("P86 readiness is unaffected by showIn2D/showIn3D — booth kind never read
   assert.equal(computeReadiness(item).ready, true, "booth readiness must stay true regardless of showIn2D/showIn3D");
 });
 
-test("UI: the scene-capability section is hidden for service/graphics_service/floor_finish/booth (L02 must never see nonsensical scene checkboxes), but shown for booth_component (create-form parity)", () => {
+test("UI: scene readiness kinds stay furniture/technical_point/construction/other/booth_component; services get the 2D/3D switch only to choose their attachments (an explicit 3D model stays possible), booth/floor_finish never", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,40}=[\s\S]{0,120}\["furniture", "technical_point", "construction", "other", "booth_component"\]/u);
-  assert.doesNotMatch(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,200}"service"/u);
-  assert.doesNotMatch(source, /SCENE_CAPABILITY_KINDS[\s\S]{0,200}"booth"\]/u);
+  assert.match(source, /const SCENE_CAPABILITY_KINDS: readonly CatalogItemKind\[\] = \["furniture", "technical_point", "construction", "other", "booth_component"\];/u);
+  assert.match(source, /const CAPABILITY_TOGGLE_KINDS: readonly CatalogItemKind\[\] = \[\.\.\.SCENE_CAPABILITY_KINDS, "service", "graphics_service"\];/u);
+  assert.match(source, /\{CAPABILITY_TOGGLE_KINDS\.includes\(item\.kind\) && \(\s*<section className="catalogDetailSection">\s*<h3>Použití v generátoru<\/h3>/u);
+  assert.doesNotMatch(source, /CAPABILITY_TOGGLE_KINDS[^;]*"booth"/u);
+  assert.doesNotMatch(source, /CAPABILITY_TOGGLE_KINDS[^;]*"floor_finish"/u);
 });
 
 test("UI: capability checkboxes use the real showIn2D/showIn3D fields, never a parallel field name", () => {
@@ -1871,8 +1884,11 @@ test("category change never mutates kind — kind changes only through an explic
   assert.throws(() => parseCatalogItemAdminEdit({ category: "Stavba", kind: "not-a-kind" }), "an unknown kind is rejected, never stored");
   assert.equal("kind" in parseCatalogItemAdminEdit({ category: "Stavba" }), false);
   const client = createFakeSupabaseClient({ catalog_items: [stubRow()] });
-  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { category: "Stavba" }, "2026-08-14T19:16:38.000000+00:00");
+  const saved = await saveCatalogItemAdmin(client as never, "f01-uuid", { category: "Nábytek" }, "2026-08-14T19:16:38.000000+00:00");
   assert.equal(saved.kind, "furniture", "kind column must be completely unaffected by a category edit");
+  // V1-CATALOG: a category whose kinds don't include the card's kind is refused — never stored, never "fixed" by mutating kind.
+  await assert.rejects(() => saveCatalogItemAdmin(client as never, "f01-uuid", { category: "Stavba" }, saved.updatedAt), /nepovoluje interní druh/u);
+  assert.equal(client.tables.get("catalog_items")![0]!.category, "Nábytek");
 });
 
 test("M57 and L02 keep fully independent category values — reading one never leaks into the other (regression for the key-less state-leak bug)", async () => {
