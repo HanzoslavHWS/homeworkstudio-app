@@ -219,7 +219,8 @@ function BoothComponentCreateForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  const canSubmit = displayName.trim().length > 0 && category.trim().length > 0 && !busy;
+  // Interní komponenta: the generator code is required (no ABF code to fall back on) — same rule the server enforces.
+  const canSubmit = displayName.trim().length > 0 && category.trim().length > 0 && internalCode.trim().length > 0 && !busy;
 
   async function handleSubmit() {
     setBusy(true);
@@ -259,8 +260,11 @@ function BoothComponentCreateForm({
           <dd><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Např. Sloupek" /></dd>
         </div>
         <div className="catalogAdminEditRow">
-          <dt>Interní kód</dt>
-          <dd><input value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder="Ponechte prázdné, pokud kód neznáte" /></dd>
+          <dt>Interní / generátorový kód *</dt>
+          <dd>
+            <input value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder="Vlastní unikátní kód komponenty" />
+            {!internalCode.trim() && <small className="fieldWarning">Interní komponenta musí mít vlastní generátorový kód (ABF kód nemá).</small>}
+          </dd>
         </div>
         <div className="catalogAdminEditRow">
           <dt>Kategorie *</dt>

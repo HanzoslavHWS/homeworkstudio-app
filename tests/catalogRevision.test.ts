@@ -266,8 +266,8 @@ test("archive: an archived booth is NOT offered in the generator picker for new 
 
 test("archive: an archived booth_component is NOT offered in the individual-booth component picker", () => {
   const ready = { displayName: "Sloupek 2500", category: "Sloupky", widthMm: 40, depthMm: 40, heightMm: 2500, modelAsset: { id: "glb", storageKey: "s.glb" }, sourceAssets: [{ id: "skp", kind: "sketchup", asset: { storageKey: "s.skp" } }] };
-  const active = toAdmin(sloupekRow({ document: ready }));
-  const archived = toAdmin(sloupekRow({ id: "sloupek-2", lifecycle_status: "archived", document: ready }));
+  const active = toAdmin(sloupekRow({ internal_code: "INT-SLOUPEK-2500", document: ready }));
+  const archived = toAdmin(sloupekRow({ id: "sloupek-2", internal_code: "INT-SLOUPEK-2500-B", lifecycle_status: "archived", document: ready }));
   assert.deepEqual(selectGeneratorBoothComponents([active, archived]).map((component) => component.id), ["sloupek-uuid"]);
 });
 
@@ -381,7 +381,8 @@ test("manual create: a PRODUCT with an ABF code keeps internal and ABF code as t
 test("manual create: requires a type (or legacy kind); rejects an incompatible kind; duplicate ABF code -> DuplicateAbfCodeError", async () => {
   assert.throws(() => parseCatalogItemAdminCreateInput({ displayName: "X", category: "Nábytek" }));
   assert.throws(() => parseCatalogItemAdminCreateInput({ itemType: "SERVICE", kind: "booth", displayName: "X", category: "services" }));
-  assert.equal(parseCatalogItemAdminCreateInput({ kind: "booth_component", displayName: "X", category: "Sloupky" }).itemType, "INTERNAL_COMPONENT");
+  assert.equal(parseCatalogItemAdminCreateInput({ kind: "booth_component", displayName: "X", category: "Sloupky", internalCode: "INT-X" }).itemType, "INTERNAL_COMPONENT");
+  assert.throws(() => parseCatalogItemAdminCreateInput({ kind: "booth_component", displayName: "X", category: "Sloupky" }), /generátorový kód/u, "interní komponenta bez kódu se nezaloží");
   const client = createFakeClient({ catalog_items: [m57Row()] });
   await assert.rejects(() => createCatalogItemAdmin(client as never, parseCatalogItemAdminCreateInput({ itemType: "PRODUCT", displayName: "Židle 2", category: "chairs", abfCode: "M57" })), DuplicateAbfCodeError);
 });

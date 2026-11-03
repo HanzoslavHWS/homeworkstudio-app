@@ -3,6 +3,7 @@ import {
   type BoothVariant,
   type CatalogItemKind,
   type CatalogItemStatus,
+  type CatalogItemType,
   type ComponentDefinition,
 } from "./models.ts";
 import { resolveGraphicsPricingUnit } from "./graphicsPricingUnit.ts";
@@ -31,7 +32,7 @@ export type ReadinessIssue =
   | "variants_unconfirmed";
 
 export const READINESS_ISSUE_LABELS_CS: Readonly<Record<ReadinessIssue, string>> = {
-  missing_internal_code: "Chybí interní kód",
+  missing_internal_code: "Chybí interní/generátorový kód",
   missing_display_name: "Chybí zobrazovaný název",
   missing_category: "Chybí kategorie",
   missing_unit: "Chybí jednotka",
@@ -45,6 +46,13 @@ export const READINESS_ISSUE_LABELS_CS: Readonly<Record<ReadinessIssue, string>>
   requires_review: "Čeká na kontrolu/schválení",
   variants_unconfirmed: "Varianty ještě nejsou potvrzené jako finální katalog",
 };
+
+/**
+ * What the document alone cannot tell: the card TYPE lives in the item_type column, and kinds such
+ * as construction/other are shared by Produkt and Interní komponenta. Callers that know the type
+ * pass it; without it the type-dependent rules simply don't apply (legacy callers keep their result).
+ */
+export type ReadinessContext = Readonly<{ itemType?: CatalogItemType }>;
 
 export type ReadinessResult = Readonly<{
   ready: boolean;
@@ -136,12 +144,18 @@ function declaresSceneCapability(item: ComponentDefinition): boolean {
  * thing as "safe to offer to the generator" (see domain/importBatch2b.ts: every EXACT_SAFE
  * import still lands as lifecycleStatus=needs_review, generatorEligible=false).
  */
-export function evaluateCatalogReadiness(item: ComponentDefinition, kind: CatalogItemKind): ReadinessResult {
+export function evaluateCatalogReadiness(item: ComponentDefinition, kind: CatalogItemKind, context: ReadinessContext = {}): ReadinessResult {
   const issues: ReadinessIssue[] = [];
   const displayName = item.displayName ?? item.name;
 
   if (!hasText(displayName)) issues.push("missing_display_name");
   if (!hasText(item.category)) issues.push("missing_category");
+  // Interní komponenta has no ABF code to fall back on — its generator code is its only working
+  // identity, whatever its kind (booth_component / construction / other). A card may exist as a
+  // draft without one (e.g. a fresh duplicate), but it is never ready/activatable. Furniture keeps
+  // its own internal-code rule below (same issue, pushed once).
+  const requiresInternalCode = context.itemType === "INTERNAL_COMPONENT" || kind === "booth_component";
+  if (requiresInternalCode && kind !== "furniture" && !hasText(item.internalCode)) issues.push("missing_internal_code");
 
   switch (kind) {
     // Physical, placeable furniture — the strictest rule set (unchanged by this hardening
@@ -289,11 +303,11 @@ export function evaluateCatalogReadiness(item: ComponentDefinition, kind: Catalo
  * Undefined lifecycleStatus means the item predates this field (current seeds like
  * M57/L02/P86) and stays eligible, so nothing already shipped silently disappears.
  */
-export function isGeneratorEligible(item: ComponentDefinition, kind?: CatalogItemKind): boolean {
+export function isGeneratorEligible(item: ComponentDefinition, kind?: CatalogItemKind, context: ReadinessContext = {}): boolean {
   if (item.lifecycleStatus === undefined) return true;
   if (item.lifecycleStatus !== "active") return false;
   const resolvedKind = kind ?? item.catalogItemKind ?? inferCatalogItemKind(item);
-  return evaluateCatalogReadiness(item, resolvedKind).ready;
+  return evaluateCatalogReadiness(item, resolvedKind, context).ready;
 }
 
 export function inferCatalogItemKind(item: Pick<ComponentDefinition, "catalogItemType" | "sceneLayer" | "printable">): CatalogItemKind {
@@ -318,8 +332,8 @@ export class CatalogReadinessError extends Error {
  * Section 9: activation must be enforced server-side too, not just hidden by the UI.
  * Call this before persisting a status transition into "active".
  */
-export function assertCanActivate(item: ComponentDefinition, kind: CatalogItemKind): void {
-  const result = evaluateCatalogReadiness(item, kind);
+export function assertCanActivate(item: ComponentDefinition, kind: CatalogItemKind, context: ReadinessContext = {}): void {
+  const result = evaluateCatalogReadiness(item, kind, context);
   if (!result.ready) throw new CatalogReadinessError(result.issues);
 }
 

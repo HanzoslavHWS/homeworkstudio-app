@@ -47,6 +47,7 @@ export type SavedKitContents = Readonly<{ packageItems: readonly CatalogPackageI
 import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../domain/catalogReadiness";
 import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, CATALOG_ITEM_TYPES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type CatalogItemType, type ComponentDefinition } from "../../domain/models";
 import { PRICING_UNIT_SYMBOLS, resolveGraphicsPricingUnit } from "../../domain/graphicsPricingUnit";
+import { INTERNAL_COMPONENT_USAGE_HINTS_CS, INTERNAL_COMPONENT_USAGE_LABELS_CS, usageChangeWarningCs, usagesForCategory } from "../../domain/internalComponentUsage";
 import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "../../domain/assets";
 import type { TechnicalRasterComponentConfig } from "../../domain/technicalRasterComponentPresentation";
 import type { TechnicalServicePlacementBehavior } from "../../domain/technicalRasterServicePresentation";
@@ -804,10 +805,17 @@ export function ComponentAdminDetail({
   const isSpecialCard = storedGroup === "booth" || storedGroup === "kit";
   const [group, setGroup] = useState<CardGroup>(storedGroup);
   const categoryDef = findCategory(categoryRegister.categories, category);
-  const classificationTargetForCategory = !isSpecialCard && categoryDef && categoryDef.group === group ? classificationTarget(categoryDef, item.kind) : undefined;
+  // Interní komponenta → Použití komponenty (booth_component / construction), offered only when the
+  // category allows both. Feeds the same classificationTarget the category already drives.
+  const [usageKind, setUsageKind] = useState<CatalogItemKind>(item.kind);
+  const classificationTargetForCategory = !isSpecialCard && categoryDef && categoryDef.group === group ? classificationTarget(categoryDef, usageKind) : undefined;
   const itemType: CatalogItemType = isSpecialCard ? currentItemType : classificationTargetForCategory?.itemType ?? (isComponentGroup(group) ? COMPONENT_GROUP_TARGETS[group].itemType : currentItemType);
   const kind: CatalogItemKind = isSpecialCard ? item.kind : classificationTargetForCategory?.kind ?? item.kind;
-  const classificationChanged = !isSpecialCard && (category !== (item.category ?? "") || group !== storedGroup);
+  // Only an explicit usage choice counts — a historical card whose stored kind the category no longer
+  // lists must never get a silent kind change on an unrelated save.
+  const classificationChanged = !isSpecialCard && (category !== (item.category ?? "") || group !== storedGroup || usageKind !== item.kind);
+  const usageOptions = itemType === "INTERNAL_COMPONENT" ? usagesForCategory(categoryDef) : [];
+  const usageWarning = usageChangeWarningCs(item.kind, kind);
   const classificationProblem = classificationChanged ? classificationIssue(categoryRegister.categories, { itemType, kind, category: category || null }, { requireActive: category !== (item.category ?? "") }) : undefined;
   const storedClassificationIssue = isSpecialCard ? undefined : classificationIssue(categoryRegister.categories, { itemType: currentItemType, kind: item.kind, category: item.category });
   const storedCategoryDef = findCategory(categoryRegister.categories, item.category);
@@ -1047,6 +1055,22 @@ export function ComponentAdminDetail({
                 </>
               )}
             </EditRow>
+            {usageOptions.length > 1 && (
+              <EditRow label="Použití komponenty">
+                <div className="catalogUsageChoice" role="radiogroup" aria-label="Použití komponenty">
+                  {usageOptions.map((option) => (
+                    <label key={option} className="checkboxRow">
+                      <input type="radio" name={`usage-${item.id}`} checked={kind === option} disabled={item.lifecycleStatus === "active"} onChange={() => { setUsageKind(option); setDirty(true); }} />
+                      <span><strong>{INTERNAL_COMPONENT_USAGE_LABELS_CS[option]}</strong> — {INTERNAL_COMPONENT_USAGE_HINTS_CS[option]}</span>
+                    </label>
+                  ))}
+                  {!usageOptions.includes(kind as never) && <small className="fieldHint">Uložené zařazení: {CATALOG_ITEM_KIND_LABELS_CS[kind]} — beze změny, dokud nevyberete jedno z použití.</small>}
+                  {item.lifecycleStatus === "active"
+                    ? <small className="fieldHint">Aktivní komponentě nelze změnit použití — nejdřív ji převeďte do stavu K doplnění.</small>
+                    : usageWarning && <small className="fieldWarning">{usageWarning}</small>}
+                </div>
+              </EditRow>
+            )}
             <EditRow label="ABF kód">
               <input
                 value={abfCode}
@@ -1078,7 +1102,9 @@ export function ComponentAdminDetail({
               ) : resultingCode ? (
                 <small className="fieldHint">Po uložení: {resultingCode} · {codeModeLabel(resultingCode, abfCode.trim() || null)}.</small>
               ) : (
-                <small className="fieldHint">{abfCode.trim() ? "Zadejte vlastní kód, nebo zaškrtněte „Stejný jako ABF kód“." : "Interní komponenta nepotřebuje ABF kód — stačí vlastní generátorový kód."}</small>
+                itemType === "INTERNAL_COMPONENT"
+                  ? <small className="fieldWarning">Interní komponenta musí mít vlastní interní/generátorový kód — bez něj ji nelze aktivovat. {abfCode.trim() ? "Zadejte kód, nebo zaškrtněte „Stejný jako ABF kód“." : "ABF kód není potřeba."}</small>
+                  : <small className="fieldHint">{abfCode.trim() ? "Zadejte vlastní kód, nebo zaškrtněte „Stejný jako ABF kód“." : "Interní komponenta nepotřebuje ABF kód — stačí vlastní generátorový kód."}</small>
               )}
             </EditRow>
             <EditRow label="Oficiální název ABF (CZ)">

@@ -637,13 +637,13 @@ function toReadinessAdapter(item: Pick<CatalogItemAdmin, "document" | "lifecycle
   return { ...withColumnInternalCode(item.document as Partial<ComponentDefinition>, item.internalCode), lifecycleStatus: item.lifecycleStatus } as ComponentDefinition;
 }
 
-export function computeReadiness(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode">>): ReadinessResult {
-  return evaluateCatalogReadiness(toReadinessAdapter(item), item.kind);
+export function computeReadiness(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode" | "itemType">>): ReadinessResult {
+  return evaluateCatalogReadiness(toReadinessAdapter(item), item.kind, { itemType: itemTypeOf(item) });
 }
 
 /** NEVER stored — always live-computed, so a stale flag can never drift from the real rules. */
-export function computeGeneratorEligibleLive(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode">>): boolean {
-  return isGeneratorEligible(toReadinessAdapter(item), item.kind);
+export function computeGeneratorEligibleLive(item: Pick<CatalogItemAdmin, "document" | "lifecycleStatus" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode" | "itemType">>): boolean {
+  return isGeneratorEligible(toReadinessAdapter(item), item.kind, { itemType: itemTypeOf(item) });
 }
 
 export type CatalogItemAdminListEntry = Readonly<{
@@ -1113,11 +1113,11 @@ export function resolveTypeAndKindEdit(
  * active if it still passes readiness today; otherwise — and for legacy archives without the
  * stored status — it lands on needs_review, never silently active.
  */
-export function resolveRestoreStatus(item: Pick<CatalogItemAdmin, "document" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode">>): CatalogItemStatus {
+export function resolveRestoreStatus(item: Pick<CatalogItemAdmin, "document" | "kind"> & Partial<Pick<CatalogItemAdmin, "internalCode" | "itemType">>): CatalogItemStatus {
   const previous = item.document.archivedFromStatus;
   if (typeof previous !== "string" || !isValidCatalogItemStatus(previous) || previous === "archived") return "needs_review";
   if (previous === "active") {
-    const readiness = evaluateCatalogReadiness({ ...withColumnInternalCode(item.document as Partial<ComponentDefinition>, item.internalCode), lifecycleStatus: "active" } as ComponentDefinition, item.kind);
+    const readiness = evaluateCatalogReadiness({ ...withColumnInternalCode(item.document as Partial<ComponentDefinition>, item.internalCode), lifecycleStatus: "active" } as ComponentDefinition, item.kind, { itemType: itemTypeOf(item) });
     return readiness.ready ? "active" : "needs_review";
   }
   return previous;
@@ -1329,6 +1329,12 @@ export function parseCatalogItemAdminCreateInput(body: unknown): CatalogItemAdmi
     const normalized = normalizeInternalCode(raw.internalCode);
     if (!normalized) throw new InvalidCatalogItemAdminCreateInputError("internalCode", "Generátorový kód smí obsahovat jen písmena, číslice a . _ / + - (bez mezer a uvozovek), nejvýše 64 znaků.");
     input.internalCode = normalized;
+  }
+  // Interní komponenta: the ABF code is optional, the generator code is not — it is the card's
+  // only working identity. (A duplicate may still exist as a code-less draft; readiness then
+  // blocks activation — see evaluateCatalogReadiness's missing_internal_code.)
+  if (itemType === "INTERNAL_COMPONENT" && !input.internalCode) {
+    throw new InvalidCatalogItemAdminCreateInputError("internalCode", "Interní komponenta musí mít interní/generátorový kód. ABF kód je nepovinný, generátorový kód ne.");
   }
   if (typeof raw.abfCode === "string" && raw.abfCode.trim()) {
     const normalized = normalizeAbfCode(raw.abfCode);

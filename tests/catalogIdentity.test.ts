@@ -126,7 +126,7 @@ test("interní komponenta: bez ABF kódu, ABF kód se nikdy negeneruje", () => {
 
 test("typy: všech pět typů lze založit; KIT má vlastní typ, BOOTH zůstává stánkem", () => {
   assert.deepEqual([...CATALOG_ITEM_TYPES], ["PRODUCT", "SERVICE", "BOOTH", "INTERNAL_COMPONENT", "KIT"]);
-  const created = CATALOG_ITEM_TYPES.map((itemType) => parseCatalogItemAdminCreateInput({ itemType, displayName: `Test ${itemType}`, category: "other", unitCode: "ks" }));
+  const created = CATALOG_ITEM_TYPES.map((itemType) => parseCatalogItemAdminCreateInput({ itemType, displayName: `Test ${itemType}`, category: "other", unitCode: "ks", ...(itemType === "INTERNAL_COMPONENT" ? { internalCode: "TEST-INT" } : {}) }));
   assert.deepEqual(created.map((input) => [input.itemType, input.kind]), [
     ["PRODUCT", "furniture"], ["SERVICE", "service"], ["BOOTH", "booth"], ["INTERNAL_COMPONENT", "booth_component"], ["KIT", "other"],
   ]);

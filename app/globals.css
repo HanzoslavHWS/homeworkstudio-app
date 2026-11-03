@@ -7538,3 +7538,13 @@ select:focus {
 @container (max-width: 600px) {
   .catalogCategoryForm { grid-template-columns: 1fr; }
 }
+
+/* V1-INTERNAL-01 — Interní komponenta → Použití komponenty (radio list; overrides the 100%-wide field inputs). */
+.catalogUsageChoice { display: grid; gap: 6px; text-align: left; }
+/* Inside a detail list the generic ".catalogDetailSection dl div" two-column row rule would split the options side by side. */
+.catalogDetailSection dl div.catalogUsageChoice { grid-template-columns: 1fr; gap: 8px; padding-bottom: 0; border-bottom: 0; }
+.catalogUsageChoice .checkboxRow > span { color: #3c4042; font-size: 8px; font-weight: 400; line-height: 1.5; }
+.catalogUsageChoice .checkboxRow > span strong { font-weight: 700; }
+.catalogUsageChoice .checkboxRow { flex-direction: row; align-items: flex-start; gap: 7px; margin-top: 0; line-height: 1.45; }
+.catalogUsageChoice input[type="radio"] { flex: none; width: 13px; height: 13px; margin: 1px 0 0; padding: 0; }
+.catalogUsageChoice small { display: block; }

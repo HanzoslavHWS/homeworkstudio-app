@@ -891,11 +891,14 @@ test("POST /api/catalog-admin/items/save: request body cannot smuggle internalCo
 // CREATE — "Nová komponenta stánku" founding workflow (booth_component)
 // -----------------------------------------------------------------------------------------
 
+/** Interní komponenta always carries its own generator code (V1-INTERNAL-01) — unique per call so a test may create several. */
+let boothComponentCodeSequence = 0;
 function boothComponentCreateInput(overrides: Partial<CatalogItemAdminCreateInput> = {}): CatalogItemAdminCreateInput {
   return {
     kind: "booth_component",
     displayName: "Sloupek",
     category: "Sloupky",
+    internalCode: `TEST-SLOUPEK-${++boothComponentCodeSequence}`,
     ...overrides,
   };
 }
@@ -915,10 +918,11 @@ test("CREATE: generatorEligible is computed false immediately after creation (mi
   assert.equal("generatorEligible" in created.document, false);
 });
 
-test("CREATE: internalCode is optional — omitted input yields internalCode=null, DB id is always distinct from internalCode", async () => {
+test("CREATE: interní komponenta bez generátorového kódu se nezaloží (V1-INTERNAL-01); s kódem je DB id vždy odlišné od kódu", async () => {
   const client = createFakeSupabaseClient({ catalog_items: [] });
-  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput());
-  assert.equal(created.internalCode, null);
+  assert.throws(() => parseCatalogItemAdminCreateInput({ kind: "booth_component", displayName: "Sloupek", category: "Sloupky" }), InvalidCatalogItemAdminCreateInputError);
+  const created = await createCatalogItemAdmin(client as never, boothComponentCreateInput({ internalCode: "INT-SLOUPEK" }));
+  assert.equal(created.internalCode, "INT-SLOUPEK");
   assert.notEqual(created.id, created.internalCode);
 });
 
@@ -1017,7 +1021,7 @@ test("CREATE: missing SKP alone blocks readiness with exactly missing_sketchup_s
 });
 
 test("CREATE: parseCatalogItemAdminCreateInput never accepts a lifecycleStatus field — create can never activate by construction", () => {
-  const input = parseCatalogItemAdminCreateInput({ kind: "booth_component", displayName: "Sloupek", category: "Sloupky", lifecycleStatus: "active" });
+  const input = parseCatalogItemAdminCreateInput({ kind: "booth_component", displayName: "Sloupek", category: "Sloupky", internalCode: "TEST-SLOUPEK", lifecycleStatus: "active" });
   assert.equal("lifecycleStatus" in input, false);
 });
 
@@ -1081,7 +1085,7 @@ test("POST /api/catalog-admin/items/create: authenticated + valid -> 200, kind/l
   const response = await handleCatalogAdminItemsCreate(
     authenticatedRequest(token, "http://localhost/api/catalog-admin/items/create", {
       method: "POST",
-      body: { create: { kind: "booth_component", displayName: "Sloupek", category: "Sloupky", lifecycleStatus: "active", reviewedAt: "2000-01-01T00:00:00.000Z" } },
+      body: { create: { kind: "booth_component", displayName: "Sloupek", category: "Sloupky", internalCode: "TEST-SLOUPEK", lifecycleStatus: "active", reviewedAt: "2000-01-01T00:00:00.000Z" } },
     }),
     async (input) => {
       capturedInput = input;
@@ -1089,7 +1093,7 @@ test("POST /api/catalog-admin/items/create: authenticated + valid -> 200, kind/l
     },
   );
   assert.equal(response.status, 200);
-  assert.deepEqual(capturedInput, { kind: "booth_component", itemType: "INTERNAL_COMPONENT", displayName: "Sloupek", category: "Sloupky" });
+  assert.deepEqual(capturedInput, { kind: "booth_component", itemType: "INTERNAL_COMPONENT", displayName: "Sloupek", category: "Sloupky", internalCode: "TEST-SLOUPEK" });
 });
 
 // -----------------------------------------------------------------------------------------

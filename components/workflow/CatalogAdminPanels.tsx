@@ -31,6 +31,7 @@ import { CATALOG_UNITS } from "../../domain/catalogUnits";
 import { catalogTypeHasField } from "../../domain/catalogItemFields";
 import { categoriesForGroup, COMPONENT_GROUP_HINTS_CS, COMPONENT_GROUP_LABELS_CS, COMPONENT_GROUP_TARGETS, COMPONENT_GROUPS, type ComponentGroup } from "../../domain/catalogClassification";
 import { useCatalogCategories } from "../../lib/db/catalogCategories.remoteApi.client";
+import { INTERNAL_COMPONENT_USAGE_HINTS_CS, INTERNAL_COMPONENT_USAGE_LABELS_CS, usagesForCategory, type InternalComponentUsage } from "../../domain/internalComponentUsage";
 
 /** Types whose cards physically exist (dimensions make sense). SERVICE never needs them. */
 const TYPES_WITH_DIMENSIONS: readonly CatalogItemType[] = ["PRODUCT", "BOOTH", "INTERNAL_COMPONENT"];
@@ -75,19 +76,27 @@ export function CatalogItemCreateForm({
   const [widthMm, setWidthMm] = useState("");
   const [depthMm, setDepthMm] = useState("");
   const [heightMm, setHeightMm] = useState("");
+  // Interní komponenta → Použití komponenty: chosen explicitly when the category allows both.
+  const [usage, setUsage] = useState<InternalComponentUsage | "">("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   const isGroup = pick !== "" && pick !== "BOOTH" && pick !== "KIT";
   const groupCategories = isGroup ? categoriesForGroup(categoryRegister.categories, pick) : [];
   const categoryDef = isGroup ? groupCategories.find((candidate) => candidate.id === category) : undefined;
-  const kind: CatalogItemKind | "" = !itemType ? "" : isGroup ? categoryDef?.kinds[0] ?? "" : CATALOG_ITEM_KINDS_BY_TYPE[itemType][0]!;
-  const canSubmit = Boolean(itemType) && Boolean(kind) && displayName.trim().length > 0 && category.trim().length > 0 && !busy;
+  const usageOptions = usagesForCategory(categoryDef);
+  const resolvedUsage: InternalComponentUsage | "" = usageOptions.length === 1 ? usageOptions[0]! : usageOptions.includes(usage as InternalComponentUsage) ? usage : "";
+  const kind: CatalogItemKind | "" = !itemType ? "" : isGroup ? (usageOptions.length > 0 ? resolvedUsage : categoryDef?.kinds[0] ?? "") : CATALOG_ITEM_KINDS_BY_TYPE[itemType][0]!;
+  const isInternal = itemType === "INTERNAL_COMPONENT";
+  const generatorCodeDraft = codeFromAbf && abfCode.trim() ? abfCode.trim() : internalCode.trim();
+  const missingInternalCode = isInternal && !generatorCodeDraft;
+  const canSubmit = Boolean(itemType) && Boolean(kind) && displayName.trim().length > 0 && category.trim().length > 0 && !missingInternalCode && !busy;
 
   function selectPick(next: ComponentGroup | "BOOTH" | "KIT") {
     setPick(next);
     // Never carry a category over into another group, never preselect one — the user chooses.
     setCategory("");
+    setUsage("");
   }
 
   async function handleSubmit() {
@@ -154,7 +163,7 @@ export function CatalogItemCreateForm({
           <Field label={itemTypeExpectsAbfCode(itemType) ? "ABF kód" : "ABF kód (nepovinný)"}>
             <input value={abfCode} onChange={(event) => setAbfCode(event.target.value)} placeholder={itemTypeExpectsAbfCode(itemType) ? "např. M57 (podle KODY.xlsm)" : "Interní komponenta obvykle ABF kód nemá"} />
           </Field>
-          <Field label="Generátorový kód">
+          <Field label={isInternal ? "Interní / generátorový kód *" : "Generátorový kód"}>
             {abfCode.trim() && (
               <label className="checkboxRow">
                 <input type="checkbox" checked={codeFromAbf} onChange={(event) => setCodeFromAbf(event.target.checked)} /> Stejný jako ABF kód
@@ -165,6 +174,7 @@ export function CatalogItemCreateForm({
             ) : (
               <input aria-label="Generátorový kód" value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder={itemType === "INTERNAL_COMPONENT" ? "např. INT-PANEL-950" : "Ponechte prázdné, pokud kód neznáte"} />
             )}
+            {missingInternalCode && <small className="fieldWarning">Interní komponenta musí mít vlastní interní/generátorový kód — je to její hlavní identifikátor (ABF kód je nepovinný).</small>}
           </Field>
           {itemTypeExpectsAbfCode(itemType) && (
             <>
@@ -177,7 +187,7 @@ export function CatalogItemCreateForm({
             </>
           )}
           <Field label="Kategorie *">
-            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+            <select value={category} onChange={(event) => { setCategory(event.target.value); setUsage(""); }}>
               <option value="">— vyberte —</option>
               {isGroup
                 ? groupCategories.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)
@@ -186,6 +196,23 @@ export function CatalogItemCreateForm({
             {categoryDef?.priceCategory === "electricity" && <small className="fieldHint">Cenové zařazení: Elektřina → ceník elektřiny.</small>}
             {isGroup && pick === "technical_point" && <small className="fieldHint">Technický bod se samostatně neúčtuje.</small>}
           </Field>
+          {usageOptions.length > 0 && (
+            <Field label={usageOptions.length > 1 ? "Použití komponenty *" : "Použití komponenty"}>
+              {usageOptions.length > 1 ? (
+                <div className="catalogUsageChoice" role="radiogroup" aria-label="Použití komponenty">
+                  {usageOptions.map((option) => (
+                    <label key={option} className="checkboxRow">
+                      <input type="radio" name="catalogCreateUsage" checked={resolvedUsage === option} onChange={() => setUsage(option)} />
+                      <span><strong>{INTERNAL_COMPONENT_USAGE_LABELS_CS[option]}</strong> — {INTERNAL_COMPONENT_USAGE_HINTS_CS[option]}</span>
+                    </label>
+                  ))}
+                  {!resolvedUsage && <small className="fieldWarning">Vyberte, jak se komponenta bude používat.</small>}
+                </div>
+              ) : (
+                <span>{INTERNAL_COMPONENT_USAGE_LABELS_CS[usageOptions[0]!]} <small className="fieldHint">— {INTERNAL_COMPONENT_USAGE_HINTS_CS[usageOptions[0]!]}</small></span>
+              )}
+            </Field>
+          )}
           <Field label="Měrná jednotka">
             <select aria-label="Měrná jednotka" value={unitCode} onChange={(event) => setUnitCode(event.target.value)}>
               <option value="">— nevybráno —</option>

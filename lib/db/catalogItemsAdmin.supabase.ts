@@ -1,6 +1,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { assertCanActivate, assertUniqueInternalCode, DuplicateInternalCodeError, evaluateCatalogReadiness, withColumnInternalCode } from "../../domain/catalogReadiness.ts";
 import { documentReferencesCode, internalCodeChangeIssue } from "../../domain/catalogCodeChange.ts";
+import { boothComponentUsageChangeIssue } from "../../domain/internalComponentUsage.ts";
 import { classificationIssue, derivedPriceCategory, findCategory } from "../../domain/catalogClassification.ts";
 import { readCatalogCategoryRegister } from "./catalogCategories.supabase.ts";
 import { ConcurrencyConflictError } from "./concurrency.ts";
@@ -443,6 +444,19 @@ export async function saveCatalogItemAdmin(
     const issue = kitTypeChangeIssue(id, typeAndKind.itemType, await readCatalogPackageItems(client));
     if (issue) throw new InvalidCatalogItemAdminEditError("itemType", issue);
   }
+  // Použití komponenty (booth_component -> construction/other): the card leaves the generator's
+  // component picker, so a project that already placed it would point at a component the
+  // generator no longer offers. Refused while any project references the card (by id or code).
+  if (typeAndKind && current.kind === "booth_component" && typeAndKind.kind !== "booth_component") {
+    const { data: projectRows, error: projectError } = await client.from("projects").select("id, document");
+    if (projectError) throw projectError;
+    const referencingProjects = ((projectRows ?? []) as { id: string; document: { name?: string } | null }[])
+      .filter((row) => documentReferencesCode(row.document, id) || (current.internalCode ? documentReferencesCode(row.document, current.internalCode) : false))
+      .map((row) => row.document?.name || row.id);
+    const issue = boothComponentUsageChangeIssue(referencingProjects);
+    if (issue) throw new InvalidCatalogItemAdminEditError("kind", issue);
+  }
+  const resultingItemType = typeAndKind?.itemType ?? itemTypeOf(current);
 
   const columnPatch: Record<string, unknown> = {};
   if (typeAndKind) {
@@ -501,7 +515,7 @@ export async function saveCatalogItemAdmin(
   // (restoreFromArchive) returns to it via resolveRestoreStatus — a previously-active item only
   // comes back active if it still passes readiness. Never touches anything else in the document.
   if (edit.restoreFromArchive === true && current.lifecycleStatus === "archived") {
-    nextDocument = { ...withoutArchiveBookkeeping(nextDocument), lifecycleStatus: resolveRestoreStatus({ ...current, kind: kindForEdit }) };
+    nextDocument = { ...withoutArchiveBookkeeping(nextDocument), lifecycleStatus: resolveRestoreStatus({ ...current, kind: kindForEdit, itemType: resultingItemType }) };
   } else {
     const requestedStatus = nextDocument.lifecycleStatus as CatalogItemStatus | undefined;
     if (edit.lifecycleStatus === "archived" && current.lifecycleStatus !== "archived") {
@@ -526,7 +540,7 @@ export async function saveCatalogItemAdmin(
   // guard — only a genuine transition into "active" does, so routine edits to M57/L02/P86 are
   // unaffected.
   if (edit.lifecycleStatus === "active" && current.lifecycleStatus !== "active") {
-    assertCanActivate({ ...withColumnInternalCode(nextDocument as Partial<ComponentDefinition>, resultingInternalCode), lifecycleStatus: "active" } as ComponentDefinition, kindForEdit);
+    assertCanActivate({ ...withColumnInternalCode(nextDocument as Partial<ComponentDefinition>, resultingInternalCode), lifecycleStatus: "active" } as ComponentDefinition, kindForEdit, { itemType: resultingItemType });
   }
 
   // Section 8/9 (asset + capability workflow spec): removing a photo/model reference, OR
@@ -582,7 +596,7 @@ export async function saveCatalogItemAdmin(
   }
   const resultingStatus = (nextDocument.lifecycleStatus as CatalogItemStatus | undefined) ?? current.lifecycleStatus;
   if (mightAffectReadiness && resultingStatus === "active") {
-    const readiness = evaluateCatalogReadiness({ ...withColumnInternalCode(nextDocument as Partial<ComponentDefinition>, resultingInternalCode), lifecycleStatus: "active" } as ComponentDefinition, kindForEdit);
+    const readiness = evaluateCatalogReadiness({ ...withColumnInternalCode(nextDocument as Partial<ComponentDefinition>, resultingInternalCode), lifecycleStatus: "active" } as ComponentDefinition, kindForEdit, { itemType: resultingItemType });
     if (!readiness.ready) {
       nextDocument = { ...nextDocument, lifecycleStatus: "needs_review" };
     }
