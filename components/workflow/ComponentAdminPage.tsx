@@ -45,7 +45,8 @@ import type { CatalogVariantSet, CatalogVariantSetInput } from "../../domain/cat
 
 export type SavedKitContents = Readonly<{ packageItems: readonly CatalogPackageItem[]; warnings: readonly string[] }>;
 import { CATALOG_ITEM_STATUS_LABELS_CS, READINESS_ISSUE_LABELS_CS } from "../../domain/catalogReadiness";
-import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, CATALOG_ITEM_TYPES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type CatalogItemType } from "../../domain/models";
+import { CATALOG_ITEM_KINDS, CATALOG_ITEM_STATUSES, CATALOG_ITEM_TYPES, type BoothVariant, type CatalogItemKind, type CatalogItemStatus, type CatalogItemType, type ComponentDefinition } from "../../domain/models";
+import { PRICING_UNIT_SYMBOLS, resolveGraphicsPricingUnit } from "../../domain/graphicsPricingUnit";
 import { SOURCE_ASSET_KINDS, SOURCE_ASSET_KIND_EXTENSIONS, SOURCE_ASSET_KIND_LABELS_CS, type SourceAssetEntry, type SourceAssetKind, type StoredAsset } from "../../domain/assets";
 import type { TechnicalRasterComponentConfig } from "../../domain/technicalRasterComponentPresentation";
 import type { TechnicalServicePlacementBehavior } from "../../domain/technicalRasterServicePresentation";
@@ -1101,6 +1102,7 @@ export function ComponentAdminDetail({
                 <small className="fieldHint">Původní text „{item.unit}“ nebyl převeden: {legacyUnit.status === "empty" ? "" : legacyUnit.message}</small>
               )}
             </EditRow>
+            {kind === "graphics_service" && <GraphicsPricingUnitRow category={category} unitCode={unitCode} explicitPricingUnit={(itemDocument as Partial<ComponentDefinition>).pricingUnit} />}
             <EditRow label="Poznámka">
               <input value={note} onChange={(event) => { setNote(event.target.value); setDirty(true); }} placeholder="Interní poznámka" />
             </EditRow>
@@ -1211,7 +1213,9 @@ export function ComponentAdminDetail({
             <p className="fieldHint">
               {SCENE_CAPABILITY_KINDS.includes(item.kind)
                 ? 'Aspoň jedno zaškrtnutí je nutné pro generator readiness (jinak "Chybí nastavení zobrazení ve 2D/3D"). Zobrazení ve 3D vyžaduje nahraný 3D model.'
-                : "U služby 2D/3D jen určuje, které přílohy karta nabízí (bez 3D se nenabízí GLB). Připravenost služby na nich nezávisí."}
+                : item.kind === "graphics_service"
+                  ? "Grafika se na 3D stánku zobrazuje na jeho tiskových plochách — vlastní GLB model grafická karta nepotřebuje. 3D zapněte, jen pokud má karta mít vlastní model. Připravenost na tomto nastavení nezávisí."
+                  : "U služby 2D/3D jen určuje, které přílohy karta nabízí (bez 3D se nenabízí GLB). Připravenost služby na nich nezávisí."}
               {" "}Vypnutí 3D žádný soubor nemaže.
             </p>
           </section>
@@ -1934,6 +1938,20 @@ function EditRow({ label, children }: { label: string; children: ReactNode }) {
       <dt>{label}</dt>
       <dd>{children}</dd>
     </div>
+  );
+}
+
+/** Graphics cards: the pricing unit is derived (category + unit), shown read-only with any mismatch — never entered twice. */
+function GraphicsPricingUnitRow({ category, unitCode, explicitPricingUnit }: { category: string; unitCode: string; explicitPricingUnit?: ComponentDefinition["pricingUnit"] }) {
+  const resolution = resolveGraphicsPricingUnit({ category, unit: unitCode, pricingUnit: explicitPricingUnit });
+  const source = resolution.status === "resolved" ? { category: "podle kategorie", unit: "podle měrné jednotky", explicit: "uložená hodnota" }[resolution.source] : "";
+  return (
+    <Row
+      label="Cenová jednotka"
+      value={resolution.status === "resolved"
+        ? <>{PRICING_UNIT_SYMBOLS[resolution.pricingUnit]} <small className="fieldHint">({source})</small></>
+        : <span className="uploadError">{resolution.message}</span>}
+    />
   );
 }
 

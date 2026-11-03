@@ -5,6 +5,7 @@ import {
   type CatalogItemStatus,
   type ComponentDefinition,
 } from "./models.ts";
+import { resolveGraphicsPricingUnit } from "./graphicsPricingUnit.ts";
 
 export const CATALOG_ITEM_STATUS_LABELS_CS: Readonly<Record<CatalogItemStatus, string>> = {
   draft: "Koncept",
@@ -25,6 +26,7 @@ export type ReadinessIssue =
   | "missing_3d_asset"
   | "missing_sketchup_source"
   | "missing_pricing_unit"
+  | "pricing_unit_mismatch"
   | "requires_review"
   | "variants_unconfirmed";
 
@@ -39,6 +41,7 @@ export const READINESS_ISSUE_LABELS_CS: Readonly<Record<ReadinessIssue, string>>
   missing_3d_asset: "Chybí platný 3D model (GLB)",
   missing_sketchup_source: "Chybí zdrojový SketchUp (.skp) soubor",
   missing_pricing_unit: "Chybí typ jednotky pro cenotvorbu",
+  pricing_unit_mismatch: "Jednotka karty neodpovídá cenové jednotce kategorie (Límec = bm, Celopolep a Polep pultu = m²)",
   requires_review: "Čeká na kontrolu/schválení",
   variants_unconfirmed: "Varianty ještě nejsou potvrzené jako finální katalog",
 };
@@ -174,8 +177,13 @@ export function evaluateCatalogReadiness(item: ComponentDefinition, kind: Catalo
       if (!hasText(item.unit)) issues.push("missing_unit");
       break;
     }
+    // The pricing unit is derived from the graphics category and the card's unit (Límec = bm,
+    // Celopolep / Polep pultu = m²) — see domain/graphicsPricingUnit.ts. The admin never enters it
+    // separately; a document's explicit pricingUnit (legacy imports) must agree with it.
     case "graphics_service": {
-      if (!item.pricingUnit) issues.push("missing_pricing_unit");
+      const pricingUnit = resolveGraphicsPricingUnit(item);
+      if (pricingUnit.status === "missing") issues.push("missing_pricing_unit");
+      if (pricingUnit.status === "mismatch") issues.push("pricing_unit_mismatch");
       break;
     }
     // A booth is ALWAYS the placed stage every other object sits in — there is no such thing
