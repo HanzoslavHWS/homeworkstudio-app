@@ -57,6 +57,8 @@ import {
 import { parseKitPrintAllowances } from "../../domain/catalogKitPrintAllowance.ts";
 import {
   InvalidCatalogVariantSetError,
+  isVariantAssetShape,
+  parseVariantImageSource,
   validateCatalogVariantSet,
   VARIANT_SET_KINDS,
   VARIANT_SURCHARGE_RULES,
@@ -82,6 +84,8 @@ const PACKAGE_COLUMNS = `${LEGACY_PACKAGE_COLUMNS}, line_key, line_kind, label, 
 const SUBSTITUTE_COLUMNS = "id, kit_line_id, substitute_item_id, substitute_variant_id, surcharge_rule, surcharge_unit_code, quantity_factor, is_active, sort_order, note";
 const VARIANT_SET_COLUMNS = "id, code, name, kind, is_active, note";
 const VARIANT_COLUMNS = "id, variant_set_id, code, name, name_en, swatch_color, price_item_id, surcharge_rule, surcharge_unit_code, legacy_finish_id, is_active, sort_order, note";
+/** 20261103120000 (V1-CARPET-02): product line + image metadata. Reads fall back to VARIANT_COLUMNS. */
+const VARIANT_COLUMNS_V2 = `${VARIANT_COLUMNS}, series, photo_asset, texture_asset, image_source`;
 
 type CatalogItemAdminDbRow = Readonly<{
   id: string;
@@ -139,6 +143,10 @@ type CatalogVariantDbRow = Readonly<{
   id: string;
   variant_set_id: string;
   code: string;
+  series?: string | null;
+  photo_asset?: unknown;
+  texture_asset?: unknown;
+  image_source?: unknown;
   name: string;
   name_en: string | null;
   swatch_color: string | null;
@@ -757,7 +765,11 @@ function rowToVariant(row: CatalogVariantDbRow): CatalogVariant {
     code: row.code,
     name: row.name,
     ...(row.name_en ? { nameEn: row.name_en } : {}),
+    ...(row.series ? { series: row.series } : {}),
     ...(row.swatch_color ? { swatchColor: row.swatch_color } : {}),
+    ...(isVariantAssetShape(row.photo_asset) ? { photoAsset: row.photo_asset } : {}),
+    ...(isVariantAssetShape(row.texture_asset) ? { textureAsset: row.texture_asset } : {}),
+    ...(parseVariantImageSource(row.image_source) ? { imageSource: parseVariantImageSource(row.image_source)! } : {}),
     ...(row.price_item_id ? { priceItemId: row.price_item_id } : {}),
     surchargeRule: ((VARIANT_SURCHARGE_RULES as readonly string[]).includes(row.surcharge_rule) ? row.surcharge_rule : "none") as VariantSurchargeRule,
     ...(row.surcharge_unit_code ? { surchargeUnitCode: row.surcharge_unit_code } : {}),
@@ -770,10 +782,12 @@ function rowToVariant(row: CatalogVariantDbRow): CatalogVariant {
 
 /** Every swatch book with all its variants (active and inactive). Empty without the V1-DATA-04 migration. */
 export async function readCatalogVariantSets(client: SupabaseClient): Promise<readonly CatalogVariantSet[]> {
-  const [sets, variants] = await Promise.all([
+  let [sets, variants] = await Promise.all([
     client.from("catalog_variant_sets").select(VARIANT_SET_COLUMNS),
-    client.from("catalog_variants").select(VARIANT_COLUMNS),
+    client.from("catalog_variants").select(VARIANT_COLUMNS_V2),
   ]);
+  // Before 20261103120000 the product-line / image columns do not exist yet.
+  if (variants.error && isMissingSchemaError(variants.error) && !sets.error) variants = await client.from("catalog_variants").select(VARIANT_COLUMNS);
   for (const result of [sets, variants]) {
     if (result.error) {
       if (isMissingSchemaError(result.error)) return [];
@@ -826,6 +840,12 @@ export async function saveCatalogVariantSet(client: SupabaseClient, input: Catal
       is_active: variant.isActive,
       sort_order: index,
       note: variant.note ?? null,
+      // V1-CARPET-02 columns are written only when the input carries them, so an editor that does
+      // not know them (or a DB before 20261103120000) never clears a stored line, photo or texture.
+      ...(variant.series !== undefined ? { series: variant.series } : {}),
+      ...(variant.photoAsset !== undefined ? { photo_asset: variant.photoAsset } : {}),
+      ...(variant.textureAsset !== undefined ? { texture_asset: variant.textureAsset } : {}),
+      ...(variant.imageSource !== undefined ? { image_source: variant.imageSource } : {}),
     };
     const { error } = variant.id
       ? await client.from("catalog_variants").update(row).eq("id", variant.id)

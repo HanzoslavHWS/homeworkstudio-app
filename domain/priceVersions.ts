@@ -165,6 +165,11 @@ export type SalePriceEntry = Readonly<{
   catalogItemId: string;
   /** Price of one variant; without it the price applies to every variant of the card. */
   variantId?: string;
+  /**
+   * Price of one product line of the card (catalog_variants.series, e.g. REVEXPO) — never together
+   * with variantId. Keyed by the card: M02 + REVEXPO never prices M04 + REVEXPO.
+   */
+  variantSeries?: string;
   priceMode: SalePriceMode;
   /** CZK price. */
   saleCzk?: number;
@@ -313,6 +318,8 @@ export type VersionedPricingContext = Readonly<{
   electricity?: SalePriceBook;
   /** Category of a catalog card; unknown cards count as standard. */
   priceCategoryOf: (catalogItemId: string) => PriceCategory | undefined;
+  /** Product line of a variant (swatch book). Without it product-line rows are never used. */
+  variantSeriesOf?: (variantId: string) => string | undefined;
 }>;
 
 export type VersionedPriceOrigin = Readonly<{
@@ -326,6 +333,8 @@ export type VersionedPriceOrigin = Readonly<{
   surchargeId?: string;
   /** true when the row is specific to the requested variant. */
   variantSpecific: boolean;
+  /** Product line whose row decided the price (variant -> product line -> card). */
+  variantSeries?: string;
   eurRate: number;
   eurRoundingMode: EurRoundingMode;
   eurRoundingStep: number;
@@ -369,13 +378,17 @@ function booksFor(context: VersionedPricingContext, catalogItemId: string): read
   return books;
 }
 
-/** Variant-specific row first, then the card's general row. */
-export function findSaleEntry(entries: readonly SalePriceEntry[], catalogItemId: string, variantId?: string): SalePriceEntry | undefined {
+/** Variant-specific row first, then the row of the variant's product line, then the card's general row. */
+export function findSaleEntry(entries: readonly SalePriceEntry[], catalogItemId: string, variantId?: string, variantSeries?: string): SalePriceEntry | undefined {
   if (variantId) {
     const specific = entries.find((entry) => entry.catalogItemId === catalogItemId && entry.variantId === variantId);
     if (specific) return specific;
   }
-  return entries.find((entry) => entry.catalogItemId === catalogItemId && !entry.variantId);
+  if (variantSeries) {
+    const line = entries.find((entry) => entry.catalogItemId === catalogItemId && !entry.variantId && entry.variantSeries === variantSeries);
+    if (line) return line;
+  }
+  return entries.find((entry) => entry.catalogItemId === catalogItemId && !entry.variantId && !entry.variantSeries);
 }
 
 function originOf(book: SalePriceBook, extra: Partial<VersionedPriceOrigin>): VersionedPriceOrigin {
@@ -399,12 +412,14 @@ function originOf(book: SalePriceBook, extra: Partial<VersionedPriceOrigin>): Ve
 export function priceFromSaleEntry(book: SalePriceBook, entry: SalePriceEntry, track: PriceTrack, variantId?: string): VersionedPriceResult {
   const common = { track, currency: currencyOfTrack(track), ...(entry.unitCode ? { unitCode: entry.unitCode } : {}) };
   const variantSpecific = Boolean(variantId && entry.variantId === variantId);
-  if (entry.priceMode === "individual") return { ...common, status: "individual", origin: originOf(book, { entryId: entry.id, variantSpecific }) };
-  if (entry.priceMode === "included") return { ...common, status: "included", amountNet: 0, origin: originOf(book, { entryId: entry.id, variantSpecific }) };
+  const series = entry.variantSeries ? { variantSeries: entry.variantSeries } : {};
+  if (entry.priceMode === "individual") return { ...common, status: "individual", origin: originOf(book, { entryId: entry.id, variantSpecific, ...series }) };
+  if (entry.priceMode === "included") return { ...common, status: "included", amountNet: 0, origin: originOf(book, { entryId: entry.id, variantSpecific, ...series }) };
   const resolved = resolveAmount({ czk: entry.saleCzk, eurMode: entry.eurMode, eur: entry.saleEur, eurWorld: entry.saleEurWorld }, track, book.version);
   const origin = originOf(book, {
     entryId: entry.id,
     variantSpecific,
+    ...series,
     ...(resolved.eurSource ? { eurSource: resolved.eurSource } : {}),
     ...(resolved.derivedEur !== undefined ? { derivedEur: resolved.derivedEur } : {}),
     manual: resolved.eurSource === "manual",
@@ -423,8 +438,9 @@ export function resolveSalePrice(context: VersionedPricingContext, catalogItemId
   const books = booksFor(context, catalogItemId);
   const missing = { status: "missing" as const, track: context.track, currency: currencyOfTrack(context.track) };
   if (books.length === 0) return { ...missing, missingReason: "no_version" };
+  const variantSeries = variantId ? context.variantSeriesOf?.(variantId) : undefined;
   for (const book of books) {
-    const entry = findSaleEntry(book.entries, catalogItemId, variantId);
+    const entry = findSaleEntry(book.entries, catalogItemId, variantId, variantSeries);
     if (entry) return priceFromSaleEntry(book, entry, context.track, variantId);
   }
   return { ...missing, missingReason: "no_entry" };
@@ -468,7 +484,7 @@ export function resolveSurchargeAmount(context: VersionedPricingContext, kitItem
 /** KitPriceResolver (V1-DATA-04 priceKit) backed by the event's assigned versions. */
 export function versionedKitPriceResolver(context: VersionedPricingContext, kitItemId: string): KitPriceResolver {
   return {
-    unitPrice: (itemId) => toPackageUnitPrice(resolveSalePrice(context, itemId)),
+    unitPrice: (itemId, variantId) => toPackageUnitPrice(resolveSalePrice(context, itemId, variantId)),
     surchargeAmount: (ref) => resolveSurchargeAmount(context, kitItemId, ref).amountNet,
   };
 }
@@ -486,6 +502,7 @@ export function priceKitVersioned(input: Readonly<{
   lines: readonly CatalogPackageItem[];
   variantSets?: readonly CatalogVariantSet[];
   selections?: readonly KitLineSelection[];
+  agreementItemIds?: ReadonlySet<string>;
 }>): VersionedKitPriceResult {
   const kitPrice = resolveSalePrice(input.context, input.kitItemId);
   const kitPriceNet = kitPrice.status === "priced" || kitPrice.status === "included" ? kitPrice.amountNet ?? 0 : 0;
@@ -494,6 +511,7 @@ export function priceKitVersioned(input: Readonly<{
     lines: input.lines,
     ...(input.variantSets ? { variantSets: input.variantSets } : {}),
     ...(input.selections ? { selections: input.selections } : {}),
+    ...(input.agreementItemIds ? { agreementItemIds: input.agreementItemIds } : {}),
     resolver: versionedKitPriceResolver(input.context, input.kitItemId),
   });
   const kitNeedsQuote = kitPrice.status === "missing" || kitPrice.status === "individual";
@@ -705,6 +723,13 @@ function optionalUuid(value: unknown, field: string): string | undefined {
 }
 
 /** Accepts 516, "516", "516,50", "1 234,5". Empty = undefined (never 0). */
+/** Product-line key of a sale row (same shape as catalog_variants.series: REVEXPO, PODIUM-PLAT). */
+function optionalSeries(value: unknown, field: string): string | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  if (typeof value !== "string" || !/^[A-Z0-9][A-Z0-9_-]*$/u.test(value.trim()) || value.trim().length > 64) fail(`Pole ${field} smí obsahovat jen velká písmena, číslice, - a _.`);
+  return value.trim();
+}
+
 export function parsePriceAmount(value: unknown, field: string): number | undefined {
   if (value === undefined || value === null || value === "") return undefined;
   const parsed = typeof value === "number" ? value : typeof value === "string" ? Number(value.replace(/\s/gu, "").replace(",", ".")) : Number.NaN;
@@ -786,6 +811,8 @@ export function parseSaleEntryInput(raw: unknown, index: number): SaleEntryInput
   const at = `Řádek ${index + 1}`;
   const catalogItemId = uuid(body.catalogItemId, `${at} položka`);
   const variantId = optionalUuid(body.variantId, `${at} varianta`);
+  const variantSeries = optionalSeries(body.variantSeries, `${at} řada`);
+  if (variantId && variantSeries) fail(`${at}: řádek platí buď pro jednu variantu, nebo pro celou řadu — ne pro obojí.`);
   const priceMode = oneOf(body.priceMode, SALE_PRICE_MODES, `${at} režim ceny`, "fixed");
   const saleCzk = parsePriceAmount(body.saleCzk, `${at} cena CZK`);
   const saleEur = parsePriceAmount(body.saleEur, `${at} ruční cena EUR SK`);
@@ -794,7 +821,7 @@ export function parseSaleEntryInput(raw: unknown, index: number): SaleEntryInput
   const note = optionalText(body.note, `${at} poznámka`, 1000);
   if (priceMode !== "fixed") {
     if (saleCzk !== undefined || saleEur !== undefined || saleEurWorld !== undefined) fail(`${at}: cena na dotaz ani zahrnutá položka nemá částku.`);
-    return { catalogItemId, ...(variantId ? { variantId } : {}), priceMode, eurMode: "none", ...(unitCode ? { unitCode } : {}), ...(note ? { note } : {}) };
+    return { catalogItemId, ...(variantId ? { variantId } : {}), ...(variantSeries ? { variantSeries } : {}), priceMode, eurMode: "none", ...(unitCode ? { unitCode } : {}), ...(note ? { note } : {}) };
   }
   const eurMode = oneOf(body.eurMode, EUR_SK_MODES, `${at} režim EUR SK`, "derived");
   if (saleCzk === undefined) fail(`${at}: chybí cena CZK.`);
@@ -802,6 +829,7 @@ export function parseSaleEntryInput(raw: unknown, index: number): SaleEntryInput
   return {
     catalogItemId,
     ...(variantId ? { variantId } : {}),
+    ...(variantSeries ? { variantSeries } : {}),
     priceMode,
     saleCzk,
     eurMode,
@@ -857,11 +885,11 @@ export function parsePurchaseEntryInput(raw: unknown, index: number): PurchaseEn
 }
 
 /** Duplicate (card, variant) rows would violate the unique index — reported up front. */
-export function duplicateRowKeys<T extends Readonly<{ catalogItemId: string; variantId?: string }>>(rows: readonly T[]): readonly string[] {
+export function duplicateRowKeys<T extends Readonly<{ catalogItemId: string; variantId?: string; variantSeries?: string }>>(rows: readonly T[]): readonly string[] {
   const seen = new Set<string>();
   const duplicates = new Set<string>();
   for (const row of rows) {
-    const key = `${row.catalogItemId}|${row.variantId ?? ""}`;
+    const key = `${row.catalogItemId}|${row.variantId ?? ""}|${row.variantSeries ?? ""}`;
     if (seen.has(key)) duplicates.add(key);
     seen.add(key);
   }

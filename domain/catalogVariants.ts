@@ -9,6 +9,7 @@
  * versioned price lists of V1-DATA-05 later, keyed by the variant id.
  */
 import { catalogUnitByCode } from "./catalogUnits.ts";
+import type { StoredAsset } from "./assets.ts";
 
 export const VARIANT_SET_KINDS = ["carpet", "finish", "color", "other"] as const;
 export type VariantSetKind = (typeof VARIANT_SET_KINDS)[number];
@@ -31,13 +32,35 @@ export const VARIANT_SURCHARGE_RULE_LABELS_CS: Readonly<Record<VariantSurchargeR
   fixed: "Pevný příplatek",
 };
 
+/**
+ * Supplier image provenance (V1-CARPET-02). A supplier photo is copied into our R2 only once the
+ * right to use it is confirmed (status approved); until then the variant keeps just the reference.
+ */
+export const VARIANT_IMAGE_STATUSES = ["pending_permission", "approved", "rejected"] as const;
+export type VariantImageStatus = (typeof VARIANT_IMAGE_STATUSES)[number];
+/** manualReview = the image could not be matched to the shade reliably (e.g. a differently named file) — never uploaded until a person confirms it. */
+export type VariantImageSource = Readonly<{ sourcePageUrl?: string; sourceImageUrl?: string; status: VariantImageStatus; manualReview?: boolean; note?: string }>;
+
+export const VARIANT_IMAGE_STATUS_LABELS_CS: Readonly<Record<VariantImageStatus, string>> = {
+  pending_permission: "Čeká na oprávnění k použití",
+  approved: "Použití schváleno",
+  rejected: "Použití zamítnuto",
+};
+
 export type CatalogVariant = Readonly<{
   id: string;
   variantSetId: string;
   code: string;
   name: string;
   nameEn?: string;
+  /** Product line inside the swatch book (PODIUM-PLAT, REVEXPO). Sale prices may be set per line. */
+  series?: string;
   swatchColor?: string;
+  /** Catalog swatch photo (R2). */
+  photoAsset?: StoredAsset;
+  /** Repeatable 3D floor texture (R2) — a photo is not automatically one. Absent = 3D uses swatchColor. */
+  textureAsset?: StoredAsset;
+  imageSource?: VariantImageSource;
   priceItemId?: string;
   surchargeRule: VariantSurchargeRule;
   surchargeUnitCode?: string;
@@ -63,7 +86,11 @@ export type CatalogVariantInput = Readonly<{
   code: string;
   name: string;
   nameEn?: string;
+  series?: string;
   swatchColor?: string;
+  photoAsset?: StoredAsset;
+  textureAsset?: StoredAsset;
+  imageSource?: VariantImageSource;
   priceItemId?: string;
   surchargeRule: VariantSurchargeRule;
   surchargeUnitCode?: string;
@@ -100,6 +127,29 @@ function text(raw: unknown, max = TEXT_MAX): string | undefined {
   return typeof raw === "string" && raw.trim() ? raw.trim().slice(0, max) : undefined;
 }
 
+/** Same shape check as a card's photoAsset (domain/catalogItemsAdmin.ts) — an R2 reference, never a URL. */
+export function isVariantAssetShape(value: unknown): value is StoredAsset {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.id === "string" && typeof candidate.storageKey === "string" && Boolean(candidate.storageKey) && typeof candidate.originalFileName === "string" && typeof candidate.mimeType === "string" && typeof candidate.size === "number" && typeof candidate.createdAt === "string";
+}
+
+function httpsUrl(raw: unknown): string | undefined {
+  const value = text(raw, 1000);
+  return value && /^https:\/\/\S+$/u.test(value) ? value : undefined;
+}
+
+export function parseVariantImageSource(raw: unknown): VariantImageSource | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  const status = (VARIANT_IMAGE_STATUSES as readonly unknown[]).includes(value.status) ? (value.status as VariantImageStatus) : "pending_permission";
+  const sourcePageUrl = httpsUrl(value.sourcePageUrl);
+  const sourceImageUrl = httpsUrl(value.sourceImageUrl);
+  const note = text(value.note, 500);
+  if (!sourcePageUrl && !sourceImageUrl && !note) return undefined;
+  return { ...(sourcePageUrl ? { sourcePageUrl } : {}), ...(sourceImageUrl ? { sourceImageUrl } : {}), status, ...(value.manualReview === true ? { manualReview: true } : {}), ...(note ? { note } : {}) };
+}
+
 /** Codes are upper-case identifiers ("KOBERCE-2026", "SEDA"); spaces become dashes, diacritics are dropped. */
 export function normalizeVariantCode(raw: unknown): string | undefined {
   if (typeof raw !== "string") return undefined;
@@ -130,6 +180,9 @@ export function parseCatalogVariantSetInput(raw: unknown): CatalogVariantSetInpu
     const label = `Varianta ${index + 1}`;
     if (!variantCode || !CODE_PATTERN.test(variantCode) || variantCode.length > CODE_MAX) issues.push(`${label}: interní kód barvy smí obsahovat jen velká písmena, číslice, - a _.`);
     if (!variantName) issues.push(`${label}: chybí název barvy.`);
+    const series = normalizeVariantCode(variant.series);
+    if (series && (!CODE_PATTERN.test(series) || series.length > CODE_MAX)) issues.push(`${label}: řada smí obsahovat jen velká písmena, číslice, - a _ (např. REVEXPO).`);
+    const imageSource = parseVariantImageSource(variant.imageSource);
     const swatchColor = text(variant.swatchColor, 7);
     if (swatchColor && !/^#[0-9a-fA-F]{6}$/u.test(swatchColor)) issues.push(`${label}: barva náhledu musí být ve tvaru #RRGGBB.`);
     const surchargeRule = (VARIANT_SURCHARGE_RULES as readonly unknown[]).includes(variant.surchargeRule) ? (variant.surchargeRule as VariantSurchargeRule) : "none";
@@ -141,7 +194,11 @@ export function parseCatalogVariantSetInput(raw: unknown): CatalogVariantSetInpu
       code: variantCode ?? "",
       name: variantName ?? "",
       ...(text(variant.nameEn) ? { nameEn: text(variant.nameEn)! } : {}),
+      ...(series ? { series } : {}),
       ...(swatchColor ? { swatchColor } : {}),
+      ...(isVariantAssetShape(variant.photoAsset) ? { photoAsset: variant.photoAsset } : {}),
+      ...(isVariantAssetShape(variant.textureAsset) ? { textureAsset: variant.textureAsset } : {}),
+      ...(imageSource ? { imageSource } : {}),
       ...(text(variant.priceItemId, 64) ? { priceItemId: text(variant.priceItemId, 64)! } : {}),
       surchargeRule,
       ...(surchargeRule === "per_unit" && surchargeUnitCode ? { surchargeUnitCode } : {}),
@@ -217,4 +274,65 @@ export function variantById(sets: readonly CatalogVariantSet[], variantId: strin
 
 export function activeVariants(set: CatalogVariantSet | undefined): readonly CatalogVariant[] {
   return (set?.variants ?? []).filter((variant) => variant.isActive).slice().sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, "cs"));
+}
+
+/** What a variant can show: our own photo, a supplier image still waiting for permission, or nothing. */
+export type VariantImageState = "photo" | "manual_review" | "pending_permission" | "rejected" | "missing";
+
+export function variantImageState(variant: Pick<CatalogVariant, "photoAsset" | "imageSource">): VariantImageState {
+  if (variant.photoAsset) return "photo";
+  if (variant.imageSource?.status === "rejected") return "rejected";
+  if (variant.imageSource?.manualReview) return "manual_review";
+  if (variant.imageSource?.status === "approved") return "missing";
+  if (variant.imageSource?.sourceImageUrl) return "pending_permission";
+  return "missing";
+}
+
+// ---------------------------------------------------------------------------------------------
+// Card ↔ swatch book (V1-CARPET-02): which colours a card offers. Stored in the card document
+// (document.variantOptions) — the swatch book stays one separately managed object.
+//   billed_by_card  the variants this card bills (variant.priceItemId = card): M01 → PLAT 020,
+//                   M02 → the other 55.
+//   all_variants    every active variant of the book whatever it is normally billed by: M04 (the
+//                   PVA carpet) may use all 56 colours, including PLAT 020.
+// ---------------------------------------------------------------------------------------------
+export const CARD_VARIANT_SCOPES = ["billed_by_card", "all_variants"] as const;
+export type CardVariantScope = (typeof CARD_VARIANT_SCOPES)[number];
+
+export const CARD_VARIANT_SCOPE_LABELS_CS: Readonly<Record<CardVariantScope, string>> = {
+  billed_by_card: "Barvy účtované touto kartou",
+  all_variants: "Všechny barvy vzorníku",
+};
+
+export type CardVariantOptions = Readonly<{ variantSetId: string; scope: CardVariantScope }>;
+
+export function parseCardVariantOptions(raw: unknown): CardVariantOptions | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  const variantSetId = text(value.variantSetId, 64);
+  if (!variantSetId) return undefined;
+  const scope = (CARD_VARIANT_SCOPES as readonly unknown[]).includes(value.scope) ? (value.scope as CardVariantScope) : "billed_by_card";
+  return { variantSetId, scope };
+}
+
+/** Variants a card offers (active only unless includeInactive), in book order. */
+export function variantsForCard(sets: readonly CatalogVariantSet[], cardId: string, options: CardVariantOptions | undefined, includeInactive = false): readonly CatalogVariant[] {
+  if (!options) return [];
+  const set = sets.find((candidate) => candidate.id === options.variantSetId);
+  if (!set) return [];
+  return set.variants
+    .filter((variant) => (includeInactive || variant.isActive) && (options.scope === "all_variants" || variant.priceItemId === cardId))
+    .slice()
+    .sort((a, b) => a.sortOrder - b.sortOrder || a.code.localeCompare(b.code, "cs"));
+}
+
+/** Product lines of the given variants, in first-appearance order. Variants without a line are grouped under "". */
+export function variantSeriesGroups(variants: readonly CatalogVariant[]): readonly Readonly<{ series: string; variants: readonly CatalogVariant[] }>[] {
+  const groups = new Map<string, CatalogVariant[]>();
+  for (const variant of variants) {
+    const key = variant.series ?? "";
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(variant);
+  }
+  return [...groups].map(([series, list]) => ({ series, variants: list }));
 }

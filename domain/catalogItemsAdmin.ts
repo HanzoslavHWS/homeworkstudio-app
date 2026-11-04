@@ -20,6 +20,7 @@ import {
 } from "./catalogItemTypes.ts";
 import type { CatalogPackageItem } from "./catalogPackages.ts";
 import { catalogUnitByCode, normalizeCatalogUnit } from "./catalogUnits.ts";
+import { parseCardVariantOptions, type CardVariantOptions } from "./catalogVariants.ts";
 import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
 import { isKnownTechnicalServiceCategory } from "./technicalServiceCatalog.ts";
@@ -176,6 +177,31 @@ function parseServiceTechnical(value: unknown): ServiceTechnicalMetadata | undef
 
 export function documentServiceTechnical(document: CatalogItemAdminDocument): ServiceTechnicalMetadata | undefined {
   return parseServiceTechnical(document.serviceTechnical);
+}
+
+/** Which colours of which swatch book the card offers (V1-CARPET-02) — see domain/catalogVariants.ts variantsForCard. */
+export function documentVariantOptions(document: CatalogItemAdminDocument): CardVariantOptions | undefined {
+  return parseCardVariantOptions(document.variantOptions);
+}
+
+/**
+ * Card usable only by explicit agreement (V1-CARPET-03): e.g. M04 "Koberec PVA" — 0 Kč for the
+ * customer, the cost is borne by `payerLabel` (PVA). Never offered as an ordinary cheaper choice;
+ * using it in a kit requires a stated reason (domain/catalogKitPricing.ts priceKit).
+ */
+export type CatalogUsageAgreement = Readonly<{ payerLabel: string; note?: string }>;
+
+export function parseUsageAgreement(raw: unknown): CatalogUsageAgreement | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const value = raw as Record<string, unknown>;
+  const payerLabel = typeof value.payerLabel === "string" ? value.payerLabel.trim().slice(0, 80) : "";
+  if (!payerLabel) return undefined;
+  const note = typeof value.note === "string" && value.note.trim() ? value.note.trim().slice(0, 500) : undefined;
+  return { payerLabel, ...(note ? { note } : {}) };
+}
+
+export function documentUsageAgreement(document: CatalogItemAdminDocument): CatalogUsageAgreement | undefined {
+  return parseUsageAgreement(document.usageAgreement);
 }
 
 // ============================================================================
@@ -917,6 +943,10 @@ export type CatalogItemAdminEdit = Readonly<{
   attributes?: CatalogItemAttributes | null;
   /** SERVICE technical metadata — whole-value replace, `null` = clear. */
   serviceTechnical?: ServiceTechnicalMetadata | null;
+  /** Barevné varianty (swatch book + scope) — whole-value replace, `null` = clear. */
+  variantOptions?: CardVariantOptions | null;
+  /** Použití jen na základě dohody (e.g. M04 — hradí PVA) — whole-value replace, `null` = clear. */
+  usageAgreement?: CatalogUsageAgreement | null;
   /** "Publikace v katalogu" — merge patch into document.catalogPublication; `null` resets the whole section (unpublishes). */
   catalogPublication?: CatalogPublicationEdit | null;
   /** Explicitly confirms the current card type (clears the import's "K zařazení" flag) without changing it. */
@@ -1071,6 +1101,8 @@ export function parseCatalogItemAdminEdit(body: unknown): CatalogItemAdminEdit {
   if ("serviceTechnical" in raw) {
     edit.serviceTechnical = raw.serviceTechnical === null ? null : (parseServiceTechnical(raw.serviceTechnical) ?? null);
   }
+  if ("variantOptions" in raw && raw.variantOptions !== undefined) edit.variantOptions = raw.variantOptions === null ? null : (parseCardVariantOptions(raw.variantOptions) ?? null);
+  if ("usageAgreement" in raw && raw.usageAgreement !== undefined) edit.usageAgreement = raw.usageAgreement === null ? null : (parseUsageAgreement(raw.usageAgreement) ?? null);
   if ("catalogPublication" in raw && raw.catalogPublication !== undefined) {
     edit.catalogPublication = raw.catalogPublication === null ? null : parseCatalogPublicationEdit(raw.catalogPublication);
   }
@@ -1151,6 +1183,10 @@ export function applyCatalogItemEdit(document: CatalogItemAdminDocument, edit: C
   else if (edit.attributes !== undefined) next.attributes = edit.attributes;
   if (edit.serviceTechnical === null) delete next.serviceTechnical;
   else if (edit.serviceTechnical !== undefined) next.serviceTechnical = edit.serviceTechnical;
+  if (edit.variantOptions === null) delete next.variantOptions;
+  else if (edit.variantOptions !== undefined) next.variantOptions = edit.variantOptions;
+  if (edit.usageAgreement === null) delete next.usageAgreement;
+  else if (edit.usageAgreement !== undefined) next.usageAgreement = edit.usageAgreement;
   if (edit.catalogPublication === null) delete next.catalogPublication;
   else if (edit.catalogPublication !== undefined) {
     next.catalogPublication = applyCatalogPublicationEdit(documentCatalogPublication(document), edit.catalogPublication);

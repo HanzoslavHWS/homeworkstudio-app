@@ -7,6 +7,7 @@ import {
   type SalePriceEntry,
   type VersionedPriceList,
 } from "./priceVersions.ts";
+import { variantSeriesGroups, type CatalogVariant } from "./catalogVariants.ts";
 
 /**
  * Catalog card → section "Ceny" (read-only overview). The card describes the component; the
@@ -36,7 +37,10 @@ export type CardSalePrices = Readonly<{
 
 /** The three sale prices of a card in one version. A missing price is "missing" (shown "K nacenění"), never 0. */
 export function cardSalePrices(version: PriceListVersion, entries: readonly SalePriceEntry[], catalogItemId: string): CardSalePrices {
-  const entry = findSaleEntry(entries.filter((candidate) => candidate.versionId === version.id), catalogItemId);
+  return salePricesOfEntry(version, findSaleEntry(entries.filter((candidate) => candidate.versionId === version.id), catalogItemId));
+}
+
+function salePricesOfEntry(version: PriceListVersion, entry: SalePriceEntry | undefined): CardSalePrices {
   const rate = version.eurRate;
   if (!entry) return { hasEntry: false, czk: { status: "missing" }, eurSk: { status: "missing", rate }, eurWorld: { status: "missing" } };
   const unit = entry.unitCode ? { unitCode: entry.unitCode } : {};
@@ -122,4 +126,38 @@ export function cardPurchaseListChoice(lists: readonly VersionedPriceList[]): Ca
   const candidates = listsOfKind(lists, "purchase");
   if (!candidates.length) return { kind: "purchase", lists: [], locked: true, warning: "Zatím není založený nákupní ceník." };
   return { kind: "purchase", lists: candidates, locked: candidates.length === 1 };
+}
+
+/**
+ * "Sazba podle barev" (V1-CARPET-03): the rate of each product line of the card's colours in ONE
+ * version — exactly the resolver's order (variant row -> product-line row -> card row). Colours with
+ * their own row are listed separately. Read only, nothing is stored.
+ */
+export type CardSeriesPrice = Readonly<{
+  series: string;
+  variantCount: number;
+  /** Which row decides the line's rate: its own product-line row, the card's general row, or none. */
+  source: "series" | "card" | "none";
+  prices: CardSalePrices;
+  /** Colours of this line priced by their own variant row. */
+  variantOverrides: readonly Readonly<{ variant: CatalogVariant; prices: CardSalePrices }>[];
+}>;
+
+export function cardSeriesPrices(version: PriceListVersion, entries: readonly SalePriceEntry[], catalogItemId: string, variants: readonly CatalogVariant[]): readonly CardSeriesPrice[] {
+  const rows = entries.filter((entry) => entry.versionId === version.id && entry.catalogItemId === catalogItemId);
+  return variantSeriesGroups(variants).map(({ series, variants: lineVariants }) => {
+    const seriesRow = series ? rows.find((entry) => !entry.variantId && entry.variantSeries === series) : undefined;
+    const cardRow = rows.find((entry) => !entry.variantId && !entry.variantSeries);
+    const decided = seriesRow ?? cardRow;
+    return {
+      series,
+      variantCount: lineVariants.length,
+      source: seriesRow ? "series" : cardRow ? "card" : "none",
+      prices: salePricesOfEntry(version, decided),
+      variantOverrides: lineVariants.flatMap((variant) => {
+        const own = rows.find((entry) => entry.variantId === variant.id);
+        return own ? [{ variant, prices: salePricesOfEntry(version, own) }] : [];
+      }),
+    };
+  });
 }

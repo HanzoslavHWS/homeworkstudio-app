@@ -69,6 +69,8 @@ type Row = Record<string, unknown>;
 const LIST_COLUMNS = "id, code, name, kind, is_active, note";
 const VERSION_COLUMNS = "id, price_list_id, version_no, revision, label, status, valid_from, valid_to, eur_rate, eur_rounding_mode, eur_rounding_step, based_on_version_id, note, created_by, published_at, published_by, archived_at, created_at";
 const SALE_ENTRY_COLUMNS = "id, version_id, catalog_item_id, variant_id, price_mode, sale_czk, eur_mode, sale_eur, sale_eur_world, unit_code, note";
+/** 20261103120000 (V1-CARPET-03): price of a product line. Reads fall back to SALE_ENTRY_COLUMNS before it. */
+const SALE_ENTRY_COLUMNS_V2 = `${SALE_ENTRY_COLUMNS}, variant_series`;
 const SURCHARGE_COLUMNS = "id, version_id, target_kind, variant_id, kit_item_id, line_key, substitute_item_id, substitute_variant_id, amount_czk, eur_mode, amount_eur, amount_eur_world, note";
 const PURCHASE_ENTRY_COLUMNS = "id, version_id, catalog_item_id, variant_id, purchase_czk, unit_code, note";
 const ASSIGNMENT_COLUMNS = "id, event_id, list_kind, price_list_version_id, assigned_at, assigned_by, note, replaced_at, replaced_by";
@@ -106,6 +108,7 @@ function rowToSaleEntry(row: Row): SalePriceEntry {
     versionId: row.version_id as string,
     catalogItemId: row.catalog_item_id as string,
     ...(str(row.variant_id) ? { variantId: row.variant_id as string } : {}),
+    ...(str(row.variant_series) ? { variantSeries: row.variant_series as string } : {}),
     priceMode: row.price_mode as SalePriceMode,
     ...(num(row.sale_czk) !== undefined ? { saleCzk: num(row.sale_czk) } : {}),
     eurMode: row.eur_mode as EurMode,
@@ -269,7 +272,9 @@ export function createSupabasePriceVersionRepository(client: SupabaseClient): Pr
     },
     async listSaleEntries(versionIds) {
       if (versionIds.length === 0) return [];
-      const rows = check(await client.from("price_list_entries").select(SALE_ENTRY_COLUMNS).in("version_id", [...versionIds]));
+      let result: { data: unknown; error: unknown } = await client.from("price_list_entries").select(SALE_ENTRY_COLUMNS_V2).in("version_id", [...versionIds]);
+      if (result.error && (result.error as { code?: string }).code === "42703") result = await client.from("price_list_entries").select(SALE_ENTRY_COLUMNS).in("version_id", [...versionIds]);
+      const rows = check(result);
       return (rows as Row[]).map(rowToSaleEntry);
     },
     async listSurcharges(versionIds) {
@@ -285,6 +290,8 @@ export function createSupabasePriceVersionRepository(client: SupabaseClient): Pr
           p_entries: entries.map((entry) => ({
             catalog_item_id: entry.catalogItemId,
             variant_id: entry.variantId ?? null,
+            // Ignored by the function before 20261103120000; a product-line row then cannot be saved as such.
+            ...(entry.variantSeries ? { variant_series: entry.variantSeries } : {}),
             price_mode: entry.priceMode,
             sale_czk: entry.saleCzk ?? null,
             eur_mode: entry.eurMode,

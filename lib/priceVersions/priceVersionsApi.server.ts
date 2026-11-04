@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from "next/server.js";
 import { requestHasPermission, type Permission, type PermissionCheck } from "../auth/permissions.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../db/supabase.server.ts";
 import { createSupabasePriceVersionRepository, PriceVersionConflictError, PriceVersionsNotMigratedError, type PriceVersionRepository } from "../db/priceVersions.supabase.ts";
-import { readCatalogPackageItems, readCatalogVariantSets } from "../db/catalogItemsAdmin.supabase.ts";
+import { readCatalogItemsAdmin, readCatalogPackageItems, readCatalogVariantSets } from "../db/catalogItemsAdmin.supabase.ts";
+import { documentUsageAgreement } from "../../domain/catalogItemsAdmin.ts";
 import type { CatalogPackageItem } from "../../domain/catalogPackages.ts";
 import type { CatalogVariantSet } from "../../domain/catalogVariants.ts";
 import type { KitLineSelection } from "../../domain/catalogKitPricing.ts";
@@ -44,7 +45,8 @@ import {
  */
 export type PriceVersionsApiDependencies = Readonly<{
   repository: () => PriceVersionRepository;
-  kitData: () => Promise<Readonly<{ variantSets: readonly CatalogVariantSet[]; packageItems: readonly CatalogPackageItem[] }>>;
+  /** agreementItemIds: cards usable only by explicit agreement (document.usageAgreement, e.g. M04 — the PVA carpet). */
+  kitData: () => Promise<Readonly<{ variantSets: readonly CatalogVariantSet[]; packageItems: readonly CatalogPackageItem[]; agreementItemIds?: readonly string[] }>>;
   hasPermission: PermissionCheck;
 }>;
 
@@ -52,8 +54,8 @@ export const defaultPriceVersionsApiDependencies: PriceVersionsApiDependencies =
   repository: () => createSupabasePriceVersionRepository(createSupabaseServerClient()),
   kitData: async () => {
     const client = createSupabaseServerClient();
-    const [variantSets, packageItems] = await Promise.all([readCatalogVariantSets(client), readCatalogPackageItems(client)]);
-    return { variantSets, packageItems };
+    const [variantSets, packageItems, items] = await Promise.all([readCatalogVariantSets(client), readCatalogPackageItems(client), readCatalogItemsAdmin(client)]);
+    return { variantSets, packageItems, agreementItemIds: items.filter((item) => documentUsageAgreement(item.document)).map((item) => item.id) };
   },
   hasPermission: requestHasPermission,
 };
@@ -355,7 +357,10 @@ export async function handleSaleResolve(request: NextRequest, dependencies: Pric
     };
     const [base, electricity, items] = await Promise.all([book(versionIds.base, "base"), book(versionIds.electricity, "electricity"), repository.listPricingItems()]);
     const categoryById = new Map(items.map((item) => [item.id, item.priceCategory]));
-    const context: VersionedPricingContext = { track, ...(base ? { base } : {}), ...(electricity ? { electricity } : {}), priceCategoryOf: (id) => categoryById.get(id) };
+    // Swatch books resolve a variant's product line (variant row -> product line -> card row).
+    const kitData = await dependencies.kitData();
+    const seriesByVariant = new Map(kitData.variantSets.flatMap((set) => set.variants.flatMap((variant) => (variant.series ? [[variant.id, variant.series] as const] : []))));
+    const context: VersionedPricingContext = { track, ...(base ? { base } : {}), ...(electricity ? { electricity } : {}), priceCategoryOf: (id) => categoryById.get(id), variantSeriesOf: (variantId) => seriesByVariant.get(variantId) };
     const requested = Array.isArray(body.items) ? body.items : [];
     const results = requested
       .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === "object" && typeof (entry as Record<string, unknown>).catalogItemId === "string")
@@ -364,9 +369,8 @@ export async function handleSaleResolve(request: NextRequest, dependencies: Pric
     let kit;
     const kitItemId = text(body.kitItemId);
     if (kitItemId) {
-      const kitData = await dependencies.kitData();
       const selections = (Array.isArray(body.selections) ? body.selections : []).filter((selection): selection is KitLineSelection => Boolean(selection) && typeof (selection as KitLineSelection).lineKey === "string");
-      kit = priceKitVersioned({ context, kitItemId, lines: kitData.packageItems.filter((line) => line.packageItemId === kitItemId), variantSets: kitData.variantSets, selections });
+      kit = priceKitVersioned({ context, kitItemId, lines: kitData.packageItems.filter((line) => line.packageItemId === kitItemId), variantSets: kitData.variantSets, selections, agreementItemIds: new Set(kitData.agreementItemIds ?? []) });
     }
     return NextResponse.json({ track, currency: currencyOfTrack(track), versionIds, results, ...(kit ? { kit } : {}) });
   } catch (error) {

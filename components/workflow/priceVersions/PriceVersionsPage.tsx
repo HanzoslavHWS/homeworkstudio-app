@@ -272,6 +272,8 @@ type EntryDraft = Readonly<{
   key: string;
   catalogItemId: string;
   variantId: string;
+  /** Product line (e.g. REVEXPO) — never together with variantId. */
+  variantSeries: string;
   priceMode: SalePriceMode;
   saleCzk: string;
   /** EUR_SK: derived from CZK, or manual (saleEur). */
@@ -301,6 +303,7 @@ function entryToDraft(entry: SalePriceEntry): EntryDraft {
     key: entry.id,
     catalogItemId: entry.catalogItemId,
     variantId: entry.variantId ?? "",
+    variantSeries: entry.variantSeries ?? "",
     priceMode: entry.priceMode,
     saleCzk: amountText(entry.saleCzk),
     // Legacy direct rows: their EUR price is EUR_WORLD and EUR_SK is derived (same as the resolver).
@@ -316,6 +319,7 @@ function draftToEntryInput(draft: EntryDraft): Record<string, unknown> {
   return {
     catalogItemId: draft.catalogItemId,
     variantId: draft.variantId || undefined,
+    variantSeries: draft.variantId ? undefined : draft.variantSeries || undefined,
     priceMode: draft.priceMode,
     saleCzk: draft.priceMode === "fixed" ? draft.saleCzk : undefined,
     eurMode: draft.priceMode === "fixed" ? draft.eurMode : "none",
@@ -441,7 +445,7 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
   function addEntry() {
     const item = itemById.get(newItemId);
     if (!item) return;
-    setEntries((current) => [...current, { key: nextKey(), catalogItemId: item.id, variantId: "", priceMode: "fixed", saleCzk: "", eurMode: "derived", saleEur: "", saleEurWorld: "", unitCode: item.unitCode ?? "", note: "" }]);
+    setEntries((current) => [...current, { key: nextKey(), catalogItemId: item.id, variantId: "", variantSeries: "", priceMode: "fixed", saleCzk: "", eurMode: "derived", saleEur: "", saleEurWorld: "", unitCode: item.unitCode ?? "", note: "" }]);
     setNewItemId("");
     setDirty(true);
   }
@@ -486,7 +490,7 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
       const primary = sort.key === "code" ? comparePriceItemsByCode(itemA, itemB) : (itemA?.displayName ?? "").localeCompare(itemB?.displayName ?? "", "cs") || comparePriceItemsByCode(itemA, itemB);
       return sort.direction * primary || variantName(a.variantId).localeCompare(variantName(b.variantId), "cs");
     });
-  const usedItemIds = new Set(entries.filter((entry) => !entry.variantId).map((entry) => entry.catalogItemId));
+  const usedItemIds = new Set(entries.filter((entry) => !entry.variantId && !entry.variantSeries).map((entry) => entry.catalogItemId));
 
   return (
     <>
@@ -527,14 +531,26 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
               <tbody>
                 {visibleEntries.map((entry) => {
                   const variants = allVariants.filter((variant) => variant.priceItemId === entry.catalogItemId);
+                  // Product lines of this card's colours (REVEXPO …): one price for the whole line.
+                  const seriesOptions = [...new Set(variants.flatMap((variant) => (variant.series ? [variant.series] : [])))];
+                  const scopeValue = entry.variantId ? `variant:${entry.variantId}` : entry.variantSeries ? `series:${entry.variantSeries}` : "";
                   return (
                     <tr key={entry.key}>
                       <ItemCodeCell item={itemById.get(entry.catalogItemId)} />
                       <td>{itemName(itemById.get(entry.catalogItemId), entry.catalogItemId)}</td>
                       <td>
-                        <select value={entry.variantId} onChange={(event) => patchEntry(entry.key, { variantId: event.target.value })} disabled={!editable || variants.length === 0}>
+                        <select
+                          aria-label="Varianta"
+                          value={scopeValue}
+                          onChange={(event) => {
+                            const [kind, id] = [event.target.value.slice(0, event.target.value.indexOf(":")), event.target.value.slice(event.target.value.indexOf(":") + 1)];
+                            patchEntry(entry.key, kind === "variant" ? { variantId: id, variantSeries: "" } : kind === "series" ? { variantId: "", variantSeries: id } : { variantId: "", variantSeries: "" });
+                          }}
+                          disabled={!editable || variants.length === 0}
+                        >
                           <option value="">všechny varianty</option>
-                          {variants.map((variant) => <option key={variant.id} value={variant.id}>{variant.setName} · {variant.name}</option>)}
+                          {seriesOptions.map((series) => <option key={series} value={`series:${series}`}>řada {series} (všechny její barvy)</option>)}
+                          {variants.map((variant) => <option key={variant.id} value={`variant:${variant.id}`}>{variant.setName} · {variant.name}</option>)}
                         </select>
                       </td>
                       <td>

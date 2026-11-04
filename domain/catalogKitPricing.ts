@@ -18,6 +18,13 @@
  *     Colours sharing one ABF card (M02) can therefore still cost differently (per_unit).
  *   - With a substitute chosen, the substitute's rule applies and its variant (if any) is used.
  *   - A missing price never invents an amount: the line is "missing" and the kit needs a quote.
+ *   - V1-CARPET-03: prices are resolved per card AND variant (variant row -> product line -> card),
+ *     and a chosen variant bills through its own card (variant.priceItemId): M01 line + REVEXPO
+ *     colour = M02 at the REVEXPO price, surcharge (240 − 190) × m². The result line names that
+ *     card (effectiveItemId), so exports carry the right ABF code.
+ *   - A substitute without a fixed variant accepts any active colour of the line's swatch book
+ *     (M04 in any of the 56 colours). A card that may only be used by agreement (M04 — the PVA
+ *     carpet) is applied only with a stated reason; without one the original line stays.
  */
 import type { CatalogPackageItem, KitSubstituteRule, PackageUnitPrice } from "./catalogPackages.ts";
 import { variantById, type CatalogVariant, type CatalogVariantSet, type VariantSurchargeRule } from "./catalogVariants.ts";
@@ -29,6 +36,8 @@ export type KitLineSelection = Readonly<{
   substituteVariantId?: string;
   /** Chosen variant of the line's swatch book (no substitute). */
   variantId?: string;
+  /** Why an agreement-only card (M04) is used — required for it, kept on the result line. */
+  reason?: string;
 }>;
 
 export type KitSurchargeRef =
@@ -36,8 +45,8 @@ export type KitSurchargeRef =
   | Readonly<{ kind: "substitute"; lineKey: string; substituteItemId: string; substituteVariantId?: string; substituteId?: string }>;
 
 export type KitPriceResolver = Readonly<{
-  /** Unit price of a catalog card (same shape as pricePackage's resolver). */
-  unitPrice: (itemId: string) => PackageUnitPrice;
+  /** Unit price of a catalog card, optionally of one of its variants (same shape as pricePackage's resolver). */
+  unitPrice: (itemId: string, variantId?: string) => PackageUnitPrice;
   /** Amount of a fixed / per-unit surcharge. Undefined = not priced yet. */
   surchargeAmount?: (ref: KitSurchargeRef) => number | undefined;
 }>;
@@ -66,6 +75,8 @@ export type KitPricedLine = Readonly<{
   baseNet: number;
   surcharge?: KitSurcharge;
   totalNet: number;
+  /** The line was switched to an agreement-only card (M04); its stated reason. */
+  agreement?: Readonly<{ reason: string }>;
 }>;
 
 export type KitPriceResult = Readonly<{
@@ -109,6 +120,8 @@ export function priceKit(input: Readonly<{
   variantSets?: readonly CatalogVariantSet[];
   selections?: readonly KitLineSelection[];
   resolver: KitPriceResolver;
+  /** Cards usable only by explicit agreement (document.usageAgreement, e.g. M04). */
+  agreementItemIds?: ReadonlySet<string>;
 }>): KitPriceResult {
   const issues: string[] = [];
   const selectionByKey = new Map<string, KitLineSelection>();
@@ -117,7 +130,7 @@ export function priceKit(input: Readonly<{
     else selectionByKey.set(selection.lineKey, selection);
   }
   const sets = input.variantSets ?? [];
-  const priceOf = (itemId: string | undefined) => (itemId ? fixedPrice(input.resolver.unitPrice(itemId)) : undefined);
+  const priceOf = (itemId: string | undefined, variantId?: string) => (itemId ? fixedPrice(input.resolver.unitPrice(itemId, variantId)) : undefined);
   let totalNet = input.kitPriceNet;
   let needsQuote = false;
 
@@ -127,10 +140,25 @@ export function priceKit(input: Readonly<{
       return { ...common, effectiveItemId: null, substituted: false, includedInPackage: true, status: "included", baseNet: 0, totalNet: 0 };
     }
     const selection = selectionByKey.get(line.lineKey);
-    const substitute = selection?.substituteItemId
-      ? (line.substitutes ?? []).find((candidate) => candidate.isActive !== false && candidate.substituteItemId === selection.substituteItemId && (candidate.substituteVariantId ?? undefined) === (selection.substituteVariantId ?? undefined))
+    // A substitute with no fixed variant accepts any active colour of the line's own swatch book.
+    const lineSetVariant = (variantId: string | undefined) => {
+      const candidate = variantById(sets, variantId);
+      return candidate && candidate.isActive && candidate.variantSetId === line.variantSetId ? candidate : undefined;
+    };
+    let substitute = selection?.substituteItemId
+      ? (line.substitutes ?? []).find((candidate) => {
+          if (candidate.isActive === false || candidate.substituteItemId !== selection.substituteItemId) return false;
+          if (candidate.substituteVariantId) return candidate.substituteVariantId === selection.substituteVariantId;
+          return !selection.substituteVariantId || Boolean(lineSetVariant(selection.substituteVariantId));
+        })
       : undefined;
     if (selection?.substituteItemId && !substitute) issues.push(`Řádek „${line.lineKey}“: zvolená náhrada není povolená, použita původní komponenta.`);
+    const reason = selection?.reason?.trim();
+    if (substitute && input.agreementItemIds?.has(substitute.substituteItemId) && !reason) {
+      issues.push(`Řádek „${line.lineKey}“: tuto položku lze použít jen na základě dohody — uveďte důvod. Použita původní komponenta.`);
+      substitute = undefined;
+    }
+    const substituteVariantId = substitute ? substitute.substituteVariantId ?? selection?.substituteVariantId : undefined;
 
     let variant: CatalogVariant | undefined;
     if (!substitute && selection?.variantId) {
@@ -139,21 +167,22 @@ export function priceKit(input: Readonly<{
       else issues.push(`Řádek „${line.lineKey}“: varianta nepatří do vzorníku řádku, použita výchozí.`);
     }
     const defaultVariant = variantById(sets, line.defaultVariantId);
-    const effectiveItemId = substitute?.substituteItemId ?? line.childItemId;
-    const effectiveVariantId = substitute ? substitute.substituteVariantId : (variant ?? defaultVariant)?.id;
+    // A chosen colour bills through its own card (M01 line + REVEXPO colour -> M02).
+    const effectiveItemId = substitute?.substituteItemId ?? (variant?.priceItemId ?? line.childItemId);
+    const effectiveVariantId = substitute ? substituteVariantId : (variant ?? defaultVariant)?.id;
     const effectiveQuantity = substitute ? line.quantity * substitute.quantityFactor : line.quantity;
 
     let surcharge: KitSurcharge | undefined;
     if (substitute) {
       if (!line.includedInPackage) surcharge = undefined; // an optional line simply costs its new component
-      else if (substitute.surchargeRule === "price_difference") surcharge = differenceSurcharge("substitute", priceOf(substitute.substituteItemId), priceOf(line.childItemId), effectiveQuantity, line.quantity);
+      else if (substitute.surchargeRule === "price_difference") surcharge = differenceSurcharge("substitute", priceOf(substitute.substituteItemId, substituteVariantId), priceOf(line.childItemId, defaultVariant?.id), effectiveQuantity, line.quantity);
       else if (substitute.surchargeRule === "none") surcharge = { source: "substitute", rule: "none", amountNet: 0 };
       else {
         const amount = input.resolver.surchargeAmount?.({ kind: "substitute", lineKey: line.lineKey, substituteItemId: substitute.substituteItemId, ...(substitute.substituteVariantId ? { substituteVariantId: substitute.substituteVariantId } : {}), ...(substitute.id ? { substituteId: substitute.id } : {}) });
         surcharge = amountSurcharge("substitute", substitute.surchargeRule, amount, effectiveQuantity, line.unitCode, substitute.surchargeUnitCode);
       }
     } else if (variant && variant.id !== defaultVariant?.id) {
-      if (variant.surchargeRule === "price_difference") surcharge = differenceSurcharge("variant", priceOf(variant.priceItemId), priceOf(defaultVariant?.priceItemId ?? line.childItemId), line.quantity, line.quantity);
+      if (variant.surchargeRule === "price_difference") surcharge = differenceSurcharge("variant", priceOf(variant.priceItemId ?? line.childItemId, variant.id), priceOf(defaultVariant?.priceItemId ?? line.childItemId, defaultVariant?.id), line.quantity, line.quantity);
       else if (variant.surchargeRule === "none") surcharge = { source: "variant", rule: "none", amountNet: 0 };
       else surcharge = amountSurcharge("variant", variant.surchargeRule, input.resolver.surchargeAmount?.({ kind: "variant", variantId: variant.id, lineKey: line.lineKey }), line.quantity, line.unitCode, variant.surchargeUnitCode);
     }
@@ -161,7 +190,7 @@ export function priceKit(input: Readonly<{
     let status: KitPricedLine["status"] = "included";
     let baseNet = 0;
     if (!line.includedInPackage) {
-      const unit = input.resolver.unitPrice(effectiveItemId);
+      const unit = input.resolver.unitPrice(effectiveItemId, effectiveVariantId);
       if (unit?.priceMode === "individual") status = "individual";
       else if (unit?.priceMode !== "included" && unit?.salePrice === undefined) status = "missing";
       else if (unit?.priceMode === "included") status = "included";
@@ -185,6 +214,7 @@ export function priceKit(input: Readonly<{
       baseNet,
       ...(surcharge ? { surcharge } : {}),
       totalNet: lineTotal,
+      ...(substitute && reason && input.agreementItemIds?.has(substitute.substituteItemId) ? { agreement: { reason } } : {}),
     };
   });
   return { lines, totalNet, needsQuote, issues };

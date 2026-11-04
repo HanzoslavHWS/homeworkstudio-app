@@ -15,6 +15,7 @@ import {
   documentGalleryPhotoAssets,
   documentPhotoAsset,
   documentServiceTechnical,
+  documentVariantOptions,
   documentPhotoUrl,
   documentReviewedAt,
   documentSourceAssets,
@@ -59,6 +60,8 @@ import { catalogTypeHasField } from "../../domain/catalogItemFields";
 import { CatalogAliasesSection } from "./CatalogAliasesSection";
 import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
 import { useAssetUrl } from "../../hooks/useAssetUrl";
+import { CatalogCardVariants } from "./CatalogCardVariants";
+import { variantsForCard } from "../../domain/catalogVariants";
 import { CatalogCardPrices } from "./CatalogCardPrices";
 import { categoriesForGroup, classificationIssue, classificationTarget, COMPONENT_GROUP_HINTS_CS, COMPONENT_GROUP_LABELS_CS, COMPONENT_GROUP_TARGETS, COMPONENT_GROUPS, derivedPriceCategory, findCategory, groupOfCard, isComponentGroup, type CardGroup, type ComponentGroup } from "../../domain/catalogClassification";
 import { useCatalogCategories } from "../../lib/db/catalogCategories.remoteApi.client";
@@ -1476,9 +1479,14 @@ export function ComponentAdminDetail({
           />
         )}
 
+        {(item.kind === "floor_finish" || documentVariantOptions(item.document) || (variantSets ?? []).some((set) => set.variants.some((variant) => variant.priceItemId === item.id))) && (
+          <CatalogCardVariants key={`${item.id}-${item.updatedAt}`} item={item} variantSets={variantSets ?? []} allItems={allItems} onSave={onSave} />
+        )}
+
         <CatalogCardPrices
           refreshKey={item.updatedAt}
           catalogItemId={item.id}
+          variants={variantsForCard(variantSets ?? [], item.id, documentVariantOptions(item.document))}
           itemFilter={item.abfCode ?? item.internalCode ?? item.displayName}
           legacy={pricing}
           onOpenPriceVersion={onOpenPriceVersion}

@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { type CatalogVariant } from "../../domain/catalogVariants";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import {
   cardPurchaseListChoice,
   cardPurchasePrice,
   cardSaleListChoice,
   cardSalePrices,
+  cardSeriesPrices,
   defaultCardVersion,
   type CardListChoice,
   type CardPriceCell,
@@ -110,7 +112,10 @@ export function CatalogCardPrices({
   legacy,
   onOpenPriceVersion,
   onOpenLegacyPricing,
+  variants = [],
 }: {
+  /** The card's colours (V1-CARPET-03): their rate per product line is shown for the chosen version. */
+  variants?: readonly CatalogVariant[];
   /** Changes when the card is saved (e.g. a new service type → price category): reloads the price classification. */
   refreshKey?: string;
   catalogItemId: string;
@@ -162,6 +167,7 @@ export function CatalogCardPrices({
   }, [purchaseApi, purchaseVersion, purchaseRows]);
 
   const salePrices = saleVersion && saleRows[saleVersion.id] ? cardSalePrices(saleVersion, saleRows[saleVersion.id]!, catalogItemId) : undefined;
+  const seriesPrices = saleVersion && saleRows[saleVersion.id] && variants.length > 0 ? cardSeriesPrices(saleVersion, saleRows[saleVersion.id]!, catalogItemId, variants) : undefined;
   const purchasePrice = purchaseVersion && purchaseRows[purchaseVersion.id] ? cardPurchasePrice(purchaseVersion, purchaseRows[purchaseVersion.id]!, catalogItemId) : undefined;
 
   /**
@@ -237,6 +243,46 @@ export function CatalogCardPrices({
           </dl>
         )}
         {salePrices && !salePrices.hasEntry && <p className="fieldHint">Komponenta v této verzi ceníku nemá řádek.</p>}
+        {seriesPrices && (
+          <div className="catalogCardSeriesPrices">
+            <h4>Sazba podle barev <span className="fieldHint">· pořadí: cena barvy → cena řady → základní cena karty</span></h4>
+            <table className="priceVersionTable">
+              <thead><tr><th>Řada</th><th>Barev</th><th>CZK</th><th>EUR SK</th><th>EUR WORLD</th><th>Zdroj</th></tr></thead>
+              <tbody>
+                {seriesPrices.map((row) => {
+                  // Every colour of the line has its own row (e.g. M01 = only PLAT 020): the line itself needs no price.
+                  const onlyVariantPrices = row.source === "none" && row.variantOverrides.length === row.variantCount;
+                  return (
+                    <Fragment key={row.series}>
+                      <tr>
+                        <td>{row.series || "bez řady"}</td>
+                        <td>{row.variantCount}</td>
+                        {onlyVariantPrices ? <td colSpan={3} className="fieldHint">ceny jednotlivých barev — viz níže</td> : (
+                          <>
+                            <td><CellValue cell={row.prices.czk} currency="CZK" /></td>
+                            <td><CellValue cell={row.prices.eurSk} currency="EUR" /></td>
+                            <td><CellValue cell={row.prices.eurWorld} currency="EUR" /></td>
+                          </>
+                        )}
+                        <td className="fieldHint">{row.source === "series" ? "cena řady" : row.source === "card" ? "základní cena karty" : onlyVariantPrices ? "cena barvy" : "chybí řádek"}</td>
+                      </tr>
+                      {row.variantOverrides.map((override) => (
+                        <tr key={override.variant.id} className="catalogCardSeriesVariantRow">
+                          <td>↳ {override.variant.code}</td>
+                          <td />
+                          <td><CellValue cell={override.prices.czk} currency="CZK" /></td>
+                          <td><CellValue cell={override.prices.eurSk} currency="EUR" /></td>
+                          <td><CellValue cell={override.prices.eurWorld} currency="EUR" /></td>
+                          <td className="fieldHint">cena barvy</td>
+                        </tr>
+                      ))}
+                    </Fragment>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
         <div className="assetActions">
           {openButton("sale", saleSelection.listId, saleVersion)}
           {saleVersion && saleVersion.status !== "draft" && <span className="fieldHint">Verze je {saleVersion.status === "published" ? "publikovaná" : "archivovaná"} a neměnná — v ceníku ji lze jen prohlížet; změna ceny = nová verze (v ceníku „Kopírovat do nové verze“).</span>}
