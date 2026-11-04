@@ -388,6 +388,37 @@ export default function BoothGenerator() {
   // active+ready+generatorEligible+placeable booth components right now.
   const [dbBoothComponents, setDbBoothComponents] = useState<readonly ComponentDefinition[] | null>(null);
   const [boothComponentsError, setBoothComponentsError] = useState("");
+  // A catalog card activated while the generator is open must appear without F5: the booth picker
+  // and the booth-component picker are reloaded on a new project and when leaving the catalog
+  // administration (Katalog komponent / Knihovna stánků). While a reload runs the previous lists
+  // stay visible and "no active booths" is never shown; a slower, older reload never overwrites a
+  // newer one. The project itself (selection, scene, edits) is never touched.
+  const [generatorCatalogReloading, setGeneratorCatalogReloading] = useState(false);
+  const generatorCatalogReloadSeq = useRef(0);
+  const reloadGeneratorCatalog = useCallback(async () => {
+    const seq = ++generatorCatalogReloadSeq.current;
+    setGeneratorCatalogReloading(true);
+    try {
+      const catalogItems = await catalogItemsAdminRepositoryRef.current.list();
+      if (seq !== generatorCatalogReloadSeq.current) return;
+      setDbBoothTypes(selectGeneratorBooths(catalogItems));
+      setDbSavedProjectBoothTypes(selectSavedProjectBooths(catalogItems));
+      setBoothsError("");
+      // Same fetched list, same failure-visibility rule as the booth picker above — a
+      // dedicated try/catch so a booth-component adapt error can never silently blank the
+      // (already-succeeded) booth picker or vice versa.
+      setDbBoothComponents(selectGeneratorBoothComponents(catalogItems));
+      setBoothComponentsError("");
+    } catch (error) {
+      if (seq !== generatorCatalogReloadSeq.current) return;
+      setBoothsError(error instanceof Error ? error.message : "Typové stánky se nepodařilo načíst.");
+      setDbBoothTypes([]);
+      setBoothComponentsError(error instanceof Error ? error.message : "Komponenty stánku se nepodařilo načíst.");
+      setDbBoothComponents([]);
+    } finally {
+      if (seq === generatorCatalogReloadSeq.current) setGeneratorCatalogReloading(false);
+    }
+  }, []);
   const [step, setStep] =
     useState(1);
 
@@ -626,24 +657,7 @@ export default function BoothGenerator() {
         // Generator booth picker: UNLIKE technical-service pricing above, a failure here must
         // stay VISIBLE (boothsError), never silently leave the picker empty/stale — see section
         // "API FAILURE": production must never quietly show static demo data as if it were live.
-        try {
-          const catalogItems = await catalogItemsAdminRepositoryRef.current.list();
-          if (cancelled) return;
-          setDbBoothTypes(selectGeneratorBooths(catalogItems));
-          setDbSavedProjectBoothTypes(selectSavedProjectBooths(catalogItems));
-          setBoothsError("");
-          // Same fetched list, same failure-visibility rule as the booth picker above — a
-          // dedicated try/catch so a booth-component adapt error can never silently blank the
-          // (already-succeeded) booth picker or vice versa.
-          setDbBoothComponents(selectGeneratorBoothComponents(catalogItems));
-          setBoothComponentsError("");
-        } catch (error) {
-          if (cancelled) return;
-          setBoothsError(error instanceof Error ? error.message : "Typové stánky se nepodařilo načíst.");
-          setDbBoothTypes([]);
-          setBoothComponentsError(error instanceof Error ? error.message : "Komponenty stánku se nepodařilo načíst.");
-          setDbBoothComponents([]);
-        }
+        await reloadGeneratorCatalog();
         return;
       }
 
@@ -672,8 +686,19 @@ export default function BoothGenerator() {
     init();
     return () => {
       cancelled = true;
+      // An unmounted generator ignores any catalog reload still in flight.
+      generatorCatalogReloadSeq.current += 1;
     };
-  }, []);
+  }, [reloadGeneratorCatalog]);
+
+  // Leaving the catalog administration (Katalog komponent / Knihovna stánků) by ANY route — the
+  // side menu, the workflow stepper, opening a project: a card may have been activated there.
+  const previousWorkspaceSectionRef = useRef(workspaceSection);
+  useEffect(() => {
+    const previous = previousWorkspaceSectionRef.current;
+    previousWorkspaceSectionRef.current = workspaceSection;
+    if ((previous === "components" || previous === "booths") && workspaceSection !== previous && persistenceMode === "db") void reloadGeneratorCatalog();
+  }, [workspaceSection, persistenceMode, reloadGeneratorCatalog]);
 
   useEffect(() => {
     const cancelTool = (event: KeyboardEvent) => {
@@ -1370,6 +1395,8 @@ export default function BoothGenerator() {
     }
     setWorkspaceSection("project");
     setStep(1);
+    // A new project always offers the booths / components active right now (no F5 after activating one).
+    if (persistenceMode === "db") void reloadGeneratorCatalog();
 
     setProjectId("");
     setProjectName("Nový projekt");
@@ -3644,13 +3671,13 @@ export default function BoothGenerator() {
                     </p>
                   </div>
 
-                  {dbBoothTypes === null && (
+                  {(dbBoothTypes === null || (generatorCatalogReloading && dbBoothTypes.length === 0)) && (
                     <p className="workspaceEmpty">Načítám typové stánky…</p>
                   )}
                   {dbBoothTypes !== null && boothsError && (
                     <p className="uploadError persistenceBanner">Typové stánky se nepodařilo načíst: {boothsError}</p>
                   )}
-                  {dbBoothTypes !== null && !boothsError && dbBoothTypes.length === 0 && (
+                  {dbBoothTypes !== null && !boothsError && !generatorCatalogReloading && dbBoothTypes.length === 0 && (
                     <p className="workspaceEmpty">Pro tento výběr nejsou dostupné žádné aktivní stánky.</p>
                   )}
                   {selectedBoothIsArchived && selectedBooth && (

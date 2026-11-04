@@ -486,3 +486,17 @@ test("BoothGenerator.tsx's selectedBooth lookup uses resolveGeneratorBooth (id-o
   assert.match(source, /const selectedBooth =\s*\n?\s*type === "individualni" \? individualBooth : resolveGeneratorBooth\(savedProjectBoothTypes, selectedBoothId\);/u);
   assert.match(source, /setDbSavedProjectBoothTypes\(selectSavedProjectBooths\(catalogItems\)\)/u);
 });
+
+test("V1-COMPLETE-02: generátor obnoví katalog stánků při startu, novém projektu a odchodu z katalogu — bez falešného „žádné aktivní stánky“", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const source = await readFile(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
+  const calls = source.match(/reloadGeneratorCatalog\(\)/gu) ?? [];
+  assert.ok(calls.length >= 3, "start + nový projekt + odchod z katalogu");
+  const startNewProject = source.slice(source.indexOf("function startNewProject()"), source.indexOf("function startNewProject()") + 600);
+  assert.match(startNewProject, /reloadGeneratorCatalog\(\)/u);
+  assert.match(source, /previous === "components" \|\| previous === "booths"\) && workspaceSection !== previous[^\n]*reloadGeneratorCatalog\(\)/u, "odchod z katalogu jakoukoli cestou");
+  assert.match(source, /!generatorCatalogReloading && dbBoothTypes\.length === 0/u, "během obnovy se prázdný výběr nehlásí");
+  assert.match(source, /seq !== generatorCatalogReloadSeq\.current/u, "starší obnova nepřepíše novější");
+  const reload = source.slice(source.indexOf("const reloadGeneratorCatalog"), source.indexOf("}, []);", source.indexOf("const reloadGeneratorCatalog")));
+  assert.doesNotMatch(reload, /setSelectedBoothId|setProject|setPlacedComponents|setStep/u, "obnova katalogu nesahá na projekt");
+});

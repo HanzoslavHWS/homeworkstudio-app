@@ -915,6 +915,16 @@ function TestResolveTab({ register, api }: { register: SalePriceRegister; api: S
                 {setVariants.filter((variant) => variant.isActive && variant.id !== line.defaultVariantId).map((variant) => <option key={variant.id} value={`var|${variant.id}`}>Barva: {variant.name}</option>)}
                 {(line.substitutes ?? []).filter((substitute) => substitute.isActive !== false).map((substitute) => <option key={`${substitute.substituteItemId}-${substitute.substituteVariantId ?? ""}`} value={`sub|${substitute.substituteItemId}|${substitute.substituteVariantId ?? ""}`}>Náhrada: {itemLabel(itemById.get(substitute.substituteItemId))}</option>)}
               </select>
+              {/* A substitute without a fixed colour (e.g. M04) takes any colour of the line swatch book; an agreement-only card needs a reason. */}
+              {selection?.substituteItemId && !(line.substitutes ?? []).some((substitute) => substitute.substituteItemId === selection.substituteItemId && substitute.substituteVariantId) && setVariants.length > 0 && (
+                <select aria-label="Barva náhrady" value={selection.substituteVariantId ?? ""} onChange={(event) => setSelections({ ...selections, [line.lineKey]: { ...selection, substituteVariantId: event.target.value || undefined } })}>
+                  <option value="">— barva —</option>
+                  {setVariants.filter((variant) => variant.isActive).map((variant) => <option key={variant.id} value={variant.id}>Barva: {variant.name}</option>)}
+                </select>
+              )}
+              {selection?.substituteItemId && (
+                <input aria-label="Důvod náhrady" value={selection.reason ?? ""} onChange={(event) => setSelections({ ...selections, [line.lineKey]: { ...selection, reason: event.target.value } })} placeholder="Důvod / dohoda (povinné u položek jen na dohodu, např. M04)" />
+              )}
             </label>
           );
         })}
@@ -951,7 +961,7 @@ function TestResolveTab({ register, api }: { register: SalePriceRegister; api: S
                 {response.kit.lines.map((line) => (
                   <tr key={line.lineKey}>
                     <td>{line.lineKey}</td>
-                    <td>{line.label ?? itemLabel(itemById.get(line.effectiveItemId ?? ""))}{line.substituted ? " (náhrada)" : ""}{line.variantId ? ` · ${allVariants.find((variant) => variant.id === line.variantId)?.name ?? ""}` : ""}</td>
+                    <td>{line.label ?? itemLabel(itemById.get(line.effectiveItemId ?? ""))}{line.substituted ? " (náhrada)" : ""}{line.variantId ? ` · ${allVariants.find((variant) => variant.id === line.variantId)?.name ?? ""}` : ""}{line.agreement ? ` · dohoda: ${line.agreement.reason}` : ""}</td>
                     <td>{line.quantity} {line.unitCode ?? ""}</td>
                     <td>{line.status === "included" ? "v ceně kompletu" : line.status === "priced" ? "účtováno" : line.status === "individual" ? "na dotaz" : "k nacenění"}</td>
                     <td>{formatAmount(line.baseNet, response.currency)}</td>
@@ -961,7 +971,10 @@ function TestResolveTab({ register, api }: { register: SalePriceRegister; api: S
                 ))}
               </tbody>
             </table>
-            <p><strong>Celkem bez DPH: {formatAmount(response.kit.totalNet, response.currency)}</strong>{response.kit.needsQuote ? <span className="dangerText"> · obsahuje položky k nacenění, cena není úplná</span> : ""}</p>
+            {/* Without the kit's own price the total is not a price at all — never shown as "0 Kč". */}
+            {response.kit.kitPrice.status === "missing" || response.kit.kitPrice.status === "individual"
+              ? <p><strong>Celkem bez DPH: K nacenění</strong><span className="dangerText"> · cena kompletu v této verzi chybí{response.kit.totalNet ? ` · známé příplatky ${formatAmount(response.kit.totalNet, response.currency)}` : ""}</span></p>
+              : <p><strong>Celkem bez DPH: {formatAmount(response.kit.totalNet, response.currency)}</strong>{response.kit.needsQuote ? <span className="dangerText"> · obsahuje položky k nacenění, cena není úplná</span> : ""}</p>}
             {response.kit.issues.map((issue) => <p key={issue} className="fieldHint">⚠ {issue}</p>)}
           </div>
         )}

@@ -1855,7 +1855,9 @@ test("CATALOG_ITEM_CATEGORY_OPTIONS matches the real, live-audited set of catego
   const values = CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => option.value).sort();
   const liveAudited = ["Canonical", "Kuchyňka", "Nábytek", "Octanorm", "Ostatní", "Stavba", "Světlo", "T. služby", "Typovky", "Úvaz", "chairs", "services"];
   const boothComponentCategories = ["Panely / stěny", "Sloupky", "Límce", "Dveře", "Zázemí / konstrukce", "Podlaha", "Osvětlení"];
-  assert.deepEqual(values, [...liveAudited, ...boothComponentCategories].sort());
+  // V1-COMPLETE-02: booths split into Typovky (T04–T25) and Kóje (P86) — deliberately added.
+  const boothCategories = ["Kóje"];
+  assert.deepEqual(values, [...liveAudited, ...boothComponentCategories, ...boothCategories].sort());
 });
 
 test("categoryLabelCs reuses domain/catalogCategories.ts's existing chairs/services labels rather than re-declaring them", () => {

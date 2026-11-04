@@ -368,7 +368,8 @@ export function KitContentsSection({
                                 </select>
                                 {allVariantOptions.length > 0 && (
                                   <select aria-label="Varianta náhrady" value={substitute.substituteVariantId} onChange={(event) => patchSubstitute({ substituteVariantId: event.target.value })}>
-                                    <option value="">bez varianty</option>
+                                    {/* Empty = no fixed colour: with a swatch book on the line, any of its colours may be chosen (priceKit). */}
+                                    <option value="">{line.variantSetId ? "Libovolná barva vzorníku" : "bez varianty"}</option>
                                     {allVariantOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
                                   </select>
                                 )}

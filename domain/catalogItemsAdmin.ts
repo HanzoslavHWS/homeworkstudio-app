@@ -61,6 +61,7 @@ export const CATALOG_ITEM_CATEGORY_OPTIONS: readonly Readonly<{ value: string; l
   { value: "Úvaz", label: "Úvaz (rigging)" },
   { value: "Světlo", label: "Světlo" },
   { value: "Typovky", label: "Typovky" },
+  { value: "Kóje", label: "Kóje" },
   { value: "Canonical", label: "Canonical" },
   { value: "T. služby", label: "Technické služby" },
   { value: "services", label: reusedCategoryLabel.get("services") ?? "Služby" },

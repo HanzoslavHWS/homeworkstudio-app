@@ -119,12 +119,12 @@ test("skripty v scripts/ používají pro databázi výhradně kontrolovaného k
   const guard = await readFile(new URL("../lib/db/scriptSupabase.server.ts", import.meta.url), "utf8");
   assert.doesNotMatch(guard, /process\.argv|--force/u, "kontrola nečte příkazovou řádku");
   let writers = 0;
-  for (const writer of ["importBatch1", "importBatch2a", "importBatch2b", "typeBoothCanonicalization"]) {
+  for (const writer of ["importBatch1", "importBatch2a", "importBatch2b", "typeBoothCanonicalization", "p86Catalog"]) {
     const source = await readFile(new URL(`../lib/db/${writer}.supabase.ts`, import.meta.url), "utf8");
     for (const match of source.matchAll(/export async function apply\w+\([^)]*\)[^{]*\{\r?\n(.*)\r?\n/gu)) {
       writers += 1;
       assert.equal(match[1]!.trim(), "assertScriptDatabaseClient(client);", `${writer}: první příkaz zapisovače`);
     }
   }
-  assert.equal(writers, 4);
+  assert.equal(writers, 5);
 });
