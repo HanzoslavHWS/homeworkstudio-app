@@ -46,7 +46,8 @@ import {
   type VersionedPriceList,
   type VersionedPricingContext,
 } from "../domain/priceVersions.ts";
-import { PERMISSIONS, sessionPermissions, type Permission } from "../lib/auth/permissions.ts";
+import type { Permission } from "../lib/auth/permissions.ts";
+import { can, PERMISSIONS } from "../domain/accessControl.ts";
 import { PriceVersionConflictError, type PriceVersionRepository, type PricingCatalogItem } from "../lib/db/priceVersions.supabase.ts";
 import {
   handlePurchaseAction,
@@ -421,10 +422,12 @@ test("nákupní cena: jeden společný ceník pro firmy; prodejní ceník nákup
   assert.doesNotMatch(JSON.stringify(saleResult), /purchase/iu);
 });
 
-test("oprávnění: prodejní a nákupní ceny jsou samostatná oprávnění; dnešní jedno přihlášení má všechna", () => {
-  assert.deepEqual([...PERMISSIONS], ["prices.sale.read", "prices.sale.write", "prices.purchase.read", "prices.purchase.write"]);
-  assert.equal(sessionPermissions(true).size, 4);
-  assert.equal(sessionPermissions(false).size, 0);
+test("oprávnění: prodejní a nákupní ceny jsou samostatná oprávnění; Správce vše, Běžný jen čte, Externí nic (V1-AUTH-01)", () => {
+  const PRICE_PERMISSIONS = ["prices.sale.read", "prices.sale.write", "prices.purchase.read", "prices.purchase.write"] as const;
+  assert.ok(PRICE_PERMISSIONS.every((permission) => (PERMISSIONS as readonly string[]).includes(permission)));
+  assert.deepEqual(PRICE_PERMISSIONS.map((permission) => can("admin", permission)), [true, true, true, true]);
+  assert.deepEqual(PRICE_PERMISSIONS.map((permission) => can("user", permission)), [true, false, true, false]);
+  assert.deepEqual(PRICE_PERMISSIONS.map((permission) => can("external", permission)), [false, false, false, false]);
 });
 
 // ---------------------------------------------------------------------------------------------

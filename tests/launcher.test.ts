@@ -45,6 +45,8 @@ test("app/page.tsx (launcher) už nerenderuje BoothGenerator přímo — ABF Gen
 test("app/abf/page.tsx renderuje současný BoothGenerator beze změny komponenty a zachovává auth gate", () => {
   const source = readFileSync(new URL("../app/abf/page.tsx", import.meta.url), "utf8");
   assert.match(source, /import BoothGenerator from "\.\.\/\.\.\/components\/BoothGenerator"/u);
-  assert.match(source, /verifySessionToken/u);
+  // V1-AUTH-01: the same server-side resolver as the API routes (user, role, session row).
+  assert.match(source, /getPageAuth\(\)/u);
+  assert.match(source, /state\.status === "unauthenticated"/u);
   assert.match(source, /redirect\(/u);
 });

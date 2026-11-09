@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { readWorkbookFromBuffer, extractSheetGrid } from "../../../../lib/import/xlsxReader.server.ts";
 import { importPrintSurfaceExcel, PRINT_SURFACE_EXCEL_SHEET_NAME } from "../../../../domain/printSurfaceExcelImport.ts";
 
@@ -11,9 +11,8 @@ import { importPrintSurfaceExcel, PRINT_SURFACE_EXCEL_SHEET_NAME } from "../../.
  * for a preview and the non-destructive apply (see components/workflow/printSurfaces/PrintSurfaceCatalogImportPanel.tsx).
  */
 export async function handlePrintSurfaceExcelImport(request: NextRequest): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro import katalogu tiskových ploch je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "printSurfaces.use");
+  if (authDenied) return authDenied;
 
   let formData: FormData;
   try {

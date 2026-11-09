@@ -20,7 +20,7 @@ import {
 } from "./catalogItemTypes.ts";
 import type { CatalogPackageItem } from "./catalogPackages.ts";
 import { catalogUnitByCode, normalizeCatalogUnit } from "./catalogUnits.ts";
-import { parseCardVariantOptions, type CardVariantOptions } from "./catalogVariants.ts";
+import { CARD_VARIANT_SCOPES, parseCardVariantOptions, type CardVariantOptions } from "./catalogVariants.ts";
 import { getBasePricingEntry } from "./catalog.ts";
 import { catalogCategories } from "./catalogCategories.ts";
 import { isKnownTechnicalServiceCategory } from "./technicalServiceCatalog.ts";
@@ -242,13 +242,18 @@ export function documentAttributes(document: CatalogItemAdminDocument): CatalogI
   return parseCatalogItemAttributes(document.attributes) ?? {};
 }
 
-const OFFICIAL_NAME_MAX = 300;
+export const OFFICIAL_NAME_MAX = 300;
+
+/** How an official (ABF) name is stored: whitespace collapsed, trimmed. Shared with the Excel import so a re-import never reports a whitespace-only change. */
+export function normalizeOfficialNameText(text: string): string {
+  return text.replace(/\s+/gu, " ").trim();
+}
 
 function parseOfficialName(raw: unknown, field: string, makeError: (field: string, message: string) => Error): string | null | undefined {
   if (raw === undefined) return undefined;
   if (raw === null) return null;
   if (typeof raw !== "string") throw makeError(field, "Neplatný název.");
-  const text = raw.replace(/\s+/gu, " ").trim();
+  const text = normalizeOfficialNameText(raw);
   if (!text) return null;
   if (text.length > OFFICIAL_NAME_MAX || /[<>]/u.test(text)) throw makeError(field, "Název je příliš dlouhý nebo obsahuje nepovolené znaky.");
   return text;
@@ -293,7 +298,7 @@ export type CatalogPublicationEdit = Readonly<{
 
 export const CATALOG_PUBLICATION_NAME_MAX = 120;
 export const CATALOG_PUBLICATION_DESCRIPTION_MAX = 400;
-const CATALOG_PUBLICATION_SORT_ORDER_MAX = 99999;
+export const CATALOG_PUBLICATION_SORT_ORDER_MAX = 99999;
 
 function isValidCatalogSortOrder(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= CATALOG_PUBLICATION_SORT_ORDER_MAX;
@@ -735,6 +740,8 @@ export type CatalogItemAdminFilters = Readonly<{
   query?: string;
   kind?: CatalogItemKind | "";
   itemType?: CatalogItemType | "";
+  /** Kategorie (the register id stored on the card). */
+  category?: string;
   lifecycleStatus?: CatalogItemStatus | "";
   readiness?: "ready" | "not-ready" | "";
   asset?: "has-3d" | "missing-3d" | "";
@@ -759,6 +766,16 @@ export function matchesCatalogItemAdminSearch(
   return haystack.includes(normalizedText(query));
 }
 
+/** How many of the catalog list "Další filtry" are set (druh, připravenost, 3D model, k zařazení). */
+export function moreFiltersActive(filters: CatalogItemAdminFilters): number {
+  return [filters.kind, filters.readiness, filters.asset, filters.needsTypeReview].filter(Boolean).length;
+}
+
+/** Any filter at all — the list then offers "Vymazat filtry". */
+export function anyFilterActive(filters: CatalogItemAdminFilters): boolean {
+  return Boolean(filters.query?.trim() || filters.itemType || filters.category || filters.lifecycleStatus || filters.onlyArchived || filters.showArchived) || moreFiltersActive(filters) > 0;
+}
+
 export function filterCatalogItemsAdmin(entries: readonly CatalogItemAdminListEntry[], filters: CatalogItemAdminFilters): readonly CatalogItemAdminListEntry[] {
   return entries.filter((entry) => {
     // Archived items are excluded from the default view regardless of any other filter —
@@ -768,6 +785,7 @@ export function filterCatalogItemsAdmin(entries: readonly CatalogItemAdminListEn
     } else if (entry.lifecycleStatus === "archived" && !filters.showArchived) return false;
     if (filters.query && !matchesCatalogItemAdminSearch(entry, filters.query)) return false;
     if (filters.itemType && entry.itemType !== filters.itemType) return false;
+    if (filters.category && entry.category !== filters.category) return false;
     if (filters.needsTypeReview && !entry.itemTypeNeedsReview) return false;
     if (filters.kind && entry.kind !== filters.kind) return false;
     if (filters.lifecycleStatus && entry.lifecycleStatus !== filters.lifecycleStatus) return false;
@@ -969,7 +987,7 @@ export class InvalidCatalogItemAdminEditError extends Error {
   }
 }
 
-const NOTE_MAX_LENGTH = 2000;
+export const NOTE_MAX_LENGTH = 2000;
 
 const EDITABLE_STRING_KEYS = ["displayName", "name", "category", "unit"] as const;
 const EDITABLE_NUMBER_KEYS = ["widthMm", "depthMm", "heightMm"] as const;
@@ -1311,6 +1329,14 @@ export type CatalogItemAdminCreateInput = Readonly<{
   heightMm?: number;
   showIn2D?: boolean;
   showIn3D?: boolean;
+  /** SERVICE: power figure (document.serviceTechnical.powerKw) — part of the one insert, so a card never exists without it. */
+  powerKw?: number;
+  /** Publikace v katalogu, written in the same insert (no image — that goes through the asset upload). */
+  catalogPublication?: Omit<CatalogPublication, "image">;
+  /** Barevné varianty (swatch book + scope), same insert. Only when explicitly given — never a default. The swatch book must exist (checked on create). */
+  variantOptions?: CardVariantOptions;
+  /** "Jen na dohodu — náklady nese", same insert. */
+  usageAgreement?: CatalogUsageAgreement;
 }>;
 
 export class InvalidCatalogItemAdminCreateInputError extends Error {
@@ -1397,6 +1423,31 @@ export function parseCatalogItemAdminCreateInput(body: unknown): CatalogItemAdmi
   if (typeof raw.heightMm === "number" && Number.isFinite(raw.heightMm)) input.heightMm = raw.heightMm;
   if (typeof raw.showIn2D === "boolean") input.showIn2D = raw.showIn2D;
   if (typeof raw.showIn3D === "boolean") input.showIn3D = raw.showIn3D;
+  if (raw.powerKw !== undefined) {
+    if (typeof raw.powerKw !== "number" || !Number.isFinite(raw.powerKw) || raw.powerKw < 0) throw createError("powerKw", "Výkon musí být nezáporné číslo.");
+    input.powerKw = raw.powerKw;
+  }
+  if (raw.catalogPublication !== undefined) {
+    let publication: CatalogPublicationEdit;
+    try {
+      publication = parseCatalogPublicationEdit(raw.catalogPublication);
+    } catch (error) {
+      throw createError("catalogPublication", error instanceof Error ? error.message : "Neplatná data publikace v katalogu.");
+    }
+    const { image: _image, ...withoutImage } = applyCatalogPublicationEdit({ visible: false }, { ...publication, image: undefined });
+    input.catalogPublication = withoutImage;
+  }
+  if (raw.variantOptions !== undefined) {
+    const value = raw.variantOptions as Record<string, unknown> | null;
+    const options = parseCardVariantOptions(value);
+    if (!options || !(CARD_VARIANT_SCOPES as readonly unknown[]).includes(value?.scope)) throw createError("variantOptions", "Barevné varianty: chybí vzorník nebo platný rozsah barev.");
+    input.variantOptions = options;
+  }
+  if (raw.usageAgreement !== undefined) {
+    const agreement = parseUsageAgreement(raw.usageAgreement);
+    if (!agreement) throw createError("usageAgreement", "Jen na dohodu: vyplňte, kdo nese náklady.");
+    input.usageAgreement = agreement;
+  }
 
   return input as CatalogItemAdminCreateInput;
 }
@@ -1426,6 +1477,10 @@ export function buildCatalogItemCreateDocument(input: CatalogItemAdminCreateInpu
   // needs SOME 2D representation — fill the minimal shape so a freshly-created item is never left
   // in the inconsistent "showIn2D=true, no footprint2D" state.
   if (input.showIn2D === true) document.footprint2D = { shape: "rectangle" };
+  if (input.powerKw !== undefined) document.serviceTechnical = { powerKw: input.powerKw };
+  if (input.catalogPublication !== undefined) document.catalogPublication = input.catalogPublication;
+  if (input.variantOptions !== undefined) document.variantOptions = input.variantOptions;
+  if (input.usageAgreement !== undefined) document.usageAgreement = input.usageAgreement;
   return document;
 }
 

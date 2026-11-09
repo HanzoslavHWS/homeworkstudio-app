@@ -340,6 +340,11 @@ export async function createCatalogItemAdmin(client: SupabaseClient, input: Cata
   );
   if (input.abfCode) await assertAbfCodeFree(client, input.abfCode);
   assertNoCrossCodeCollision(existing, { internalCode: input.internalCode, abfCode: input.abfCode });
+  if (input.variantOptions) {
+    const { data: setRows, error: setError } = await client.from("catalog_variant_sets").select("id").eq("id", input.variantOptions.variantSetId);
+    if (setError) throw setError;
+    if (!((setRows ?? []) as { id: string }[]).length) throw new InvalidCatalogItemAdminCreateInputError("variantOptions", "Zvolený vzorník barev neexistuje.");
+  }
 
   // Druh komponenty → Kategorie: a new card must have a valid, active combination.
   const itemType = input.itemType ?? defaultItemTypeForKind(input.kind);
@@ -349,7 +354,7 @@ export async function createCatalogItemAdmin(client: SupabaseClient, input: Cata
   const category = findCategory(categories, input.category);
 
   let document = buildCatalogItemCreateDocument(input);
-  if (category?.serviceCategory) document = { ...document, serviceTechnical: { serviceCategory: category.serviceCategory } };
+  if (category?.serviceCategory) document = { ...document, serviceTechnical: { ...(documentServiceTechnical(document) ?? {}), serviceCategory: category.serviceCategory } };
   const row: Record<string, unknown> = {
     internal_code: input.internalCode?.trim() || null,
     kind: input.kind,

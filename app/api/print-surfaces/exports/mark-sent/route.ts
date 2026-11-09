@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { SupabasePrintSurfaceExportRepository } from "../../../../../lib/db/printSurfaceExportRepository.supabase.ts";
 import type { PrintSurfaceExportMarkSentInput, PrintSurfaceExportRepository } from "../../../../../domain/printSurfaceExport.ts";
@@ -20,9 +20,8 @@ export async function handlePrintSurfaceExportMarkSent(
   request: NextRequest,
   repositoryFactory: () => PrintSurfaceExportRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro označení exportu jako odeslaného je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "printSurfaces.use");
+  if (authDenied) return authDenied;
   let body: Partial<PrintSurfaceExportMarkSentInput> & { id?: string };
   try {
     body = (await request.json()) as Partial<PrintSurfaceExportMarkSentInput> & { id?: string };

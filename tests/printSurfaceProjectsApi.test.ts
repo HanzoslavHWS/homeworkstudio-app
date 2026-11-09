@@ -7,7 +7,7 @@ import { handlePrintSurfaceProjectSave } from "../app/api/print-surfaces/project
 import { handlePrintSurfaceProjectDelete } from "../app/api/print-surfaces/projects/delete/route.ts";
 import * as catalogRoute from "../app/api/print-surfaces/catalog/route.ts";
 import { handlePrintSurfaceCatalogGet, type PrintSurfaceCatalogRepositories } from "../app/api/print-surfaces/catalog/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import {
   createPrintSurfaceProject,
   type PrintSurfaceProject,

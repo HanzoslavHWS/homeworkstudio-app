@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import {
   CustomerCatalogPresetNotFoundError,
@@ -30,7 +30,8 @@ export async function handleCustomerCatalogPresetsList(
   request: NextRequest,
   getRepository: () => CustomerCatalogPresetRepository = defaultRepository,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: UNAUTHORIZED }, { status: 401 });
+  const authDenied = await denyUnless(request, "customerCatalog.use");
+  if (authDenied) return authDenied;
   try {
     return NextResponse.json({ presets: await getRepository().list() });
   } catch (error) {
@@ -42,7 +43,8 @@ export async function handleCustomerCatalogPresetsSave(
   request: NextRequest,
   getRepository: () => CustomerCatalogPresetRepository = defaultRepository,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: UNAUTHORIZED }, { status: 401 });
+  const authDenied = await denyUnless(request, "customerCatalog.use");
+  if (authDenied) return authDenied;
   let input: CustomerCatalogPresetInput;
   try {
     input = parseCustomerCatalogPresetInput(await request.json());
@@ -60,7 +62,8 @@ export async function handleCustomerCatalogPresetsDelete(
   request: NextRequest,
   getRepository: () => CustomerCatalogPresetRepository = defaultRepository,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: UNAUTHORIZED }, { status: 401 });
+  const authDenied = await denyUnless(request, "customerCatalog.use");
+  if (authDenied) return authDenied;
   const id = request.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Chybí id konfigurace." }, { status: 400 });
   try {

@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { NextRequest } from "next/server.js";
 import { handleTechnicalRasterProjectSave } from "../app/api/technical-rasters/projects/save/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import type { EventIdResolver } from "../lib/db/eventIdValidation.server.ts";
 import { resolveCanonicalEventId } from "../domain/eventIdentity.ts";
 import {

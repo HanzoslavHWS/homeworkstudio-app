@@ -64,7 +64,9 @@ const SALE_KINDS: readonly PriceListKind[] = SALE_PRICE_LIST_KINDS;
 const PURCHASE_KINDS: readonly PriceListKind[] = ["purchase"];
 
 async function denied(request: NextRequest, dependencies: PriceVersionsApiDependencies, permission: Permission): Promise<NextResponse | undefined> {
-  if (await dependencies.hasPermission(request, permission)) return undefined;
+  const result = await dependencies.hasPermission(request, permission);
+  if (result === true) return undefined;
+  if (result instanceof NextResponse) return result;
   return NextResponse.json({ error: "Pro tuto část ceníků nemáte oprávnění nebo nejste přihlášeni." }, { status: 401 });
 }
 

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { SupabaseEmailHistoryRepository } from "../../../../../lib/db/emailHistoryRepository.supabase.ts";
 import type { EmailHistoryRepository } from "../../../../../domain/emailHistory.ts";
@@ -14,7 +14,8 @@ export async function handleEmailHistoryDelete(
   request: NextRequest,
   repositoryFactory: () => EmailHistoryRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro mazání historie e-mailů je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "emails.use");
+  if (authDenied) return authDenied;
   let body: DeleteBody;
   try { body = await request.json() as DeleteBody; }
   catch { return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 }); }

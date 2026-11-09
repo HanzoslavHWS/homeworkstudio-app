@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { SupabaseEventRepository } from "../../../../lib/db/eventRepository.supabase.ts";
 import type { RemoteEventRepository } from "../../../../domain/remotePersistence.ts";
@@ -12,7 +12,8 @@ export async function handleEventsList(
   request: NextRequest,
   repositoryFactory: () => RemoteEventRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro přístup k eventům je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "events.read");
+  if (authDenied) return authDenied;
   try {
     const events = await repositoryFactory().list();
     return NextResponse.json({ events });

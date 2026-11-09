@@ -655,6 +655,8 @@ test("M57: Produkt + Židle je platné zařazení; samotné načtení a běžné
 test("API kategorií: vyžaduje přihlášení; bez migrace je registr jen pro čtení (vestavěný seznam)", async () => {
   const { handleCatalogCategoriesGet, handleCatalogCategorySave } = await import("../app/api/catalog-admin/categories/route.ts");
   const { NextRequest } = await import("next/server.js");
+  // Configured server, no session → 401 (a missing APP_SESSION_SECRET would be a 503 configuration error).
+  process.env.APP_SESSION_SECRET ??= "test-session-secret-with-at-least-32-characters";
   const anonymous = new NextRequest("http://localhost/api/catalog-admin/categories");
   assert.equal((await handleCatalogCategoriesGet(anonymous, { readRegister: async () => ({ categories: [], persisted: false }), saveCategory: async (category) => category })).status, 401);
   const notMigrated = fakeClient({ catalog_items: [] });

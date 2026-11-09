@@ -4,7 +4,7 @@ import {
   EmailOutlookDraftRequestError,
   type EmailOutlookDraftInput,
 } from "../../../../domain/emailOutlookDraft.ts";
-import { isEmailAiRequestAuthorized } from "../../../../lib/ai/emailAiRouteAuth.server.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { resolveOutlookDraftProvider } from "../../../../lib/mail/outlookDraftProvider.server.ts";
 import type { EmailOutlookDraftProvider } from "../../../../domain/emailOutlookDraft.ts";
 
@@ -18,9 +18,8 @@ export async function handleEmailOutlookDraft(
   request: NextRequest,
   providerFactory: () => EmailOutlookDraftProvider | undefined = resolveOutlookDraftProvider,
 ): Promise<NextResponse> {
-  if (!(await isEmailAiRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro vytvoření konceptu je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "emails.use");
+  if (authDenied) return authDenied;
 
   let body: unknown;
   try {

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { readCatalogItemsAdmin } from "../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import type { CatalogItemAdmin } from "../../../../domain/catalogItemsAdmin.ts";
@@ -12,7 +12,8 @@ export async function handleCatalogAdminItemsList(
   request: NextRequest,
   readItems: () => Promise<readonly CatalogItemAdmin[]> = defaultReadCatalogItemsAdmin,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro administraci komponent je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.read");
+  if (authDenied) return authDenied;
   try {
     const catalogItems = await readItems();
     return NextResponse.json({ catalogItems });

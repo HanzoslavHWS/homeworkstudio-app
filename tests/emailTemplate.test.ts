@@ -4,7 +4,7 @@ import { NextRequest } from "next/server.js";
 import { handleEmailTemplatesSave } from "../app/api/emails/templates/save/route.ts";
 import { handleEmailTemplatesDelete } from "../app/api/emails/templates/delete/route.ts";
 import { handleEmailTemplatesList } from "../app/api/emails/templates/list/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { EmailTemplateProtectedError, type EmailTemplate, type EmailTemplateCreateInput, type EmailTemplateEditInput, type EmailTemplateRepository } from "../domain/emailTemplate.ts";
 
 const SECRET = "email-template-test-session-secret-32ch";

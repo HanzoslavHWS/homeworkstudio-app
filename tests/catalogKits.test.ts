@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { readdirSync } from "node:fs";
 import test from "node:test";
 import { NextRequest } from "next/server.js";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import {
   assignKitLineKeys,
   buildKitLinesRpcPayload,

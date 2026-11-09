@@ -262,7 +262,7 @@ Mimo databázi: do `projects.document` přibude volitelné `pricingPin` (verze s
 | Oblast | Soubory / routy | Dopad |
 |---|---|---|
 | Administrace katalogu | `app/api/catalog-admin/items/*`, `…/package`, `…/lifecycle`, `AdminPages.tsx` | Nová pole (kódy, názvy, jednotka), editor kompletů s náhradami a variantami, editor aliasů. `package` route se rozšíří, starý tvar zůstane čitelný |
-| Import ABF kódů | `app/api/catalog-admin/abf-import`, `domain/catalogAbfImport.ts` | Stane se adaptérem jednotného Excel importu (šablona Katalog, sloupce ABF). Logika párování zůstává |
+| Import ABF kódů | odstraněn ve V1-ADMIN-01 (nahrazuje ho Import Excelu) | Stane se adaptérem jednotného Excel importu (šablona Katalog, sloupce ABF). Logika párování zůstává |
 | Katalog pro generátor | `app/api/catalog/items`, `domain/catalogPricing.ts`, `data/components.ts`, `data/booths.ts` | Generátor bere karty, komplety a varianty z DB. Statické seedy zůstanou jako záloha pro starší projekty |
 | Ceny v generátoru | `components/configurator/PricingBar.tsx`, `components/BoothGenerator.tsx` (výběr ceníku nerozlišuje měnu) | Přechod na `resolvePrice` s kontextem veletrhu a měny; rozpad kompletu, náhrady, doplatky; vytvoření snapshotu |
 | Administrace cen | `app/api/pricing-admin/*`, `app/api/price-lists/*`, `app/api/pricing/entries`, `PricingAdminPages.tsx`, `domain/pricingAdmin.ts` | Nové verzované endpointy (verze, publikace, řádky, doplatky). Staré endpointy jen čtou legacy ceníky |

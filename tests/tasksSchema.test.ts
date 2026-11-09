@@ -59,8 +59,8 @@ test("MIGRATION: status / priority / source check constraints match the domain e
 
 test("UI: sidebar has Úkoly with the attention badge; BoothGenerator hosts the page, the shared dialog/detail and the badge", async () => {
   const sidebar = await read("components/AppSidebar.tsx");
-  assert.match(sidebar, /onNavigate\?\.\("tasks"\)/u);
-  assert.match(sidebar, /<span className="navLabel">Úkoly<\/span>/u);
+  assert.match(sidebar, /\{ section: "tasks", icon: "[^"]+", label: "Úkoly"/u);
+  assert.match(sidebar, /onClick=\{\(\) => onNavigate\?\.\(item\.section\)\}/u);
   assert.match(sidebar, /className="navBadge"/u);
   const shell = await read("components/BoothGenerator.tsx");
   assert.match(shell, /taskBadge=\{taskStore\.tasks \? computeTaskCounts\(taskStore\.tasks, localIsoDate\(\)\)\.attention : undefined\}/u);

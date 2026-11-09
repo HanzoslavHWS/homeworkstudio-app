@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server.js";
 import { AssetValidationError, assertValidStorageKey, type AssetStorageProvider } from "../../../../domain/assets.ts";
-import { isAssetRequestAuthorized } from "../../../../lib/storage/assetRouteAuth.ts";
+import { authenticate, authorizeFile } from "../../../../lib/auth/requestAuth.ts";
 import { createCloudflareR2StorageProvider } from "../../../../lib/storage/cloudflareR2.server.ts";
 import { R2ConfigurationError } from "../../../../lib/storage/r2Config.ts";
 
@@ -8,7 +8,8 @@ export async function handleAssetDownload(
   request: NextRequest,
   providerFactory: () => AssetStorageProvider = createCloudflareR2StorageProvider,
 ): Promise<NextResponse> {
-  if (!(await isAssetRequestAuthorized(request))) return NextResponse.json({ error: "Pro stažení je vyžadováno přihlášení." }, { status: 401 });
+  const signedIn = await authenticate(request);
+  if (signedIn.ok === false) return signedIn.response;
   let storageKey = "";
   let fileName: string | undefined;
   try {
@@ -22,6 +23,9 @@ export async function handleAssetDownload(
   catch { return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 }); }
   try {
     assertValidStorageKey(storageKey);
+    // Module / project of the key decides (externals: only outputs of an assigned project).
+    const access = await authorizeFile(request, storageKey, "read");
+    if (access.ok === false) return access.response;
     const provider = providerFactory();
     const metadata = await provider.getMetadata(storageKey);
     if (!metadata) return NextResponse.json({ error: "Asset nebyl nalezen." }, { status: 404 });

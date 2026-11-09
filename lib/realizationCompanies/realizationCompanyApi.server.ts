@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../auth/requestAuth.ts";
+import type { Permission } from "../../domain/accessControl.ts";
+import { denyUnless } from "../auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../db/supabase.server.ts";
 import { RealizationCompaniesNotMigratedError, SupabaseRealizationCompanyRepository } from "../db/realizationCompanyRepository.supabase.ts";
 import {
@@ -23,9 +24,8 @@ export const defaultRealizationCompanyApiDependencies: RealizationCompanyApiDepe
   repository: () => new SupabaseRealizationCompanyRepository(createSupabaseServerClient()),
 };
 
-async function unauthorized(request: NextRequest): Promise<NextResponse | undefined> {
-  if (await isSessionRequestAuthorized(request)) return undefined;
-  return NextResponse.json({ error: "Pro správu realizačních firem je vyžadováno přihlášení." }, { status: 401 });
+async function unauthorized(request: NextRequest, permission: Permission): Promise<NextResponse | undefined> {
+  return denyUnless(request, permission);
 }
 
 async function readJsonBody(request: NextRequest): Promise<Record<string, unknown> | NextResponse> {
@@ -88,7 +88,7 @@ export async function handleRealizationCompaniesList(
   request: NextRequest,
   dependencies: RealizationCompanyApiDependencies = defaultRealizationCompanyApiDependencies,
 ): Promise<NextResponse> {
-  const denied = await unauthorized(request);
+  const denied = await unauthorized(request, "realizationCompanies.read");
   if (denied) return denied;
   try {
     const repository = dependencies.repository();
@@ -103,7 +103,7 @@ export async function handleRealizationCompanyCreate(
   request: NextRequest,
   dependencies: RealizationCompanyApiDependencies = defaultRealizationCompanyApiDependencies,
 ): Promise<NextResponse> {
-  const denied = await unauthorized(request);
+  const denied = await unauthorized(request, "realizationCompanies.manage");
   if (denied) return denied;
   const body = await readJsonBody(request);
   if (body instanceof NextResponse) return body;
@@ -129,7 +129,7 @@ export async function handleRealizationCompanyUpdate(
   request: NextRequest,
   dependencies: RealizationCompanyApiDependencies = defaultRealizationCompanyApiDependencies,
 ): Promise<NextResponse> {
-  const denied = await unauthorized(request);
+  const denied = await unauthorized(request, "realizationCompanies.manage");
   if (denied) return denied;
   const body = await readJsonBody(request);
   if (body instanceof NextResponse) return body;

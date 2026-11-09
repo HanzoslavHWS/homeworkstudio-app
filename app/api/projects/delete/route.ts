@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { authenticate, authorizeProject } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { SupabaseProjectRepository } from "../../../../lib/db/projectRepository.supabase.ts";
 import type { RemoteProjectRepository } from "../../../../domain/remotePersistence.ts";
@@ -12,11 +12,14 @@ export async function handleProjectsDelete(
   request: NextRequest,
   repositoryFactory: () => RemoteProjectRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro mazání projektů je vyžadováno přihlášení." }, { status: 401 });
+  const signedIn = await authenticate(request);
+  if (signedIn.ok === false) return signedIn.response;
   let id = "";
   try { id = String((await request.json() as { id?: unknown }).id ?? ""); }
   catch { return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 }); }
   if (!id) return NextResponse.json({ error: "Chybí id projektu." }, { status: 400 });
+  const access = await authorizeProject(request, id, "delete");
+  if (access.ok === false) return access.response;
   try {
     await repositoryFactory().delete(id);
     return NextResponse.json({ deleted: true });

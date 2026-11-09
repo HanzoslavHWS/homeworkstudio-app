@@ -7,6 +7,7 @@ import { applyBatch1Plan } from "../lib/db/importBatch1.supabase.ts";
 import { applyBatch2aPlan } from "../lib/db/importBatch2a.supabase.ts";
 import { applyBatch2bPlan } from "../lib/db/importBatch2b.supabase.ts";
 import { applyCanonicalPlanEntry } from "../lib/db/typeBoothCanonicalization.supabase.ts";
+import { applyCatalogExcelImportPlan } from "../lib/db/catalogExcelImport.supabase.ts";
 
 // =========================================================================================
 // Scripts (imports, canonicalization, repairs) never write to production
@@ -93,6 +94,7 @@ test("zapisovače importů odmítnou klienta, který neprošel kontrolou cíle �
     ["applyBatch2aPlan", () => applyBatch2aPlan(unchecked, {} as never, { sourceFileName: "x", sourceFingerprint: "x" })],
     ["applyBatch2bPlan", () => applyBatch2bPlan(unchecked, [], {} as never, { sourceFileName: "x", sourceFingerprint: "x" })],
     ["applyCanonicalPlanEntry", () => applyCanonicalPlanEntry(unchecked, { action: "create" } as never)],
+    ["applyCatalogExcelImportPlan", () => applyCatalogExcelImportPlan(unchecked, {} as never)],
   ];
   for (const [name, write] of writers) await assert.rejects(write, ScriptDatabaseTargetError, name);
   assert.equal(touched, 0);
@@ -119,12 +121,12 @@ test("skripty v scripts/ používají pro databázi výhradně kontrolovaného k
   const guard = await readFile(new URL("../lib/db/scriptSupabase.server.ts", import.meta.url), "utf8");
   assert.doesNotMatch(guard, /process\.argv|--force/u, "kontrola nečte příkazovou řádku");
   let writers = 0;
-  for (const writer of ["importBatch1", "importBatch2a", "importBatch2b", "typeBoothCanonicalization", "p86Catalog"]) {
+  for (const writer of ["importBatch1", "importBatch2a", "importBatch2b", "typeBoothCanonicalization", "p86Catalog", "catalogExcelImport"]) {
     const source = await readFile(new URL(`../lib/db/${writer}.supabase.ts`, import.meta.url), "utf8");
     for (const match of source.matchAll(/export async function apply\w+\([^)]*\)[^{]*\{\r?\n(.*)\r?\n/gu)) {
       writers += 1;
       assert.equal(match[1]!.trim(), "assertScriptDatabaseClient(client);", `${writer}: první příkaz zapisovače`);
     }
   }
-  assert.equal(writers, 5);
+  assert.equal(writers, 6);
 });

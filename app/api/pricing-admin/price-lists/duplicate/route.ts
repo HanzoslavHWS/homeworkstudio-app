@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import {
   duplicatePriceListAdmin,
@@ -41,7 +41,8 @@ export async function handlePricingAdminDuplicatePriceList(
   duplicate: (sourcePriceListId: string, draft: DuplicatePriceListDraft) => Promise<DuplicatePriceListResult> = defaultDuplicate,
   linkEventToPriceList: (eventId: string, priceListId: string) => Promise<string | undefined> = defaultLinkEventToPriceList,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro duplikaci ceníku je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "prices.sale.write");
+  if (authDenied) return authDenied;
   let body: DuplicateBody;
   try { body = await request.json() as DuplicateBody; }
   catch { return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 }); }

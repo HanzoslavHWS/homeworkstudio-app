@@ -5,7 +5,7 @@ import { approveTask, createAutomaticTasks, createTask, returnTask, setTaskStatu
 import type { Task, TaskCategory, TaskFields, TaskHistoryEntry, TaskHistoryInput, TaskRepository, TaskSystemFields } from "../domain/tasks.ts";
 import type { StandChecklistEntry, StandChecklistRepository, StandChecklistTemplate, StandKey } from "../domain/standChecklist.ts";
 import { resolveCanonicalEventId } from "../domain/eventIdentity.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import type { TaskApiDependencies } from "../lib/tasks/taskApi.server.ts";
 import { handleTaskList } from "../app/api/tasks/list/route.ts";
 import { handleTaskSave } from "../app/api/tasks/save/route.ts";

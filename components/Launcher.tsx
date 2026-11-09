@@ -1,5 +1,8 @@
 import Link from "next/link";
 import { launcherApps, type LauncherApp } from "../data/launcherApps";
+import { APP_ROLE_LABELS_CS } from "../domain/accessControl";
+import type { CurrentUser } from "../lib/auth/pageAuth.server";
+import { UserMenu } from "./auth/UserMenu";
 
 function LauncherCardContent({ app }: { app: LauncherApp }) {
   return (
@@ -22,9 +25,10 @@ function LauncherCardContent({ app }: { app: LauncherApp }) {
   );
 }
 
-export function Launcher() {
+export function Launcher({ user }: Readonly<{ user?: CurrentUser }>) {
   return (
     <main className="launcherPage">
+      {user && <UserMenu user={user} roleLabel={APP_ROLE_LABELS_CS[user.role]} variant="dark" />}
       <header className="launcherHeader">
         <h1>HOMEWORKSTUDIO</h1>
         <p>Vyberte aplikaci</p>

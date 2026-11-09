@@ -8,7 +8,7 @@ import { handleEventsList } from "../app/api/events/list/route.ts";
 import { handleEventsSave } from "../app/api/events/save/route.ts";
 import { handlePriceListsList } from "../app/api/price-lists/list/route.ts";
 import { handlePriceListsSave } from "../app/api/price-lists/save/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { ConcurrencyConflictError } from "../lib/db/concurrency.ts";
 import { SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
 import { createProjectRecord } from "../domain/project.ts";

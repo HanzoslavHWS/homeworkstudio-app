@@ -119,7 +119,7 @@ export function SettlementDictionaryTab({ check, dictionary, client, busy, run }
       <div className="workflowCard">
         <div className="workflowCardHeader"><div><span>KATALOG KOMPONENT</span><strong>Názvy ABF u komponent</strong></div></div>
         <p className="workflowMuted">
-          Každá komponenta má ABF kód, originální název ABF (spravuje ho import KODY) a náš zobrazovaný název — ty se zde nemění.
+          Každá komponenta má ABF kód, originální název ABF (upravuje se na kartě katalogu) a náš zobrazovaný název — ty se zde nemění.
           Tady se k ní přidávají další názvy, pod kterými ji ABF uvádí v objednávkách (historické, zkrácené, jinak zapsané).
         </p>
         <div className="settlementActionRow">

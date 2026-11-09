@@ -52,7 +52,7 @@ Ostatní moduly (úkoly, tiskové plochy, rastry, e-maily, katalog, vyúčtován
 |---|---|---|---|
 | Generátor stánků (projekty) | `BoothGenerator.tsx`, `components/configurator/*`, `components/workflow/WorkflowSteps.tsx` | `projects` (JSONB `document`) | Funkční; monolit, směs statických a DB katalogů (viz D3) |
 | Knihovna stánků / Katalog komponent | `ComponentAdminPage.tsx` (1 569 ř.), `BoothAdminPage.tsx`, `domain/catalogItemsAdmin.ts` | `catalog_items`, `catalog_item_package_items` | Funkční, dobře chráněné (archivace místo mazání, guard proti hard-delete) |
-| Import ABF kódů (KODY) | `domain/catalogAbfImport.ts`, `app/api/catalog-admin/abf-import` | `catalog_items`, `import_batches` | Funkční |
+| Import ABF kódů (KODY) | — | `catalog_items`, `import_batches` (historické záznamy) | Odstraněno ve V1-ADMIN-01; nahrazuje Import Excelu |
 | Zákaznický katalog | `CustomerCatalogPage.tsx`, `lib/customerCatalogPdf.ts` | `customer_catalog_presets` + čte katalog/ceny | Funkční |
 | Výstavy / eventy | `CatalogManagementPages.tsx`, `domain/organizations.ts` | `events` | Funkční; legacy aliasy ID (D2) |
 | Ceníky / Správa cen | `PricingAdminPages.tsx`, `domain/pricingAdmin.ts` | `price_lists`, `pricing_entries` | Funkční; dvojí zdroj základních cen (D4) |

@@ -27,7 +27,7 @@ import type { KeyValueStorage } from "../domain/repository.ts";
 import { normalizeProjectRecord } from "../domain/project.ts";
 import { CloudflareR2StorageProvider, createR2Client } from "../lib/storage/cloudflareR2.server.ts";
 import { R2ConfigurationError, readR2Config } from "../lib/storage/r2Config.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { handleAssetPresign } from "../app/api/assets/presign/route.ts";
 import { handleAssetDelete } from "../app/api/assets/delete/route.ts";
 import { handleAssetDownload } from "../app/api/assets/download/route.ts";

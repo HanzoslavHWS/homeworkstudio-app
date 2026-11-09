@@ -44,7 +44,7 @@ import {
   handleCustomerCatalogPresetsSave,
 } from "../app/api/customer-catalog/presets/route.ts";
 import { CustomerCatalogPresetsNotMigratedError } from "../lib/db/customerCatalogPresetRepository.supabase.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 
 const SECRET = "customer-catalog-test-session-secret-32";
 (process.env as Record<string, string | undefined>).APP_SESSION_SECRET = SECRET;
@@ -491,10 +491,11 @@ test("PRESET API: a database without the presets migration answers 409 with a cl
 // Wiring: separate menu item, existing admin untouched
 // ---------------------------------------------------------------------------------------
 
-test("NAVIGATION: 'Katalog' is its own menu item next to 'Katalog komponent'", () => {
+test("NAVIGATION: 'Katalog' (customer output) is its own menu item; Katalog komponent lives in Administrace", () => {
   const sidebar = readFileSync(new URL("../components/AppSidebar.tsx", import.meta.url), "utf8");
-  assert.match(sidebar, /<span className="navLabel">Katalog<\/span>/u);
-  assert.match(sidebar, /<span className="navLabel">Katalog komponent<\/span>/u);
+  assert.match(sidebar, /\{ section: "customerCatalog", icon: "[^"]+", label: "Katalog"/u);
+  assert.match(sidebar, /\{ section: "admin", icon: "[^"]+", label: "Administrace"/u);
+  assert.match(sidebar, /<span className="navLabel">\{item\.label\}<\/span>/u);
   const generator = readFileSync(new URL("../components/BoothGenerator.tsx", import.meta.url), "utf8");
   assert.match(generator, /workspaceSection === "customerCatalog"[\s\S]{0,120}<CustomerCatalogPage/u);
   assert.match(generator, /workspaceSection === "components"[\s\S]{0,120}<ComponentAdminPage/u);

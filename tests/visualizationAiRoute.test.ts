@@ -3,7 +3,7 @@ import test from "node:test";
 import { NextRequest } from "next/server.js";
 import { handleVisualizationAiGenerate } from "../app/api/visualizations/ai-generate/route.ts";
 import { DeterministicFakeAiProvider } from "../lib/ai/deterministicFakeAiProvider.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import type { VisualizationAiProvider } from "../lib/ai/visualizationAiProvider.server.ts";
 
 const SECRET = "ai-route-session-secret-with-at-least-32-characters";
@@ -38,6 +38,7 @@ function validBody(overrides: Record<string, unknown> = {}) {
 // =========================================================================================
 
 test("AUTH: rejects an unauthenticated request before ever resolving a provider", async () => {
+  process.env.APP_SESSION_SECRET = SECRET;
   let providerResolved = false;
   const response = await handleVisualizationAiGenerate(
     new NextRequest("http://localhost/api/visualizations/ai-generate", { method: "POST", body: "{}", headers: { "Content-Type": "application/json" } }),

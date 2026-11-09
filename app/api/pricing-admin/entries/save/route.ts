@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { saveManyPricingEntriesAdmin } from "../../../../../lib/db/pricingAdmin.supabase.ts";
 import type { PricingEntryEdit, PricingEntrySaveSummary } from "../../../../../domain/pricingAdmin.ts";
@@ -21,7 +21,8 @@ export async function handlePricingAdminEntriesSave(
   request: NextRequest,
   saveEntries: (edits: readonly PricingEntryEdit[]) => Promise<PricingEntrySaveSummary> = defaultSaveEntries,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro ukládání cen je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "prices.sale.write");
+  if (authDenied) return authDenied;
   let body: SaveBody;
   try { body = await request.json() as SaveBody; }
   catch { return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 }); }

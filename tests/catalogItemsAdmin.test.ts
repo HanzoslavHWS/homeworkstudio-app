@@ -44,7 +44,7 @@ import { ConcurrencyConflictError } from "../lib/db/concurrency.ts";
 import { handleCatalogAdminItemsList } from "../app/api/catalog-admin/items/route.ts";
 import { handleCatalogAdminItemsCreate } from "../app/api/catalog-admin/items/create/route.ts";
 import { handleCatalogAdminItemsSave } from "../app/api/catalog-admin/items/save/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
 
 const SECRET = "catalog-admin-test-session-secret-32chars";
@@ -1125,22 +1125,23 @@ test("ComponentAdminPage.tsx reuses the existing asset upload infrastructure (up
 // and the "Upravit ceny" hand-off to the EXISTING Pricing Administration (never a duplicate).
 // -----------------------------------------------------------------------------------------
 
-test("UI: list view shows the required columns (section 4)", () => {
+test("UI: the catalog table has the columns of the shared administration (V1-ADMIN-01): výběr, náhled, kód, název, typ, kategorie, stav, podklady", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  for (const label of ["Kód / ABF", "Název", "Typ · kategorie", "Stav", "Rozměry", "3D", "Cena", "Generator"]) {
-    assert.match(source, new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), `missing list column "${label}"`);
+  for (const label of ["Náhled", "Kód", "Název", "Typ", "Kategorie", "Stav", "Podklady"]) {
+    assert.match(source, new RegExp(`<th[^>]*>${label}</th>`, "u"), `missing list column "${label}"`);
   }
+  assert.match(source, /<table className="adminTable catalogTable">/u);
+  assert.match(source, /className="catalogNameButton"/u, "a card opens by keyboard (a real button)");
 });
 
-test("UI: filters cover search/kind/lifecycle/readiness/asset (section 5)", () => {
+test("UI: filters — search, Typ, Kategorie, Stav visible; Druh / Připravenost / 3D model / k zařazení under Další filtry; Vymazat filtry; Czech labels only", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /Hledat interní kód, ABF kód/u);
-  assert.match(source, /Typ: vše/u);
-  assert.match(source, /Druh \(kind\): vše/u);
+  assert.match(source, /placeholder="Název, generátorový nebo ABF kód"/u);
+  for (const label of ["Typ", "Kategorie", "Stav", "Druh použití", "Připravenost k aktivaci", "3D model"]) assert.match(source, new RegExp(`<span>${label}</span>`, "u"), label);
   assert.match(source, /Jen archivované/u);
-  assert.match(source, /Stav: vše/u);
-  assert.match(source, /Readiness: vše/u);
-  assert.match(source, /Asset: vše/u);
+  assert.match(source, /Další filtry/u);
+  assert.match(source, /Vymazat filtry/u);
+  assert.doesNotMatch(source, /Druh (kind)|Readiness: vše|Asset: vše/u, "no internal terms in the UI");
 });
 
 test("UI: detail sections match Identita/Rozměry/Lifecycle/Fotografie/3D model/Zdrojové a výrobní soubory/Ceny (section 6, extended with the asset + source-file workflow)", () => {
@@ -2368,4 +2369,48 @@ test("ARCHIVE UI: 'Zobrazit archivované' checkbox exists in both the generic Ad
   assert.match(componentAdminSource, /Jen archivované/u);
   assert.match(componentAdminSource, /Vše včetně archivu/u);
   assert.match(boothAdminSource, /Zobrazit archivované/u);
+});
+
+test("CREATE (catalog Excel import): power and catalog publication are part of the ONE insert, merged with the category's service category; a failed insert leaves no card", async () => {
+  const input = parseCatalogItemAdminCreateInput({ itemType: "SERVICE", kind: "service", displayName: "Elektrická energie - 3kW", category: "service-electricity", internalCode: "L03", abfCode: "L03", unitCode: "ks", powerKw: 3, catalogPublication: { visible: false, name: "Elektřina 3 kW", image: { id: "x" } } });
+  assert.deepEqual(input.catalogPublication, { visible: false, name: "Elektřina 3 kW" });
+  const client = createFakeSupabaseClient({ catalog_items: [] });
+  let inserts = 0;
+  const counting = { from: (table: string) => { const builder = client.from(table); const insert = builder.insert; builder.insert = (row: FakeRow) => { inserts += 1; return insert(row); }; return builder; } };
+  const created = await createCatalogItemAdmin(counting as never, input);
+  assert.equal(inserts, 1);
+  assert.equal(created.lifecycleStatus, "needs_review");
+  assert.deepEqual(created.document.serviceTechnical, { powerKw: 3, serviceCategory: "electricity" });
+  assert.deepEqual(created.document.catalogPublication, { visible: false, name: "Elektřina 3 kW" });
+  assert.equal(client.tables.get("catalog_items")![0]!.price_category, "electricity");
+  assert.throws(() => parseCatalogItemAdminCreateInput({ ...input, powerKw: -1 }), InvalidCatalogItemAdminCreateInputError);
+  assert.throws(() => parseCatalogItemAdminCreateInput({ ...input, catalogPublication: { name: "<b>" } }), InvalidCatalogItemAdminCreateInputError);
+
+  const failing = { from: (table: string) => { const builder = client.from(table); builder.insert = () => ({ select: () => ({ single: async () => ({ data: null, error: { code: "XX000", message: "insert failed" } }) }) }) as never; return builder; } };
+  await assert.rejects(() => createCatalogItemAdmin(failing as never, { ...input, internalCode: "L04", abfCode: "L04" }));
+  assert.equal(client.tables.get("catalog_items")!.length, 1, "no half-created card");
+});
+
+test("CREATE (catalog Excel import, Produkty): dimensions, attributes, swatch book and agreement in ONE insert; an unknown swatch book refuses BEFORE any insert", async () => {
+  const setId = "a4e2a267-b1f0-4e5f-b6e5-038921deea55";
+  const input = parseCatalogItemAdminCreateInput({ itemType: "PRODUCT", kind: "furniture", displayName: "Pult", category: "product-counters", internalCode: "M20", abfCode: "M20", unitCode: "ks", widthMm: 500, depthMm: 500, heightMm: 800, attributes: { color: "Bílá", material: "Hliník/desky" }, showIn2D: true, showIn3D: true, variantOptions: { variantSetId: setId, scope: "billed_by_card" }, usageAgreement: { payerLabel: "PVA" }, catalogPublication: { visible: true, name: "Pult" } });
+  const client = createFakeSupabaseClient({ catalog_items: [], catalog_variant_sets: [{ id: setId, code: "KOBERCE-SERBUS" }] });
+  let inserts = 0;
+  const counting = { from: (table: string) => { const builder = client.from(table); const insert = builder.insert; builder.insert = (row: FakeRow) => { inserts += 1; return insert(row); }; return builder; } };
+  const created = await createCatalogItemAdmin(counting as never, input);
+  assert.equal(inserts, 1);
+  assert.equal(created.lifecycleStatus, "needs_review");
+  assert.deepEqual([created.document.widthMm, created.document.depthMm, created.document.heightMm], [500, 500, 800]);
+  assert.deepEqual(created.document.attributes, { color: "Bílá", material: "Hliník/desky" });
+  assert.deepEqual(created.document.variantOptions, { variantSetId: setId, scope: "billed_by_card" });
+  assert.deepEqual(created.document.usageAgreement, { payerLabel: "PVA" });
+  assert.equal(created.document.showIn3D, true);
+  assert.equal(created.document.modelAsset, undefined);
+  assert.throws(() => parseCatalogItemAdminCreateInput({ ...input, variantOptions: { variantSetId: setId, scope: "everything" } }), InvalidCatalogItemAdminCreateInputError);
+  assert.throws(() => parseCatalogItemAdminCreateInput({ ...input, usageAgreement: { payerLabel: " " } }), InvalidCatalogItemAdminCreateInputError);
+
+  inserts = 0;
+  await assert.rejects(() => createCatalogItemAdmin(counting as never, { ...input, internalCode: "M21", abfCode: "M21", variantOptions: { variantSetId: "missing-set", scope: "billed_by_card" } }), InvalidCatalogItemAdminCreateInputError);
+  assert.equal(inserts, 0);
+  assert.equal(client.tables.get("catalog_items")!.length, 1, "no half-created card");
 });

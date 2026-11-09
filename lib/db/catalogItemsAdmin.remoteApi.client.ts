@@ -146,16 +146,4 @@ export class RemoteApiCatalogItemsAdminRepository {
     if (!response.ok) await throwForFailedResponse(response, "Aliasy se nepodařilo uložit.");
     return ((await response.json()) as { aliases: readonly CatalogItemAlias[] }).aliases;
   }
-
-  /** KODY.xlsm import — mode "preview" never writes; "apply" re-plans on the server and writes. */
-  async abfImport<T>(file: File, mode: "preview" | "apply", linkConfirmations: Readonly<Record<string, string>>): Promise<T> {
-    const form = new FormData();
-    form.append("file", file);
-    form.append("mode", mode);
-    form.append("linkConfirmations", JSON.stringify(linkConfirmations));
-    const response = await fetch("/api/catalog-admin/abf-import", { method: "POST", credentials: "same-origin", body: form });
-    if (!response.ok) await throwForFailedResponse(response, mode === "preview" ? "Náhled importu selhal." : "Import selhal.");
-    const body = (await response.json()) as { preview?: T; result?: T };
-    return (mode === "preview" ? body.preview : body.result) as T;
-  }
 }

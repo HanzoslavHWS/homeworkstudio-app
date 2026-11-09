@@ -6,7 +6,7 @@ import {
   type EmailAiGenerateRequestBody,
 } from "../../../../domain/emailAi.ts";
 import { findEmailAiLanguage } from "../../../../domain/emailAiConfig.ts";
-import { isEmailAiRequestAuthorized } from "../../../../lib/ai/emailAiRouteAuth.server.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { resolveEmailAiProvider } from "../../../../lib/ai/emailAiProvider.server.ts";
 import type { EmailAiProvider } from "../../../../lib/ai/emailAiProvider.server.ts";
 
@@ -19,9 +19,8 @@ export async function handleEmailAiGenerate(
   request: NextRequest,
   providerFactory: () => EmailAiProvider | undefined = resolveEmailAiProvider,
 ): Promise<NextResponse> {
-  if (!(await isEmailAiRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro generování e-mailu je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "emails.use");
+  if (authDenied) return authDenied;
 
   let body: unknown;
   try {

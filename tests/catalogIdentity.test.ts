@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { NextRequest } from "next/server.js";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { CATALOG_UNITS, catalogUnitLabel, normalizeCatalogUnit } from "../domain/catalogUnits.ts";
 import {
   abfCodeWarning,

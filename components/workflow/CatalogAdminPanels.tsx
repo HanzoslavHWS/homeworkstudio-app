@@ -21,8 +21,6 @@ import {
   itemTypeExpectsAbfCode,
 } from "../../domain/catalogItemTypes";
 import { CATALOG_ITEM_TYPES, type CatalogItemKind, type CatalogItemType } from "../../domain/models";
-import type { AbfImportPlan, AbfImportPlanRow } from "../../domain/catalogAbfImport";
-import type { AbfImportApplyResult } from "../../lib/db/catalogAbfImport.supabase";
 import type { RemoteApiCatalogItemsAdminRepository } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
 import { canPublishInCustomerCatalog } from "../../domain/customerCatalog";
 import { uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
@@ -161,7 +159,7 @@ export function CatalogItemCreateForm({
             <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
           </Field>
           <Field label={itemTypeExpectsAbfCode(itemType) ? "ABF kód" : "ABF kód (nepovinný)"}>
-            <input value={abfCode} onChange={(event) => setAbfCode(event.target.value)} placeholder={itemTypeExpectsAbfCode(itemType) ? "např. M57 (podle KODY.xlsm)" : "Interní komponenta obvykle ABF kód nemá"} />
+            <input value={abfCode} onChange={(event) => setAbfCode(event.target.value)} placeholder={itemTypeExpectsAbfCode(itemType) ? "např. M57 (podle oficiálního ceníku ABF)" : "Interní komponenta obvykle ABF kód nemá"} />
           </Field>
           <Field label={isInternal ? "Interní / generátorový kód *" : "Generátorový kód"}>
             {abfCode.trim() && (
@@ -179,7 +177,7 @@ export function CatalogItemCreateForm({
           {itemTypeExpectsAbfCode(itemType) && (
             <>
               <Field label="Oficiální název ABF (CZ)">
-                <input value={officialName} onChange={(event) => setOfficialName(event.target.value)} placeholder="Podle KODY.xlsm" />
+                <input value={officialName} onChange={(event) => setOfficialName(event.target.value)} placeholder="Oficiální název ABF" />
               </Field>
               <Field label="Oficiální název ABF (EN)">
                 <input value={officialNameEn} onChange={(event) => setOfficialNameEn(event.target.value)} placeholder="Official ABF name" />
@@ -376,206 +374,5 @@ export function CatalogPublicationSection({ item, ownerId, onSave }: { item: Cat
       {!sortOrderValid && <small className="uploadError">Pořadí musí být celé nezáporné číslo.</small>}
       {error && <small className="uploadError">{error}</small>}
     </section>
-  );
-}
-
-// ============================================================================
-// KODY.xlsm IMPORT — preview first, explicit confirmation second.
-// ============================================================================
-
-type PreviewResponse = Readonly<{ plan: AbfImportPlan; schemaReady: boolean }>;
-
-const ACTION_LABELS_CS: Readonly<Record<AbfImportPlanRow["action"], string>> = {
-  create: "Nová",
-  update: "Aktualizace",
-  unchanged: "Beze změny",
-  conflict: "Konflikt",
-};
-
-function rowDetail(row: AbfImportPlanRow): string {
-  switch (row.action) {
-    case "create":
-      return `${CATALOG_ITEM_TYPE_LABELS_CS[row.classification.itemType]}${row.classification.confident ? "" : " (k zařazení)"} · interní kód ${row.internalCode}${row.warnings.length ? ` · ${row.warnings.join(" ")}` : ""}`;
-    case "update":
-      return `${row.itemLabel} · ${row.changes.map((change) => change.field).join(", ")}${row.linkedVia !== "abf_code" ? ` · spárováno přes ${row.linkedVia === "internal_code" ? "interní kód" : "potvrzené propojení"}` : ""}${row.warnings.length ? ` · ${row.warnings.join(" ")}` : ""}`;
-    case "unchanged":
-      return row.itemLabel;
-    case "conflict":
-      return `${row.message}${row.candidateLabel ? ` (${row.candidateLabel})` : ""}`;
-  }
-}
-
-export function AbfImportPanel({
-  repository,
-  onClose,
-  onApplied,
-}: {
-  repository: RemoteApiCatalogItemsAdminRepository;
-  onClose: () => void;
-  onApplied: () => void;
-}) {
-  const [file, setFile] = useState<File | null>(null);
-  const [preview, setPreview] = useState<PreviewResponse | null>(null);
-  const [links, setLinks] = useState<Readonly<Record<string, string>>>({});
-  const [result, setResult] = useState<AbfImportApplyResult | null>(null);
-  const [busy, setBusy] = useState<"idle" | "preview" | "apply">("idle");
-  const [error, setError] = useState("");
-  const [showUnchanged, setShowUnchanged] = useState(false);
-
-  async function runPreview(nextFile: File, nextLinks: Readonly<Record<string, string>>) {
-    setBusy("preview");
-    setError("");
-    setResult(null);
-    try {
-      setPreview(await repository.abfImport<PreviewResponse>(nextFile, "preview", nextLinks));
-    } catch (previewError) {
-      setPreview(null);
-      setError(previewError instanceof Error ? previewError.message : "Náhled importu selhal.");
-    } finally {
-      setBusy("idle");
-    }
-  }
-
-  async function handleApply() {
-    if (!file || !preview) return;
-    const { create, update } = preview.plan.summary;
-    if (!window.confirm(`Importovat ${create} nových a aktualizovat ${update} existujících položek? Konflikty a řádky bez ABF kódu se přeskočí, nic se nearchivuje ani nesmaže.`)) return;
-    setBusy("apply");
-    setError("");
-    try {
-      const applied = await repository.abfImport<AbfImportApplyResult>(file, "apply", links);
-      setResult(applied);
-      setPreview(null);
-      onApplied();
-    } catch (applyError) {
-      setError(applyError instanceof Error ? applyError.message : "Import selhal.");
-    } finally {
-      setBusy("idle");
-    }
-  }
-
-  function toggleLink(abfCode: string, itemId: string, checked: boolean) {
-    const next = { ...links };
-    if (checked) next[abfCode] = itemId;
-    else delete next[abfCode];
-    setLinks(next);
-    if (file) void runPreview(file, next);
-  }
-
-  const plan = preview?.plan;
-  const visibleRows = plan ? plan.rows.filter((row) => showUnchanged || row.action !== "unchanged") : [];
-
-  return (
-    <div className="catalogDetailSection adminDetail catalogImportPanel">
-      <h3>Import ABF kódů z KODY.xlsm</h3>
-      <p className="fieldHint">
-        Importují se pouze řádky listu PRICELIST, které mají ve sloupci A vyplněný ABF kód. Řádky bez ABF kódu se ignorují. Existující položky se párují podle ABF kódu (bez duplicit) a aktualizují se jen pole spravovaná importem (ABF název, provenance, prázdný interní kód/jednotka) — kategorie, typ, 3D vazby, technické parametry a ceny zůstávají. Import nic nearchivuje.
-      </p>
-      <div className="assetActions">
-        <label className="smallUploadButton">
-          {file ? "Vybrat jiný soubor" : "Vybrat soubor"}
-          <input
-            type="file"
-            accept=".xlsm,.xlsx"
-            onChange={(event) => {
-              const next = event.target.files?.[0];
-              event.target.value = "";
-              if (!next) return;
-              setFile(next);
-              setLinks({});
-              void runPreview(next, {});
-            }}
-          />
-        </label>
-        {file && <span className="fieldHint">{file.name}</span>}
-        <button type="button" className="secondaryButton" onClick={onClose}>Zavřít</button>
-      </div>
-      {busy === "preview" && <p className="workspaceEmpty">Připravuji náhled…</p>}
-      {error && <p className="uploadError">{error}</p>}
-
-      {plan && (
-        <>
-          {!preview!.schemaReady && (
-            <p className="uploadError">Databáze ještě nemá migraci katalogu (abf_code / item_type). Náhled je jen orientační, import nelze potvrdit.</p>
-          )}
-          <dl className="catalogImportSummary">
-            <Field label="Datové řádky v souboru">{plan.summary.dataRows}</Field>
-            <Field label="S ABF kódem (importovatelné)">{plan.summary.withAbfCode}</Field>
-            <Field label="Přeskočeno — bez ABF kódu">{plan.summary.skippedWithoutAbfCode}</Field>
-            <Field label="Nové položky">{plan.summary.create}{plan.summary.createdNeedingTypeReview ? ` (z toho k zařazení: ${plan.summary.createdNeedingTypeReview})` : ""}</Field>
-            <Field label="Aktualizované položky">{plan.summary.update}</Field>
-            <Field label="Beze změny">{plan.summary.unchanged}</Field>
-            <Field label="Konflikty">{plan.summary.conflicts}</Field>
-            <Field label="Duplicitní ABF kódy v souboru">{plan.duplicateCodes.length ? plan.duplicateCodes.join(", ") : "0"}</Field>
-          </dl>
-
-          <label className="checkboxRow">
-            <input type="checkbox" checked={showUnchanged} onChange={(event) => setShowUnchanged(event.target.checked)} />
-            Zobrazit i řádky beze změny
-          </label>
-          <div className="catalogImportRows">
-            {visibleRows.map((row) => (
-              <div key={`${row.row.sourceRow}`} className={`catalogImportRow ${row.action}`}>
-                <span>ř. {row.row.sourceRow}</span>
-                <strong>{row.abfCode ?? "—"}</strong>
-                <span>{row.row.nameCz}</span>
-                <span className={`lifecycleBadge ${row.action === "conflict" ? "archived" : row.action === "create" ? "needs_review" : "active"}`}>{ACTION_LABELS_CS[row.action]}</span>
-                <small>
-                  {rowDetail(row)}
-                  {row.action === "conflict" && row.reason === "possible_duplicate_by_name" && row.abfCode && row.candidateItemId && (
-                    <label className="checkboxRow">
-                      <input type="checkbox" checked={false} onChange={() => toggleLink(row.abfCode!, row.candidateItemId!, true)} />
-                      Propojit s existující položkou (doplní jí ABF kód)
-                    </label>
-                  )}
-                  {row.action === "update" && row.linkedVia === "confirmed_link" && (
-                    <label className="checkboxRow">
-                      <input type="checkbox" checked onChange={() => toggleLink(row.abfCode, row.itemId, false)} />
-                      Propojeno s existující položkou (zrušit propojení)
-                    </label>
-                  )}
-                </small>
-              </div>
-            ))}
-          </div>
-
-          {plan.skippedWithoutAbfCode.length > 0 && (
-            <details className="catalogImportDetails">
-              <summary>Přeskočené řádky bez ABF kódu ({plan.skippedWithoutAbfCode.length})</summary>
-              <ul>
-                {plan.skippedWithoutAbfCode.map((row) => <li key={row.sourceRow}>ř. {row.sourceRow}: {row.nameCz}</li>)}
-              </ul>
-            </details>
-          )}
-          {plan.notInFile.length > 0 && (
-            <details className="catalogImportDetails">
-              <summary>Položky s ABF kódem, které v souboru nejsou ({plan.notInFile.length}) — import je nemění ani nearchivuje</summary>
-              <ul>
-                {plan.notInFile.map((entry) => <li key={entry.itemId}>{entry.abfCode} · {entry.label} ({entry.lifecycleStatus})</li>)}
-              </ul>
-            </details>
-          )}
-
-          <div className="catalogAdminReviewActions">
-            <button
-              type="button"
-              className="primaryButton"
-              onClick={() => void handleApply()}
-              disabled={busy !== "idle" || !preview!.schemaReady || plan.summary.create + plan.summary.update === 0}
-            >
-              {busy === "apply" ? "Importuji…" : `Potvrdit import (${plan.summary.create} nových, ${plan.summary.update} aktualizací)`}
-            </button>
-          </div>
-        </>
-      )}
-
-      {result && (
-        <div className="catalogImportResult">
-          <strong>Import dokončen.</strong> Vytvořeno: {result.created}, aktualizováno: {result.updated}
-          {result.staleSkipped.length > 0 && <>, přeskočeno kvůli souběžné změně: {result.staleSkipped.map((row) => row.abfCode).join(", ")}</>}
-          {result.failed.length > 0 && <>, chyby: {result.failed.map((row) => `${row.abfCode} (${row.message})`).join("; ")}</>}.
-        </div>
-      )}
-    </div>
   );
 }

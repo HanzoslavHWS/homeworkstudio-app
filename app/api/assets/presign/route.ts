@@ -6,7 +6,7 @@ import {
   type AssetStorageProvider,
   type StoredAsset,
 } from "../../../../domain/assets.ts";
-import { isAssetRequestAuthorized } from "../../../../lib/storage/assetRouteAuth.ts";
+import { authenticate, authorizeFile } from "../../../../lib/auth/requestAuth.ts";
 import { createCloudflareR2StorageProvider } from "../../../../lib/storage/cloudflareR2.server.ts";
 import { R2ConfigurationError } from "../../../../lib/storage/r2Config.ts";
 
@@ -24,7 +24,8 @@ export async function handleAssetPresign(
   request: NextRequest,
   providerFactory: () => AssetStorageProvider = createCloudflareR2StorageProvider,
 ): Promise<NextResponse> {
-  if (!(await isAssetRequestAuthorized(request))) return NextResponse.json({ error: "Pro upload je vyžadováno přihlášení." }, { status: 401 });
+  const signedIn = await authenticate(request);
+  if (signedIn.ok === false) return signedIn.response;
   let body: PresignBody;
   try { body = await request.json() as PresignBody; }
   catch { return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 }); }
@@ -38,6 +39,9 @@ export async function handleAssetPresign(
   try {
     validateUploadInput(input);
     const storageKey = createStorageKey(input);
+    // Upload only where the user may write: the module of the category, or a project they may edit.
+    const access = await authorizeFile(request, storageKey, "write");
+    if (access.ok === false) return access.response;
     const asset: StoredAsset = {
       id: crypto.randomUUID(),
       storageKey,

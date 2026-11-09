@@ -43,11 +43,13 @@ const PROJECT_ID = "zkusebni-v1-data-07-b1";
 const EVENT_ID = "zkusebni-v1-data-05";
 
 const form = new FormData();
-form.set("password", process.env.APP_LOGIN_PASSWORD ?? "");
+// V1-AUTH-01: a DEV account (Správce) — e-mail + heslo z .env.local, nikdy produkční účet.
+form.set("email", process.env.E2E_LOGIN_EMAIL ?? "");
+form.set("password", process.env.E2E_LOGIN_PASSWORD ?? "");
 form.set("next", "/abf");
 const cookie = ((await fetch(`${baseUrl}/api/auth/login`, { method: "POST", body: form, redirect: "manual" })).headers.get("set-cookie") ?? "").split(";")[0] ?? "";
 if (!cookie.startsWith("homeworkstudio_session=")) {
-  console.error("✖ Přihlášení selhalo (APP_LOGIN_PASSWORD v .env.local).");
+  console.error("✖ Přihlášení selhalo (E2E_LOGIN_EMAIL / E2E_LOGIN_PASSWORD v .env.local — DEV účet s rolí Správce).");
   process.exit(1);
 }
 const headers = { cookie, "Content-Type": "application/json" };

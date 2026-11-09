@@ -42,11 +42,13 @@ function writeOwnEvent(eventId: string): string {
 
 async function login(): Promise<string> {
   const form = new FormData();
-  form.set("password", process.env.APP_LOGIN_PASSWORD ?? "");
+  // V1-AUTH-01: a DEV account (Správce) — e-mail + heslo z .env.local, nikdy produkční účet.
+  form.set("email", process.env.E2E_LOGIN_EMAIL ?? "");
+  form.set("password", process.env.E2E_LOGIN_PASSWORD ?? "");
   form.set("next", "/abf");
   const response = await fetch(`${baseUrl}/api/auth/login`, { method: "POST", body: form, redirect: "manual" });
   const cookie = (response.headers.get("set-cookie") ?? "").split(";")[0] ?? "";
-  if (!cookie.startsWith("homeworkstudio_session=")) throw new Error("Přihlášení selhalo (APP_LOGIN_PASSWORD v .env.local).");
+  if (!cookie.startsWith("homeworkstudio_session=")) throw new Error("Přihlášení selhalo (E2E_LOGIN_EMAIL / E2E_LOGIN_PASSWORD v .env.local — DEV účet s rolí Správce).");
   return cookie;
 }
 

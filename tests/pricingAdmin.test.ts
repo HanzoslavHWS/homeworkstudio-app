@@ -27,7 +27,7 @@ import {
 import { handlePricingAdminEntriesList } from "../app/api/pricing-admin/entries/route.ts";
 import { handlePricingAdminEntriesSave } from "../app/api/pricing-admin/entries/save/route.ts";
 import { handlePricingAdminDuplicatePriceList } from "../app/api/pricing-admin/price-lists/duplicate/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { readCatalogItems, readPricingEntriesForPriceList } from "../lib/db/catalogPricing.supabase.ts";
 import { resolvePricingEntryForApply, type ExistingPricingEntryRow } from "../domain/importBatch2a.ts";
 

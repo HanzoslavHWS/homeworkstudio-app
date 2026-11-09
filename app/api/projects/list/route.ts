@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { authenticate, visibleProjectIds } from "../../../../lib/auth/requestAuth.ts";
+import { externalProjectView } from "../../../../domain/externalProjectView.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { SupabaseProjectRepository } from "../../../../lib/db/projectRepository.supabase.ts";
 import type { RemoteProjectRepository } from "../../../../domain/remotePersistence.ts";
@@ -12,10 +13,16 @@ export async function handleProjectsList(
   request: NextRequest,
   repositoryFactory: () => RemoteProjectRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro přístup k projektům je vyžadováno přihlášení." }, { status: 401 });
+  const signedIn = await authenticate(request);
+  if (signedIn.ok === false) return signedIn.response;
+  const { user } = signedIn.auth;
   try {
-    const projects = await repositoryFactory().list();
-    return NextResponse.json({ projects });
+    // Admin: every project. Others: only assigned ones; an external user gets the read-only view
+    // (identification + allowed outputs), never the full document.
+    const [projects, visible] = await Promise.all([repositoryFactory().list(), visibleProjectIds(user)]);
+    const allowed = visible ? projects.filter((project) => visible.has(project.id)) : projects;
+    if (user.role === "external") return NextResponse.json({ projects: allowed.map((project) => externalProjectView(project as unknown as Readonly<Record<string, unknown>> & { id: string })) });
+    return NextResponse.json({ projects: allowed });
   } catch (error) {
     if (error instanceof SupabaseConfigurationError) return NextResponse.json({ error: error.message }, { status: 503 });
     return NextResponse.json({ error: "Projekty se nepodařilo načíst z databáze." }, { status: 502 });

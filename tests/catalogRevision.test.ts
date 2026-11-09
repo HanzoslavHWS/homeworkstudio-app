@@ -1,6 +1,6 @@
 /**
  * Catalog revision batch: card types (PRODUCT/SERVICE/BOOTH/INTERNAL_COMPONENT), separate ABF
- * code, archive/restore, BOOTH package contents and the KODY.xlsm import.
+ * code, archive/restore, BOOTH package contents.
  */
 import assert from "node:assert/strict";
 import test from "node:test";
@@ -36,15 +36,6 @@ import {
   parseCatalogPackageItemsInput,
   pricePackage,
 } from "../domain/catalogPackages.ts";
-import {
-  buildAbfImportInsert,
-  buildAbfImportUpdatePatch,
-  classifyAbfCodeItemType,
-  KodyFormatError,
-  parseKodyPricelist,
-  planAbfImport,
-  type AbfImportExistingItem,
-} from "../domain/catalogAbfImport.ts";
 import { selectGeneratorBooths, selectSavedProjectBooths, resolveGeneratorBooth, isArchivedButUsableBooth } from "../domain/generatorBooths.ts";
 import { selectGeneratorBoothComponents } from "../domain/generatorBoothComponents.ts";
 import { CATALOG_ITEM_KINDS, CATALOG_ITEM_TYPES, type CatalogItemKind } from "../domain/models.ts";
@@ -59,14 +50,11 @@ import {
   saveCatalogPackageItems,
   CatalogSchemaNotMigratedError,
 } from "../lib/db/catalogItemsAdmin.supabase.ts";
-import { applyAbfImport, previewAbfImport } from "../lib/db/catalogAbfImport.supabase.ts";
-import { readKodyRowsFromBuffer } from "../lib/import/kodyReader.server.ts";
-import { handleAbfImport } from "../app/api/catalog-admin/abf-import/route.ts";
 import { handleCatalogAdminItemsCreate } from "../app/api/catalog-admin/items/create/route.ts";
 import { handleCatalogAdminItemsSave } from "../app/api/catalog-admin/items/save/route.ts";
 import { handleCatalogAdminPackageSave } from "../app/api/catalog-admin/items/package/route.ts";
 import { handleCatalogAdminItemsLifecycle } from "../app/api/catalog-admin/items/lifecycle/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 
 const SECRET = "catalog-revision-test-session-secret-32";
 (process.env as Record<string, string | undefined>).APP_SESSION_SECRET = SECRET;
@@ -530,172 +518,4 @@ test("POST /api/catalog-admin/items/package: malformed lines -> 400; unauthentic
   const token = await createSessionToken(SECRET);
   const response = await handleCatalogAdminPackageSave(request("http://localhost/api/catalog-admin/items/package", { token, body: { packageItemId: "a", items: [{ childItemId: "b", quantity: -1 }] } }), async () => { throw new Error("must not be called"); });
   assert.equal(response.status, 400);
-});
-
-// =========================================================================================
-// KODY.xlsm IMPORT
-// =========================================================================================
-
-const KODY_GRID = [
-  ["kategorie", "položka", "ks", "Kč / ks", "item", "€ / pcs", "NÁKLAD Kč / ks"],
-  ["T04", "Typový stánek octanorm - T4", null, 4400, "Basic schell scheme octanorm - T4", 191, 2860],
-  [null, null, null, null, null, null, null],
-  ["M57", "Židle čalouněná", null, 300, "Upholstered chair", 13, 170],
-  [null, "Dveře křídlové, uzamykatelné", null, 1800, "Hinged door", 78, 1300],
-  ["M56", "Židle bílá", null, 650, "White chair", 28, 470],
-  ["L40", "Přípojka el. energie - 40kW", null, "ZVOL VELETRH", "Electricity supply connection - 40kW", "ZVOL VELETRH"],
-  ["M01", "Koberec šedý 1 m²", null, 190, "Grey carpet/1m²", 9, 130],
-];
-
-function existing(fake: FakeRow): AbfImportExistingItem {
-  const admin = toAdmin(fake);
-  return { ...admin, abfCode: admin.abfCode ?? null, itemType: itemTypeOf(admin) };
-}
-
-test("KODY parse: header validated; blank spacer rows ignored; codes normalized; EN name + unit captured", () => {
-  const rows = parseKodyPricelist(KODY_GRID);
-  assert.equal(rows.length, 6);
-  assert.deepEqual(rows.map((entry) => entry.abfCode), ["T04", "M57", null, "M56", "L40", "M01"]);
-  assert.equal(rows[0]!.nameEn, "Basic schell scheme octanorm - T4");
-  assert.equal(rows[5]!.unit, "m²");
-  assert.throws(() => parseKodyPricelist([["x", "y"]]), KodyFormatError);
-});
-
-test("KODY import: a row WITH an ABF code creates a needs_review card with internal_code = abf_code (two separate fields)", () => {
-  const plan = planAbfImport(parseKodyPricelist(KODY_GRID), [], "KODY.xlsm");
-  const created = plan.rows.find((entry) => entry.action === "create" && entry.abfCode === "M56");
-  assert.ok(created && created.action === "create");
-  const insert = buildAbfImportInsert(created, "KODY.xlsm", "2026-10-01T00:00:00.000Z");
-  assert.equal(insert.internal_code, "M56");
-  assert.equal(insert.abf_code, "M56");
-  assert.equal(insert.lifecycle_status, "needs_review");
-  assert.equal(insert.display_name, "Židle bílá");
-  assert.equal(insert.category, null, "category is never invented");
-  assert.equal(insert.item_type, "PRODUCT");
-  assert.equal(insert.document.itemTypeNeedsReview, true, "M-series type is ambiguous -> flagged for manual classification");
-  assert.equal(created.classification.confident, false);
-});
-
-test("KODY import: a row WITHOUT an ABF code is ignored — never created, never drafted, only counted", async () => {
-  const plan = planAbfImport(parseKodyPricelist(KODY_GRID), [], "KODY.xlsm");
-  assert.equal(plan.summary.skippedWithoutAbfCode, 1);
-  assert.deepEqual(plan.skippedWithoutAbfCode, [{ sourceRow: 5, nameCz: "Dveře křídlové, uzamykatelné" }]);
-  assert.equal(plan.rows.some((entry) => entry.row.nameCz === "Dveře křídlové, uzamykatelné"), false);
-  const client = createFakeClient({ catalog_items: [] });
-  await applyAbfImport(client as never, parseKodyPricelist(KODY_GRID), "KODY.xlsm", "fp");
-  const names = client.tables.get("catalog_items")!.map((stored) => stored.display_name);
-  assert.equal(names.includes("Dveře křídlové, uzamykatelné"), false);
-  assert.equal(names.length, 5);
-});
-
-test("KODY import: classification — T/P -> BOOTH, L/I/W/U -> SERVICE (confident), others PRODUCT + 'k zařazení'", () => {
-  assert.deepEqual([classifyAbfCodeItemType("T04").itemType, classifyAbfCodeItemType("T04").confident], ["BOOTH", true]);
-  assert.deepEqual([classifyAbfCodeItemType("P87").itemType, classifyAbfCodeItemType("L55").itemType, classifyAbfCodeItemType("I20").itemType], ["BOOTH", "SERVICE", "SERVICE"]);
-  assert.deepEqual([classifyAbfCodeItemType("M90").itemType, classifyAbfCodeItemType("M90").kind, classifyAbfCodeItemType("S15").confident], ["PRODUCT", "other", false]);
-});
-
-test("KODY import: an existing ABF code is UPDATED, never duplicated — and only import-managed fields change", async () => {
-  const m57 = m57Row({ document: { id: "chair-basic", displayName: "Židle kovová čalouněná", name: "Židle kovová čalouněná", modelAsset: { id: "a", storageKey: "catalog/m57.glb" }, technicalRaster: { enabled: false }, reviewedAt: "2026-08-01" } });
-  const client = createFakeClient({ catalog_items: [m57] });
-  const first = await applyAbfImport(client as never, parseKodyPricelist(KODY_GRID), "KODY.xlsm", "fp", {}, () => "2026-10-01T10:00:00.000Z");
-  assert.equal(first.updated, 1);
-  const rows = client.tables.get("catalog_items")!;
-  assert.equal(rows.filter((stored) => stored.abf_code === "M57").length, 1, "no duplicate by abf_code");
-  const stored = rows.find((candidate) => candidate.id === "m57-uuid")!;
-  assert.equal(stored.display_name, "Židle kovová čalouněná", "our curated display name is kept");
-  assert.equal(stored.official_name, "Židle čalouněná", "ABF name lands in official_name");
-  assert.equal(stored.category, "chairs");
-  assert.equal(stored.kind, "furniture");
-  assert.equal(stored.lifecycle_status, "active");
-  const document = stored.document as FakeRow;
-  assert.deepEqual(document.modelAsset, { id: "a", storageKey: "catalog/m57.glb" }, "3D link kept");
-  assert.deepEqual(document.technicalRaster, { enabled: false }, "technical parameters kept");
-  assert.equal(document.reviewedAt, "2026-08-01");
-  assert.equal((document.abfImport as FakeRow).abfNameEn, "Upholstered chair");
-
-  const second = await applyAbfImport(client as never, parseKodyPricelist(KODY_GRID), "KODY.xlsm", "fp", {}, () => "2026-10-02T10:00:00.000Z");
-  assert.equal(second.created, 0, "re-import never creates anything again");
-  assert.equal(second.updated, 0);
-  assert.equal(second.plan.summary.unchanged, 5);
-  assert.equal(client.tables.get("catalog_items")!.length, 5);
-});
-
-test("KODY import: legacy card whose internal_code is the ABF code (no abf_code yet) is linked, not duplicated", () => {
-  const legacy = existing(row({ id: "t04-uuid", internal_code: "T04", abf_code: null, kind: "booth", item_type: "BOOTH", display_name: "Typový stánek octanorm - T4", unit: null }));
-  const plan = planAbfImport(parseKodyPricelist(KODY_GRID), [legacy], "KODY.xlsm");
-  const t04 = plan.rows.find((entry) => entry.abfCode === "T04")!;
-  assert.equal(t04.action, "update");
-  assert.equal(t04.action === "update" && t04.linkedVia, "internal_code");
-  assert.ok(t04.action === "update" && t04.changes.some((change) => change.field === "abf_code" && change.to === "T04"));
-  const patch = buildAbfImportUpdatePatch(t04 as never, legacy.document, "KODY.xlsm", "now");
-  assert.deepEqual(Object.keys(patch).sort(), ["abf_code", "document", "official_name"]);
-});
-
-test("KODY import: a code-less card with the SAME NAME is a conflict (no duplicate, no silent link) until the admin confirms the link", () => {
-  const l40 = existing(row({ id: "l40-uuid", kind: "service", item_type: "SERVICE", display_name: "Přípojka el. energie - 40kW", internal_code: null, abf_code: null }));
-  const plan = planAbfImport(parseKodyPricelist(KODY_GRID), [l40], "KODY.xlsm");
-  const conflict = plan.rows.find((entry) => entry.abfCode === "L40")!;
-  assert.equal(conflict.action, "conflict");
-  assert.equal(conflict.action === "conflict" && conflict.reason, "possible_duplicate_by_name");
-  assert.equal(plan.rows.some((entry) => entry.action === "create" && entry.abfCode === "L40"), false);
-  const confirmed = planAbfImport(parseKodyPricelist(KODY_GRID), [l40], "KODY.xlsm", { L40: "l40-uuid" });
-  const linked = confirmed.rows.find((entry) => entry.abfCode === "L40")!;
-  assert.equal(linked.action === "update" && linked.linkedVia, "confirmed_link");
-  const forged = planAbfImport(parseKodyPricelist(KODY_GRID), [l40], "KODY.xlsm", { L40: "some-other-id" });
-  assert.equal(forged.rows.find((entry) => entry.abfCode === "L40")!.action, "conflict", "a confirmation for a different item never links");
-});
-
-test("KODY import: duplicate codes inside the file and an internal code owned by a card with another ABF code are conflicts", () => {
-  const grid = [...KODY_GRID, ["M56", "Židle bílá (2)", null, 1]];
-  const owner = existing(row({ id: "x", internal_code: "M01", abf_code: "M01-OLD", display_name: "Koberec" }));
-  const plan = planAbfImport(parseKodyPricelist(grid), [owner], "KODY.xlsm");
-  assert.deepEqual(plan.duplicateCodes, ["M56"]);
-  assert.equal(plan.rows.filter((entry) => entry.abfCode === "M56").every((entry) => entry.action === "conflict"), true);
-  const m01 = plan.rows.find((entry) => entry.abfCode === "M01")!;
-  assert.equal(m01.action === "conflict" && m01.reason, "internal_code_taken");
-});
-
-test("KODY import: never archives — cards missing from the file are only listed", async () => {
-  const notInFile = row({ id: "m10-uuid", internal_code: "M10", abf_code: "M10", display_name: "Stropní podhled" });
-  const client = createFakeClient({ catalog_items: [notInFile] });
-  const { plan } = await previewAbfImport(client as never, parseKodyPricelist(KODY_GRID), "KODY.xlsm");
-  assert.deepEqual(plan.notInFile.map((entry) => entry.abfCode), ["M10"]);
-  await applyAbfImport(client as never, parseKodyPricelist(KODY_GRID), "KODY.xlsm", "fp");
-  assert.equal(client.tables.get("catalog_items")!.find((stored) => stored.id === "m10-uuid")!.lifecycle_status, "needs_review");
-  assert.equal(client.tables.get("import_batches")!.length, 1, "audit row recorded");
-});
-
-test("KODY import: preview is read-only (never inserts/updates anything)", async () => {
-  const client = createFakeClient({ catalog_items: [m57Row()] });
-  await previewAbfImport(client as never, parseKodyPricelist(KODY_GRID), "KODY.xlsm");
-  assert.equal(client.calls.some((call) => !call.startsWith("select:")), false);
-});
-
-test("POST /api/catalog-admin/abf-import: 401 without session; preview mode never calls apply; missing file -> 400", async () => {
-  const handlers = {
-    readRows: async () => parseKodyPricelist(KODY_GRID),
-    preview: async () => ({ ok: "preview" }),
-    apply: async () => { throw new Error("apply must not run in preview mode"); },
-  };
-  const form = () => {
-    const data = new FormData();
-    data.append("file", new File([new Uint8Array([1, 2, 3])], "KODY.xlsm"));
-    return data;
-  };
-  assert.equal((await handleAbfImport(request("http://localhost/api/catalog-admin/abf-import", { form: form() }), handlers)).status, 401);
-  const token = await createSessionToken(SECRET);
-  const preview = await handleAbfImport(request("http://localhost/api/catalog-admin/abf-import", { token, form: form() }), handlers);
-  assert.equal(preview.status, 200);
-  assert.deepEqual(await preview.json(), { preview: { ok: "preview" } });
-  assert.equal((await handleAbfImport(request("http://localhost/api/catalog-admin/abf-import", { token, form: new FormData() }), handlers)).status, 400);
-});
-
-const REAL_KODY = path.resolve("_IMPORT", "KODY.xlsm");
-test("KODY import: the real _IMPORT/KODY.xlsm parses (VML form controls tolerated) — 84 rows with ABF code, 34 without", { skip: !existsSync(REAL_KODY) && "_IMPORT/KODY.xlsm not present (gitignored)" }, async () => {
-  const rows = await readKodyRowsFromBuffer(readFileSync(REAL_KODY));
-  const plan = planAbfImport(rows, [], "KODY.xlsm");
-  assert.equal(plan.summary.withAbfCode, 84);
-  assert.equal(plan.summary.skippedWithoutAbfCode, 34);
-  assert.equal(plan.summary.duplicateCodes, 0);
-  assert.equal(plan.summary.conflicts, 0);
 });

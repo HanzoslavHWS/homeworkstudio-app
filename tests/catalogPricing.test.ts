@@ -11,7 +11,7 @@ import {
   type CatalogItemSummary,
   type PricingEntrySummary,
 } from "../domain/catalogPricing.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { SupabaseConfigurationError } from "../lib/db/supabase.server.ts";
 import { selectPricingEntry, derivePricingAvailability, findCatalogItemByIdentity } from "../domain/catalog.ts";
 import { resolveEventPriceListForCurrency, normalizeExhibition } from "../domain/organizations.ts";

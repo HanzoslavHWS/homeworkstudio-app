@@ -5,7 +5,7 @@ import { handleEmailHistoryList } from "../app/api/emails/history/list/route.ts"
 import { handleEmailHistorySave } from "../app/api/emails/history/save/route.ts";
 import { handleEmailHistoryUpdate } from "../app/api/emails/history/update/route.ts";
 import { handleEmailHistoryDelete } from "../app/api/emails/history/delete/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { nextHistorySaveAction, type EmailHistoryEntry, type EmailHistoryRepository, type EmailHistorySaveInput } from "../domain/emailHistory.ts";
 
 const SECRET = "email-history-test-session-secret-32ch";

@@ -91,3 +91,42 @@ export function extractSheetGrid(workbook: ExcelJS.Workbook, sheetName: string):
   }
   return grid;
 }
+
+/**
+ * Catalog import cell: like RawCellValue, but nothing is silently dropped — an Excel boolean stays a
+ * boolean and an error value (#N/A, #REF!, … also as a formula result) or a formula without a stored
+ * value becomes an ExcelErrorCell, so
+ * the importer can accept or refuse it explicitly instead of reading "empty".
+ */
+export type ExcelErrorCell = Readonly<{ excelError: string }>;
+export type StrictCellValue = string | number | boolean | ExcelErrorCell | null;
+
+export function cellToStrictValue(value: ExcelJS.CellValue): StrictCellValue {
+  if (typeof value === "boolean") return value;
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    const error = (value as { error?: unknown }).error;
+    if (typeof error === "string") return { excelError: error };
+    const formulaResult = (value as { result?: ExcelJS.CellValue }).result;
+    if (formulaResult !== undefined && (typeof formulaResult === "boolean" || (formulaResult && typeof formulaResult === "object"))) return cellToStrictValue(formulaResult);
+    // A formula whose value was never calculated/stored would otherwise read as empty.
+    if (formulaResult === undefined && ("formula" in value || "sharedFormula" in value)) return { excelError: "vzorec bez uložené hodnoty" };
+  }
+  return cellToRawValue(value);
+}
+
+/** extractSheetGrid for the catalog import — booleans and Excel errors kept (see StrictCellValue). */
+export function extractStrictSheetGrid(workbook: ExcelJS.Workbook, sheetName: string): readonly (readonly StrictCellValue[])[] {
+  const sheet = workbook.getWorksheet(sheetName);
+  if (!sheet) return [];
+  // Same rectangle as before, but only cells that hold something are visited: the template has
+  // ~1000 formatted (validated) empty rows per sheet, and getRow()/getCell() on each of them made
+  // reading a real workbook take ~30 s instead of well under a second.
+  const width = sheet.columnCount;
+  const grid: StrictCellValue[][] = Array.from({ length: sheet.rowCount }, () => new Array<StrictCellValue>(width).fill(null));
+  sheet.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      if (rowNumber <= grid.length && colNumber <= width) grid[rowNumber - 1]![colNumber - 1] = cellToStrictValue(cell.value);
+    });
+  });
+  return grid;
+}

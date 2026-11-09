@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../auth/requestAuth.ts";
+import { denyUnless } from "../auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../db/supabase.server.ts";
 import { SupabaseTaskRepository } from "../db/taskRepository.supabase.ts";
 import { SupabaseStandChecklistRepository } from "../db/standChecklistRepository.supabase.ts";
@@ -26,8 +26,7 @@ export const defaultTaskApiDependencies: TaskApiDependencies = {
 };
 
 export async function requireTaskSession(request: NextRequest): Promise<NextResponse | undefined> {
-  if (await isSessionRequestAuthorized(request)) return undefined;
-  return NextResponse.json({ error: "Pro práci s úkoly je vyžadováno přihlášení." }, { status: 401 });
+  return denyUnless(request, "tasks.use");
 }
 
 export async function readJsonBody<T>(request: NextRequest): Promise<T | NextResponse> {

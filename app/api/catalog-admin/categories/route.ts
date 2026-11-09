@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { CatalogCategoriesNotMigratedError, readCatalogCategoryRegister, saveCatalogCategory, type CatalogCategoryRegister } from "../../../../lib/db/catalogCategories.supabase.ts";
 import { InvalidCatalogCategoryError, parseCatalogCategoryInput, type CatalogCategoryDef } from "../../../../domain/catalogClassification.ts";
@@ -20,7 +20,8 @@ const defaultDependencies: CatalogCategoryDependencies = {
 };
 
 export async function handleCatalogCategoriesGet(request: NextRequest, dependencies: CatalogCategoryDependencies = defaultDependencies): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro administraci katalogu je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.read");
+  if (authDenied) return authDenied;
   try {
     return NextResponse.json(await dependencies.readRegister());
   } catch (error) {
@@ -30,7 +31,8 @@ export async function handleCatalogCategoriesGet(request: NextRequest, dependenc
 }
 
 export async function handleCatalogCategorySave(request: NextRequest, dependencies: CatalogCategoryDependencies = defaultDependencies): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro úpravu kategorií je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.manage");
+  if (authDenied) return authDenied;
   let body: { category?: unknown; isNew?: unknown };
   try {
     body = (await request.json()) as { category?: unknown; isNew?: unknown };

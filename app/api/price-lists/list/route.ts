@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { SupabasePriceListRepository } from "../../../../lib/db/priceListRepository.supabase.ts";
 import type { PriceListRepository } from "../../../../domain/priceListRepository.ts";
@@ -12,7 +12,8 @@ export async function handlePriceListsList(
   request: NextRequest,
   repositoryFactory: () => PriceListRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro přístup k ceníkům je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "prices.sale.read");
+  if (authDenied) return authDenied;
   try {
     const priceLists = await repositoryFactory().list();
     return NextResponse.json({ priceLists });

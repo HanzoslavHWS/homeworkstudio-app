@@ -19,7 +19,6 @@ V tomto batchi **neproběhl žádný datový import**. Všechny dry-runy jen če
 | `scripts/importBatch2a.ts` | M57, L02, 22 technických služeb, 495 cen technických služeb pro jednotlivé veletrhy | jen s `--apply` | `…/import-batch2a-plan.json` | ✅ totéž |
 | `scripts/importBatch2b.ts` | 56 položek z PRICELIST, P86 a jejich mapování (bez `pricing_entries`) | jen s `--apply` | `…/import-batch2b-plan.json` | ✅ totéž |
 | `scripts/canonicalizeTypeBooths.ts` | Opravný skript: kostra `variants` u Txx a P87 jako záznam k doplnění | jen s `--apply` | — | ✅ totéž |
-| `scripts/catalogAbfImportPreview.ts` | Náhled importu `KODY.xlsm` (s `--against-db` čte katalog) | nikdy | — | ✅ `createScriptSupabaseClient` |
 | `scripts/importPreviewV66.ts` | Náhled `Ultimátní kalkulace V6.6.xlsm` | nikdy (DB nepoužívá) | `…/import-preview-v6.6.json` (vstup pro 2B) | — |
 | `scripts/importDryRun.ts` | Starší obecný náhled importu | nikdy | — | — |
 | `scripts/matchAbfCodes.ts` | Párování kódů V6.6 ↔ sklad ABF | nikdy | **přepisuje** `code-matching-report.json/.xlsx` | — (v tomto batchi záměrně nespuštěn) |
@@ -28,7 +27,7 @@ V tomto batchi **neproběhl žádný datový import**. Všechny dry-runy jen če
 
 **Zápisy z uživatelského rozhraní** (neběží jako skripty, ale přes API aplikace a `createSupabaseServerClient`):
 
-- *Katalog komponent → Import ABF kódů*: `app/api/catalog-admin/abf-import`
+- *Administrace → Katalog → Import Excelu* (Produkty, Sluzby): `app/api/catalog-admin/excel-import/*` (jen DEV). Dřívější import ABF kódů (`abf-import`) byl odstraněn ve V1-ADMIN-01.
 - *Tiskové plochy → import katalogu*: náhled vytvoří `app/api/print-surfaces/import`, zápis pak provede prohlížeč přes `replaceAll` u tří repozitářů
 - běžné ukládání v modulech
 

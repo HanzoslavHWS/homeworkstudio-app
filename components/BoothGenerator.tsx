@@ -242,6 +242,12 @@ import { TaskDetailPanel } from "./workflow/tasks/TaskDetailPanel";
 import { StandTasksPanel } from "./workflow/tasks/StandTasksPanel";
 import { EventTasksSummary } from "./workflow/tasks/EventTasksSummary";
 import type { TaskLookups } from "./workflow/tasks/TaskRow";
+import { UsersAdminPage } from "./workflow/UsersAdminPage";
+import { AdminShell } from "./workflow/AdminShell";
+import type { CatalogAdminView } from "./workflow/ComponentAdminPage";
+import { LEGACY_ADMIN_SECTIONS, canOpenAdmin, defaultAdminRoute, normalizeAdminRoute, parseWorkspaceHash, workspaceHash, type AdminRoute, type WorkspaceLocation } from "../domain/adminNavigation";
+import { canOpenSection } from "../domain/accessControl";
+import type { CurrentUser } from "../lib/auth/pageAuth.server";
 
 /** Individual-booth plot size defaults (mode=individualni, before the user has entered anything) — a neutral starting point on the 250 mm layout grid, never a fabricated real-world footprint. */
 const INDIVIDUAL_DEFAULT_WIDTH_MM = 3000;
@@ -301,7 +307,7 @@ function VariantCardThumbnail({ variant, parentPhotoAsset, label }: { variant: P
   );
 }
 
-export default function BoothGenerator() {
+export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?: CurrentUser }> = {}) {
   const repositoryRef = useRef<ProjectRepository | null>(null);
   const eventRepositoryRef = useRef<EventRepository | null>(null);
   const priceListRepositoryRef = useRef<PriceListRepository | null>(null);
@@ -358,7 +364,7 @@ export default function BoothGenerator() {
     navigateWorkspace("printSurfaces", { printSurfaceProjectId: projectId });
   }
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies" | "priceVersions"
+    "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies" | "priceVersions" | "users"
   >("project");
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
@@ -717,6 +723,8 @@ export default function BoothGenerator() {
   }
 
   function navigateWorkspace(section: typeof workspaceSection, payload?: { catalogItemId?: string; printSurfaceProjectId?: string; technicalRasterProjectId?: string; eventId?: string; tasksIntent?: TasksPageIntent; priceVersions?: PriceVersionsPreselect }) {
+    // Navigation only offers what the role may open (domain/accessControl.ts); the API checks again.
+    if (currentUser && !canOpenSection(currentUser.role, section)) return;
     if (workspaceSection === "events" && section !== "events" && !confirmLeaveEvent()) return;
     if (workspaceSection === "events" && section !== "events" && eventDirty) {
       eventRepositoryRef.current?.list().then((events) => setAdminEvents([...events]));
@@ -733,6 +741,73 @@ export default function BoothGenerator() {
       repositoryRef.current?.list().then((projects) => setSavedProjects([...projects]));
     }
   }
+
+  // ---- Společná administrace (V1-ADMIN-01) + the address bar ----------------------------------
+  // The admin screens keep their own sections; Administrace groups them (AdminShell) and the
+  // address bar (/abf#/administrace/katalog/polozky/<id>, #/ukoly, …) mirrors where the user is,
+  // so a reload or the browser's Back opens the same place.
+  const [catalogView, setCatalogView] = useState<CatalogAdminView>("items");
+  const [catalogItemId, setCatalogItemId] = useState<string | undefined>(undefined);
+  const adminBase = LEGACY_ADMIN_SECTIONS[workspaceSection as keyof typeof LEGACY_ADMIN_SECTIONS];
+  const currentAdminRoute: AdminRoute | undefined = adminBase
+    ? normalizeAdminRoute(adminBase.area === "catalog" && adminBase.tab === "items" ? { area: "catalog", tab: catalogView, itemId: catalogItemId } : adminBase)
+    : undefined;
+
+  function sectionForAdminRoute(route: AdminRoute): typeof workspaceSection {
+    const match = (Object.entries(LEGACY_ADMIN_SECTIONS) as [typeof workspaceSection, AdminRoute][]).find(([, candidate]) => candidate.area === route.area && (candidate.tab === undefined || candidate.tab === route.tab));
+    return match?.[0] ?? "components";
+  }
+
+  function navigateAdmin(route: AdminRoute) {
+    const target = normalizeAdminRoute(route);
+    if (target.area === "catalog" && target.tab !== "booths") {
+      setCatalogView(target.tab as CatalogAdminView);
+      setCatalogItemId(target.itemId);
+      if (workspaceSection === "components") return;
+      navigateWorkspace("components");
+      return;
+    }
+    navigateWorkspace(sectionForAdminRoute(target));
+  }
+
+  function openAdministration() {
+    const route = defaultAdminRoute(currentUser?.role);
+    if (route) navigateAdmin(route);
+  }
+
+  function applyLocation(location: WorkspaceLocation) {
+    if (location.section === "admin") {
+      if (!canOpenAdmin(currentUser?.role)) return;
+      navigateAdmin(location.admin);
+    } else if (location.section === "project") {
+      if (workspaceSection !== "project") setWorkspaceSection("project");
+    } else {
+      navigateWorkspace(location.section);
+    }
+  }
+
+  const locationReadyRef = useRef(false);
+  useEffect(() => {
+    // first load: open what the address bar names (a bookmark, a reload)
+    applyLocation(parseWorkspaceHash(window.location.hash));
+    locationReadyRef.current = true;
+    const onPop = () => applyLocation(parseWorkspaceHash(window.location.hash));
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (!locationReadyRef.current) return;
+    const location: WorkspaceLocation = currentAdminRoute
+      ? { section: "admin", admin: currentAdminRoute }
+      : workspaceSection === "project"
+        ? { section: "project" }
+        : { section: workspaceSection };
+    const hash = workspaceHash(location);
+    if (hash !== window.location.hash && !(hash === "" && window.location.hash === "")) {
+      window.history.pushState(null, "", `${window.location.pathname}${window.location.search}${hash}`);
+    }
+  }, [workspaceSection, catalogView, catalogItemId, currentAdminRoute?.area, currentAdminRoute?.tab]);
 
   /* ================================================= */
   /* DERIVED                                          */
@@ -2774,9 +2849,10 @@ export default function BoothGenerator() {
           setIsSidebarCollapsed((collapsed) => !collapsed)
         }
         onStartNewProject={startNewProject}
-        activeSection={workspaceSection}
-        onNavigate={navigateWorkspace}
+        activeSection={currentAdminRoute ? "admin" : workspaceSection}
+        onNavigate={(section) => (section === "admin" ? openAdministration() : navigateWorkspace(section))}
         taskBadge={taskStore.tasks ? computeTaskCounts(taskStore.tasks, localIsoDate()).attention : undefined}
+        user={currentUser}
       />
 
       {/* ================================================= */}
@@ -2827,20 +2903,94 @@ export default function BoothGenerator() {
           />
         )}
 
-        {workspaceSection === "booths" && (
-          <BoothAdminPage
-            repository={catalogItemsAdminRepositoryRef.current}
-            onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
-            onOpenPriceVersion={(preselect) => navigateWorkspace("priceVersions", { priceVersions: preselect })}
-          />
-        )}
+        {currentAdminRoute && (
+          <AdminShell role={currentUser?.role} route={currentAdminRoute} onNavigate={navigateAdmin}>
+              {workspaceSection === "booths" && (
+            <BoothAdminPage
+              repository={catalogItemsAdminRepositoryRef.current}
+              onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
+              onOpenPriceVersion={(preselect) => navigateWorkspace("priceVersions", { priceVersions: preselect })}
+            />
+          )}
 
-        {workspaceSection === "components" && (
-          <ComponentAdminPage
-            repository={catalogItemsAdminRepositoryRef.current}
-            onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
-            onOpenPriceVersion={(preselect) => navigateWorkspace("priceVersions", { priceVersions: preselect })}
-          />
+              {workspaceSection === "components" && (
+            <ComponentAdminPage
+              repository={catalogItemsAdminRepositoryRef.current}
+              onOpenPricing={(catalogItemId) => navigateWorkspace("pricingAdmin", { catalogItemId })}
+              onOpenPriceVersion={(preselect) => navigateWorkspace("priceVersions", { priceVersions: preselect })}
+              view={catalogView}
+              onViewChange={(view) => navigateAdmin({ area: "catalog", tab: view })}
+              selectedItemId={catalogItemId}
+              onSelectItem={(id) => navigateAdmin({ area: "catalog", tab: "items", ...(id ? { itemId: id } : {}) })}
+            />
+          )}
+
+              {workspaceSection === "events" && eventsHydrated && (
+            <EventsPage
+              events={adminEvents}
+              priceLists={adminPriceLists}
+              onChange={setAdminEvents}
+              onDirtyChange={setEventDirty}
+              initialSelectedId={eventPreselect}
+              renderEventExtras={(eventId) => (
+                <EventTasksSummary
+                  tasks={taskStore.tasks}
+                  eventId={eventId}
+                  onShowEventTasks={(id) => navigateWorkspace("tasks", { tasksIntent: { tab: "all", filters: { eventId: id } } })}
+                  onOpenTask={(taskId) => setTaskDetailId(taskId)}
+                />
+              )}
+              actorName={taskStore.actorName}
+              onSave={async (event) => {
+                const repository = eventRepositoryRef.current;
+                if (!repository) {
+                  setAdminEvents((events) => events.map((item) => item.id === event.id ? event : item));
+                  return event;
+                }
+                // Optimistic concurrency: save against the revision the card was loaded with, so an edit
+                // made elsewhere in the meantime is refused instead of overwritten (V1-DATA-06).
+                const knownRevision = (event as Partial<PersistedExhibition>).revision;
+                const stored = typeof knownRevision === "number" && "saveWithRevision" in repository
+                  ? await (repository as RemoteEventRepository).saveWithRevision(event, knownRevision)
+                  : await repository.save(event);
+                setAdminEvents((events) => events.map((item) => item.id === event.id ? stored : item));
+                return stored;
+              }}
+            />
+          )}
+
+              {workspaceSection === "priceLists" && priceListsHydrated && (
+            <PriceListsPage
+              priceLists={adminPriceLists}
+              events={adminEvents}
+              catalogItems={dbCatalogItems}
+              pricingAdminRepository={pricingAdminRepositoryRef.current}
+              onChange={setAdminPriceLists}
+              onSave={async (priceList) => {
+                if (!priceListRepositoryRef.current) throw new Error("Databázové úložiště není dostupné. Ceník nebyl uložen.");
+                const saved = await priceListRepositoryRef.current.save(priceList);
+                setAdminPriceLists((lists) => lists.map((item) => item.id === priceList.id ? saved : item));
+                return saved;
+              }}
+            />
+          )}
+
+              {workspaceSection === "pricingAdmin" && (
+            <PricingAdminPage
+              catalogItems={dbCatalogItems}
+              priceLists={adminPriceLists}
+              events={adminEvents}
+              repository={pricingAdminRepositoryRef.current}
+              initialCatalogItemId={pricingAdminPreselect}
+            />
+          )}
+
+              {workspaceSection === "realizationCompanies" && <RealizationCompaniesPage />}
+
+              {workspaceSection === "users" && <UsersAdminPage currentUserId={currentUser?.id} />}
+
+              {workspaceSection === "priceVersions" && <PriceVersionsPage key={priceVersionsPreselect?.key ?? "default"} actorName={taskStore.actorName} preselect={priceVersionsPreselect?.value} />}
+          </AdminShell>
         )}
 
         {workspaceSection === "customerCatalog" && (
@@ -2850,66 +3000,6 @@ export default function BoothGenerator() {
             presetRepository={customerCatalogPresetRepositoryRef.current}
             events={adminEvents}
             priceLists={adminPriceLists}
-          />
-        )}
-
-        {workspaceSection === "events" && eventsHydrated && (
-          <EventsPage
-            events={adminEvents}
-            priceLists={adminPriceLists}
-            onChange={setAdminEvents}
-            onDirtyChange={setEventDirty}
-            initialSelectedId={eventPreselect}
-            renderEventExtras={(eventId) => (
-              <EventTasksSummary
-                tasks={taskStore.tasks}
-                eventId={eventId}
-                onShowEventTasks={(id) => navigateWorkspace("tasks", { tasksIntent: { tab: "all", filters: { eventId: id } } })}
-                onOpenTask={(taskId) => setTaskDetailId(taskId)}
-              />
-            )}
-            actorName={taskStore.actorName}
-            onSave={async (event) => {
-              const repository = eventRepositoryRef.current;
-              if (!repository) {
-                setAdminEvents((events) => events.map((item) => item.id === event.id ? event : item));
-                return event;
-              }
-              // Optimistic concurrency: save against the revision the card was loaded with, so an edit
-              // made elsewhere in the meantime is refused instead of overwritten (V1-DATA-06).
-              const knownRevision = (event as Partial<PersistedExhibition>).revision;
-              const stored = typeof knownRevision === "number" && "saveWithRevision" in repository
-                ? await (repository as RemoteEventRepository).saveWithRevision(event, knownRevision)
-                : await repository.save(event);
-              setAdminEvents((events) => events.map((item) => item.id === event.id ? stored : item));
-              return stored;
-            }}
-          />
-        )}
-
-        {workspaceSection === "priceLists" && priceListsHydrated && (
-          <PriceListsPage
-            priceLists={adminPriceLists}
-            events={adminEvents}
-            catalogItems={dbCatalogItems}
-            pricingAdminRepository={pricingAdminRepositoryRef.current}
-            onChange={setAdminPriceLists}
-            onSave={async (priceList) => {
-              if (!priceListRepositoryRef.current) throw new Error("Databázové úložiště není dostupné. Ceník nebyl uložen.");
-              const saved = await priceListRepositoryRef.current.save(priceList);
-              setAdminPriceLists((lists) => lists.map((item) => item.id === priceList.id ? saved : item));
-              return saved;
-            }}
-          />
-        )}
-
-        {workspaceSection === "pricingAdmin" && (
-          <PricingAdminPage
-            catalogItems={dbCatalogItems}
-            priceLists={adminPriceLists}
-            events={adminEvents}
-            repository={pricingAdminRepositoryRef.current}
-            initialCatalogItemId={pricingAdminPreselect}
           />
         )}
 
@@ -2950,10 +3040,6 @@ export default function BoothGenerator() {
         {workspaceSection === "settlementChecks" && (
           <SettlementChecksPage events={adminEvents} actorName={taskStore.actorName} />
         )}
-
-        {workspaceSection === "realizationCompanies" && <RealizationCompaniesPage />}
-
-        {workspaceSection === "priceVersions" && <PriceVersionsPage key={priceVersionsPreselect?.key ?? "default"} actorName={taskStore.actorName} preselect={priceVersionsPreselect?.value} />}
 
         {taskDetail && (
           <TaskDetailPanel

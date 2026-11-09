@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../auth/requestAuth.ts";
+import { denyUnless } from "../auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../db/supabase.server.ts";
 import { SupabaseRealizationCompanyRepository } from "../db/realizationCompanyRepository.supabase.ts";
 import { SettlementSchemaNotMigratedError, SupabaseSettlementRepository } from "../db/settlementRepository.supabase.ts";
@@ -64,8 +64,7 @@ const MAX_UPLOAD_BYTES = 20 * 1024 * 1024;
 const MAX_PDF_TEXT_ITEMS = 200_000;
 
 async function unauthorized(request: NextRequest): Promise<NextResponse | undefined> {
-  if (await isSessionRequestAuthorized(request)) return undefined;
-  return NextResponse.json({ error: "Pro práci s kontrolou vyúčtování je vyžadováno přihlášení." }, { status: 401 });
+  return denyUnless(request, "settlement.use");
 }
 
 async function readJsonBody(request: NextRequest): Promise<Record<string, unknown> | NextResponse> {

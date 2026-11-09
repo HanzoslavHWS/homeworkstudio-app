@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { authenticate, authorizeProject } from "../../../../lib/auth/requestAuth.ts";
+import { authStore } from "../../../../lib/auth/authStore.server.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { SupabaseProjectRepository } from "../../../../lib/db/projectRepository.supabase.ts";
 import type { RemoteProjectRepository } from "../../../../domain/remotePersistence.ts";
@@ -28,13 +29,17 @@ export async function handleProjectsSave(
   repositoryFactory: () => RemoteProjectRepository = defaultRepositoryFactory,
   resolveEventIdFactory: () => EventIdResolver = defaultEventIdResolverFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro ukládání projektů je vyžadováno přihlášení." }, { status: 401 });
+  const signedIn = await authenticate(request);
+  if (signedIn.ok === false) return signedIn.response;
   let body: SaveBody;
   try { body = await request.json() as SaveBody; }
   catch { return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 }); }
   if (!body.project || typeof body.project.id !== "string" || !body.project.id) {
     return NextResponse.json({ error: "Chybí platný projekt." }, { status: 400 });
   }
+  // Existing project: the user must be allowed to edit it; a new one: may create projects at all.
+  const access = await authorizeProject(request, body.project.id, "write");
+  if (access.ok === false) return access.response;
   try {
     // Never trust the client payload blindly — the same migration/normalization the app
     // runs on every localStorage read also runs here before anything is persisted.
@@ -45,6 +50,8 @@ export async function handleProjectsSave(
     // union correctly (verified directly; an exact literal comparison narrows fine either way).
     if (eventResolution.ok === false) return NextResponse.json({ error: eventResolution.message }, { status: 400 });
     const saved = await repositoryFactory().saveWithRevision({ ...normalized, fairId: eventResolution.eventId ?? "" }, body.expectedRevision ?? null);
+    // The creator of a new project is assigned to it (an admin sees every project anyway).
+    if ((body.expectedRevision ?? null) === null && access.auth.user.role !== "admin") await authStore().addProjectMember(saved.id, access.auth.user.id, access.auth.user.id);
     return NextResponse.json({ project: saved });
   } catch (error) {
     if (error instanceof ConcurrencyConflictError) return NextResponse.json({ error: "Data byla mezitím změněna jinde. Obnovte stránku před uložením." }, { status: 409 });

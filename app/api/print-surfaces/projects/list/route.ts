@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { SupabasePrintSurfaceProjectRepository } from "../../../../../lib/db/printSurfaceProjectRepository.supabase.ts";
 import type { PrintSurfaceProjectRepository } from "../../../../../domain/printSurfaceProject.ts";
@@ -12,9 +12,8 @@ export async function handlePrintSurfaceProjectsList(
   request: NextRequest,
   repositoryFactory: () => PrintSurfaceProjectRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro přístup k projektům tiskových ploch je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "printSurfaces.use");
+  if (authDenied) return authDenied;
   try {
     const projects = await repositoryFactory().list();
     return NextResponse.json({ projects });

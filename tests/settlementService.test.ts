@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { NextRequest } from "next/server.js";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { handleSettlementCreate, handleSettlementGet, handleSettlementImport, handleSettlementList, handleSettlementRulesPost, type SettlementApiDependencies } from "../lib/settlement/settlementApi.server.ts";
 import { parseAbfOrdersFromSheetGrid } from "../domain/settlementAbfOrderImport.ts";
 import { parseCreativExpoWorkbook, type VendorSheetGrid } from "../domain/settlementCreativExpoImport.ts";
@@ -499,8 +499,8 @@ test("API RULES: „mimo rozsah“ z řádku se aktivuje jen se jménem autora",
 
 test("UI: položka „Kontrola vyúčtování“ v navigaci, stránka v BoothGenerator, filtry a žádné AI volání", async () => {
   const sidebar = await read("components/AppSidebar.tsx");
-  assert.match(sidebar, /onNavigate\?\.\("settlementChecks"\)/u);
-  assert.match(sidebar, /<span className="navLabel">Kontrola vyúčtování<\/span>/u);
+  assert.match(sidebar, /\{ section: "settlementChecks", icon: "[^"]+", label: "Kontrola vyúčtování"/u);
+  assert.match(sidebar, /onClick=\{\(\) => onNavigate\?\.\(item\.section\)\}/u);
   const shell = await read("components/BoothGenerator.tsx");
   assert.match(shell, /\{workspaceSection === "settlementChecks" && \(\s*<SettlementChecksPage events=\{adminEvents\}/u);
 

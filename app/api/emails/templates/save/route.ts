@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { SupabaseEmailTemplateRepository } from "../../../../../lib/db/emailTemplateRepository.supabase.ts";
 import { EmailTemplateProtectedError, type EmailTemplateCreateInput, type EmailTemplateRepository } from "../../../../../domain/emailTemplate.ts";
@@ -15,7 +15,8 @@ export async function handleEmailTemplatesSave(
   request: NextRequest,
   repositoryFactory: () => EmailTemplateRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro ukládání vzorů e-mailů je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "emails.use");
+  if (authDenied) return authDenied;
   let body: SaveBody;
   try { body = await request.json() as SaveBody; }
   catch { return NextResponse.json({ error: "Neplatný JSON požadavek." }, { status: 400 }); }

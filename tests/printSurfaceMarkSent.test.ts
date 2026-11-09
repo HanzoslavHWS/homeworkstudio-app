@@ -13,7 +13,7 @@ import {
 import { SupabasePrintSurfaceProjectRepository } from "../lib/db/printSurfaceProjectRepository.supabase.ts";
 import { handlePrintSurfaceProjectSave } from "../app/api/print-surfaces/projects/save/route.ts";
 import { NextRequest } from "next/server.js";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import type { PrintSurfaceProjectRepository } from "../domain/printSurfaceProject.ts";
 
 // =============================================================================================

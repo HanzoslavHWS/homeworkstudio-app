@@ -444,6 +444,18 @@ textarea {
   font-size: 8px;
 }
 
+/* V1-AUTH-01: readable sizes, notices, links and account-state pages */
+.loginCard > p { font-size: 13px; }
+.loginForm label span { font-size: 12px; }
+.loginForm input { font-size: 14px; }
+.loginForm button { font-size: 13px; }
+.loginForm button:disabled, .loginForm input:disabled { opacity: 0.65; cursor: progress; }
+.loginMessage { font-size: 12px; line-height: 1.5; }
+.loginNotice { padding: 8px 10px; border: 1px solid #d6e4da; border-radius: 6px; background: #f5fbf7; color: #3e6a4c; font-size: 12px; line-height: 1.5; margin-bottom: 13px; }
+.loginForm .loginNotice { margin-bottom: 0; }
+.loginLink { justify-self: center; color: #4b5055; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; }
+.loginForm .loginSecondary, .loginSecondary { width: 100%; height: 42px; border: 1px solid #d9dbdc; border-radius: 7px; background: #fff; color: #202326; font-size: 13px; font-weight: 700; cursor: pointer; }
+
 /* ================================================= */
 /* LAUNCHER                                          */
 /* ================================================= */
@@ -7093,7 +7105,7 @@ select:focus {
 .technicalRasterViewport.drawingTool-point,
 .technicalRasterViewport.drawingTool-line { cursor: crosshair; }
 
-/* Catalog revision: card types, bulk archive, package contents, KODY import preview */
+/* Catalog revision: card types, bulk archive, package contents */
 .catalogAdminToolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 12px; }
 .catalogAdminFilters { grid-template-columns: minmax(200px, 1fr) repeat(6, minmax(110px, .3fr)) auto; }
 .catalogBulkBar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: -4px 0 12px; }
@@ -7568,3 +7580,247 @@ select:focus {
 .catalogCardSeriesPrices { margin-top: 10px; }
 .catalogCardSeriesPrices h4 { margin-bottom: 4px; }
 .catalogCardSeriesVariantRow td { color: #55595c; }
+
+/* ================================================= */
+/* V1-AUTH-01: user menu, external projects, users admin */
+/* ================================================= */
+
+.userMenu { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; font-size: 12px; }
+.userMenuIdentity { display: grid; min-width: 0; gap: 2px; }
+.userMenuIdentity strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.userMenuIdentity span { color: #767b81; font-size: 11px; }
+.userMenuLogout { padding: 5px 9px; border: 1px solid #d9dbdc; border-radius: 6px; background: transparent; color: inherit; font-size: 11px; font-weight: 700; cursor: pointer; white-space: nowrap; }
+.userMenu--dark { position: absolute; top: 18px; right: 24px; color: #f2f2f2; }
+.userMenu--dark .userMenuLogout { border-color: #3a3c40; }
+.userMenu--dark .userMenuIdentity span { color: #9a9ea3; }
+.userMenu--compact { justify-content: center; }
+.userMenu--compact .userMenuIdentity { display: none; }
+.launcherPage { position: relative; }
+
+.externalPage { min-height: 100vh; padding: 32px 24px; background: #f3f4f4; }
+.externalHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; max-width: 900px; margin: 0 auto 20px; }
+.externalHeader h1 { font-size: 26px; letter-spacing: -0.5px; }
+.externalHeader .userMenu { margin-bottom: 0; }
+.externalList { display: grid; gap: 14px; max-width: 900px; margin: 0 auto; }
+.externalCard { padding: 18px 20px; border: 1px solid #dfe1e2; border-radius: 12px; background: #fff; }
+.externalCard h2 { font-size: 17px; margin-bottom: 4px; }
+.externalCard ul { display: grid; gap: 8px; margin: 12px 0 0; padding: 0; list-style: none; }
+.externalCard li { display: flex; align-items: center; justify-content: space-between; gap: 12px; font-size: 13px; }
+.externalPage > .uploadError, .externalPage > .fieldHint { max-width: 900px; margin: 0 auto 12px; }
+.externalPage .fieldHint, .externalPage .uploadError { font-size: 13px; line-height: 1.5; }
+
+.userLinkBox { display: grid; grid-template-columns: 1fr auto; gap: 8px; align-items: center; }
+.userLinkBox input { font-family: ui-monospace, monospace; font-size: 12px; }
+.userLinkBox .fieldHint { grid-column: 1 / -1; }
+.userProjectList { display: grid; gap: 6px; max-height: 320px; overflow: auto; padding: 4px 0; }
+
+@media (max-width: 640px) {
+  .externalHeader { flex-direction: column; }
+  .externalCard li { flex-direction: column; align-items: flex-start; }
+  .userMenu--dark { position: static; align-self: flex-end; }
+  .userLinkBox { grid-template-columns: 1fr; }
+}
+
+/* ================================================= */
+/* V1-IMPORT-UI-01: Import Excel (catalog template)  */
+/* ================================================= */
+.excelImportPanel .fieldHint, .excelImportPanel .uploadError { font-size: 12px; line-height: 1.5; }
+.excelImportPanel .smallUploadButton.disabled { opacity: 0.5; pointer-events: none; }
+.excelImportSheets { margin: 12px 0; font-size: 12px; }
+.excelImportSheets .excelImportSheetBlocked td { color: #8a3b3b; font-weight: 700; }
+.excelImportIssues { margin: 8px 0; padding-left: 18px; font-size: 12px; }
+.excelImportIssues .error, .excelImportRow li.error { color: #8a3b3b; }
+.excelImportIssues .warning, .excelImportRow li.warning { color: #7a5a14; }
+.excelImportAllSame { padding: 10px 12px; border: 1px solid #d6e4da; border-radius: 8px; background: #f5fbf7; color: #3e6a4c; font-size: 13px; font-weight: 700; }
+.excelImportFilters { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 10px 0; }
+.excelImportFilters label { display: grid; gap: 4px; font-size: 12px; }
+.excelImportRows { display: grid; gap: 6px; max-height: 520px; overflow: auto; padding-right: 4px; }
+.excelImportRow { padding: 8px 10px; border: 1px solid #e3e5e6; border-left-width: 4px; border-radius: 8px; background: #fff; font-size: 12px; }
+.excelImportRow.create { border-left-color: #3e8a57; }
+.excelImportRow.update { border-left-color: #2f6db5; }
+.excelImportRow.conflict { border-left-color: #b54848; background: #fff8f8; }
+.excelImportRow.unchanged { border-left-color: #c9cccf; }
+.excelImportRowHead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 10px; }
+.excelImportBadge { padding: 1px 7px; border-radius: 10px; background: #eef0f1; font-size: 11px; font-weight: 700; }
+.excelImportRow ul { margin: 6px 0 0; padding-left: 18px; }
+.excelImportChanges { margin-top: 6px; border-collapse: collapse; font-size: 12px; }
+.excelImportChanges th { padding: 2px 10px 2px 0; color: #5d6266; font-weight: 600; text-align: left; white-space: nowrap; }
+.excelImportChanges td { padding: 2px 6px; vertical-align: top; }
+.excelImportChanges .before { color: #8a3b3b; text-decoration: line-through; }
+.excelImportChanges .after { color: #2b5f3a; font-weight: 600; }
+.excelImportConfirm { display: grid; gap: 8px; margin-top: 12px; padding: 12px; border: 1px solid #e3e5e6; border-radius: 8px; background: #fafbfb; }
+.excelImportConfirm .primaryButton { justify-self: start; }
+.excelImportResult { margin-top: 14px; }
+.excelImportResult h4 { font-size: 14px; margin-bottom: 4px; }
+.excelImportOutcome.failed td { color: #8a3b3b; font-weight: 700; }
+.excelImportOutcome.not_attempted td { color: #8a8e91; }
+.excelImportRecent { margin-top: 12px; font-size: 12px; }
+@media (max-width: 640px) {
+  .excelImportChanges th { white-space: normal; }
+  .excelImportSheets { display: block; overflow-x: auto; }
+}
+
+.excelImportSummary { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin: 12px 0; }
+.excelImportSummary > div { padding: 8px 10px; border: 1px solid #e3e5e6; border-radius: 8px; background: #fff; }
+.excelImportSummary > div:first-child, .excelImportSummary > div:nth-child(2) { grid-column: span 2; }
+.excelImportSummary dt { color: #6b7075; font-size: 11px; font-weight: 700; }
+.excelImportSummary dd { margin: 2px 0 0; font-size: 15px; font-weight: 700; overflow-wrap: anywhere; }
+.excelImportSummary dd .fieldHint { font-weight: 400; }
+.excelImportSummary dd.dirty { color: #b54848; }
+.excelImportTable { width: 100%; border-collapse: collapse; font-size: 12px; }
+.excelImportTable th, .excelImportTable td { padding: 5px 8px; border-bottom: 1px solid #e8eaeb; text-align: left; }
+.excelImportTable th { color: #5d6266; font-weight: 700; background: #f6f7f7; }
+@media (max-width: 640px) { .excelImportSummary > div:first-child, .excelImportSummary > div:nth-child(2) { grid-column: auto; } }
+
+/* ================================================= */
+/* V1-ADMIN-01: shared administration                */
+/* Scoped to .adminShell — the generator and the     */
+/* operational modules keep their own styles.        */
+/* ================================================= */
+.adminShell { --admin-ink: #1d2124; --admin-muted: #5f666b; --admin-line: #dfe2e4; --admin-soft: #f4f6f7; --admin-accent: #1d4ed8; --admin-danger: #b42318; color: var(--admin-ink); font-size: 14px; }
+.adminShellHeader { max-width: 1480px; margin: 0 auto; padding: 28px 48px 0; }
+.adminShellEyebrow { display: block; margin-bottom: 10px; color: var(--admin-muted); font-size: 12px; font-weight: 700; letter-spacing: 1.5px; }
+.adminTabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
+.adminAreaTabs { border-bottom: 1px solid var(--admin-line); }
+.adminTab { flex: 0 0 auto; padding: 10px 14px; border-bottom: 3px solid transparent; color: var(--admin-muted); font-size: 15px; font-weight: 700; text-decoration: none; white-space: nowrap; }
+.adminTab:hover { color: var(--admin-ink); }
+.adminTab.active { border-bottom-color: var(--admin-ink); color: var(--admin-ink); }
+.adminSubTabs { padding: 12px 0 0; gap: 6px; }
+.adminSubTab { flex: 0 0 auto; padding: 7px 12px; border: 1px solid var(--admin-line); border-radius: 999px; background: white; color: var(--admin-muted); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; }
+.adminSubTab:hover { border-color: #b9bec2; color: var(--admin-ink); }
+.adminSubTab.active { border-color: var(--admin-ink); background: var(--admin-ink); color: white; }
+.adminShell a:focus-visible, .adminShell button:focus-visible, .adminShell input:focus-visible, .adminShell select:focus-visible, .adminShell textarea:focus-visible { outline: 3px solid #93b4ff; outline-offset: 2px; }
+.adminShellBody .workspacePage { padding-top: 22px; }
+.adminShell .workspacePageHeader .eyebrow { display: none; }
+.adminShell .workspacePageHeader h1 { font-size: 30px; letter-spacing: -0.8px; }
+
+/* page header */
+.adminPageHeader { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
+.adminPageHeader h1 { font-size: 30px; letter-spacing: -0.8px; line-height: 1.1; }
+.adminPageCount { margin-top: 6px; color: var(--admin-muted); font-size: 14px; }
+.adminPageActions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+/* buttons: primary / secondary / danger / ghost */
+.adminButton { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 0 14px; border: 1px solid transparent; border-radius: 8px; font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer; white-space: nowrap; }
+.adminButton:disabled { opacity: 0.55; cursor: not-allowed; }
+.adminButtonPrimary { background: var(--admin-ink); color: white; }
+.adminButtonPrimary:hover:not(:disabled) { background: #000; }
+.adminButtonSecondary { border-color: #c9cdd0; background: white; color: var(--admin-ink); }
+.adminButtonSecondary:hover:not(:disabled), .adminButtonActive { border-color: var(--admin-ink); }
+.adminButtonActive { background: #eef2ff; }
+.adminButtonDanger { border-color: #f0b4ae; background: #fff5f4; color: var(--admin-danger); }
+.adminButtonDanger:hover:not(:disabled) { border-color: var(--admin-danger); }
+.adminButtonGhost { background: transparent; color: var(--admin-muted); text-decoration: underline; text-underline-offset: 3px; }
+.adminButtonGhost:hover:not(:disabled) { color: var(--admin-ink); }
+/* existing admin screens: the legacy button classes and bare buttons get a real button look here */
+.adminShell .primaryButton { min-width: 0; height: auto; min-height: 40px; padding: 0 16px; font-size: 14px; }
+.adminShell .secondaryButton { min-height: 36px; padding: 0 12px; border: 1px solid #c9cdd0; border-radius: 8px; background: white; color: var(--admin-ink); font-size: 13px; font-weight: 600; }
+.adminShell .secondaryButton:hover:not(:disabled) { border-color: var(--admin-ink); }
+.adminShell button.dangerText { min-height: 36px; padding: 0 12px; border: 1px solid #f0b4ae; border-radius: 8px; background: #fff5f4; font-size: 13px; font-weight: 600; }
+.adminShell button:not([class]) { min-height: 32px; padding: 0 10px; border: 1px solid #c9cdd0; border-radius: 6px; background: white; color: var(--admin-ink); font-size: 13px; font-weight: 600; cursor: pointer; }
+.adminShell button:not([class]):hover:not(:disabled) { border-color: var(--admin-ink); }
+.adminShell button:disabled { cursor: not-allowed; }
+
+/* readable sizes for the existing admin screens (they were authored at 7–10 px) */
+.adminShell .fieldHint, .adminShell .temporaryNotice { font-size: 13px; line-height: 1.5; }
+.adminShell .uploadError, .adminError { font-size: 13px; line-height: 1.5; }
+.adminError { padding: 10px 12px; border: 1px solid #f3c0ba; border-radius: 8px; background: #fff6f5; color: var(--admin-danger); }
+.adminNotice { padding: 8px 12px; border: 1px solid #cfe0f5; border-radius: 8px; background: #f3f8ff; color: #1f4a7a; font-size: 13px; }
+.adminEmpty { padding: 18px; color: var(--admin-muted); font-size: 14px; text-align: center; }
+.adminShell .adminList strong { font-size: 14px; }
+.adminShell .adminList span { color: var(--admin-muted); font-size: 12px; }
+.adminShell .adminList button { padding: 12px 14px; }
+.adminShell .adminFilters input:not([type="checkbox"]), .adminShell .adminFilters select { height: 40px; font-size: 14px; }
+.adminShell label.checkboxRow { flex-direction: row; }
+.adminShell .adminFilters .checkboxRow { align-self: center; margin-top: 0; }
+.adminShell .adminCategoryTabs button { min-height: 34px; padding: 0 14px; font-size: 13px; }
+.adminShell .catalogAdminCount { font-size: 13px; }
+.adminShell .eventForm label > span { font-size: 12px; }
+.adminShell .eventForm input, .adminShell .eventForm select, .adminShell .eventForm textarea { font-size: 14px; }
+.adminShell .eventSaveBar span, .adminShell .eventSaveBar small { font-size: 13px; }
+.adminShell .dataTable { font-size: 13px; }
+.adminShell .checkLabel, .adminShell .checkboxRow { font-size: 13px; }
+.adminShell .adminDetailMeta p, .adminShell .adminDetailMeta dd { font-size: 13px; }
+.adminShell .adminDetailMeta dt, .adminShell .adminDetailMeta > span { font-size: 11px; }
+.adminShell .catalogDetailSection h3 { font-size: 16px; }
+.adminShell .deadlineEditor strong { font-size: 14px; }
+.adminShell .workspaceEmpty { font-size: 13px; }
+.adminShell .smallUploadButton { min-height: 36px; padding: 0 14px; border-radius: 8px; color: var(--admin-ink); font-size: 13px; font-weight: 600; }
+.adminShell .sourceAssetListItem { padding: 8px 12px; font-size: 13px; }
+.adminShell .sourceAssetListItem strong { font-size: 14px; }
+.adminShell .sourceAssetKindBadge { font-size: 11px; }
+.adminShell .catalogCategoryGroup { margin-top: 18px; }
+.adminShell .catalogCategoryGroup h4 { margin: 0 0 8px; font-size: 14px; }
+.adminShell button.linkButton { padding: 4px 8px; border: 0; background: transparent; color: var(--admin-accent, #1f4a7a); font-size: 13px; font-weight: 600; text-decoration: underline; cursor: pointer; }
+.adminShell section.adminDetail { margin-top: 18px; padding: 16px; }
+.adminShell .dataTable { width: 100%; border-collapse: collapse; }
+.adminShell .dataTable th, .adminShell .dataTable td { padding: 8px 10px; border-bottom: 1px solid var(--admin-line); text-align: left; vertical-align: top; }
+.adminShell .dataTable th { color: var(--admin-muted); font-size: 12px; }
+
+/* filters */
+.adminFilterPanel { display: grid; gap: 10px; margin-bottom: 14px; padding: 14px; border: 1px solid var(--admin-line); border-radius: 12px; background: white; }
+.adminFilterRow { display: grid; grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(150px, 1fr)) auto; align-items: end; gap: 10px; }
+.adminFilterMore { grid-template-columns: repeat(3, minmax(170px, 1fr)) auto; padding-top: 10px; border-top: 1px dashed var(--admin-line); }
+.adminField { display: grid; gap: 5px; min-width: 0; }
+.adminField > span { color: var(--admin-muted); font-size: 12px; font-weight: 700; }
+.adminField input, .adminField select { width: 100%; height: 40px; padding: 0 10px; border: 1px solid #c9cdd0; border-radius: 8px; background: white; font-size: 14px; }
+.adminCheck { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 14px; }
+.adminCheck input { width: 18px; height: 18px; }
+.adminFilterButtons { display: flex; align-items: center; gap: 6px; }
+
+/* bulk actions — only with a selection */
+.adminBulkBar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; border: 1px solid #c7d6f5; border-radius: 10px; background: #f3f7ff; font-size: 14px; }
+.adminBulkHint { color: var(--admin-muted); font-size: 13px; }
+.adminBulkMessage { flex-basis: 100%; color: #1f4a7a; font-size: 13px; }
+
+/* tables */
+.adminTableScroll { overflow-x: auto; border: 1px solid var(--admin-line); border-radius: 12px; background: white; }
+.adminTable { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 14px; }
+.adminTable th { padding: 10px 12px; border-bottom: 1px solid var(--admin-line); background: var(--admin-soft); color: var(--admin-muted); font-size: 12px; font-weight: 700; text-align: left; white-space: nowrap; }
+.adminTable td { padding: 10px 12px; border-bottom: 1px solid #edf0f1; vertical-align: middle; }
+.adminTable tbody tr:last-child td { border-bottom: 0; }
+.adminTable tbody tr { cursor: pointer; }
+.adminTable tbody tr:hover td { background: #fafbfc; }
+.adminTable tbody tr.active td { background: #eef3ff; }
+.adminTable td small { display: block; margin-top: 3px; color: var(--admin-muted); font-size: 12px; }
+.catalogColCheck { width: 44px; }
+.catalogColCheck input { width: 18px; height: 18px; cursor: pointer; }
+.catalogColThumb { width: 72px; }
+.catalogTable .catalogThumbnailCell { width: 48px; height: 48px; }
+.catalogTable .catalogThumbnailImg, .catalogTable .catalogThumbnailPlaceholder { width: 48px; height: 48px; object-fit: contain; background: #f7f8f8; }
+.catalogColCode { width: 120px; white-space: nowrap; }
+.catalogColCode strong { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.catalogColName { min-width: 240px; }
+.catalogNameButton { padding: 0; border: 0; background: none; color: var(--admin-ink); font-size: 14px; font-weight: 700; line-height: 1.35; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
+.catalogNameButton:hover { color: var(--admin-accent); text-decoration: underline; text-underline-offset: 3px; }
+.adminStatus { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.adminStatus-active { border-color: #9fd5b2; background: #effaf2; color: #1f6b3a; }
+.adminStatus-needs_review { border-color: #f1d08b; background: #fffaeb; color: #8a5a00; }
+.adminStatus-draft { border-color: #cfd4d8; background: #f6f7f8; color: #4b5257; }
+.adminStatus-inactive { border-color: #cfd4d8; background: #f6f7f8; color: #6b7277; }
+.adminStatus-archived { border-color: #d6d0e8; background: #f6f4fb; color: #5b4c86; }
+.adminTable td small.adminReady { color: #1f6b3a; }
+.adminTable td small.adminNotReady { color: #8a5a00; }
+.catalogAssets { display: flex; flex-wrap: wrap; gap: 4px; }
+.catalogAsset { padding: 1px 7px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.catalogAsset.yes { background: #effaf2; color: #1f6b3a; }
+.catalogAsset.no { background: #f6f7f8; color: #80878c; }
+
+/* card detail as its own view (list and detail, filters kept) */
+.catalogDetailView { display: grid; gap: 12px; }
+.catalogBackButton { justify-self: start; padding-left: 0; }
+.adminShell .catalogImportPanel { margin-bottom: 16px; }
+
+@media (max-width: 1100px) {
+  .adminFilterRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .adminFieldSearch { grid-column: 1 / -1; }
+  .adminFilterMore { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 720px) {
+  .adminShellHeader { padding: 18px 16px 0; }
+  .adminShellBody .workspacePage { padding: 16px; }
+  .adminFilterRow, .adminFilterMore { grid-template-columns: 1fr; }
+  .adminFilterButtons { flex-wrap: wrap; }
+  .adminPageHeader h1, .adminShell .workspacePageHeader h1 { font-size: 24px; }
+  .adminShell .adminSplit { grid-template-columns: 1fr; }
+}

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../auth/requestAuth.ts";
+import { denyUnless } from "../auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../db/supabase.server.ts";
 import { RealizationCompaniesNotMigratedError, SupabaseRealizationCompanyRepository } from "../db/realizationCompanyRepository.supabase.ts";
 import { SupabasePrintSurfacePresetRepository } from "../db/printSurfacePresetRepository.supabase.ts";
@@ -60,9 +60,8 @@ export async function handlePrintSurfaceCatalogSync(
   request: NextRequest,
   dependencies: PrintSurfaceCatalogSyncDependencies = defaultPrintSurfaceCatalogSyncDependencies,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro úpravu katalogu tiskových ploch je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "printSurfaces.catalogSync");
+  if (authDenied) return authDenied;
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;

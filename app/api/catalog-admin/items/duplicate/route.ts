@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { CatalogSchemaNotMigratedError, duplicateCatalogItemAdmin } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import { CatalogItemAdminNotFoundError, type CatalogItemAdmin } from "../../../../../domain/catalogItemsAdmin.ts";
@@ -13,7 +13,8 @@ export async function handleCatalogAdminItemsDuplicate(
   request: NextRequest,
   duplicate: (id: string) => Promise<CatalogItemAdmin> = defaultDuplicate,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro duplikaci položky je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.manage");
+  if (authDenied) return authDenied;
   let body: { id?: unknown };
   try {
     body = (await request.json()) as { id?: unknown };

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { CatalogSchemaNotMigratedError, readCatalogVariantSets, saveCatalogVariantSet } from "../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import { InvalidCatalogVariantSetError, parseCatalogVariantSetInput, type CatalogVariantSet, type CatalogVariantSetInput } from "../../../../domain/catalogVariants.ts";
@@ -19,7 +19,8 @@ const defaultDependencies: CatalogVariantSetDependencies = {
 };
 
 export async function handleCatalogVariantSetsGet(request: NextRequest, dependencies: CatalogVariantSetDependencies = defaultDependencies): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro administraci komponent je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.read");
+  if (authDenied) return authDenied;
   try {
     return NextResponse.json({ variantSets: await dependencies.readSets() });
   } catch (error) {
@@ -29,7 +30,8 @@ export async function handleCatalogVariantSetsGet(request: NextRequest, dependen
 }
 
 export async function handleCatalogVariantSetSave(request: NextRequest, dependencies: CatalogVariantSetDependencies = defaultDependencies): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro úpravu vzorníků je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.manage");
+  if (authDenied) return authDenied;
   let body: { variantSet?: unknown };
   try {
     body = (await request.json()) as { variantSet?: unknown };

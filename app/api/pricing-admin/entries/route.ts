@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { readPricingEntriesAdmin } from "../../../../lib/db/pricingAdmin.supabase.ts";
 import type { PricingEntryAdmin } from "../../../../domain/pricingAdmin.ts";
@@ -16,7 +16,8 @@ export async function handlePricingAdminEntriesList(
   request: NextRequest,
   readEntries: (filter: Readonly<{ catalogItemIds: readonly string[]; priceListIds: readonly string[] }>) => Promise<readonly PricingEntryAdmin[]> = defaultReadEntries,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro přístup ke správě cen je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "prices.sale.read");
+  if (authDenied) return authDenied;
   const catalogItemIds = parseIds(request.nextUrl.searchParams.get("catalogItemIds"));
   const priceListIds = parseIds(request.nextUrl.searchParams.get("priceListIds"));
   if (catalogItemIds.length === 0 && priceListIds.length === 0) {

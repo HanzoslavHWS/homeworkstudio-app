@@ -81,7 +81,7 @@ Prostředí se rozlišují podle **project ref** (subdoména `https://<ref>.supa
    SUPABASE_SECRET_KEY=<service role / secret key DEV projektu>
    SUPABASE_EXPECTED_PROJECT_REF=<dev-ref>
    SUPABASE_DEV_DB_URL=<connection string DEV databáze, Session pooler, s heslem>
-   APP_LOGIN_PASSWORD=<lokální heslo, klidně jiné než produkční>
+   APP_BASE_URL=http://localhost:3000   # odkazy pozvánek a nového hesla (V1-AUTH-01, docs/AUTH_SETUP.md)
    APP_SESSION_SECRET=<nový náhodný řetězec ≥ 32 znaků>
    R2_… / OPENAI_API_KEY=<viz bod 5>
    ```

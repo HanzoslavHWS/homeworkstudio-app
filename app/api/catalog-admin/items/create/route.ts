@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { CatalogSchemaNotMigratedError, createCatalogItemAdmin } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import { CrossCodeCollisionError, DuplicateAbfCodeError } from "../../../../../domain/catalogItemTypes.ts";
@@ -21,9 +21,8 @@ export async function handleCatalogAdminItemsCreate(
   request: NextRequest,
   create: (input: CatalogItemAdminCreateInput) => Promise<CatalogItemAdmin> = defaultCreate,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro vytvoření katalogové položky je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "catalog.manage");
+  if (authDenied) return authDenied;
 
   let body: CreateBody;
   try {

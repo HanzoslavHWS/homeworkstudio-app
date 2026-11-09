@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { CatalogSchemaNotMigratedError, saveCatalogPackageItems } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import { CatalogItemAdminNotFoundError } from "../../../../../domain/catalogItemsAdmin.ts";
@@ -21,7 +21,8 @@ export async function handleCatalogAdminPackageSave(
   request: NextRequest,
   savePackage: (packageItemId: string, lines: readonly CatalogPackageItemInput[]) => Promise<SavePackageResult> = defaultSavePackage,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro úpravu obsahu kompletu je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.manage");
+  if (authDenied) return authDenied;
   let body: { packageItemId?: unknown; items?: unknown };
   try {
     body = (await request.json()) as { packageItemId?: unknown; items?: unknown };

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { SupabaseTechnicalRasterProjectRepository } from "../../../../../lib/db/technicalRasterProjectRepository.supabase.ts";
 import type { TechnicalRasterProjectRepository } from "../../../../../domain/technicalRaster.ts";
@@ -12,9 +12,8 @@ export async function handleTechnicalRasterProjectGet(
   request: NextRequest,
   repositoryFactory: () => TechnicalRasterProjectRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro přístup k projektu technického rastru je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "technicalRasters.use");
+  if (authDenied) return authDenied;
   const id = new URL(request.url).searchParams.get("id");
   if (!id) return NextResponse.json({ error: "Chybí id projektu." }, { status: 400 });
   try {

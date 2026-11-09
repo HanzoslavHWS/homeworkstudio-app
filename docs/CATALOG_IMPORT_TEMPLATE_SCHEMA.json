@@ -1,0 +1,3563 @@
+{
+  "$comment": "Generated once from the domain constants of sourceCommit and a read-only look at DEV. See docs/CATALOG_IMPORT_TEMPLATE_SPEC.md.",
+  "templateFormatVersion": "catalog-template/1 (návrh)",
+  "sourceCommit": "4cbf644",
+  "generatedAt": "2026-11-04T13:52:50.948Z",
+  "devProject": "wpbivmobbqcqmyehunog (DEV, read-only)",
+  "conventions": {
+    "headerRows": {
+      "row1": "technical column key (import reads this)",
+      "row2": "Czech label (may be renamed)",
+      "dataFrom": 3
+    },
+    "emptyCell": "optional cell empty = no value on create, UNCHANGED on update (never clears)",
+    "deleteMarker": "#SMAZAT",
+    "zero": "0 is a real value (e.g. price 0 Kč, dimension 0) — never 'empty'",
+    "rowIdentity": "id (exported uuid, read-only) -> generator_code -> abf_code; name is never an identity"
+  },
+  "cardTypes": [
+    {
+      "itemType": "PRODUCT",
+      "labelCs": "Produkt",
+      "sheet": "Produkty",
+      "kinds": [
+        "furniture",
+        "floor_finish",
+        "construction",
+        "other"
+      ],
+      "defaultKind": "furniture",
+      "expectsAbfCode": true,
+      "columnsInCode": [
+        {
+          "key": "id",
+          "labelCs": "ID (neměnit)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "internal_code",
+          "labelCs": "Generátorový kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "abf_code",
+          "labelCs": "ABF kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "display_name",
+          "labelCs": "Interní název HomeworkStudio",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "official_name",
+          "labelCs": "Oficiální název ABF (CZ)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "official_name_en",
+          "labelCs": "Oficiální název ABF (EN)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "kind",
+          "labelCs": "Druh",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "category",
+          "labelCs": "Kategorie",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "unit_code",
+          "labelCs": "Měrná jednotka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "width_mm",
+          "labelCs": "Šířka (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "depth_mm",
+          "labelCs": "Hloubka (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "height_mm",
+          "labelCs": "Výška (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "color",
+          "labelCs": "Barva",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "material",
+          "labelCs": "Materiál",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "note",
+          "labelCs": "Poznámka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "lifecycle_status",
+          "labelCs": "Stav",
+          "requiredOnCreate": false
+        }
+      ]
+    },
+    {
+      "itemType": "SERVICE",
+      "labelCs": "Služba",
+      "sheet": "Sluzby",
+      "kinds": [
+        "service",
+        "graphics_service",
+        "technical_point"
+      ],
+      "defaultKind": "service",
+      "expectsAbfCode": true,
+      "columnsInCode": [
+        {
+          "key": "id",
+          "labelCs": "ID (neměnit)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "internal_code",
+          "labelCs": "Generátorový kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "abf_code",
+          "labelCs": "ABF kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "display_name",
+          "labelCs": "Interní název HomeworkStudio",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "official_name",
+          "labelCs": "Oficiální název ABF (CZ)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "official_name_en",
+          "labelCs": "Oficiální název ABF (EN)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "kind",
+          "labelCs": "Druh",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "category",
+          "labelCs": "Kategorie",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "unit_code",
+          "labelCs": "Měrná jednotka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "note",
+          "labelCs": "Poznámka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "lifecycle_status",
+          "labelCs": "Stav",
+          "requiredOnCreate": false
+        }
+      ]
+    },
+    {
+      "itemType": "BOOTH",
+      "labelCs": "Stánek",
+      "sheet": "Stanky",
+      "kinds": [
+        "booth"
+      ],
+      "defaultKind": "booth",
+      "expectsAbfCode": true,
+      "columnsInCode": [
+        {
+          "key": "id",
+          "labelCs": "ID (neměnit)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "internal_code",
+          "labelCs": "Generátorový kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "abf_code",
+          "labelCs": "ABF kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "display_name",
+          "labelCs": "Interní název HomeworkStudio",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "official_name",
+          "labelCs": "Oficiální název ABF (CZ)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "official_name_en",
+          "labelCs": "Oficiální název ABF (EN)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "kind",
+          "labelCs": "Druh",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "category",
+          "labelCs": "Kategorie",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "unit_code",
+          "labelCs": "Měrná jednotka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "width_mm",
+          "labelCs": "Šířka (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "depth_mm",
+          "labelCs": "Hloubka (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "height_mm",
+          "labelCs": "Výška (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "note",
+          "labelCs": "Poznámka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "lifecycle_status",
+          "labelCs": "Stav",
+          "requiredOnCreate": false
+        }
+      ]
+    },
+    {
+      "itemType": "INTERNAL_COMPONENT",
+      "labelCs": "Interní komponenta",
+      "sheet": "InterniKomponenty",
+      "kinds": [
+        "booth_component",
+        "construction",
+        "other"
+      ],
+      "defaultKind": "booth_component",
+      "expectsAbfCode": false,
+      "columnsInCode": [
+        {
+          "key": "id",
+          "labelCs": "ID (neměnit)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "internal_code",
+          "labelCs": "Generátorový kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "abf_code",
+          "labelCs": "ABF kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "display_name",
+          "labelCs": "Interní název HomeworkStudio",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "official_name",
+          "labelCs": "Oficiální název ABF (CZ)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "official_name_en",
+          "labelCs": "Oficiální název ABF (EN)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "kind",
+          "labelCs": "Druh",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "category",
+          "labelCs": "Kategorie",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "unit_code",
+          "labelCs": "Měrná jednotka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "width_mm",
+          "labelCs": "Šířka (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "depth_mm",
+          "labelCs": "Hloubka (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "height_mm",
+          "labelCs": "Výška (mm)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "color",
+          "labelCs": "Barva",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "material",
+          "labelCs": "Materiál",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "note",
+          "labelCs": "Poznámka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "lifecycle_status",
+          "labelCs": "Stav",
+          "requiredOnCreate": false
+        }
+      ]
+    },
+    {
+      "itemType": "KIT",
+      "labelCs": "Komplet",
+      "sheet": "Komplety",
+      "kinds": [
+        "other"
+      ],
+      "defaultKind": "other",
+      "expectsAbfCode": true,
+      "columnsInCode": [
+        {
+          "key": "id",
+          "labelCs": "ID (neměnit)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "internal_code",
+          "labelCs": "Generátorový kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "abf_code",
+          "labelCs": "ABF kód",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "display_name",
+          "labelCs": "Interní název HomeworkStudio",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "official_name",
+          "labelCs": "Oficiální název ABF (CZ)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "official_name_en",
+          "labelCs": "Oficiální název ABF (EN)",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "kind",
+          "labelCs": "Druh",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "category",
+          "labelCs": "Kategorie",
+          "requiredOnCreate": true
+        },
+        {
+          "key": "unit_code",
+          "labelCs": "Měrná jednotka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "note",
+          "labelCs": "Poznámka",
+          "requiredOnCreate": false
+        },
+        {
+          "key": "lifecycle_status",
+          "labelCs": "Stav",
+          "requiredOnCreate": false
+        }
+      ]
+    }
+  ],
+  "enums": {
+    "itemTypes": [
+      {
+        "id": "PRODUCT",
+        "labelCs": "Produkt"
+      },
+      {
+        "id": "SERVICE",
+        "labelCs": "Služba"
+      },
+      {
+        "id": "BOOTH",
+        "labelCs": "Stánek"
+      },
+      {
+        "id": "INTERNAL_COMPONENT",
+        "labelCs": "Interní komponenta"
+      },
+      {
+        "id": "KIT",
+        "labelCs": "Komplet"
+      }
+    ],
+    "kinds": [
+      {
+        "id": "booth",
+        "labelCs": "Stánek"
+      },
+      {
+        "id": "booth_component",
+        "labelCs": "Komponenta stánku"
+      },
+      {
+        "id": "construction",
+        "labelCs": "Konstrukce / Octanorm"
+      },
+      {
+        "id": "furniture",
+        "labelCs": "Mobiliář"
+      },
+      {
+        "id": "technical_point",
+        "labelCs": "Technický bod (umístění, neúčtuje se)"
+      },
+      {
+        "id": "service",
+        "labelCs": "Technická služba"
+      },
+      {
+        "id": "graphics_service",
+        "labelCs": "Grafická služba"
+      },
+      {
+        "id": "floor_finish",
+        "labelCs": "Podlahová krytina"
+      },
+      {
+        "id": "other",
+        "labelCs": "Ostatní"
+      }
+    ],
+    "lifecycleStatuses": [
+      {
+        "id": "draft",
+        "labelCs": "Koncept"
+      },
+      {
+        "id": "needs_review",
+        "labelCs": "K doplnění"
+      },
+      {
+        "id": "active",
+        "labelCs": "Aktivní"
+      },
+      {
+        "id": "inactive",
+        "labelCs": "Neaktivní"
+      },
+      {
+        "id": "archived",
+        "labelCs": "Archivováno"
+      }
+    ],
+    "componentGroups": [
+      {
+        "id": "product",
+        "labelCs": "Produkt",
+        "itemType": "PRODUCT",
+        "kinds": [
+          "furniture",
+          "floor_finish",
+          "construction",
+          "other"
+        ]
+      },
+      {
+        "id": "graphics",
+        "labelCs": "Grafika",
+        "itemType": "SERVICE",
+        "kinds": [
+          "graphics_service"
+        ]
+      },
+      {
+        "id": "technical_service",
+        "labelCs": "Technická služba",
+        "itemType": "SERVICE",
+        "kinds": [
+          "service"
+        ]
+      },
+      {
+        "id": "internal_component",
+        "labelCs": "Interní komponenta",
+        "itemType": "INTERNAL_COMPONENT",
+        "kinds": [
+          "booth_component",
+          "construction",
+          "other"
+        ]
+      },
+      {
+        "id": "technical_point",
+        "labelCs": "Technický bod",
+        "itemType": "SERVICE",
+        "kinds": [
+          "technical_point"
+        ]
+      }
+    ],
+    "internalComponentUsages": [
+      {
+        "id": "booth_component",
+        "labelCs": "Samostatný prvek generátoru"
+      },
+      {
+        "id": "construction",
+        "labelCs": "Konstrukční díl / součást kompletu"
+      }
+    ],
+    "specialCardCategories": {
+      "source": "code: domain/catalogItemsAdmin.ts CATALOG_ITEM_CATEGORY_OPTIONS (BOOTH / KIT cards)",
+      "values": [
+        {
+          "id": "chairs",
+          "labelCs": "Židle"
+        },
+        {
+          "id": "Nábytek",
+          "labelCs": "Nábytek"
+        },
+        {
+          "id": "Kuchyňka",
+          "labelCs": "Kuchyňka"
+        },
+        {
+          "id": "Octanorm",
+          "labelCs": "Octanorm"
+        },
+        {
+          "id": "Ostatní",
+          "labelCs": "Ostatní"
+        },
+        {
+          "id": "Stavba",
+          "labelCs": "Stavba"
+        },
+        {
+          "id": "Úvaz",
+          "labelCs": "Úvaz (rigging)"
+        },
+        {
+          "id": "Světlo",
+          "labelCs": "Světlo"
+        },
+        {
+          "id": "Typovky",
+          "labelCs": "Typovky"
+        },
+        {
+          "id": "Kóje",
+          "labelCs": "Kóje"
+        },
+        {
+          "id": "Canonical",
+          "labelCs": "Canonical"
+        },
+        {
+          "id": "T. služby",
+          "labelCs": "Technické služby"
+        },
+        {
+          "id": "services",
+          "labelCs": "Služby"
+        },
+        {
+          "id": "Panely / stěny",
+          "labelCs": "Panely / stěny"
+        },
+        {
+          "id": "Sloupky",
+          "labelCs": "Sloupky"
+        },
+        {
+          "id": "Límce",
+          "labelCs": "Límce"
+        },
+        {
+          "id": "Dveře",
+          "labelCs": "Dveře"
+        },
+        {
+          "id": "Zázemí / konstrukce",
+          "labelCs": "Zázemí / konstrukce"
+        },
+        {
+          "id": "Podlaha",
+          "labelCs": "Podlaha"
+        },
+        {
+          "id": "Osvětlení",
+          "labelCs": "Osvětlení"
+        }
+      ]
+    },
+    "priceCategories": [
+      {
+        "id": "standard",
+        "labelCs": "Běžná položka"
+      },
+      {
+        "id": "electricity",
+        "labelCs": "Elektřina"
+      }
+    ],
+    "kitLineKinds": [
+      "item",
+      "text"
+    ],
+    "kitSubstituteRules": [
+      {
+        "id": "price_difference",
+        "labelCs": "Rozdíl ceny nové a původní komponenty"
+      },
+      {
+        "id": "fixed",
+        "labelCs": "Pevný doplatek"
+      },
+      {
+        "id": "per_unit",
+        "labelCs": "Doplatek za jednotku"
+      },
+      {
+        "id": "none",
+        "labelCs": "Bez doplatku"
+      }
+    ],
+    "variantSetKinds": [
+      {
+        "id": "carpet",
+        "labelCs": "Koberce"
+      },
+      {
+        "id": "finish",
+        "labelCs": "Povrchy"
+      },
+      {
+        "id": "color",
+        "labelCs": "Barvy"
+      },
+      {
+        "id": "other",
+        "labelCs": "Ostatní"
+      }
+    ],
+    "variantSurchargeRules": [
+      {
+        "id": "none",
+        "labelCs": "Bez příplatku"
+      },
+      {
+        "id": "price_difference",
+        "labelCs": "Rozdíl ceny karty proti výchozí variantě"
+      },
+      {
+        "id": "per_unit",
+        "labelCs": "Vlastní příplatek za jednotku"
+      },
+      {
+        "id": "fixed",
+        "labelCs": "Pevný příplatek"
+      }
+    ],
+    "variantImageStatuses": [
+      {
+        "id": "pending_permission",
+        "labelCs": "Čeká na oprávnění k použití"
+      },
+      {
+        "id": "approved",
+        "labelCs": "Použití schváleno"
+      },
+      {
+        "id": "rejected",
+        "labelCs": "Použití zamítnuto"
+      }
+    ],
+    "cardVariantScopes": [
+      {
+        "id": "billed_by_card",
+        "labelCs": "Barvy účtované touto kartou"
+      },
+      {
+        "id": "all_variants",
+        "labelCs": "Všechny barvy vzorníku"
+      }
+    ],
+    "aliasKinds": [
+      "name",
+      "code"
+    ],
+    "sourceAssetKinds": [
+      {
+        "id": "sketchup",
+        "labelCs": "SketchUp (.skp)"
+      },
+      {
+        "id": "dwg",
+        "labelCs": "DWG"
+      },
+      {
+        "id": "dxf",
+        "labelCs": "DXF"
+      },
+      {
+        "id": "pdf",
+        "labelCs": "PDF"
+      },
+      {
+        "id": "other",
+        "labelCs": "Ostatní"
+      }
+    ],
+    "assetCategories": [
+      "event-logo",
+      "event-cover",
+      "event-document",
+      "catalog-photo",
+      "catalog-thumbnail",
+      "catalog-model",
+      "catalog-source",
+      "project-graphics",
+      "project-document",
+      "project-visualization",
+      "project-floorplan",
+      "project-export",
+      "print-surface-image",
+      "print-surface-export",
+      "technical-raster-source",
+      "technical-raster-import",
+      "catalog-technical-icon",
+      "temporary"
+    ],
+    "batchUploadTargets": [
+      {
+        "id": "photo_main",
+        "labelCs": "Hlavní fotografie"
+      },
+      {
+        "id": "photo_gallery",
+        "labelCs": "Fotografie – galerie"
+      },
+      {
+        "id": "model_active",
+        "labelCs": "Aktivní 3D model generátoru (GLB)"
+      },
+      {
+        "id": "source_sketchup",
+        "labelCs": "Zdrojový model SketchUp (SKP)"
+      },
+      {
+        "id": "source_dwg",
+        "labelCs": "CAD podklad (DWG)"
+      },
+      {
+        "id": "source_dxf",
+        "labelCs": "CAD podklad (DXF)"
+      },
+      {
+        "id": "source_pdf",
+        "labelCs": "Dokument / technický list (PDF)"
+      },
+      {
+        "id": "source_other",
+        "labelCs": "Ostatní podklad"
+      },
+      {
+        "id": "skip",
+        "labelCs": "Nenahrávat"
+      }
+    ],
+    "technicalServiceCategories": [
+      {
+        "id": "electricity",
+        "labelCs": "Elektrická energie"
+      },
+      {
+        "id": "internet",
+        "labelCs": "Internet / WiFi"
+      },
+      {
+        "id": "water",
+        "labelCs": "Voda"
+      },
+      {
+        "id": "waste",
+        "labelCs": "Odpad"
+      },
+      {
+        "id": "cleaning",
+        "labelCs": "Úklid"
+      },
+      {
+        "id": "other",
+        "labelCs": "Jiný / budoucí"
+      }
+    ],
+    "printSurfaceTypes": [
+      {
+        "id": "panel",
+        "labelCs": "Panel"
+      },
+      {
+        "id": "panel_above_door",
+        "labelCs": "Panel nad dveřmi"
+      },
+      {
+        "id": "fascia",
+        "labelCs": "Límec"
+      },
+      {
+        "id": "counter_front",
+        "labelCs": "Pult – čelo"
+      },
+      {
+        "id": "counter_side",
+        "labelCs": "Pult – bok"
+      },
+      {
+        "id": "showcase",
+        "labelCs": "Vitrína"
+      },
+      {
+        "id": "custom",
+        "labelCs": "Jiná plocha"
+      }
+    ],
+    "priceListKinds": [
+      {
+        "id": "base",
+        "labelCs": "Základní prodejní ceník"
+      },
+      {
+        "id": "electricity",
+        "labelCs": "Ceník elektřiny"
+      },
+      {
+        "id": "purchase",
+        "labelCs": "Nákupní ceník"
+      }
+    ],
+    "priceVersionStatuses": [
+      {
+        "id": "draft",
+        "labelCs": "Koncept"
+      },
+      {
+        "id": "published",
+        "labelCs": "Publikováno"
+      },
+      {
+        "id": "archived",
+        "labelCs": "Archivováno"
+      }
+    ],
+    "salePriceModes": [
+      {
+        "id": "fixed",
+        "labelCs": "Pevná cena"
+      },
+      {
+        "id": "individual",
+        "labelCs": "Cena na dotaz"
+      },
+      {
+        "id": "included",
+        "labelCs": "Zahrnuto v ceně"
+      }
+    ],
+    "eurSkModes": [
+      "derived",
+      "manual"
+    ],
+    "eurRoundingModes": [
+      {
+        "id": "ceil",
+        "labelCs": "Nahoru"
+      },
+      {
+        "id": "round",
+        "labelCs": "Matematicky"
+      },
+      {
+        "id": "floor",
+        "labelCs": "Dolů"
+      }
+    ],
+    "eurRoundingSteps": [
+      0.01,
+      0.1,
+      0.5,
+      1,
+      5,
+      10
+    ],
+    "priceTracks": [
+      {
+        "id": "CZK",
+        "labelCs": "CZK"
+      },
+      {
+        "id": "EUR_SK",
+        "labelCs": "EUR SK (přepočet kurzem)"
+      },
+      {
+        "id": "EUR_WORLD",
+        "labelCs": "EUR WORLD (pevná cena v EUR)"
+      }
+    ],
+    "yesNo": [
+      {
+        "id": true,
+        "labelCs": "ANO"
+      },
+      {
+        "id": false,
+        "labelCs": "NE"
+      }
+    ]
+  },
+  "categories": {
+    "source": "DB: catalog_categories (managed in Katalog komponent → Kategorie)",
+    "values": [
+      {
+        "id": "chairs",
+        "labelCs": "Židle",
+        "componentGroup": "product",
+        "kinds": [
+          "furniture"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "product-tables",
+        "labelCs": "Stoly",
+        "componentGroup": "product",
+        "kinds": [
+          "furniture"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "product-counters",
+        "labelCs": "Pulty",
+        "componentGroup": "product",
+        "kinds": [
+          "furniture"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Kuchyňka",
+        "labelCs": "Kuchyňka",
+        "componentGroup": "product",
+        "kinds": [
+          "furniture",
+          "other"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Nábytek",
+        "labelCs": "Ostatní mobiliář",
+        "componentGroup": "product",
+        "kinds": [
+          "furniture",
+          "other"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "product-carpets",
+        "labelCs": "Koberce",
+        "componentGroup": "product",
+        "kinds": [
+          "floor_finish"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Podlaha",
+        "labelCs": "Podlaha",
+        "componentGroup": "product",
+        "kinds": [
+          "floor_finish"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Osvětlení",
+        "labelCs": "Osvětlení",
+        "componentGroup": "product",
+        "kinds": [
+          "other",
+          "furniture"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Světlo",
+        "labelCs": "Světlo / elektro (ABF)",
+        "componentGroup": "product",
+        "kinds": [
+          "other",
+          "furniture"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Octanorm",
+        "labelCs": "Octanorm",
+        "componentGroup": "product",
+        "kinds": [
+          "furniture",
+          "construction",
+          "other"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Stavba",
+        "labelCs": "Stavba",
+        "componentGroup": "product",
+        "kinds": [
+          "construction"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Úvaz",
+        "labelCs": "Úvaz (rigging)",
+        "componentGroup": "product",
+        "kinds": [
+          "construction"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Ostatní",
+        "labelCs": "Ostatní produkty",
+        "componentGroup": "product",
+        "kinds": [
+          "other",
+          "furniture"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "graphics-fascia",
+        "labelCs": "Límec (bm)",
+        "componentGroup": "graphics",
+        "kinds": [
+          "graphics_service"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "graphics-full-wrap",
+        "labelCs": "Celopolep (m²)",
+        "componentGroup": "graphics",
+        "kinds": [
+          "graphics_service"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "graphics-counter",
+        "labelCs": "Polep pultu (m²)",
+        "componentGroup": "graphics",
+        "kinds": [
+          "graphics_service"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "graphics-other",
+        "labelCs": "Ostatní grafika",
+        "componentGroup": "graphics",
+        "kinds": [
+          "graphics_service"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "service-electricity",
+        "labelCs": "Elektřina",
+        "componentGroup": "technical_service",
+        "kinds": [
+          "service"
+        ],
+        "active": true,
+        "serviceCategory": "electricity",
+        "priceCategory": "electricity",
+        "recommendedParameters": []
+      },
+      {
+        "id": "service-internet",
+        "labelCs": "Internet",
+        "componentGroup": "technical_service",
+        "kinds": [
+          "service"
+        ],
+        "active": true,
+        "serviceCategory": "internet",
+        "priceCategory": null,
+        "recommendedParameters": [
+          {
+            "name": "Rychlost internetu",
+            "valueType": "number",
+            "unit": "Mb/s",
+            "active": true
+          }
+        ]
+      },
+      {
+        "id": "service-cleaning",
+        "labelCs": "Úklid",
+        "componentGroup": "technical_service",
+        "kinds": [
+          "service"
+        ],
+        "active": true,
+        "serviceCategory": "cleaning",
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "service-water",
+        "labelCs": "Voda",
+        "componentGroup": "technical_service",
+        "kinds": [
+          "service"
+        ],
+        "active": true,
+        "serviceCategory": "water",
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "service-waste",
+        "labelCs": "Odpad",
+        "componentGroup": "technical_service",
+        "kinds": [
+          "service"
+        ],
+        "active": true,
+        "serviceCategory": "waste",
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "T. služby",
+        "labelCs": "Ostatní technické služby",
+        "componentGroup": "technical_service",
+        "kinds": [
+          "service"
+        ],
+        "active": true,
+        "serviceCategory": "other",
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "services",
+        "labelCs": "Služby (původní obecná kategorie)",
+        "componentGroup": "technical_service",
+        "kinds": [
+          "service",
+          "graphics_service"
+        ],
+        "active": false,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Sloupky",
+        "labelCs": "Sloupky",
+        "componentGroup": "internal_component",
+        "kinds": [
+          "booth_component",
+          "construction"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Panely / stěny",
+        "labelCs": "Panely / stěny",
+        "componentGroup": "internal_component",
+        "kinds": [
+          "booth_component",
+          "construction"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Límce",
+        "labelCs": "Límce (konstrukční profil)",
+        "componentGroup": "internal_component",
+        "kinds": [
+          "booth_component",
+          "construction"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Dveře",
+        "labelCs": "Dveře",
+        "componentGroup": "internal_component",
+        "kinds": [
+          "booth_component",
+          "construction"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "Zázemí / konstrukce",
+        "labelCs": "Konstrukční prvky / zázemí",
+        "componentGroup": "internal_component",
+        "kinds": [
+          "construction",
+          "booth_component"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "internal-other",
+        "labelCs": "Ostatní interní komponenty",
+        "componentGroup": "internal_component",
+        "kinds": [
+          "other",
+          "booth_component",
+          "construction"
+        ],
+        "active": true,
+        "serviceCategory": null,
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "point-electricity",
+        "labelCs": "Elektro bod",
+        "componentGroup": "technical_point",
+        "kinds": [
+          "technical_point"
+        ],
+        "active": true,
+        "serviceCategory": "electricity",
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "point-internet",
+        "labelCs": "Internetový bod",
+        "componentGroup": "technical_point",
+        "kinds": [
+          "technical_point"
+        ],
+        "active": true,
+        "serviceCategory": "internet",
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "point-water",
+        "labelCs": "Vodní bod",
+        "componentGroup": "technical_point",
+        "kinds": [
+          "technical_point"
+        ],
+        "active": true,
+        "serviceCategory": "water",
+        "priceCategory": null,
+        "recommendedParameters": []
+      },
+      {
+        "id": "point-other",
+        "labelCs": "Ostatní technické body",
+        "componentGroup": "technical_point",
+        "kinds": [
+          "technical_point"
+        ],
+        "active": true,
+        "serviceCategory": "other",
+        "priceCategory": null,
+        "recommendedParameters": []
+      }
+    ]
+  },
+  "units": {
+    "source": "DB: catalog_units (seeded by migration 20261021120000, mirrored in domain/catalogUnits.ts)",
+    "values": [
+      {
+        "id": "ks",
+        "symbol": "ks",
+        "labelCs": "kus",
+        "quantityKind": "count",
+        "combined": false,
+        "acceptedSpellings": [
+          "ks",
+          "kus",
+          "kusy",
+          "kusu",
+          "pc",
+          "pcs"
+        ],
+        "active": true
+      },
+      {
+        "id": "m2",
+        "symbol": "m²",
+        "labelCs": "metr čtvereční",
+        "quantityKind": "area",
+        "combined": false,
+        "acceptedSpellings": [
+          "m2",
+          "metrctverecni"
+        ],
+        "active": true
+      },
+      {
+        "id": "bm",
+        "symbol": "bm",
+        "labelCs": "běžný metr",
+        "quantityKind": "length",
+        "combined": false,
+        "acceptedSpellings": [
+          "bm",
+          "beznymetr"
+        ],
+        "active": true
+      },
+      {
+        "id": "m3",
+        "symbol": "m³",
+        "labelCs": "metr krychlový",
+        "quantityKind": "volume",
+        "combined": false,
+        "acceptedSpellings": [
+          "m3",
+          "metrkrychlovy"
+        ],
+        "active": true
+      },
+      {
+        "id": "den",
+        "symbol": "den",
+        "labelCs": "den",
+        "quantityKind": "time",
+        "combined": false,
+        "acceptedSpellings": [
+          "den",
+          "dny",
+          "dni",
+          "dnu",
+          "day",
+          "days"
+        ],
+        "active": true
+      },
+      {
+        "id": "pausal",
+        "symbol": "paušál",
+        "labelCs": "paušál",
+        "quantityKind": "flat",
+        "combined": false,
+        "acceptedSpellings": [
+          "pausal",
+          "paus",
+          "flat"
+        ],
+        "active": true
+      }
+    ],
+    "codeMirror": [
+      "ks",
+      "m2",
+      "bm",
+      "m3",
+      "den",
+      "pausal"
+    ]
+  },
+  "realizationCompanies": {
+    "source": "DB: print_surface_realization_companies",
+    "values": [
+      {
+        "id": "creativ-expo",
+        "labelCs": "Creativ Expo",
+        "active": true
+      },
+      {
+        "id": "gendai",
+        "labelCs": "Gendai",
+        "active": true
+      },
+      {
+        "id": "mac-praha",
+        "labelCs": "MAC Praha",
+        "active": true
+      }
+    ]
+  },
+  "variantSets": {
+    "source": "DB: catalog_variant_sets + catalog_variants",
+    "values": [
+      {
+        "code": "KOBERCE-SERBUS",
+        "name": "Koberce SERBUS",
+        "kind": "carpet",
+        "active": true,
+        "variantCount": 56,
+        "series": [
+          "PODIUM-PLAT",
+          "REVEXPO"
+        ],
+        "billedBy": [
+          "M02",
+          "M01"
+        ],
+        "sampleVariants": [
+          {
+            "code": "PODIUM-PLAT-035",
+            "name": "PODIUM / PLAT 035",
+            "series": "PODIUM-PLAT",
+            "billedBy": "M02",
+            "surchargeRule": "price_difference",
+            "active": true
+          },
+          {
+            "code": "PODIUM-PLAT-950",
+            "name": "PODIUM / PLAT 950",
+            "series": "PODIUM-PLAT",
+            "billedBy": "M02",
+            "surchargeRule": "price_difference",
+            "active": true
+          },
+          {
+            "code": "PODIUM-PLAT-033",
+            "name": "PODIUM / PLAT 033",
+            "series": "PODIUM-PLAT",
+            "billedBy": "M02",
+            "surchargeRule": "price_difference",
+            "active": true
+          }
+        ]
+      },
+      {
+        "code": "ZKUSEBNI-KOBERCE",
+        "name": "ZKUŠEBNÍ koberce V1-DATA-04",
+        "kind": "carpet",
+        "active": true,
+        "variantCount": 4,
+        "series": [],
+        "billedBy": [],
+        "sampleVariants": [
+          {
+            "code": "CARPET-BLACK",
+            "name": "Černý",
+            "series": null,
+            "billedBy": null,
+            "surchargeRule": "per_unit",
+            "active": true
+          },
+          {
+            "code": "CARPET-GREY",
+            "name": "Šedý",
+            "series": null,
+            "billedBy": null,
+            "surchargeRule": "none",
+            "active": true
+          },
+          {
+            "code": "CARPET-BLUE",
+            "name": "Modrý",
+            "series": null,
+            "billedBy": null,
+            "surchargeRule": "per_unit",
+            "active": true
+          }
+        ]
+      }
+    ]
+  },
+  "priceLists": {
+    "source": "DB: versioned_price_lists + price_list_versions",
+    "values": [
+      {
+        "code": "E2E-AUTOTEST",
+        "name": "Automatický test (neměnit ručně)",
+        "kind": "base",
+        "active": false,
+        "versions": []
+      },
+      {
+        "code": "PRODEJNI-ZAKLADNI",
+        "name": "Základní prodejní ceník ABF",
+        "kind": "base",
+        "active": true,
+        "versions": [
+          {
+            "version": 1,
+            "status": "draft",
+            "eurRate": 24.17,
+            "rounding": "ceil/1"
+          }
+        ]
+      },
+      {
+        "code": "ZKUSEBNI-ELEKTRINA",
+        "name": "ZKUŠEBNÍ ceník elektřiny",
+        "kind": "electricity",
+        "active": true,
+        "versions": [
+          {
+            "version": 1,
+            "status": "published",
+            "eurRate": 24.17,
+            "rounding": "ceil/1"
+          }
+        ]
+      },
+      {
+        "code": "ZKUSEBNI-NAKUP",
+        "name": "ZKUŠEBNÍ nákupní ceník (Creativ, Gendai, MAC)",
+        "kind": "purchase",
+        "active": true,
+        "versions": [
+          {
+            "version": 1,
+            "status": "published",
+            "eurRate": 24.17,
+            "rounding": "ceil/1"
+          }
+        ]
+      },
+      {
+        "code": "ZKUSEBNI-ZAKLADNI",
+        "name": "ZKUŠEBNÍ základní ceník",
+        "kind": "base",
+        "active": true,
+        "versions": [
+          {
+            "version": 6,
+            "status": "draft",
+            "eurRate": 24.17,
+            "rounding": "ceil/1"
+          },
+          {
+            "version": 5,
+            "status": "draft",
+            "eurRate": 24.17,
+            "rounding": "ceil/1"
+          },
+          {
+            "version": 4,
+            "status": "draft",
+            "eurRate": 24.17,
+            "rounding": "ceil/1"
+          },
+          {
+            "version": 3,
+            "status": "draft",
+            "eurRate": 24.17,
+            "rounding": "ceil/1"
+          },
+          {
+            "version": 2,
+            "status": "published",
+            "eurRate": 25,
+            "rounding": "ceil/1"
+          },
+          {
+            "version": 1,
+            "status": "published",
+            "eurRate": 24.17,
+            "rounding": "ceil/1"
+          }
+        ]
+      }
+    ]
+  },
+  "priceExcelColumnsInCode": [
+    {
+      "key": "generator_code",
+      "labelCs": "Generátorový kód",
+      "importable": true
+    },
+    {
+      "key": "abf_code",
+      "labelCs": "ABF kód",
+      "importable": true
+    },
+    {
+      "key": "item_name",
+      "labelCs": "Název (jen pro čtení)",
+      "importable": false
+    },
+    {
+      "key": "variant_code",
+      "labelCs": "Varianta (kód)",
+      "importable": true
+    },
+    {
+      "key": "price_mode",
+      "labelCs": "Režim ceny (fixed / individual / included)",
+      "importable": true
+    },
+    {
+      "key": "price_czk",
+      "labelCs": "Cena CZK bez DPH",
+      "importable": true
+    },
+    {
+      "key": "price_eur_sk",
+      "labelCs": "EUR SK – platná cena (jen pro čtení, z CZK a kurzu)",
+      "importable": false
+    },
+    {
+      "key": "price_eur_sk_manual",
+      "labelCs": "EUR SK – ruční cena (prázdné = přepočet)",
+      "importable": true
+    },
+    {
+      "key": "price_eur_world",
+      "labelCs": "EUR WORLD bez DPH",
+      "importable": true
+    },
+    {
+      "key": "unit_code",
+      "labelCs": "Jednotka",
+      "importable": true
+    },
+    {
+      "key": "note",
+      "labelCs": "Poznámka",
+      "importable": true
+    }
+  ],
+  "examples": {
+    "M01": {
+      "code": "M01",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "M01",
+        "abf_code": "M01",
+        "display_name": "Koberec šedý",
+        "official_name": "KOBEREC ŠEDÝ",
+        "official_name_en": "GREY CARPET",
+        "item_type": "PRODUCT",
+        "kind": "floor_finish",
+        "category": "product-carpets",
+        "unit_code": "m2",
+        "lifecycle_status": "active",
+        "width_mm": null,
+        "depth_mm": null,
+        "height_mm": null,
+        "color": null,
+        "material": null,
+        "note": null,
+        "price_category": "standard",
+        "show_2d": null,
+        "show_3d": null,
+        "variant_set": "KOBERCE-SERBUS",
+        "variant_scope": "billed_by_card",
+        "usage_agreement_payer": null,
+        "catalog_visible": true
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": false,
+        "sourceAssets": []
+      },
+      "readinessIssues": [],
+      "kitLines": [],
+      "aliases": []
+    },
+    "M02": {
+      "code": "M02",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "M02",
+        "abf_code": "M02",
+        "display_name": "Koberec barevný",
+        "official_name": "KOBEREC BAREVNÝ",
+        "official_name_en": "CARPET - OTHER COLOR",
+        "item_type": "PRODUCT",
+        "kind": "floor_finish",
+        "category": "product-carpets",
+        "unit_code": "m2",
+        "lifecycle_status": "active",
+        "width_mm": null,
+        "depth_mm": null,
+        "height_mm": null,
+        "color": null,
+        "material": null,
+        "note": null,
+        "price_category": "standard",
+        "show_2d": null,
+        "show_3d": null,
+        "variant_set": "KOBERCE-SERBUS",
+        "variant_scope": "billed_by_card",
+        "usage_agreement_payer": null,
+        "catalog_visible": true
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": false,
+        "sourceAssets": []
+      },
+      "readinessIssues": [],
+      "kitLines": [],
+      "aliases": []
+    },
+    "M04": {
+      "code": "M04",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "M04",
+        "abf_code": "M04",
+        "display_name": "Koberec PVA",
+        "official_name": "KOBEREC PVA (N)",
+        "official_name_en": "CARPET",
+        "item_type": "PRODUCT",
+        "kind": "floor_finish",
+        "category": "product-carpets",
+        "unit_code": "m2",
+        "lifecycle_status": "active",
+        "width_mm": null,
+        "depth_mm": null,
+        "height_mm": null,
+        "color": null,
+        "material": null,
+        "note": null,
+        "price_category": "standard",
+        "show_2d": null,
+        "show_3d": null,
+        "variant_set": "KOBERCE-SERBUS",
+        "variant_scope": "all_variants",
+        "usage_agreement_payer": "PVA",
+        "catalog_visible": true
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": false,
+        "sourceAssets": []
+      },
+      "readinessIssues": [],
+      "kitLines": [],
+      "aliases": []
+    },
+    "P86": {
+      "code": "P86",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "P86",
+        "abf_code": "P86",
+        "display_name": "Kóje 2×2 m",
+        "official_name": "KÓJE 2X2",
+        "official_name_en": "SCHELL SCHEME - 2X2m",
+        "item_type": "BOOTH",
+        "kind": "booth",
+        "category": "Kóje",
+        "unit_code": "ks",
+        "lifecycle_status": "active",
+        "width_mm": 2000,
+        "depth_mm": 2000,
+        "height_mm": 2500,
+        "color": null,
+        "material": null,
+        "note": "Stavba poue 1x2m",
+        "price_category": "standard",
+        "show_2d": null,
+        "show_3d": null,
+        "variant_set": null,
+        "variant_scope": null,
+        "usage_agreement_payer": null,
+        "catalog_visible": true
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": true,
+        "sourceAssets": []
+      },
+      "readinessIssues": [],
+      "kitLines": [
+        {
+          "kit": "P86",
+          "line_key": "koberec",
+          "line_kind": "item",
+          "component": "M01",
+          "label": null,
+          "quantity": 4,
+          "unit_code": "m2",
+          "included_in_price": true,
+          "variant_set": "KOBERCE-SERBUS",
+          "default_variant": "PODIUM-PLAT-020",
+          "print_allowance": null,
+          "note": "Šedý koberec PODIUM / PLAT 020 v ceně. Jiná barva: příplatek podle řady (M02). M04 jen na základě dohody s PVA.",
+          "substitutes": [
+            {
+              "substitute": "M02",
+              "substitute_variant": null,
+              "rule": "price_difference",
+              "unit_code": null,
+              "quantity_factor": 1,
+              "active": true
+            }
+          ]
+        },
+        {
+          "kit": "P86",
+          "line_key": "grafika-limec",
+          "line_kind": "item",
+          "component": "M91",
+          "label": null,
+          "quantity": 2,
+          "unit_code": "bm",
+          "included_in_price": true,
+          "variant_set": null,
+          "default_variant": null,
+          "print_allowance": [
+            {
+              "surfaceTypeId": "fascia",
+              "unitCode": "bm",
+              "includedQuantity": 2
+            }
+          ],
+          "note": "Grafika límce 2 bm v ceně.",
+          "substitutes": []
+        }
+      ],
+      "aliases": [
+        {
+          "company": "creativ-expo",
+          "kind": "name",
+          "text": "crea",
+          "unit_code": null,
+          "status": "confirmed"
+        },
+        {
+          "company": "gendai",
+          "kind": "name",
+          "text": "gen",
+          "unit_code": null,
+          "status": "confirmed"
+        },
+        {
+          "company": "mac-praha",
+          "kind": "name",
+          "text": "mac",
+          "unit_code": null,
+          "status": "confirmed"
+        }
+      ]
+    },
+    "T04": {
+      "code": "T04",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "T04",
+        "abf_code": "T04",
+        "display_name": "Typový stanek T04",
+        "official_name": "T04 - TYPOVÝ STANEK 2X2 m (STAVBA)",
+        "official_name_en": "BASIC SCHELL SCHEME OCTANORM 2X2 m (CONSTRUCTION)",
+        "item_type": "BOOTH",
+        "kind": "booth",
+        "category": "Typovky",
+        "unit_code": "ks",
+        "lifecycle_status": "needs_review",
+        "width_mm": 2000,
+        "depth_mm": 2000,
+        "height_mm": 2500,
+        "color": null,
+        "material": null,
+        "note": "Typový stánek 2x2 s mozností rohové i řadové varianty",
+        "price_category": "standard",
+        "show_2d": null,
+        "show_3d": null,
+        "variant_set": null,
+        "variant_scope": null,
+        "usage_agreement_payer": null,
+        "catalog_visible": true
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": false,
+        "sourceAssets": []
+      },
+      "readinessIssues": [
+        "missing_3d_asset"
+      ],
+      "kitLines": [
+        {
+          "kit": "T04",
+          "line_key": "m01",
+          "line_kind": "item",
+          "component": "M01",
+          "label": null,
+          "quantity": 4,
+          "unit_code": "m2",
+          "included_in_price": true,
+          "variant_set": "KOBERCE-SERBUS",
+          "default_variant": "PODIUM-PLAT-020",
+          "print_allowance": null,
+          "note": "Šedý koberec PODIUM / PLAT 020 v ceně. Jiná barva: příplatek podle řady (M02). M04 jen na základě dohody s PVA.",
+          "substitutes": [
+            {
+              "substitute": "M02",
+              "substitute_variant": null,
+              "rule": "price_difference",
+              "unit_code": null,
+              "quantity_factor": 1,
+              "active": true
+            }
+          ]
+        }
+      ],
+      "aliases": []
+    },
+    "M57": {
+      "code": "M57",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "M57",
+        "abf_code": "M57",
+        "display_name": "Židle čalouněná černá",
+        "official_name": "ŽIDLE KOVOVÁ ČALOUNĚNÁ",
+        "official_name_en": "CHAIR - UPHOLSTERED",
+        "item_type": "PRODUCT",
+        "kind": "furniture",
+        "category": "chairs",
+        "unit_code": "ks",
+        "lifecycle_status": "active",
+        "width_mm": 530,
+        "depth_mm": 600,
+        "height_mm": 820,
+        "color": "Černá",
+        "material": "Kov/textil",
+        "note": "Klasická židle",
+        "price_category": "standard",
+        "show_2d": true,
+        "show_3d": true,
+        "variant_set": null,
+        "variant_scope": null,
+        "usage_agreement_payer": null,
+        "catalog_visible": true
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": true,
+        "sourceAssets": [
+          "dwg",
+          "sketchup"
+        ]
+      },
+      "readinessIssues": [],
+      "kitLines": [],
+      "aliases": [
+        {
+          "company": "creativ-expo",
+          "kind": "name",
+          "text": "nazev od creativ",
+          "unit_code": "ks",
+          "status": "confirmed"
+        },
+        {
+          "company": "gendai",
+          "kind": "name",
+          "text": "nazev od gendai",
+          "unit_code": "ks",
+          "status": "confirmed"
+        },
+        {
+          "company": null,
+          "kind": "name",
+          "text": "nazev od mac",
+          "unit_code": "ks",
+          "status": "confirmed"
+        },
+        {
+          "company": "mac-praha",
+          "kind": "name",
+          "text": "nazev od mac",
+          "unit_code": "ks",
+          "status": "confirmed"
+        }
+      ]
+    },
+    "L02": {
+      "code": "L02",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "L02",
+        "abf_code": "L02",
+        "display_name": "Elektrická energie - 2kW",
+        "official_name": "ELEKTRICKÁ ENERGIE - PŘÍKON DO 2 kW/230V",
+        "official_name_en": "POWER SUPPLY UP TO 2 kW/230V",
+        "item_type": "SERVICE",
+        "kind": "service",
+        "category": "service-electricity",
+        "unit_code": "ks",
+        "lifecycle_status": "active",
+        "width_mm": null,
+        "depth_mm": null,
+        "height_mm": null,
+        "color": null,
+        "material": null,
+        "note": null,
+        "price_category": "electricity",
+        "show_2d": true,
+        "show_3d": null,
+        "variant_set": null,
+        "variant_scope": null,
+        "usage_agreement_payer": null,
+        "catalog_visible": true
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": false,
+        "sourceAssets": []
+      },
+      "readinessIssues": [],
+      "kitLines": [],
+      "aliases": []
+    },
+    "M91": {
+      "code": "M91",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "M91",
+        "abf_code": "M91",
+        "display_name": "Grafika Límec",
+        "official_name": "LÍMEC - GRAFIKA",
+        "official_name_en": "GRAPHICS - FASCIAL BOARD",
+        "item_type": "SERVICE",
+        "kind": "graphics_service",
+        "category": "graphics-fascia",
+        "unit_code": "bm",
+        "lifecycle_status": "active",
+        "width_mm": null,
+        "depth_mm": null,
+        "height_mm": null,
+        "color": null,
+        "material": null,
+        "note": null,
+        "price_category": "standard",
+        "show_2d": true,
+        "show_3d": false,
+        "variant_set": null,
+        "variant_scope": null,
+        "usage_agreement_payer": null,
+        "catalog_visible": true
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": false,
+        "sourceAssets": []
+      },
+      "readinessIssues": [],
+      "kitLines": [],
+      "aliases": [
+        {
+          "company": "creativ-expo",
+          "kind": "name",
+          "text": "creativ nazev",
+          "unit_code": null,
+          "status": "confirmed"
+        },
+        {
+          "company": "gendai",
+          "kind": "name",
+          "text": "gendai nazev",
+          "unit_code": null,
+          "status": "confirmed"
+        },
+        {
+          "company": "mac-praha",
+          "kind": "name",
+          "text": "mac nazev",
+          "unit_code": null,
+          "status": "confirmed"
+        }
+      ]
+    },
+    "OCT-SL-2500": {
+      "code": "OCT-SL-2500",
+      "available": true,
+      "sheetRow": {
+        "generator_code": "OCT-SL-2500",
+        "abf_code": null,
+        "display_name": "Sloupek Octanorm 250",
+        "official_name": null,
+        "official_name_en": null,
+        "item_type": "INTERNAL_COMPONENT",
+        "kind": "booth_component",
+        "category": "Sloupky",
+        "unit_code": "ks",
+        "lifecycle_status": "active",
+        "width_mm": 40,
+        "depth_mm": 40,
+        "height_mm": 2500,
+        "color": "Bílá",
+        "material": "Hliník",
+        "note": "sloupek na stavbu octanormu",
+        "price_category": "standard",
+        "show_2d": true,
+        "show_3d": true,
+        "variant_set": null,
+        "variant_scope": null,
+        "usage_agreement_payer": null,
+        "catalog_visible": null
+      },
+      "files": {
+        "photo": true,
+        "gallery": 0,
+        "model": true,
+        "sourceAssets": [
+          "dwg",
+          "dxf",
+          "sketchup"
+        ]
+      },
+      "readinessIssues": [],
+      "kitLines": [],
+      "aliases": []
+    },
+    "variantSetSample": [
+      {
+        "variant_set": "KOBERCE-SERBUS",
+        "variant_code": "PODIUM-PLAT-035",
+        "name": "PODIUM / PLAT 035",
+        "series": "PODIUM-PLAT",
+        "billed_by": "M02",
+        "surcharge_rule": "price_difference",
+        "active": true,
+        "photo": true
+      },
+      {
+        "variant_set": "KOBERCE-SERBUS",
+        "variant_code": "PODIUM-PLAT-020",
+        "name": "PODIUM / PLAT 020",
+        "series": "PODIUM-PLAT",
+        "billed_by": "M01",
+        "surcharge_rule": "none",
+        "active": true,
+        "photo": true
+      },
+      {
+        "variant_set": "KOBERCE-SERBUS",
+        "variant_code": "REVEXPO-1335",
+        "name": "REVEXPO 1335",
+        "series": "REVEXPO",
+        "billed_by": "M02",
+        "surcharge_rule": "price_difference",
+        "active": true,
+        "photo": true
+      }
+    ],
+    "priceRows": {
+      "list": "PRODEJNI-ZAKLADNI",
+      "name": "Základní prodejní ceník ABF",
+      "kind": "base",
+      "available": true,
+      "versions": [
+        {
+          "version": 1,
+          "status": "draft",
+          "label": "Podzim 2026",
+          "eur_rate": 24.17,
+          "eur_rounding_mode": "ceil",
+          "eur_rounding_step": 1,
+          "rows": [
+            {
+              "generator_code": "M01",
+              "variant_code": "PODIUM-PLAT-020",
+              "variant_series": null,
+              "price_mode": "fixed",
+              "price_czk": 190,
+              "eur_mode": "derived",
+              "price_eur_sk_manual": null,
+              "price_eur_world": 9,
+              "unit_code": "m2"
+            },
+            {
+              "generator_code": "M02",
+              "variant_code": null,
+              "variant_series": "PODIUM-PLAT",
+              "price_mode": "fixed",
+              "price_czk": 220,
+              "eur_mode": "derived",
+              "price_eur_sk_manual": null,
+              "price_eur_world": 11,
+              "unit_code": "m2"
+            },
+            {
+              "generator_code": "M02",
+              "variant_code": null,
+              "variant_series": "REVEXPO",
+              "price_mode": "fixed",
+              "price_czk": 240,
+              "eur_mode": "derived",
+              "price_eur_sk_manual": null,
+              "price_eur_world": 12,
+              "unit_code": "m2"
+            },
+            {
+              "generator_code": "M04",
+              "variant_code": null,
+              "variant_series": null,
+              "price_mode": "fixed",
+              "price_czk": 0,
+              "eur_mode": "derived",
+              "price_eur_sk_manual": null,
+              "price_eur_world": 0,
+              "unit_code": "m2"
+            },
+            {
+              "generator_code": "P86",
+              "variant_code": null,
+              "variant_series": null,
+              "price_mode": "fixed",
+              "price_czk": 3640,
+              "eur_mode": "derived",
+              "price_eur_sk_manual": null,
+              "price_eur_world": 162,
+              "unit_code": "ks"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "proposedTemplate": {
+    "workbook": "Generator_ABF_Katalog.xlsx",
+    "templateFormat": "catalog-template/1",
+    "sheetsIgnoredByImport": [
+      "Navod",
+      "Vzory",
+      "Ciselniky",
+      "_meta"
+    ],
+    "requiredLegend": {
+      "U": "povinné pro uložení (koncept)",
+      "A": "povinné pro aktivaci",
+      "P": "podmíněně povinné",
+      "": "nepovinné",
+      "R": "jen pro čtení"
+    },
+    "sheets": [
+      {
+        "name": "Produkty",
+        "columns": [
+          {
+            "key": "id",
+            "labelCs": "ID (neměnit)",
+            "type": "uuid",
+            "required": "R",
+            "dropdown": null,
+            "help": "Jen export, uzamčené."
+          },
+          {
+            "key": "generator_code",
+            "labelCs": "Generátorový kód",
+            "type": "text ≤ 64",
+            "required": "P",
+            "dropdown": null,
+            "help": "Klíč identity. U Interní komponenty povinný."
+          },
+          {
+            "key": "abf_code",
+            "labelCs": "ABF kód",
+            "type": "text ≤ 32",
+            "required": "",
+            "dropdown": null,
+            "help": "Velká písmena, unikátní."
+          },
+          {
+            "key": "display_name",
+            "labelCs": "Interní název HomeworkStudio *",
+            "type": "text",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "official_name",
+            "labelCs": "Oficiální název ABF (CZ)",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "official_name_en",
+            "labelCs": "Oficiální název ABF (EN)",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "category",
+            "labelCs": "Kategorie *",
+            "type": "id kategorie",
+            "required": "U",
+            "dropdown": "categories:product",
+            "help": ""
+          },
+          {
+            "key": "unit_code",
+            "labelCs": "Měrná jednotka",
+            "type": "kód jednotky",
+            "required": "P",
+            "dropdown": "units",
+            "help": ""
+          },
+          {
+            "key": "width_mm",
+            "labelCs": "Šířka (mm)",
+            "type": "číslo ≥ 0",
+            "required": "P",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "depth_mm",
+            "labelCs": "Hloubka (mm)",
+            "type": "číslo ≥ 0",
+            "required": "P",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "height_mm",
+            "labelCs": "Výška (mm)",
+            "type": "číslo ≥ 0",
+            "required": "P",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "color",
+            "labelCs": "Barva",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "material",
+            "labelCs": "Materiál",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "show_2d",
+            "labelCs": "2D v generátoru",
+            "type": "ANO/NE",
+            "required": "P",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "show_3d",
+            "labelCs": "3D v generátoru (vyžaduje GLB)",
+            "type": "ANO/NE",
+            "required": "P",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "variant_set",
+            "labelCs": "Vzorník barev",
+            "type": "kód vzorníku",
+            "required": "",
+            "dropdown": "variantSets",
+            "help": ""
+          },
+          {
+            "key": "variant_scope",
+            "labelCs": "Rozsah barev",
+            "type": "výčet",
+            "required": "P",
+            "dropdown": "cardVariantScopes",
+            "help": "Povinný, je-li vyplněn vzorník."
+          },
+          {
+            "key": "usage_agreement_payer",
+            "labelCs": "Jen na dohodu — náklady nese",
+            "type": "text ≤ 80",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_visible",
+            "labelCs": "Zobrazit v katalogu",
+            "type": "ANO/NE",
+            "required": "",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "catalog_name",
+            "labelCs": "Název v katalogu",
+            "type": "text ≤ 120",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_description",
+            "labelCs": "Krátký popis v katalogu",
+            "type": "text ≤ 400",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_sort",
+            "labelCs": "Pořadí v katalogu",
+            "type": "celé číslo",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "lifecycle_status",
+            "labelCs": "Stav (jen pro čtení)",
+            "type": "výčet",
+            "required": "R",
+            "dropdown": "lifecycleStatuses",
+            "help": "Aktivace v administraci (6.5/1)."
+          }
+        ]
+      },
+      {
+        "name": "Sluzby",
+        "columns": [
+          {
+            "key": "id",
+            "labelCs": "ID (neměnit)",
+            "type": "uuid",
+            "required": "R",
+            "dropdown": null,
+            "help": "Jen export, uzamčené."
+          },
+          {
+            "key": "generator_code",
+            "labelCs": "Generátorový kód",
+            "type": "text ≤ 64",
+            "required": "P",
+            "dropdown": null,
+            "help": "Klíč identity. U Interní komponenty povinný."
+          },
+          {
+            "key": "abf_code",
+            "labelCs": "ABF kód",
+            "type": "text ≤ 32",
+            "required": "",
+            "dropdown": null,
+            "help": "Velká písmena, unikátní."
+          },
+          {
+            "key": "display_name",
+            "labelCs": "Interní název HomeworkStudio *",
+            "type": "text",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "official_name",
+            "labelCs": "Oficiální název ABF (CZ)",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "official_name_en",
+            "labelCs": "Oficiální název ABF (EN)",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "category",
+            "labelCs": "Kategorie *",
+            "type": "id kategorie",
+            "required": "U",
+            "dropdown": "categories:graphics,technical_service,technical_point",
+            "help": ""
+          },
+          {
+            "key": "unit_code",
+            "labelCs": "Měrná jednotka",
+            "type": "kód jednotky",
+            "required": "P",
+            "dropdown": "units",
+            "help": "Grafika: Límec = bm, Celopolep/Polep pultu = m²."
+          },
+          {
+            "key": "power_kw",
+            "labelCs": "Výkon (kW)",
+            "type": "číslo",
+            "required": "",
+            "dropdown": null,
+            "help": "Jen elektřina."
+          },
+          {
+            "key": "show_2d",
+            "labelCs": "2D v generátoru",
+            "type": "ANO/NE",
+            "required": "P",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "show_3d",
+            "labelCs": "3D v generátoru (vyžaduje GLB)",
+            "type": "ANO/NE",
+            "required": "P",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "catalog_visible",
+            "labelCs": "Zobrazit v katalogu",
+            "type": "ANO/NE",
+            "required": "",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "catalog_name",
+            "labelCs": "Název v katalogu",
+            "type": "text ≤ 120",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_description",
+            "labelCs": "Krátký popis v katalogu",
+            "type": "text ≤ 400",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_sort",
+            "labelCs": "Pořadí v katalogu",
+            "type": "celé číslo",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "lifecycle_status",
+            "labelCs": "Stav (jen pro čtení)",
+            "type": "výčet",
+            "required": "R",
+            "dropdown": "lifecycleStatuses",
+            "help": "Aktivace v administraci (6.5/1)."
+          }
+        ]
+      },
+      {
+        "name": "InterniKomponenty",
+        "columns": [
+          {
+            "key": "id",
+            "labelCs": "ID (neměnit)",
+            "type": "uuid",
+            "required": "R",
+            "dropdown": null,
+            "help": "Jen export, uzamčené."
+          },
+          {
+            "key": "generator_code",
+            "labelCs": "Interní / generátorový kód *",
+            "type": "text ≤ 64",
+            "required": "U",
+            "dropdown": null,
+            "help": "Klíč identity. U Interní komponenty povinný."
+          },
+          {
+            "key": "abf_code",
+            "labelCs": "ABF kód",
+            "type": "text ≤ 32",
+            "required": "",
+            "dropdown": null,
+            "help": "Velká písmena, unikátní."
+          },
+          {
+            "key": "display_name",
+            "labelCs": "Interní název HomeworkStudio *",
+            "type": "text",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "category",
+            "labelCs": "Kategorie *",
+            "type": "id kategorie",
+            "required": "U",
+            "dropdown": "categories:internal_component",
+            "help": ""
+          },
+          {
+            "key": "usage",
+            "labelCs": "Použití komponenty *",
+            "type": "výčet",
+            "required": "U",
+            "dropdown": "internalComponentUsages",
+            "help": "Samostatný prvek generátoru (GLB+SKP) / Konstrukční díl."
+          },
+          {
+            "key": "unit_code",
+            "labelCs": "Měrná jednotka",
+            "type": "kód jednotky",
+            "required": "",
+            "dropdown": "units",
+            "help": ""
+          },
+          {
+            "key": "width_mm",
+            "labelCs": "Šířka (mm)",
+            "type": "číslo ≥ 0",
+            "required": "P",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "depth_mm",
+            "labelCs": "Hloubka (mm)",
+            "type": "číslo ≥ 0",
+            "required": "P",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "height_mm",
+            "labelCs": "Výška (mm)",
+            "type": "číslo ≥ 0",
+            "required": "P",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "color",
+            "labelCs": "Barva",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "material",
+            "labelCs": "Materiál",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "show_2d",
+            "labelCs": "2D v generátoru",
+            "type": "ANO/NE",
+            "required": "P",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "show_3d",
+            "labelCs": "3D v generátoru (vyžaduje GLB)",
+            "type": "ANO/NE",
+            "required": "P",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "lifecycle_status",
+            "labelCs": "Stav (jen pro čtení)",
+            "type": "výčet",
+            "required": "R",
+            "dropdown": "lifecycleStatuses",
+            "help": "Aktivace v administraci (6.5/1)."
+          }
+        ]
+      },
+      {
+        "name": "Stanky",
+        "columns": [
+          {
+            "key": "id",
+            "labelCs": "ID (neměnit)",
+            "type": "uuid",
+            "required": "R",
+            "dropdown": null,
+            "help": "Jen export, uzamčené."
+          },
+          {
+            "key": "generator_code",
+            "labelCs": "Generátorový kód",
+            "type": "text ≤ 64",
+            "required": "P",
+            "dropdown": null,
+            "help": "Klíč identity. U Interní komponenty povinný."
+          },
+          {
+            "key": "abf_code",
+            "labelCs": "ABF kód",
+            "type": "text ≤ 32",
+            "required": "",
+            "dropdown": null,
+            "help": "Velká písmena, unikátní."
+          },
+          {
+            "key": "display_name",
+            "labelCs": "Interní název HomeworkStudio *",
+            "type": "text",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "official_name",
+            "labelCs": "Oficiální název ABF (CZ)",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "official_name_en",
+            "labelCs": "Oficiální název ABF (EN)",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "category",
+            "labelCs": "Kategorie *",
+            "type": "výčet (pevný)",
+            "required": "U",
+            "dropdown": "specialCardCategories",
+            "help": ""
+          },
+          {
+            "key": "unit_code",
+            "labelCs": "Měrná jednotka",
+            "type": "kód jednotky",
+            "required": "",
+            "dropdown": "units",
+            "help": ""
+          },
+          {
+            "key": "width_mm",
+            "labelCs": "Šířka (mm)",
+            "type": "číslo ≥ 0",
+            "required": "A",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "depth_mm",
+            "labelCs": "Hloubka (mm)",
+            "type": "číslo ≥ 0",
+            "required": "A",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "height_mm",
+            "labelCs": "Výška (mm)",
+            "type": "číslo ≥ 0",
+            "required": "A",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_visible",
+            "labelCs": "Zobrazit v katalogu",
+            "type": "ANO/NE",
+            "required": "",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "catalog_name",
+            "labelCs": "Název v katalogu",
+            "type": "text ≤ 120",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_description",
+            "labelCs": "Krátký popis v katalogu",
+            "type": "text ≤ 400",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_sort",
+            "labelCs": "Pořadí v katalogu",
+            "type": "celé číslo",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "lifecycle_status",
+            "labelCs": "Stav (jen pro čtení)",
+            "type": "výčet",
+            "required": "R",
+            "dropdown": "lifecycleStatuses",
+            "help": "Aktivace v administraci (6.5/1)."
+          }
+        ]
+      },
+      {
+        "name": "Komplety",
+        "columns": [
+          {
+            "key": "id",
+            "labelCs": "ID (neměnit)",
+            "type": "uuid",
+            "required": "R",
+            "dropdown": null,
+            "help": "Jen export, uzamčené."
+          },
+          {
+            "key": "generator_code",
+            "labelCs": "Generátorový kód",
+            "type": "text ≤ 64",
+            "required": "P",
+            "dropdown": null,
+            "help": "Klíč identity. U Interní komponenty povinný."
+          },
+          {
+            "key": "abf_code",
+            "labelCs": "ABF kód",
+            "type": "text ≤ 32",
+            "required": "",
+            "dropdown": null,
+            "help": "Velká písmena, unikátní."
+          },
+          {
+            "key": "display_name",
+            "labelCs": "Interní název HomeworkStudio *",
+            "type": "text",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "official_name",
+            "labelCs": "Oficiální název ABF (CZ)",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "official_name_en",
+            "labelCs": "Oficiální název ABF (EN)",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "category",
+            "labelCs": "Kategorie *",
+            "type": "výčet (pevný)",
+            "required": "U",
+            "dropdown": "specialCardCategories",
+            "help": ""
+          },
+          {
+            "key": "unit_code",
+            "labelCs": "Měrná jednotka",
+            "type": "kód jednotky",
+            "required": "",
+            "dropdown": "units",
+            "help": ""
+          },
+          {
+            "key": "catalog_visible",
+            "labelCs": "Zobrazit v katalogu",
+            "type": "ANO/NE",
+            "required": "",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "catalog_name",
+            "labelCs": "Název v katalogu",
+            "type": "text ≤ 120",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_description",
+            "labelCs": "Krátký popis v katalogu",
+            "type": "text ≤ 400",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "catalog_sort",
+            "labelCs": "Pořadí v katalogu",
+            "type": "celé číslo",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "lifecycle_status",
+            "labelCs": "Stav (jen pro čtení)",
+            "type": "výčet",
+            "required": "R",
+            "dropdown": "lifecycleStatuses",
+            "help": "Aktivace v administraci (6.5/1)."
+          }
+        ]
+      },
+      {
+        "name": "ObsahKompletu",
+        "columns": [
+          {
+            "key": "komplet_code",
+            "labelCs": "Komplet / stánek (kód) *",
+            "type": "kód karty",
+            "required": "U",
+            "dropdown": "cards:BOOTH,KIT",
+            "help": ""
+          },
+          {
+            "key": "line_key",
+            "labelCs": "Klíč řádku *",
+            "type": "a–z 0–9 -",
+            "required": "U",
+            "dropdown": null,
+            "help": "Stabilní, např. koberec, grafika-limec."
+          },
+          {
+            "key": "line_kind",
+            "labelCs": "Druh řádku *",
+            "type": "položka / text",
+            "required": "U",
+            "dropdown": "kitLineKinds",
+            "help": ""
+          },
+          {
+            "key": "component_code",
+            "labelCs": "Komponenta (kód)",
+            "type": "kód karty",
+            "required": "P",
+            "dropdown": "cards:!BOOTH,!KIT",
+            "help": "Povinná u položky, zakázaná u textu."
+          },
+          {
+            "key": "label",
+            "labelCs": "Název textové položky",
+            "type": "text",
+            "required": "P",
+            "dropdown": null,
+            "help": "Povinný u textu."
+          },
+          {
+            "key": "quantity",
+            "labelCs": "Množství *",
+            "type": "číslo > 0",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "unit_code",
+            "labelCs": "Jednotka",
+            "type": "kód jednotky",
+            "required": "",
+            "dropdown": "units",
+            "help": ""
+          },
+          {
+            "key": "included_in_price",
+            "labelCs": "V ceně kompletu",
+            "type": "ANO/NE",
+            "required": "",
+            "dropdown": "yesNo",
+            "help": "Výchozí ANO; text vždy ANO."
+          },
+          {
+            "key": "variant_set",
+            "labelCs": "Vzorník",
+            "type": "kód vzorníku",
+            "required": "",
+            "dropdown": "variantSets",
+            "help": ""
+          },
+          {
+            "key": "default_variant",
+            "labelCs": "Výchozí barva",
+            "type": "kód barvy",
+            "required": "P",
+            "dropdown": "variants",
+            "help": "Musí patřit do vzorníku."
+          },
+          {
+            "key": "print_surface_type",
+            "labelCs": "Zahrnutá grafika: typ plochy",
+            "type": "výčet",
+            "required": "",
+            "dropdown": "printSurfaceTypes",
+            "help": ""
+          },
+          {
+            "key": "print_unit",
+            "labelCs": "Zahrnutá grafika: jednotka",
+            "type": "bm / m2 / ks",
+            "required": "P",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "print_included_qty",
+            "labelCs": "Zahrnutá grafika: množství",
+            "type": "číslo",
+            "required": "P",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "sort_order",
+            "labelCs": "Pořadí",
+            "type": "celé číslo",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          }
+        ]
+      },
+      {
+        "name": "Nahrady",
+        "columns": [
+          {
+            "key": "komplet_code",
+            "labelCs": "Komplet / stánek (kód) *",
+            "type": "kód karty",
+            "required": "U",
+            "dropdown": "cards:BOOTH,KIT",
+            "help": ""
+          },
+          {
+            "key": "line_key",
+            "labelCs": "Klíč řádku *",
+            "type": "text",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "substitute_code",
+            "labelCs": "Náhradní komponenta (kód) *",
+            "type": "kód karty",
+            "required": "U",
+            "dropdown": "cards:!BOOTH,!KIT",
+            "help": ""
+          },
+          {
+            "key": "substitute_variant",
+            "labelCs": "Barva náhrady",
+            "type": "kód barvy",
+            "required": "",
+            "dropdown": "variants",
+            "help": "Prázdné + vzorník na řádku = libovolná barva vzorníku."
+          },
+          {
+            "key": "surcharge_rule",
+            "labelCs": "Pravidlo doplatku *",
+            "type": "výčet",
+            "required": "U",
+            "dropdown": "kitSubstituteRules",
+            "help": ""
+          },
+          {
+            "key": "surcharge_unit_code",
+            "labelCs": "Jednotka doplatku",
+            "type": "kód jednotky",
+            "required": "P",
+            "dropdown": "units",
+            "help": "Povinná u per_unit."
+          },
+          {
+            "key": "quantity_factor",
+            "labelCs": "Koeficient množství",
+            "type": "číslo > 0",
+            "required": "",
+            "dropdown": null,
+            "help": "Výchozí 1."
+          },
+          {
+            "key": "active",
+            "labelCs": "Aktivní",
+            "type": "ANO/NE",
+            "required": "",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          }
+        ]
+      },
+      {
+        "name": "Vzorniky",
+        "columns": [
+          {
+            "key": "variant_set_code",
+            "labelCs": "Kód vzorníku *",
+            "type": "A–Z 0–9 - _",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "name",
+            "labelCs": "Název *",
+            "type": "text",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "kind",
+            "labelCs": "Druh",
+            "type": "výčet",
+            "required": "",
+            "dropdown": "variantSetKinds",
+            "help": "Výchozí koberce."
+          },
+          {
+            "key": "active",
+            "labelCs": "Aktivní",
+            "type": "ANO/NE",
+            "required": "",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          }
+        ]
+      },
+      {
+        "name": "Barvy",
+        "columns": [
+          {
+            "key": "variant_set_code",
+            "labelCs": "Kód vzorníku *",
+            "type": "kód",
+            "required": "U",
+            "dropdown": "variantSets",
+            "help": ""
+          },
+          {
+            "key": "variant_code",
+            "labelCs": "Kód barvy *",
+            "type": "A–Z 0–9 - _",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "name",
+            "labelCs": "Název *",
+            "type": "text",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "name_en",
+            "labelCs": "Název EN",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "series",
+            "labelCs": "Řada",
+            "type": "A–Z 0–9 - _",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "billed_by_code",
+            "labelCs": "Účtovaná karta (kód)",
+            "type": "kód karty",
+            "required": "P",
+            "dropdown": "cards",
+            "help": "Povinná u price_difference."
+          },
+          {
+            "key": "surcharge_rule",
+            "labelCs": "Pravidlo příplatku",
+            "type": "výčet",
+            "required": "",
+            "dropdown": "variantSurchargeRules",
+            "help": "Výchozí bez příplatku."
+          },
+          {
+            "key": "surcharge_unit_code",
+            "labelCs": "Jednotka příplatku",
+            "type": "kód jednotky",
+            "required": "P",
+            "dropdown": "units",
+            "help": "Povinná u per_unit."
+          },
+          {
+            "key": "swatch_color",
+            "labelCs": "Barva náhledu",
+            "type": "#RRGGBB",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "active",
+            "labelCs": "Aktivní",
+            "type": "ANO/NE",
+            "required": "",
+            "dropdown": "yesNo",
+            "help": ""
+          },
+          {
+            "key": "sort_order",
+            "labelCs": "Pořadí",
+            "type": "celé číslo",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "source_image_url",
+            "labelCs": "Zdroj obrázku (URL)",
+            "type": "https://…",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          }
+        ]
+      },
+      {
+        "name": "Aliasy",
+        "columns": [
+          {
+            "key": "card_code",
+            "labelCs": "Karta (kód) *",
+            "type": "kód karty",
+            "required": "U",
+            "dropdown": "cards",
+            "help": ""
+          },
+          {
+            "key": "company",
+            "labelCs": "Realizační firma",
+            "type": "firma",
+            "required": "",
+            "dropdown": "realizationCompanies",
+            "help": "Prázdné = obecný alias."
+          },
+          {
+            "key": "alias_kind",
+            "labelCs": "Druh *",
+            "type": "název / kód",
+            "required": "U",
+            "dropdown": "aliasKinds",
+            "help": ""
+          },
+          {
+            "key": "alias_text",
+            "labelCs": "Text aliasu *",
+            "type": "text ≤ 300",
+            "required": "U",
+            "dropdown": null,
+            "help": ""
+          },
+          {
+            "key": "unit_code",
+            "labelCs": "Jednotka firmy",
+            "type": "kód jednotky",
+            "required": "",
+            "dropdown": "units",
+            "help": ""
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          }
+        ]
+      },
+      {
+        "name": "Parametry",
+        "columns": [
+          {
+            "key": "card_code",
+            "labelCs": "Karta (kód) *",
+            "type": "kód karty",
+            "required": "U",
+            "dropdown": "cards",
+            "help": ""
+          },
+          {
+            "key": "parameter",
+            "labelCs": "Parametr *",
+            "type": "text",
+            "required": "U",
+            "dropdown": "recommendedParameters",
+            "help": "Doporučený z kategorie nebo vlastní; ne systémový."
+          },
+          {
+            "key": "value",
+            "labelCs": "Hodnota",
+            "type": "text / číslo",
+            "required": "",
+            "dropdown": null,
+            "help": "Prázdné = beze změny, #SMAZAT = odebrat."
+          },
+          {
+            "key": "note",
+            "labelCs": "Poznámka",
+            "type": "text",
+            "required": "",
+            "dropdown": null,
+            "help": ""
+          }
+        ]
+      }
+    ],
+    "priceWorkbook": {
+      "workbook": "Generator_ABF_Cenik.xlsx",
+      "basis": "domain/priceVersionExcel.ts PRICE_VERSION_EXCEL_COLUMNS",
+      "missingColumn": "variant_series (cena řady, V1-CARPET)"
+    }
+  }
+}

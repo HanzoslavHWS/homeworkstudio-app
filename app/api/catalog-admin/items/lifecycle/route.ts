@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { bulkLifecycleCatalogItemsAdmin } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import { ConcurrencyConflictError } from "../../../../../lib/db/concurrency.ts";
@@ -22,7 +22,8 @@ export async function handleCatalogAdminItemsLifecycle(
   request: NextRequest,
   bulk: (request: BulkLifecycleRequest) => Promise<BulkResult> = defaultBulk,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro archivaci je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.manage");
+  if (authDenied) return authDenied;
   let parsed: BulkLifecycleRequest;
   try {
     parsed = parseBulkLifecycleRequest(await request.json());

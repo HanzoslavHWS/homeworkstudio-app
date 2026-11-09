@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { SupabaseTechnicalRasterProjectRepository } from "../../../../../lib/db/technicalRasterProjectRepository.supabase.ts";
 import { createSupabaseEventIdResolver, isEventForeignKeyViolation, UNKNOWN_EVENT_MESSAGE, type EventIdResolver } from "../../../../../lib/db/eventIdValidation.server.ts";
@@ -38,9 +38,8 @@ export async function handleTechnicalRasterProjectSave(
   repositoryFactory: () => TechnicalRasterProjectRepository = defaultRepositoryFactory,
   resolveEventIdFactory: () => EventIdResolver = defaultEventIdResolverFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro ukládání projektů technických rastrů je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "technicalRasters.use");
+  if (authDenied) return authDenied;
   let body: SaveBody;
   try {
     body = (await request.json()) as SaveBody;

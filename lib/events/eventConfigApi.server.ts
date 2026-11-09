@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../auth/requestAuth.ts";
+import type { Permission } from "../../domain/accessControl.ts";
+import { authorize } from "../auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../db/supabase.server.ts";
 import { createSupabaseEventConfigRepository, EventConfigConflictError, EventConfigNotMigratedError, type EventConfigRepository } from "../db/eventConfig.supabase.ts";
 import {
@@ -18,11 +19,15 @@ import {
  * config_revision it was based on; a mismatch is a 409 and nothing is written. Paths are metadata
  * only — the server never touches a file system.
  */
-export type EventConfigApiDependencies = Readonly<{ repository: () => EventConfigRepository; isAuthorized: (request: NextRequest) => Promise<boolean> }>;
+/** isAuthorized: true = allowed; a NextResponse = the refusal to send (401/403/503); false (test double) = 401. */
+export type EventConfigApiDependencies = Readonly<{ repository: () => EventConfigRepository; isAuthorized: (request: NextRequest, permission: Permission) => Promise<boolean | NextResponse> }>;
 
 export const defaultEventConfigApiDependencies: EventConfigApiDependencies = {
   repository: () => createSupabaseEventConfigRepository(createSupabaseServerClient()),
-  isAuthorized: (request) => isSessionRequestAuthorized(request),
+  isAuthorized: async (request, permission) => {
+    const decision = await authorize(request, permission);
+    return decision.ok === false ? decision.response : true;
+  },
 };
 
 const NOT_SAVED = "Veletrh ještě není uložený. Nejdřív uložte kartu veletrhu.";
@@ -48,7 +53,9 @@ function revisionOf(value: unknown): number | undefined {
 }
 
 export async function handleEventConfigRead(request: NextRequest, dependencies: EventConfigApiDependencies = defaultEventConfigApiDependencies): Promise<NextResponse> {
-  if (!(await dependencies.isAuthorized(request))) return NextResponse.json({ error: "Pro nastavení veletrhu je vyžadováno přihlášení." }, { status: 401 });
+  const allowed = await dependencies.isAuthorized(request, "events.read");
+  if (allowed instanceof NextResponse) return allowed;
+  if (allowed !== true) return NextResponse.json({ error: "Pro nastavení veletrhu je vyžadováno přihlášení." }, { status: 401 });
   const eventId = text(request.nextUrl.searchParams.get("eventId"));
   if (!eventId) return NextResponse.json({ error: "Chybí veletrh." }, { status: 400 });
   try {
@@ -62,7 +69,9 @@ export async function handleEventConfigRead(request: NextRequest, dependencies: 
 }
 
 export async function handleEventConfigSave(request: NextRequest, dependencies: EventConfigApiDependencies = defaultEventConfigApiDependencies): Promise<NextResponse> {
-  if (!(await dependencies.isAuthorized(request))) return NextResponse.json({ error: "Pro nastavení veletrhu je vyžadováno přihlášení." }, { status: 401 });
+  const allowed = await dependencies.isAuthorized(request, "events.manage");
+  if (allowed instanceof NextResponse) return allowed;
+  if (allowed !== true) return NextResponse.json({ error: "Pro nastavení veletrhu je vyžadováno přihlášení." }, { status: 401 });
   let body: Record<string, unknown>;
   try {
     body = (await request.json()) as Record<string, unknown>;

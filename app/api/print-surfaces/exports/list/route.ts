@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { SupabasePrintSurfaceExportRepository } from "../../../../../lib/db/printSurfaceExportRepository.supabase.ts";
 import type { PrintSurfaceExportRepository } from "../../../../../domain/printSurfaceExport.ts";
@@ -12,9 +12,8 @@ export async function handlePrintSurfaceExportsList(
   request: NextRequest,
   repositoryFactory: () => PrintSurfaceExportRepository = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro přístup k historii exportů je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "printSurfaces.use");
+  if (authDenied) return authDenied;
   const projectId = new URL(request.url).searchParams.get("projectId");
   if (!projectId) return NextResponse.json({ error: "Chybí id projektu." }, { status: 400 });
   try {

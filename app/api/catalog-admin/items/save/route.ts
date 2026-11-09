@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { CatalogSchemaNotMigratedError, saveCatalogItemAdmin } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import { ConcurrencyConflictError } from "../../../../../lib/db/concurrency.ts";
@@ -23,7 +23,8 @@ export async function handleCatalogAdminItemsSave(
   request: NextRequest,
   save: (id: string, edit: CatalogItemAdminEdit, expectedUpdatedAt: string | null) => Promise<CatalogItemAdmin> = defaultSave,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro ukládání komponent je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.manage");
+  if (authDenied) return authDenied;
   let body: SaveBody;
   try {
     body = (await request.json()) as SaveBody;

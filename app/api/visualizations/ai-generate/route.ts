@@ -6,7 +6,7 @@ import {
   VisualizationAiRequestError,
   type VisualizationAiGenerateRequestBody,
 } from "../../../../domain/visualizationAi.ts";
-import { isVisualizationAiRequestAuthorized } from "../../../../lib/ai/visualizationAiRouteAuth.server.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { resolveVisualizationAiProvider } from "../../../../lib/ai/visualizationAiProvider.server.ts";
 import { dataUrlToPngBytes, PngDecodeError, readPngDimensions } from "../../../../lib/ai/pngDecoder.ts";
 import type { CuratedAiSceneMetadata } from "../../../../domain/visualizationAiPrompt.ts";
@@ -60,9 +60,8 @@ export async function handleVisualizationAiGenerate(
   request: NextRequest,
   providerFactory: () => VisualizationAiProvider | undefined = resolveVisualizationAiProvider,
 ): Promise<NextResponse> {
-  if (!(await isVisualizationAiRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro generování AI vizualizace je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "ai.use");
+  if (authDenied) return authDenied;
 
   let body: unknown;
   try {

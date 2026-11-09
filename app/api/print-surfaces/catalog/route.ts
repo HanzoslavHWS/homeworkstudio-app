@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { SupabaseRealizationCompanyRepository } from "../../../../lib/db/realizationCompanyRepository.supabase.ts";
 import { SupabasePrintSurfacePresetRepository } from "../../../../lib/db/printSurfacePresetRepository.supabase.ts";
@@ -34,9 +34,8 @@ export async function handlePrintSurfaceCatalogGet(
   request: NextRequest,
   repositoryFactory: () => PrintSurfaceCatalogRepositories = defaultRepositoryFactory,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) {
-    return NextResponse.json({ error: "Pro přístup ke katalogu tiskových ploch je vyžadováno přihlášení." }, { status: 401 });
-  }
+  const authDenied = await denyUnless(request, "printSurfaces.use");
+  if (authDenied) return authDenied;
   try {
     const repositories = repositoryFactory();
     const [companies, presets, productionDimensions] = await Promise.all([

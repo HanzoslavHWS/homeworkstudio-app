@@ -125,7 +125,7 @@ export function BoothAdminPage({
   const activeTab = BOOTH_ADMIN_TABS.find((tab) => tab.kind === activeKind) ?? BOOTH_ADMIN_TABS[0]!;
 
   return (
-    <div className="workspacePage">
+    <div className="workspacePage adminPage">
       <div className="workspacePageHeader">
         <div>
           <span className="eyebrow">ADMINISTRACE</span>
@@ -167,9 +167,10 @@ export function BoothAdminPage({
               onCreated={handleCreated}
             />
           )}
-          <div className="adminSplit">
-            <ComponentAdminList entries={filteredEntries} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setShowCreateForm(false); }} />
-            {selected && (
+          {!selected && <ComponentAdminList entries={filteredEntries} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setShowCreateForm(false); }} />}
+          {selected && (
+            <div className="catalogDetailView">
+              <button type="button" className="adminButton adminButtonGhost catalogBackButton" onClick={() => setSelectedId(undefined)}>← Zpět na seznam</button>
               <ComponentAdminDetail
                 key={selected.id}
                 item={selected}
@@ -181,8 +182,8 @@ export function BoothAdminPage({
                 onOpenPricing={() => onOpenPricing(selected.id)}
                 onOpenPriceVersion={onOpenPriceVersion}
               />
-            )}
-          </div>
+            </div>
+          )}
         </>
       )}
     </div>

@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../../lib/db/supabase.server.ts";
 import { CatalogSchemaNotMigratedError, readCatalogItemAliases, saveCatalogItemAliases } from "../../../../../lib/db/catalogItemsAdmin.supabase.ts";
 import { SupabaseRealizationCompanyRepository } from "../../../../../lib/db/realizationCompanyRepository.supabase.ts";
@@ -26,7 +26,8 @@ const defaultDependencies: CatalogAliasDependencies = {
 };
 
 export async function handleCatalogAliasesGet(request: NextRequest, dependencies: CatalogAliasDependencies = defaultDependencies): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro administraci komponent je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.read");
+  if (authDenied) return authDenied;
   try {
     const [aliases, companies] = await Promise.all([dependencies.readAliases(), dependencies.listCompanies()]);
     return NextResponse.json({ aliases, companies, units: CATALOG_UNITS satisfies readonly CatalogUnit[] });
@@ -37,7 +38,8 @@ export async function handleCatalogAliasesGet(request: NextRequest, dependencies
 }
 
 export async function handleCatalogAliasesSave(request: NextRequest, dependencies: CatalogAliasDependencies = defaultDependencies): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro úpravu aliasů je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "catalog.manage");
+  if (authDenied) return authDenied;
   let body: { catalogItemId?: unknown; aliases?: unknown };
   try {
     body = (await request.json()) as { catalogItemId?: unknown; aliases?: unknown };

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { NextRequest } from "next/server.js";
 import { handleTechnicalRasterProjectSave } from "../app/api/technical-rasters/projects/save/route.ts";
-import { createSessionToken } from "../lib/auth/session.ts";
+import { createTestSessionToken as createSessionToken } from "./helpers/testAuth.ts";
 import { UNKNOWN_EVENT_MESSAGE, type EventIdResolver } from "../lib/db/eventIdValidation.server.ts";
 import { createDefaultRasterSettings } from "../domain/technicalRaster.ts";
 import type {

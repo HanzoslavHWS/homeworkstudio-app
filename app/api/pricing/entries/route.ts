@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from "next/server.js";
-import { isSessionRequestAuthorized } from "../../../../lib/auth/requestAuth.ts";
+import { denyUnless } from "../../../../lib/auth/requestAuth.ts";
 import { createSupabaseServerClient, SupabaseConfigurationError } from "../../../../lib/db/supabase.server.ts";
 import { readPricingEntriesForPriceList } from "../../../../lib/db/catalogPricing.supabase.ts";
 import type { PricingEntrySummary } from "../../../../domain/catalogPricing.ts";
@@ -12,7 +12,8 @@ export async function handlePricingEntriesList(
   request: NextRequest,
   readEntries: (priceListId: string) => Promise<readonly PricingEntrySummary[]> = defaultReadPricingEntries,
 ): Promise<NextResponse> {
-  if (!(await isSessionRequestAuthorized(request))) return NextResponse.json({ error: "Pro přístup k ceníkovým položkám je vyžadováno přihlášení." }, { status: 401 });
+  const authDenied = await denyUnless(request, "prices.sale.read");
+  if (authDenied) return authDenied;
   const priceListId = request.nextUrl.searchParams.get("priceListId");
   if (!priceListId) return NextResponse.json({ error: "Chybí parametr priceListId." }, { status: 400 });
   try {
