@@ -30,6 +30,9 @@ import {
 } from "../../../domain/priceVersions";
 import { EventConfigConflictClientError, EventNotSavedClientError, eventConfigApi, type EventConfigResponse } from "../../../lib/db/eventConfig.remoteApi.client";
 import { isPriceVersionConflict, salePriceVersionsApi, type SalePriceRegister } from "../../../lib/db/priceVersions.remoteApi.client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 
 /**
  * V1-DATA-06 sections of the event card: one list of realization firms, folder paths for the future
@@ -62,7 +65,7 @@ export function EventSettingsSections({ eventId, legacyRealizationCompanyId }: {
 
   if (state.status === "loading") return <p className="fieldHint">Načítám nastavení veletrhu…</p>;
   if (state.status === "notSaved") return <p className="fieldHint eventSettingsNotice">Realizační firmy a složky na disku lze nastavit po prvním uložení veletrhu.</p>;
-  if (state.status === "error") return <p className="uploadError">{state.message} <button type="button" className="linkButton" onClick={() => void reload()}>Zkusit znovu</button></p>;
+  if (state.status === "error") return <p className="uploadError">{state.message} <Button variant="link" type="button" onClick={() => void reload()}>Zkusit znovu</Button></p>;
   return (
     <>
       <RealizationSection
@@ -88,8 +91,8 @@ function SaveBar({ dirty, saving, message, error, conflict, onSave, onReload }: 
       <span className={dirty ? "dirty" : "saved"}>{saving ? "Ukládám…" : dirty ? "Neuložené změny" : "Uloženo"}</span>
       {message && <small className="saveOk">{message}</small>}
       {error && <small className="uploadError">{error}</small>}
-      {conflict && <button type="button" className="secondaryButton" onClick={() => { if (!dirty || window.confirm("Načíst aktuální stav? Vaše neuložené změny v této části se zahodí.")) onReload(); }}>Načíst aktuální stav</button>}
-      <button type="button" className="primaryButton" disabled={!dirty || saving} onClick={onSave}>Uložit</button>
+      {conflict && <Button variant="outline" type="button" onClick={() => { if (!dirty || window.confirm("Načíst aktuální stav? Vaše neuložené změny v této části se zahodí.")) onReload(); }}>Načíst aktuální stav</Button>}
+      <Button variant="default" type="button" disabled={!dirty || saving} onClick={onSave}>Uložit</Button>
     </div>
   );
 }
@@ -139,7 +142,7 @@ function RealizationSection({ eventId, revision, onRevision, onReload, initialLi
   }
 
   return (
-    <section className="eventSettingsSection">
+    <section className="eventSettingsSection min-w-0">
       <h3>Realizační firmy</h3>
       <p className="fieldHint">Firmy, které na veletrhu realizují stánky (včetně jejich grafiky a zapojení elektřiny uvnitř stánku; hlavní přívod zajišťuje areál). Výchozí realizačka jen předvyplní nový úkol — stánkům se nepřiřazuje automaticky.</p>
       <p className="eventLegacyValue">
@@ -158,17 +161,17 @@ function RealizationSection({ eventId, revision, onRevision, onReload, initialLi
                 onChange={(event) => change(links.map((candidate) => ({ ...candidate, isDefault: candidate.realizationCompanyId === link.realizationCompanyId ? event.target.checked : false })))}
               /> výchozí
             </label>
-            <input className="eventRealizationNote" value={link.note ?? ""} placeholder="Poznámka" onChange={(event) => change(links.map((candidate) => (candidate.realizationCompanyId === link.realizationCompanyId ? { ...candidate, note: event.target.value || undefined } : candidate)))} />
-            <button type="button" className="linkButton" onClick={() => change(links.filter((candidate) => candidate.realizationCompanyId !== link.realizationCompanyId))}>Odebrat</button>
+            <Input className="eventRealizationNote" value={link.note ?? ""} placeholder="Poznámka" onChange={(event) => change(links.map((candidate) => (candidate.realizationCompanyId === link.realizationCompanyId ? { ...candidate, note: event.target.value || undefined } : candidate)))} />
+            <Button variant="link" type="button" onClick={() => change(links.filter((candidate) => candidate.realizationCompanyId !== link.realizationCompanyId))}>Odebrat</Button>
           </div>
         ))}
         {available.length > 0 && (
           <div className="eventRealizationRow">
-            <select value={adding} onChange={(event) => setAdding(event.target.value)}>
+            <NativeSelect value={adding} onChange={(event) => setAdding(event.target.value)}>
               <option value="">— přidat realizační firmu —</option>
               {available.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
-            </select>
-            <button type="button" className="secondaryButton" disabled={!adding} onClick={() => { change([...links, { realizationCompanyId: adding, isDefault: links.length === 0 }]); setAdding(""); }}>Přidat</button>
+            </NativeSelect>
+            <Button variant="outline" type="button" disabled={!adding} onClick={() => { change([...links, { realizationCompanyId: adding, isDefault: links.length === 0 }]); setAdding(""); }}>Přidat</Button>
           </div>
         )}
       </div>
@@ -247,7 +250,7 @@ function PathsSection({ eventId, revision, onRevision, onReload, initialPaths }:
   }
 
   return (
-    <section className="eventSettingsSection">
+    <section className="eventSettingsSection min-w-0">
       <h3>Složky na disku (pro budoucí Organizer)</h3>
       <p className="fieldHint">Aplikace jen ukládá cesty — na disk nepřistupuje, složky nevytváří, nic nekopíruje ani nepřejmenovává.</p>
       <div className="eventPathModes" role="radiogroup" aria-label="Režim složek">
@@ -259,10 +262,10 @@ function PathsSection({ eventId, revision, onRevision, onReload, initialPaths }:
       </div>
       <label className="eventPathRow">
         <span>{EVENT_PATH_ROLE_LABELS_CS.event_root}</span>
-        <input value={root} placeholder="např. C:\HWS_TEST\TEST_BEAUTY_2026_P nebo P:\…" onChange={(event) => { setRoot(event.target.value); setMessage(""); }} />
+        <Input value={root} placeholder="např. C:\HWS_TEST\TEST_BEAUTY_2026_P nebo P:\…" onChange={(event) => { setRoot(event.target.value); setMessage(""); }} />
         {issues.event_root ? <small className="uploadError">{issues.event_root}</small> : !root.trim() ? <small className="fieldHint">Prázdná kořenová složka = nenakonfigurováno.</small> : null}
       </label>
-      <table className="priceVersionTable eventPathTable">
+      <div className="overflow-x-auto"><table className="priceVersionTable eventPathTable">
         <thead><tr><th>Složka</th><th>{mode === "standard" ? "Standardní podsložka" : "Cesta (relativní k kořeni nebo úplná)"}</th><th>Výsledná cesta</th></tr></thead>
         <tbody>
           {EVENT_SUBFOLDER_ROLES.map((role) => {
@@ -274,7 +277,7 @@ function PathsSection({ eventId, revision, onRevision, onReload, initialPaths }:
                 <td>
                   {mode === "standard"
                     ? <code>{value}</code>
-                    : <input value={value} placeholder="prázdné = kořenová složka" onChange={(event) => { setCustom({ ...custom, [role]: event.target.value }); setMessage(""); }} />}
+                    : <Input value={value} placeholder="prázdné = kořenová složka" onChange={(event) => { setCustom({ ...custom, [role]: event.target.value }); setMessage(""); }} />}
                   {issues[role] ? <small className="uploadError"> {issues[role]}</small> : null}
                 </td>
                 <td className="eventPathPreview">{preview ? <code>{preview}</code> : <span className="fieldHint">nenakonfigurováno</span>}{preview && preview === rootPreview && mode === "custom" ? <small className="fieldHint"> (kořenová složka)</small> : null}</td>
@@ -282,7 +285,7 @@ function PathsSection({ eventId, revision, onRevision, onReload, initialPaths }:
             );
           })}
         </tbody>
-      </table>
+      </table></div>
       <SaveBar dirty={dirty} saving={saving} message={message} error={error} conflict={conflict} onSave={() => void save()} onReload={() => void onReload()} />
     </section>
   );
@@ -310,7 +313,7 @@ export function EventPricingSection({ eventId, actorName }: { eventId: string; a
     void reload();
   }, [reload]);
 
-  if (!register) return <section className="eventSettingsSection"><h3>Ceníky</h3>{error ? <p className="uploadError">{error}</p> : <p className="fieldHint">Načítám…</p>}</section>;
+  if (!register) return <section className="eventSettingsSection min-w-0"><h3>Ceníky</h3>{error ? <p className="uploadError">{error}</p> : <p className="fieldHint">Načítám…</p>}</section>;
   const listById = new Map(register.lists.map((list) => [list.id, list]));
   const versionById = new Map(register.versions.map((version) => [version.id, version]));
   const label = (versionId: string | undefined) => {
@@ -339,7 +342,7 @@ export function EventPricingSection({ eventId, actorName }: { eventId: string; a
   }
 
   return (
-    <section className="eventSettingsSection">
+    <section className="eventSettingsSection min-w-0">
       <h3>Ceníky (verze)</h3>
       <p className="fieldHint">Veletrh používá jen výslovně přiřazenou publikovanou verzi. Datum konání ani publikace nové verze ji nemění.</p>
       {!known && <p className="fieldHint">Veletrh ještě není uložený.</p>}
@@ -352,11 +355,11 @@ export function EventPricingSection({ eventId, actorName }: { eventId: string; a
             return (
               <label key={kind} className="eventPathRow">
                 <span>{PRICE_LIST_KIND_LABELS_CS[kind]}</span>
-                <select value={current?.priceListVersionId ?? ""} disabled={busy} onChange={(event) => void assign(kind, event.target.value)}>
+                <NativeSelect value={current?.priceListVersionId ?? ""} disabled={busy} onChange={(event) => void assign(kind, event.target.value)}>
                   <option value="">— nepřiřazeno —</option>
                   {current && !options.some((version) => version.id === current.priceListVersionId) && <option value={current.priceListVersionId}>{label(current.priceListVersionId)}</option>}
                   {options.map((version) => <option key={version.id} value={version.id}>{label(version.id)}</option>)}
-                </select>
+                </NativeSelect>
                 {warning && <small className="dangerText">⚠ {warning}</small>}
               </label>
             );
@@ -365,7 +368,7 @@ export function EventPricingSection({ eventId, actorName }: { eventId: string; a
       )}
       {message && <p className="saveOk">{message}</p>}
       {error && <p className="uploadError">{error}</p>}
-      {known && <button type="button" className="linkButton" onClick={() => setShowHistory(!showHistory)}>{showHistory ? "Skrýt historii" : "Historie přiřazení"}</button>}
+      {known && <Button variant="link" type="button" onClick={() => setShowHistory(!showHistory)}>{showHistory ? "Skrýt historii" : "Historie přiřazení"}</Button>}
       {showHistory && (
         <ul className="eventPricingHistory">
           {eventAssignmentHistory(register.assignments, eventId).map((assignment) => (

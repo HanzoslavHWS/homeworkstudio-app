@@ -1128,16 +1128,17 @@ test("ComponentAdminPage.tsx reuses the existing asset upload infrastructure (up
 test("UI: the catalog table has the columns of the shared administration (V1-ADMIN-01): výběr, náhled, kód, název, typ, kategorie, stav, podklady", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
   for (const label of ["Náhled", "Kód", "Název", "Typ", "Kategorie", "Stav", "Podklady"]) {
-    assert.match(source, new RegExp(`<th[^>]*>${label}</th>`, "u"), `missing list column "${label}"`);
+    assert.match(source, new RegExp(`<TableHead[^>]*>${label}</TableHead>`, "u"), `missing list column "${label}"`);
   }
-  assert.match(source, /<table className="adminTable catalogTable">/u);
-  assert.match(source, /className="catalogNameButton"/u, "a card opens by keyboard (a real button)");
+  assert.match(source, /<Table className="adminTable catalogTable[^"]*">/u);
+  assert.match(source, /<button type="button" className="catalogNameButton[^"]*"/u, "a card opens by keyboard (a real button)");
 });
 
 test("UI: filters — search, Typ, Kategorie, Stav visible; Druh / Připravenost / 3D model / k zařazení under Další filtry; Vymazat filtry; Czech labels only", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
   assert.match(source, /placeholder="Název, generátorový nebo ABF kód"/u);
-  for (const label of ["Typ", "Kategorie", "Stav", "Druh použití", "Připravenost k aktivaci", "3D model"]) assert.match(source, new RegExp(`<span>${label}</span>`, "u"), label);
+  // SHAD-01: each filter is a labelled Field (Label htmlFor ↔ the control's id).
+  for (const label of ["Typ", "Kategorie", "Stav", "Druh použití", "Připravenost k aktivaci", "3D model"]) assert.match(source, new RegExp(`<Field id="(catalog-filter-[a-z]+)" label="${label}">\\s*<(?:NativeSelect|Input)\\s+id="\\1"`, "u"), label);
   assert.match(source, /Jen archivované/u);
   assert.match(source, /Další filtry/u);
   assert.match(source, /Vymazat filtry/u);
@@ -1875,9 +1876,9 @@ test("categoryLabelCs translates the real Czech PRICELIST category values and gr
 
 test("UI: Kategorie field is a <select> populated from CATALOG_ITEM_CATEGORY_OPTIONS, never a free-text <input>", () => {
   const source = readFileSync(new URL("../components/workflow/ComponentAdminPage.tsx", import.meta.url), "utf8");
-  assert.match(source, /<select value=\{category\}/u);
+  assert.match(source, /<NativeSelect value=\{category\}/u);
   assert.match(source, /CATALOG_ITEM_CATEGORY_OPTIONS\.map/u);
-  assert.doesNotMatch(source, /EditRow label="Kategorie">\s*<input/u);
+  assert.doesNotMatch(source, /EditRow label="Kategorie">\s*<(?:input|Input)/u);
 });
 
 test("selecting a category persists the exact canonical DB value (label is display-only, never the stored value)", async () => {

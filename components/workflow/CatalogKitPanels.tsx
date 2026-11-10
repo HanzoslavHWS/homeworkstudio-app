@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { itemTypeOf, type CatalogItemAdmin } from "../../domain/catalogItemsAdmin";
 import { CATALOG_ITEM_TYPE_LABELS_CS } from "../../domain/catalogItemTypes";
 import {
@@ -21,12 +21,23 @@ import {
   VARIANT_SET_KINDS,
   VARIANT_SURCHARGE_RULE_LABELS_CS,
   VARIANT_SURCHARGE_RULES,
+  variantImageState,
+  type CatalogVariant,
   type CatalogVariantSet,
   type CatalogVariantSetInput,
+  type VariantImageState,
   type VariantSetKind,
   type VariantSurchargeRule,
 } from "../../domain/catalogVariants";
 import { carpetFinishVariants } from "../../domain/finishes";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Label } from "@/components/ui/label";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ActionBar, Field, Notice, SectionCard } from "@/components/ui/workspace";
+import { useAssetUrl } from "../../hooks/useAssetUrl";
 
 function itemOptionLabel(item: CatalogItemAdmin): string {
   const code = item.abfCode ?? item.internalCode;
@@ -277,29 +288,29 @@ export function KitContentsSection({
           <div key={line.key} className={`kitLine ${text ? "kitLineText" : ""}`} data-line-key={line.lineKey ?? ""}>
             <div className="kitLineMain">
               <div className="kitLineOrder">
-                <button type="button" aria-label="Posunout nahoru" title="Posunout nahoru" disabled={index === 0} onClick={() => move(line.key, -1)}>▲</button>
-                <button type="button" aria-label="Posunout dolů" title="Posunout dolů" disabled={index === lines.length - 1} onClick={() => move(line.key, 1)}>▼</button>
+                <Button variant="outline" size="sm" type="button" aria-label="Posunout nahoru" title="Posunout nahoru" disabled={index === 0} onClick={() => move(line.key, -1)}>▲</Button>
+                <Button variant="outline" size="sm" type="button" aria-label="Posunout dolů" title="Posunout dolů" disabled={index === lines.length - 1} onClick={() => move(line.key, 1)}>▼</Button>
               </div>
               <span className="kitLineBadge">{text ? "Text" : "Komponenta"}</span>
               {text ? (
-                <input aria-label="Název textové položky" placeholder="Název (např. Stavba stánku)" value={line.label} onChange={(event) => update(line.key, { label: event.target.value })} />
+                <Input aria-label="Název textové položky" placeholder="Název (např. Stavba stánku)" value={line.label} onChange={(event) => update(line.key, { label: event.target.value })} />
               ) : (
-                <select aria-label="Komponenta" value={line.childItemId} onChange={(event) => update(line.key, { childItemId: event.target.value })}>
+                <NativeSelect aria-label="Komponenta" value={line.childItemId} onChange={(event) => update(line.key, { childItemId: event.target.value })}>
                   <option value="">— vyberte komponentu —</option>
                   {optionsFor(line, line.childItemId)}
-                </select>
+                </NativeSelect>
               )}
-              <input aria-label="Množství" className="kitLineQuantity" inputMode="decimal" value={line.quantity} onChange={(event) => update(line.key, { quantity: event.target.value })} />
-              <select aria-label="Jednotka" value={line.unitCode} onChange={(event) => update(line.key, { unitCode: event.target.value })}>
+              <Input aria-label="Množství" className="kitLineQuantity" inputMode="decimal" value={line.quantity} onChange={(event) => update(line.key, { quantity: event.target.value })} />
+              <NativeSelect aria-label="Jednotka" value={line.unitCode} onChange={(event) => update(line.key, { unitCode: event.target.value })}>
                 <option value="">jednotka</option>
                 {CATALOG_UNITS.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol}</option>)}
-              </select>
+              </NativeSelect>
               <label className="checkboxRow" title={text ? "Textová položka je vždy v ceně kompletu" : undefined}>
                 <input type="checkbox" checked={text ? true : line.includedInPackage} disabled={text} onChange={(event) => update(line.key, { includedInPackage: event.target.checked })} />
                 Zahrnuto v ceně
               </label>
-              <button type="button" className="linkButton" aria-expanded={isOpen} onClick={() => toggleExpanded(line.key)}>{isOpen ? "Méně" : "Více"}</button>
-              <button type="button" className="dangerText" onClick={() => setLines((current) => current.filter((candidate) => candidate.key !== line.key))}>Odebrat</button>
+              <Button variant="link" type="button" aria-expanded={isOpen} onClick={() => toggleExpanded(line.key)}>{isOpen ? "Méně" : "Více"}</Button>
+              <Button variant="destructive" type="button" onClick={() => setLines((current) => current.filter((candidate) => candidate.key !== line.key))}>Odebrat</Button>
             </div>
             {!isOpen && (line.allowSubstitutes || line.variantSetId || line.allowances.length > 0 || line.note) && (
               <small className="kitLineSummary">
@@ -315,16 +326,16 @@ export function KitContentsSection({
               <div className="kitLineDetail">
                 <label>
                   <span>Poznámka</span>
-                  <input value={line.note} onChange={(event) => update(line.key, { note: event.target.value })} placeholder="Nepovinná poznámka" />
+                  <Input value={line.note} onChange={(event) => update(line.key, { note: event.target.value })} placeholder="Nepovinná poznámka" />
                 </label>
                 <label>
                   <span>Klíč řádku</span>
-                  <input value={line.lineKey ?? ""} readOnly placeholder="Přidělí se při uložení" title="Stabilní identifikátor řádku — po uložení se nemění" />
+                  <Input value={line.lineKey ?? ""} readOnly placeholder="Přidělí se při uložení" title="Stabilní identifikátor řádku — po uložení se nemění" />
                 </label>
                 {text && (
                   <label>
                     <span>Anglický název</span>
-                    <input value={line.labelEn} onChange={(event) => update(line.key, { labelEn: event.target.value })} placeholder="Nepovinné" />
+                    <Input value={line.labelEn} onChange={(event) => update(line.key, { labelEn: event.target.value })} placeholder="Nepovinné" />
                   </label>
                 )}
                 {!text && (
@@ -332,18 +343,18 @@ export function KitContentsSection({
                     <div className="kitLineGroup">
                       <label>
                         <span>Vzorník (barevné varianty)</span>
-                        <select value={line.variantSetId} onChange={(event) => update(line.key, { variantSetId: event.target.value, defaultVariantId: "" })}>
+                        <NativeSelect value={line.variantSetId} onChange={(event) => update(line.key, { variantSetId: event.target.value, defaultVariantId: "" })}>
                           <option value="">— bez variant —</option>
                           {variantSets.filter((candidate) => candidate.isActive || candidate.id === line.variantSetId).map((candidate) => <option key={candidate.id} value={candidate.id}>{candidate.name} ({candidate.code})</option>)}
-                        </select>
+                        </NativeSelect>
                       </label>
                       {set && (
                         <label>
                           <span>Výchozí varianta</span>
-                          <select value={line.defaultVariantId} onChange={(event) => update(line.key, { defaultVariantId: event.target.value })}>
+                          <NativeSelect value={line.defaultVariantId} onChange={(event) => update(line.key, { defaultVariantId: event.target.value })}>
                             <option value="">— nevybráno —</option>
                             {set.variants.filter((variant) => variant.isActive || variant.id === line.defaultVariantId).map((variant) => <option key={variant.id} value={variant.id}>{variant.name} ({variant.code})</option>)}
-                          </select>
+                          </NativeSelect>
                         </label>
                       )}
                       {variantSets.length === 0 && <small className="fieldHint">Zatím není založený žádný vzorník (tlačítko „Vzorníky“ nahoře).</small>}
@@ -362,37 +373,36 @@ export function KitContentsSection({
                               update(line.key, { substitutes: line.substitutes.map((candidate) => (candidate.key === substitute.key ? { ...candidate, ...patch } : candidate)) });
                             return (
                               <div key={substitute.key} className="kitSubstituteRow">
-                                <select aria-label="Náhradní komponenta" value={substitute.substituteItemId} onChange={(event) => patchSubstitute({ substituteItemId: event.target.value })}>
+                                <NativeSelect aria-label="Náhradní komponenta" value={substitute.substituteItemId} onChange={(event) => patchSubstitute({ substituteItemId: event.target.value })}>
                                   <option value="">— alternativa —</option>
                                   {optionsFor(line, substitute.substituteItemId)}
-                                </select>
+                                </NativeSelect>
                                 {allVariantOptions.length > 0 && (
-                                  <select aria-label="Varianta náhrady" value={substitute.substituteVariantId} onChange={(event) => patchSubstitute({ substituteVariantId: event.target.value })}>
+                                  <NativeSelect aria-label="Varianta náhrady" value={substitute.substituteVariantId} onChange={(event) => patchSubstitute({ substituteVariantId: event.target.value })}>
                                     {/* Empty = no fixed colour: with a swatch book on the line, any of its colours may be chosen (priceKit). */}
                                     <option value="">{line.variantSetId ? "Libovolná barva vzorníku" : "bez varianty"}</option>
                                     {allVariantOptions.map((option) => <option key={option.id} value={option.id}>{option.label}</option>)}
-                                  </select>
+                                  </NativeSelect>
                                 )}
-                                <select aria-label="Pravidlo doplatku" value={substitute.surchargeRule} onChange={(event) => patchSubstitute({ surchargeRule: event.target.value as KitSubstituteRule })}>
+                                <NativeSelect aria-label="Pravidlo doplatku" value={substitute.surchargeRule} onChange={(event) => patchSubstitute({ surchargeRule: event.target.value as KitSubstituteRule })}>
                                   {KIT_SUBSTITUTE_RULES.map((rule) => <option key={rule} value={rule}>{KIT_SUBSTITUTE_RULE_LABELS_CS[rule]}</option>)}
-                                </select>
+                                </NativeSelect>
                                 {substitute.surchargeRule === "per_unit" && (
-                                  <select aria-label="Jednotka doplatku" value={substitute.surchargeUnitCode} onChange={(event) => patchSubstitute({ surchargeUnitCode: event.target.value })}>
+                                  <NativeSelect aria-label="Jednotka doplatku" value={substitute.surchargeUnitCode} onChange={(event) => patchSubstitute({ surchargeUnitCode: event.target.value })}>
                                     <option value="">jednotka</option>
                                     {CATALOG_UNITS.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol}</option>)}
-                                  </select>
+                                  </NativeSelect>
                                 )}
-                                <button type="button" className="dangerText" onClick={() => update(line.key, { substitutes: line.substitutes.filter((candidate) => candidate.key !== substitute.key) })}>Odebrat</button>
+                                <Button variant="destructive" type="button" onClick={() => update(line.key, { substitutes: line.substitutes.filter((candidate) => candidate.key !== substitute.key) })}>Odebrat</Button>
                               </div>
                             );
                           })}
-                          <button
+                          <Button variant="outline"
                             type="button"
-                            className="secondaryButton"
                             onClick={() => update(line.key, { substitutes: [...line.substitutes, { key: draftKey("sub"), substituteItemId: "", substituteVariantId: "", surchargeRule: "price_difference", surchargeUnitCode: "", quantityFactor: "1", note: "" }] })}
                           >
                             + Přidat alternativu
-                          </button>
+                          </Button>
                         </>
                       )}
                     </div>
@@ -404,26 +414,25 @@ export function KitContentsSection({
                           update(line.key, { allowances: line.allowances.map((candidate) => (candidate.key === allowance.key ? { ...candidate, ...patch } : candidate)) });
                         return (
                           <div key={allowance.key} className="kitSubstituteRow">
-                            <select aria-label="Typ tiskové plochy" value={allowance.surfaceTypeId} onChange={(event) => patchAllowance({ surfaceTypeId: event.target.value as PrintSurfaceTypeId | "", unitCode: event.target.value === "fascia" ? "bm" : allowance.unitCode })}>
+                            <NativeSelect aria-label="Typ tiskové plochy" value={allowance.surfaceTypeId} onChange={(event) => patchAllowance({ surfaceTypeId: event.target.value as PrintSurfaceTypeId | "", unitCode: event.target.value === "fascia" ? "bm" : allowance.unitCode })}>
                               <option value="">— typ plochy —</option>
                               {PRINT_SURFACE_TYPES.map((type) => <option key={type.id} value={type.id}>{type.labelCz}</option>)}
-                            </select>
-                            <input aria-label="Zahrnuté množství" className="kitLineQuantity" inputMode="decimal" value={allowance.includedQuantity} onChange={(event) => patchAllowance({ includedQuantity: event.target.value })} />
-                            <select aria-label="Jednotka grafiky" value={allowance.unitCode} onChange={(event) => patchAllowance({ unitCode: event.target.value as KitAllowanceUnit })}>
+                            </NativeSelect>
+                            <Input aria-label="Zahrnuté množství" className="kitLineQuantity" inputMode="decimal" value={allowance.includedQuantity} onChange={(event) => patchAllowance({ includedQuantity: event.target.value })} />
+                            <NativeSelect aria-label="Jednotka grafiky" value={allowance.unitCode} onChange={(event) => patchAllowance({ unitCode: event.target.value as KitAllowanceUnit })}>
                               {KIT_ALLOWANCE_UNITS.map((unit) => <option key={unit} value={unit}>{KIT_ALLOWANCE_UNIT_LABELS_CS[unit]}</option>)}
-                            </select>
-                            <input aria-label="Konkrétní plochy" placeholder="ID ploch (nepovinné, např. fascia-print)" value={allowance.printSurfaceIds} onChange={(event) => patchAllowance({ printSurfaceIds: event.target.value })} />
-                            <button type="button" className="dangerText" onClick={() => update(line.key, { allowances: line.allowances.filter((candidate) => candidate.key !== allowance.key) })}>Odebrat</button>
+                            </NativeSelect>
+                            <Input aria-label="Konkrétní plochy" placeholder="ID ploch (nepovinné, např. fascia-print)" value={allowance.printSurfaceIds} onChange={(event) => patchAllowance({ printSurfaceIds: event.target.value })} />
+                            <Button variant="destructive" type="button" onClick={() => update(line.key, { allowances: line.allowances.filter((candidate) => candidate.key !== allowance.key) })}>Odebrat</Button>
                           </div>
                         );
                       })}
-                      <button
+                      <Button variant="outline"
                         type="button"
-                        className="secondaryButton"
                         onClick={() => update(line.key, { allowances: [...line.allowances, { key: draftKey("gr"), surfaceTypeId: "fascia", printSurfaceIds: "", unitCode: "bm", includedQuantity: "" }] })}
                       >
                         + Přidat rozsah grafiky
-                      </button>
+                      </Button>
                       <small className="fieldHint">Účtuje se jen přesah nad zahrnuté množství. Různé typy ploch a jednotky se nikdy neodečítají.</small>
                     </div>
                   </>
@@ -434,11 +443,11 @@ export function KitContentsSection({
         );
       })}
       <div className="assetActions">
-        <button type="button" className="secondaryButton" onClick={() => addLine("item")}>+ Přidat položku</button>
-        <button type="button" className="secondaryButton" onClick={() => addLine("text")}>+ Textová položka</button>
-        <button type="button" className="primaryButton" onClick={() => void handleSave()} disabled={!dirty || busy}>
+        <Button variant="outline" type="button" onClick={() => addLine("item")}>+ Přidat položku</Button>
+        <Button variant="outline" type="button" onClick={() => addLine("text")}>+ Textová položka</Button>
+        <Button variant="default" type="button" onClick={() => void handleSave()} disabled={!dirty || busy}>
           {busy ? "Ukládám…" : "Uložit obsah"}
-        </button>
+        </Button>
       </div>
       {savedHint && <small className="fieldHint">{savedHint}</small>}
       {warnings.map((warning) => <small key={warning} className="fieldHint kitWarning">{warning}</small>)}
@@ -464,6 +473,8 @@ type DraftVariant = Readonly<{
   surchargeUnitCode: string;
   legacyFinishId: string;
   isActive: boolean;
+  /** Display only (SHAD-01): the saved photo, product line and image provenance. Never sent back — the save keeps what is stored. */
+  stored?: Pick<CatalogVariant, "photoAsset" | "imageSource" | "series">;
 }>;
 
 type DraftSet = Readonly<{ id?: string; code: string; name: string; kind: VariantSetKind; isActive: boolean; note: string; variants: readonly DraftVariant[] }>;
@@ -489,6 +500,7 @@ function setToDraft(set: CatalogVariantSet | undefined): DraftSet {
       surchargeUnitCode: variant.surchargeUnitCode ?? "",
       legacyFinishId: variant.legacyFinishId ?? "",
       isActive: variant.isActive,
+      stored: { photoAsset: variant.photoAsset, imageSource: variant.imageSource, series: variant.series },
     })),
   };
 }
@@ -518,6 +530,70 @@ function draftToInput(draft: DraftSet): CatalogVariantSetInput {
 
 const LEGACY_CARPET_FINISHES = carpetFinishVariants.filter((finish) => finish.id !== "none" && finish.materialRole === "CARPET" && finish.swatchColor);
 
+const IMAGE_STATE_TEXT_CS: Readonly<Record<VariantImageState, string>> = {
+  photo: "Fotografie",
+  manual_review: "Obrázek čeká na ruční kontrolu",
+  pending_permission: "Obrázek čeká na oprávnění",
+  rejected: "Obrázek nelze použít",
+  missing: "Bez fotografie",
+};
+
+/**
+ * What the swatch really looks like: the stored sample photo when there is one, otherwise the colour
+ * set on the variant, otherwise an explicit "Bez náhledu" — never the colour picker's default grey.
+ */
+function VariantPreview({ variant }: { variant: DraftVariant }) {
+  const photo = useAssetUrl(variant.stored?.photoAsset, undefined);
+  const state = variantImageState({ photoAsset: variant.stored?.photoAsset, imageSource: variant.stored?.imageSource });
+  if (photo.url) {
+    return <img src={photo.url} alt={`Vzorek ${variant.name || variant.code}`} loading="lazy" className="size-12 rounded-md border object-cover" />;
+  }
+  if (variant.stored?.photoAsset && photo.loading) return <span className="grid size-12 place-items-center rounded-md border bg-muted text-[11px] text-muted-foreground">Načítám</span>;
+  if (variant.swatchColor) {
+    return (
+      <span className="flex items-center gap-2">
+        <span className="size-12 rounded-md border" style={{ backgroundColor: variant.swatchColor }} aria-hidden="true" />
+        <span className="text-xs text-muted-foreground">barva {variant.swatchColor}</span>
+      </span>
+    );
+  }
+  return (
+    <span className="grid size-12 place-items-center rounded-md border border-dashed bg-background px-1 text-center text-[11px] leading-tight text-muted-foreground" title={IMAGE_STATE_TEXT_CS[state]}>
+      Bez náhledu
+    </span>
+  );
+}
+
+/** Separate control for the preview colour: the native picker opens on demand; an unset colour stays unset. */
+function SwatchColorControl({ variant, onChange }: { variant: DraftVariant; onChange: (swatchColor: string) => void }) {
+  const pickerRef = useRef<HTMLInputElement>(null);
+  const label = `Barva náhledu ${variant.code || variant.name}`.trim();
+  const openPicker = () => {
+    const picker = pickerRef.current;
+    if (!picker) return;
+    if (typeof picker.showPicker === "function") picker.showPicker();
+    else picker.click();
+  };
+  return (
+    <span className="flex items-center gap-1">
+      <input
+        ref={pickerRef}
+        type="color"
+        aria-label={label}
+        value={variant.swatchColor || "#ffffff"}
+        onChange={(event) => onChange(event.target.value)}
+        className={variant.swatchColor ? "h-8 w-10 cursor-pointer rounded border bg-background p-0.5" : "sr-only"}
+        tabIndex={variant.swatchColor ? 0 : -1}
+      />
+      {variant.swatchColor ? (
+        <Button type="button" variant="ghost" size="sm" onClick={() => onChange("")}>Zrušit</Button>
+      ) : (
+        <Button type="button" variant="outline" size="sm" onClick={openPicker}>Nastavit barvu</Button>
+      )}
+    </span>
+  );
+}
+
 export function VariantSetsPanel({
   variantSets,
   allItems,
@@ -536,10 +612,25 @@ export function VariantSetsPanel({
   const [error, setError] = useState("");
   const [hint, setHint] = useState("");
 
+  // The sets arrive after the panel mounts (loaded with the catalog): open the first one then.
+  useEffect(() => {
+    if (selectedId === undefined && variantSets[0]) {
+      setSelectedId(variantSets[0].id);
+      setDraft(setToDraft(variantSets[0]));
+    }
+  }, [selectedId, variantSets]);
+
   const priceItems = useMemo(
     () => allItems.filter((item) => item.lifecycleStatus !== "archived" || draft.variants.some((variant) => variant.priceItemId === item.id)).slice().sort((a, b) => itemOptionLabel(a).localeCompare(itemOptionLabel(b), "cs", { numeric: true })),
     [allItems, draft.variants],
   );
+
+  const imageSummary = useMemo(() => {
+    const withPhoto = draft.variants.filter((variant) => variant.stored?.photoAsset).length;
+    const withColor = draft.variants.filter((variant) => !variant.stored?.photoAsset && variant.swatchColor).length;
+    const without = draft.variants.filter((variant) => !variant.stored?.photoAsset && !variant.swatchColor);
+    return { withPhoto, withColor, without };
+  }, [draft.variants]);
 
   function select(id: string | "new") {
     setSelectedId(id);
@@ -585,80 +676,107 @@ export function VariantSetsPanel({
   }
 
   return (
-    <section className="catalogDetailSection variantSetsPanel" aria-label="Vzorníky">
-      <div className="variantSetsHeader">
-        <h3>Vzorníky (barevné varianty)</h3>
-        <button type="button" className="linkButton" onClick={onClose}>Zavřít</button>
-      </div>
-      <div className="variantSetsTabs">
+    <SectionCard
+      className="variantSetsPanel"
+      aria-label="Vzorníky"
+      title="Vzorníky (barevné varianty)"
+      description="Sady barev (koberce, lamino…) a jejich varianty. Vzorník se upravuje zde, karty na něj jen odkazují."
+      actions={<Button type="button" variant="ghost" onClick={onClose}>Zavřít</Button>}
+    >
+      <ActionBar className="variantSetsTabs mb-4" role="group" aria-label="Vzorníky">
         {variantSets.map((set) => (
-          <button key={set.id} type="button" className={selectedId === set.id ? "primaryButton" : "secondaryButton"} onClick={() => select(set.id)}>
+          <Button key={set.id} type="button" variant={selectedId === set.id ? "default" : "outline"} aria-pressed={selectedId === set.id} onClick={() => select(set.id)}>
             {set.name}{set.isActive ? "" : " (neaktivní)"}
-          </button>
+          </Button>
         ))}
-        <button type="button" className={selectedId === "new" ? "primaryButton" : "secondaryButton"} onClick={() => select("new")}>+ Nový vzorník</button>
-      </div>
+        <Button type="button" variant={selectedId === "new" ? "default" : "outline"} aria-pressed={selectedId === "new"} onClick={() => select("new")}>+ Nový vzorník</Button>
+      </ActionBar>
       {(selectedId === "new" || selected) && (
         <>
-          <div className="variantSetFields">
-            <label><span>Kód</span><input value={draft.code} onChange={(event) => setDraft({ ...draft, code: event.target.value })} placeholder="KOBERCE-2026" /></label>
-            <label><span>Název</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Koberce 2026" /></label>
-            <label>
-              <span>Druh</span>
-              <select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as VariantSetKind })}>
+          <div className="variantSetFields mb-4 grid items-end gap-3 sm:grid-cols-2 xl:grid-cols-[1fr_1.5fr_1fr_auto]">
+            <Field id="variant-set-code" label="Kód">
+              <Input id="variant-set-code" value={draft.code} onChange={(event) => setDraft({ ...draft, code: event.target.value })} placeholder="KOBERCE-2026" />
+            </Field>
+            <Field id="variant-set-name" label="Název">
+              <Input id="variant-set-name" value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Koberce 2026" />
+            </Field>
+            <Field id="variant-set-kind" label="Druh">
+              <NativeSelect id="variant-set-kind" value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as VariantSetKind })}>
                 {VARIANT_SET_KINDS.map((kind) => <option key={kind} value={kind}>{VARIANT_SET_KIND_LABELS_CS[kind]}</option>)}
-              </select>
-            </label>
-            <label className="checkboxRow"><input type="checkbox" checked={draft.isActive} onChange={(event) => setDraft({ ...draft, isActive: event.target.checked })} />Aktivní</label>
+              </NativeSelect>
+            </Field>
+            <div className="flex h-9 items-center gap-2">
+              <Checkbox id="variant-set-active" checked={draft.isActive} onCheckedChange={(checked) => setDraft({ ...draft, isActive: checked === true })} />
+              <Label htmlFor="variant-set-active">Aktivní</Label>
+            </div>
           </div>
-          <table className="catalogAliasTable variantTable">
-            <thead>
-              <tr><th>Interní kód</th><th>Název barvy</th><th>Náhled</th><th>Účtuje se jako</th><th>Příplatek</th><th>Starší ID</th><th>Aktivní</th></tr>
-            </thead>
-            <tbody>
-              {draft.variants.map((variant) => (
-                <tr key={variant.key}>
-                  <td><input aria-label="Interní kód barvy" value={variant.code} onChange={(event) => patchVariant(variant.key, { code: event.target.value })} placeholder="SEDA" /></td>
-                  <td><input aria-label="Název barvy" value={variant.name} onChange={(event) => patchVariant(variant.key, { name: event.target.value })} placeholder="Šedá" /></td>
-                  <td>
-                    <input aria-label="Barva náhledu" type="color" value={variant.swatchColor || "#cccccc"} onChange={(event) => patchVariant(variant.key, { swatchColor: event.target.value })} />
-                  </td>
-                  <td>
-                    <select aria-label="Katalogová položka" value={variant.priceItemId} onChange={(event) => patchVariant(variant.key, { priceItemId: event.target.value })}>
-                      <option value="">— karta / ABF kód —</option>
-                      {priceItems.map((item) => <option key={item.id} value={item.id}>{itemOptionLabel(item)}</option>)}
-                    </select>
-                  </td>
-                  <td>
-                    <select aria-label="Pravidlo příplatku" value={variant.surchargeRule} onChange={(event) => patchVariant(variant.key, { surchargeRule: event.target.value as VariantSurchargeRule })}>
-                      {VARIANT_SURCHARGE_RULES.map((rule) => <option key={rule} value={rule}>{VARIANT_SURCHARGE_RULE_LABELS_CS[rule]}</option>)}
-                    </select>
-                    {variant.surchargeRule === "per_unit" && (
-                      <select aria-label="Jednotka příplatku" value={variant.surchargeUnitCode} onChange={(event) => patchVariant(variant.key, { surchargeUnitCode: event.target.value })}>
-                        <option value="">jednotka</option>
-                        {CATALOG_UNITS.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol}</option>)}
-                      </select>
-                    )}
-                  </td>
-                  <td><input aria-label="Starší ID barvy" value={variant.legacyFinishId} onChange={(event) => patchVariant(variant.key, { legacyFinishId: event.target.value })} placeholder="carpet-grey" list="legacy-carpet-finishes" /></td>
-                  <td><input aria-label="Aktivní" type="checkbox" checked={variant.isActive} onChange={(event) => patchVariant(variant.key, { isActive: event.target.checked })} /></td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          {draft.variants.length > 0 && (
+            <p className="mb-2 text-sm text-muted-foreground" role="status">
+              {draft.variants.length} barev · náhled z fotografie: {imageSummary.withPhoto} · jen barva: {imageSummary.withColor} · bez náhledu: {imageSummary.without.length}
+              {imageSummary.without.length > 0 && ` (${imageSummary.without.map((variant) => variant.code || variant.name || "nová barva").join(", ")})`}
+            </p>
+          )}
+          <div className="overflow-hidden rounded-xl border">
+            <Table className="catalogAliasTable variantTable min-w-[1100px]">
+              <TableHeader className="bg-muted/60">
+                <TableRow className="hover:bg-transparent">
+                  <TableHead>Interní kód</TableHead>
+                  <TableHead>Název barvy</TableHead>
+                  <TableHead>Náhled</TableHead>
+                  <TableHead>Barva náhledu</TableHead>
+                  <TableHead>Účtuje se jako</TableHead>
+                  <TableHead>Příplatek</TableHead>
+                  <TableHead>Starší ID</TableHead>
+                  <TableHead>Aktivní</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {draft.variants.map((variant) => (
+                  <TableRow key={variant.key}>
+                    <TableCell className="min-w-40"><Input aria-label="Interní kód barvy" value={variant.code} onChange={(event) => patchVariant(variant.key, { code: event.target.value })} placeholder="SEDA" /></TableCell>
+                    <TableCell className="min-w-44">
+                      <Input aria-label="Název barvy" value={variant.name} onChange={(event) => patchVariant(variant.key, { name: event.target.value })} placeholder="Šedá" />
+                      {variant.stored?.series && <small className="mt-0.5 block text-xs text-muted-foreground">řada {variant.stored.series}</small>}
+                    </TableCell>
+                    <TableCell><VariantPreview variant={variant} /></TableCell>
+                    <TableCell><SwatchColorControl variant={variant} onChange={(swatchColor) => patchVariant(variant.key, { swatchColor })} /></TableCell>
+                    <TableCell className="min-w-56">
+                      <NativeSelect aria-label="Katalogová položka" value={variant.priceItemId} onChange={(event) => patchVariant(variant.key, { priceItemId: event.target.value })}>
+                        <option value="">— karta / ABF kód —</option>
+                        {priceItems.map((item) => <option key={item.id} value={item.id}>{itemOptionLabel(item)}</option>)}
+                      </NativeSelect>
+                    </TableCell>
+                    <TableCell className="min-w-56">
+                      <NativeSelect aria-label="Pravidlo příplatku" value={variant.surchargeRule} onChange={(event) => patchVariant(variant.key, { surchargeRule: event.target.value as VariantSurchargeRule })}>
+                        {VARIANT_SURCHARGE_RULES.map((rule) => <option key={rule} value={rule}>{VARIANT_SURCHARGE_RULE_LABELS_CS[rule]}</option>)}
+                      </NativeSelect>
+                      {variant.surchargeRule === "per_unit" && (
+                        <NativeSelect className="mt-1" aria-label="Jednotka příplatku" value={variant.surchargeUnitCode} onChange={(event) => patchVariant(variant.key, { surchargeUnitCode: event.target.value })}>
+                          <option value="">jednotka</option>
+                          {CATALOG_UNITS.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol}</option>)}
+                        </NativeSelect>
+                      )}
+                    </TableCell>
+                    <TableCell className="min-w-36"><Input aria-label="Starší ID barvy" value={variant.legacyFinishId} onChange={(event) => patchVariant(variant.key, { legacyFinishId: event.target.value })} placeholder="nepovinné" list="legacy-carpet-finishes" /></TableCell>
+                    <TableCell><Checkbox aria-label={`Aktivní ${variant.code || variant.name}`.trim()} checked={variant.isActive} onCheckedChange={(checked) => patchVariant(variant.key, { isActive: checked === true })} /></TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
           <datalist id="legacy-carpet-finishes">
             {LEGACY_CARPET_FINISHES.map((finish) => <option key={finish.id} value={finish.id}>{finish.name}</option>)}
           </datalist>
-          <p className="fieldHint">Varianty se nemažou, jen deaktivují — starší projekty a komplety na ně mohou odkazovat. Částky příplatků se doplní v ceníku (V1-DATA-05).</p>
-          <div className="assetActions">
-            <button type="button" className="secondaryButton" onClick={() => addVariant()}>+ Přidat barvu</button>
-            {draft.kind === "carpet" && <button type="button" className="secondaryButton" onClick={prefillFromLegacyCarpets}>Předvyplnit dnešní barvy koberců</button>}
-            <button type="button" className="primaryButton" onClick={() => void handleSave()} disabled={busy}>{busy ? "Ukládám…" : "Uložit vzorník"}</button>
-          </div>
-          {hint && <small className="fieldHint">{hint}</small>}
-          {error && <small className="uploadError kitError">{error}</small>}
+          <p className="mt-3 text-sm text-muted-foreground">Varianty se nemažou, jen deaktivují — starší projekty a komplety na ně mohou odkazovat. Částky příplatků se doplní v ceníku (V1-DATA-05). Fotografie vzorků se nahrávají importem dodavatele; zde se jen zobrazují.</p>
+          <ActionBar className="mt-3">
+            <Button type="button" variant="outline" onClick={() => addVariant()}>+ Přidat barvu</Button>
+            {draft.kind === "carpet" && <Button type="button" variant="outline" onClick={prefillFromLegacyCarpets}>Předvyplnit dnešní barvy koberců</Button>}
+            <Button type="button" onClick={() => void handleSave()} disabled={busy}>{busy ? "Ukládám…" : "Uložit vzorník"}</Button>
+          </ActionBar>
+          {hint && <Notice tone="success" className="mt-3">{hint}</Notice>}
+          {error && <Notice tone="error" className="mt-3">{error}</Notice>}
         </>
       )}
-    </section>
+    </SectionCard>
   );
 }

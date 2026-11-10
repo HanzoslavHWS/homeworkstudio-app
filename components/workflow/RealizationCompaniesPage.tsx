@@ -10,6 +10,11 @@ import type {
 } from "../../domain/realizationCompany";
 import { normalizeCompanyName, realizationReferenceLabel, resolveRealizationReference, UNSPECIFIED_REALIZATION_COMPANY_LABEL } from "../../domain/realizationCompanyIdentity";
 import { realizationCompanyAdminApi, type RealizationCompanyRegister } from "../../lib/db/realizationCompanyRepository.remoteApi.client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
+import { PageHeader } from "@/components/ui/workspace";
 
 type Draft = Readonly<{ id?: string; source?: RealizationCompany["source"]; card: RealizationCompanyCardInput; aliases: readonly RealizationCompanyAliasInput[] }>;
 
@@ -133,12 +138,12 @@ export function RealizationCompaniesPage() {
   }
 
   const contacts = draft?.card.contacts ?? [];
-  return <div className="workspacePage">
-    <div className="workspacePageHeader"><div><span className="eyebrow">ADMINISTRACE</span><h1>Realizační firmy</h1></div><button className="primaryButton" onClick={startNew}>+ Nová firma</button></div>
-    <p className="temporaryNotice">Jedna karta = jedna skutečná firma. Firmy se nemažou, jen deaktivují. „{UNSPECIFIED_REALIZATION_COMPANY_LABEL}“ není firma: znamená, že realizačka není přiřazená. Firmy se automaticky neslučují — stejný název nebo alternativní název nemůže mít víc firem.</p>
-    {loadError && <p className="uploadError">{loadError}</p>}
+  return <div className="adminPage">
+    <PageHeader title="Realizační firmy" actions={<><Button variant="default" onClick={startNew}>+ Nová firma</Button></>} />
+    <p className="mb-4 max-w-5xl text-sm text-muted-foreground">Jedna karta = jedna skutečná firma. Firmy se nemažou, jen deaktivují. „{UNSPECIFIED_REALIZATION_COMPANY_LABEL}“ není firma: znamená, že realizačka není přiřazená. Firmy se automaticky neslučují — stejný název nebo alternativní název nemůže mít víc firem.</p>
+    {loadError && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{loadError}</p>}
     <div className="adminFilters">
-      <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat podle názvu, právního názvu, ABRA, IČO nebo alternativního názvu…" />
+      <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat podle názvu, právního názvu, ABRA, IČO nebo alternativního názvu…" />
       <label className="checkLabel"><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} /> Zobrazit neaktivní</label>
     </div>
     <div className="adminSplit">
@@ -152,48 +157,48 @@ export function RealizationCompaniesPage() {
       {draft && <section className="adminDetail">
         <div className="eventSaveBar">
           <span className={dirty ? "dirty" : "saved"}>{saving ? "Ukládám…" : dirty ? "Neuložené změny" : draft.id ? "Uloženo" : "Nová firma"}{saveError && <small className="uploadError">{saveError}</small>}{savedMessage && <small>{savedMessage}</small>}</span>
-          <button type="button" className="primaryButton" onClick={save} disabled={saving || (!dirty && Boolean(draft.id))}>{draft.id ? "Uložit změny" : "Založit firmu"}</button>
+          <Button variant="default" type="button" onClick={save} disabled={saving || (!dirty && Boolean(draft.id))}>{draft.id ? "Uložit změny" : "Založit firmu"}</Button>
         </div>
         <div className="eventForm">
-          <div className="twoColumns">
-            <label><span>Interní ID</span><input value={draft.id ?? "přidělí se při založení"} readOnly disabled /></label>
-            <label><span>Zdroj</span><input value={draft.source === "manual" ? "Založena ručně" : draft.id ? "Import tiskových ploch" : "Ruční založení"} readOnly disabled /></label>
+          <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+            <label><span>Interní ID</span><Input value={draft.id ?? "přidělí se při založení"} readOnly disabled /></label>
+            <label><span>Zdroj</span><Input value={draft.source === "manual" ? "Založena ručně" : draft.id ? "Import tiskových ploch" : "Ruční založení"} readOnly disabled /></label>
           </div>
-          <label><span>Pracovní / zobrazovaný název *</span><input value={draft.card.name} onChange={(event) => updateCard({ name: event.target.value })} /></label>
-          <div className="twoColumns">
-            <label><span>Oficiální právní název</span><input value={draft.card.legalName ?? ""} onChange={(event) => updateCard({ legalName: event.target.value })} placeholder="např. CREATIV EXPO, s.r.o." /></label>
-            <label><span>Název v ABRA</span><input value={draft.card.abraName ?? ""} onChange={(event) => updateCard({ abraName: event.target.value })} /></label>
+          <label><span>Pracovní / zobrazovaný název *</span><Input value={draft.card.name} onChange={(event) => updateCard({ name: event.target.value })} /></label>
+          <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+            <label><span>Oficiální právní název</span><Input value={draft.card.legalName ?? ""} onChange={(event) => updateCard({ legalName: event.target.value })} placeholder="např. CREATIV EXPO, s.r.o." /></label>
+            <label><span>Název v ABRA</span><Input value={draft.card.abraName ?? ""} onChange={(event) => updateCard({ abraName: event.target.value })} /></label>
           </div>
-          <div className="twoColumns">
-            <label><span>IČO</span><input value={draft.card.ico ?? ""} onChange={(event) => updateCard({ ico: event.target.value })} inputMode="numeric" /></label>
-            <label><span>DIČ</span><input value={draft.card.dic ?? ""} onChange={(event) => updateCard({ dic: event.target.value })} placeholder="CZ12345678" /></label>
+          <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+            <label><span>IČO</span><Input value={draft.card.ico ?? ""} onChange={(event) => updateCard({ ico: event.target.value })} inputMode="numeric" /></label>
+            <label><span>DIČ</span><Input value={draft.card.dic ?? ""} onChange={(event) => updateCard({ dic: event.target.value })} placeholder="CZ12345678" /></label>
           </div>
           <label className="checkLabel"><input type="checkbox" checked={draft.card.isActive} onChange={(event) => updateCard({ isActive: event.target.checked })} /> Aktivní firma</label>
 
           <section className="deadlineEditor">
-            <div><strong>Alternativní a historické názvy</strong><button type="button" onClick={() => updateAliases([...draft.aliases, { alias: "", kind: "alternative" }])}>+ Přidat</button></div>
+            <div><strong>Alternativní a historické názvy</strong><Button variant="outline" size="sm" type="button" onClick={() => updateAliases([...draft.aliases, { alias: "", kind: "alternative" }])}>+ Přidat</Button></div>
             {draft.aliases.length === 0 && <p className="fieldHint">Např. název z ABF sestavy („R: …“) nebo dřívější název firmy.</p>}
             {draft.aliases.map((alias, index) => <div key={alias.id ?? `new-${index}`}>
-              <input value={alias.alias} onChange={(event) => updateAliases(draft.aliases.map((item, itemIndex) => itemIndex === index ? { ...item, alias: event.target.value } : item))} placeholder="Název" />
-              <select value={alias.kind} onChange={(event) => updateAliases(draft.aliases.map((item, itemIndex) => itemIndex === index ? { ...item, kind: event.target.value as RealizationCompanyAliasKind } : item))}>
+              <Input value={alias.alias} onChange={(event) => updateAliases(draft.aliases.map((item, itemIndex) => itemIndex === index ? { ...item, alias: event.target.value } : item))} placeholder="Název" />
+              <NativeSelect value={alias.kind} onChange={(event) => updateAliases(draft.aliases.map((item, itemIndex) => itemIndex === index ? { ...item, kind: event.target.value as RealizationCompanyAliasKind } : item))}>
                 {(Object.keys(ALIAS_KIND_LABELS) as RealizationCompanyAliasKind[]).map((kind) => <option key={kind} value={kind}>{ALIAS_KIND_LABELS[kind]}</option>)}
-              </select>
-              <button type="button" onClick={() => updateAliases(draft.aliases.filter((_, itemIndex) => itemIndex !== index))}>Odebrat</button>
+              </NativeSelect>
+              <Button variant="outline" size="sm" type="button" onClick={() => updateAliases(draft.aliases.filter((_, itemIndex) => itemIndex !== index))}>Odebrat</Button>
             </div>)}
           </section>
 
           <section className="deadlineEditor">
-            <div><strong>Kontakty</strong><button type="button" onClick={() => updateContacts([...contacts, { id: `contact-${Date.now()}` }])}>+ Přidat</button></div>
+            <div><strong>Kontakty</strong><Button variant="outline" size="sm" type="button" onClick={() => updateContacts([...contacts, { id: `contact-${Date.now()}` }])}>+ Přidat</Button></div>
             {contacts.map((contact) => <div key={contact.id}>
-              <input value={contact.name ?? ""} onChange={(event) => updateContacts(contacts.map((item) => item.id === contact.id ? { ...item, name: event.target.value } : item))} placeholder="Jméno" />
-              <input value={contact.role ?? ""} onChange={(event) => updateContacts(contacts.map((item) => item.id === contact.id ? { ...item, role: event.target.value } : item))} placeholder="Role" />
-              <input value={contact.email ?? ""} onChange={(event) => updateContacts(contacts.map((item) => item.id === contact.id ? { ...item, email: event.target.value } : item))} placeholder="E-mail" type="email" />
-              <input value={contact.phone ?? ""} onChange={(event) => updateContacts(contacts.map((item) => item.id === contact.id ? { ...item, phone: event.target.value } : item))} placeholder="Telefon" />
-              <button type="button" onClick={() => updateContacts(contacts.filter((item) => item.id !== contact.id))}>Odebrat</button>
+              <Input value={contact.name ?? ""} onChange={(event) => updateContacts(contacts.map((item) => item.id === contact.id ? { ...item, name: event.target.value } : item))} placeholder="Jméno" />
+              <Input value={contact.role ?? ""} onChange={(event) => updateContacts(contacts.map((item) => item.id === contact.id ? { ...item, role: event.target.value } : item))} placeholder="Role" />
+              <Input value={contact.email ?? ""} onChange={(event) => updateContacts(contacts.map((item) => item.id === contact.id ? { ...item, email: event.target.value } : item))} placeholder="E-mail" type="email" />
+              <Input value={contact.phone ?? ""} onChange={(event) => updateContacts(contacts.map((item) => item.id === contact.id ? { ...item, phone: event.target.value } : item))} placeholder="Telefon" />
+              <Button variant="outline" size="sm" type="button" onClick={() => updateContacts(contacts.filter((item) => item.id !== contact.id))}>Odebrat</Button>
             </div>)}
           </section>
 
-          <label><span>Interní poznámka</span><textarea value={draft.card.note ?? ""} onChange={(event) => updateCard({ note: event.target.value })} /></label>
+          <label><span>Interní poznámka</span><Textarea value={draft.card.note ?? ""} onChange={(event) => updateCard({ note: event.target.value })} /></label>
         </div>
       </section>}
     </div>

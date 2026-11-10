@@ -1,0 +1,185 @@
+/*
+ * Generator_ABF stylesheet entry (SHAD-01).
+ *
+ * Layer order: Tailwind theme → base (scoped reset of the new UI) → legacy (app/globals.css, the
+ * existing hand-written styles, unchanged among themselves) → components → utilities.
+ * Utilities come last, so shadcn/ui classes win over legacy rules; legacy screens keep their own
+ * cascade because every legacy rule moved into the same layer. No Tailwind preflight: it would reset
+ * buttons, inputs and tables of modules that are not converted yet. Its job is done by the scoped
+ * base layer below, which only touches the new UI region ([data-ui]) and shadcn components
+ * ([data-slot], including their portals).
+ */
+@layer theme, base, legacy, components, utilities;
+
+@import "tailwindcss/theme.css" layer(theme);
+@import "./globals.css" layer(legacy);
+@import "shadcn/tailwind.css";
+
+/* Class scan limited to the app's code (scripts, data and docs carry no UI). */
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+@source "../components";
+@source "../app";
+/*
+ * Legacy screens use these names as their own state classes (.cadPlanLayer.hidden keeps a hidden CAD
+ * layer listed so it can be shown again; .sceneItem.visible). Tailwind must not generate them, or the
+ * utility (display: none) would win over the legacy rule. New UI renders conditionally instead.
+ */
+@source not inline("hidden visible invisible collapse");
+
+/*
+ * HomeworkStudio theme. Raw tokens are prefixed --ui-* because the legacy stylesheet already owns
+ * --muted (a text colour) and --border; the shadcn colour names map onto them in @theme inline.
+ * Light only for now (no theme switch in this stage).
+ */
+:root {
+  --ui-background: #ffffff;
+  --ui-foreground: #151515;
+  --ui-card: #ffffff;
+  --ui-card-foreground: #151515;
+  --ui-popover: #ffffff;
+  --ui-popover-foreground: #151515;
+  --ui-primary: #17191c;            /* HomeworkStudio near-black (sidebar, primary actions) */
+  --ui-primary-foreground: #ffffff;
+  --ui-secondary: #f1f2f3;
+  --ui-secondary-foreground: #17191c;
+  --ui-muted: #f4f5f6;              /* page background of the app */
+  --ui-muted-foreground: #5c6166;   /* 6.2:1 on white */
+  --ui-accent: #eef0f2;
+  --ui-accent-foreground: #17191c;
+  --ui-destructive: #b42318;        /* 6.5:1 on white */
+  --ui-success: #146c43;
+  --ui-success-soft: #e8f5ee;
+  --ui-warning: #8a5300;
+  --ui-warning-soft: #fff4e0;
+  --ui-info: #1f4a7a;
+  --ui-info-soft: #eef4fb;
+  --ui-border: #e1e3e5;             /* dividers, card edges */
+  --ui-input: #8b9095;              /* form field edges: 3.3:1, visible against white */
+  --ui-ring: #1f4a7a;
+  --ui-radius: 0.5rem;
+  --ui-font-sans: Arial, Helvetica, sans-serif;
+  --ui-font-field: "Segoe UI", Arial, Helvetica, sans-serif;
+}
+
+@theme inline {
+  --font-sans: var(--ui-font-sans);
+  --font-heading: var(--ui-font-sans);
+  --color-background: var(--ui-background);
+  --color-foreground: var(--ui-foreground);
+  --color-card: var(--ui-card);
+  --color-card-foreground: var(--ui-card-foreground);
+  --color-popover: var(--ui-popover);
+  --color-popover-foreground: var(--ui-popover-foreground);
+  --color-primary: var(--ui-primary);
+  --color-primary-foreground: var(--ui-primary-foreground);
+  --color-secondary: var(--ui-secondary);
+  --color-secondary-foreground: var(--ui-secondary-foreground);
+  --color-muted: var(--ui-muted);
+  --color-muted-foreground: var(--ui-muted-foreground);
+  --color-accent: var(--ui-accent);
+  --color-accent-foreground: var(--ui-accent-foreground);
+  --color-destructive: var(--ui-destructive);
+  --color-success: var(--ui-success);
+  --color-success-soft: var(--ui-success-soft);
+  --color-warning: var(--ui-warning);
+  --color-warning-soft: var(--ui-warning-soft);
+  --color-info: var(--ui-info);
+  --color-info-soft: var(--ui-info-soft);
+  --color-border: var(--ui-border);
+  --color-input: var(--ui-input);
+  --color-ring: var(--ui-ring);
+  --radius-sm: calc(var(--ui-radius) * 0.6);
+  --radius-md: calc(var(--ui-radius) * 0.8);
+  --radius-lg: var(--ui-radius);
+  --radius-xl: calc(var(--ui-radius) * 1.4);
+  --radius-2xl: calc(var(--ui-radius) * 1.8);
+}
+
+/*
+ * Scoped base of the new UI: what Tailwind preflight would do, limited to [data-ui] and shadcn
+ * components. Unconverted native controls that still live inside the region get the same theme
+ * (border, radius, height, focus), so a half-converted screen stays consistent. Legacy class rules
+ * (layer legacy) still override these element defaults where an unconverted screen sets its own.
+ */
+@layer base {
+  :where([data-ui], [data-slot]) {
+    font-family: var(--ui-font-sans);
+    color: var(--ui-foreground);
+  }
+  :where([data-ui]) {
+    font-size: 14px;
+    line-height: 1.5;
+  }
+  :where([data-ui], [data-slot]),
+  :where([data-ui], [data-slot]) *,
+  :where([data-ui], [data-slot]) ::before,
+  :where([data-ui], [data-slot]) ::after {
+    border-width: 0;
+    border-style: solid;
+    border-color: var(--ui-border);
+  }
+  :where([data-ui] input, [data-ui] select, [data-ui] textarea, [data-slot] input, [data-slot] select, [data-slot] textarea, input[data-slot], select[data-slot], textarea[data-slot]) {
+    font-family: var(--ui-font-field);
+    font-size: 14px;
+  }
+  :where([data-ui] button, [data-slot] button, button[data-slot]) {
+    font: inherit;
+    color: inherit;
+    background: transparent;
+    cursor: pointer;
+  }
+  :where([data-ui] button:disabled, [data-slot] button:disabled) {
+    cursor: not-allowed;
+  }
+  :where([data-ui] table) {
+    border-collapse: collapse;
+  }
+  :where([data-ui] img, [data-ui] svg, [data-ui] canvas, [data-ui] video) {
+    display: block;
+    max-width: 100%;
+  }
+  :where([data-ui] img, [data-ui] video) {
+    height: auto;
+  }
+
+  /* Native controls not converted yet: same edge, height and focus as the shadcn Input. */
+  :where([data-ui]) :where(input:not([type="checkbox"], [type="radio"], [type="file"], [type="range"], [type="color"], [type="hidden"]), select, textarea):where(:not([data-slot])) {
+    width: 100%;
+    min-height: 36px;
+    padding: 6px 10px;
+    border: 1px solid var(--ui-input);
+    border-radius: calc(var(--ui-radius) * 0.8);
+    background: var(--ui-background);
+    color: var(--ui-foreground);
+  }
+  :where([data-ui]) :where(input, textarea)::placeholder {
+    color: var(--ui-muted-foreground);
+    opacity: 1;
+  }
+  :where([data-ui]) :where(input[type="checkbox"], input[type="radio"]):where(:not([data-slot])) {
+    width: 16px;
+    height: 16px;
+    accent-color: var(--ui-primary);
+  }
+  :where([data-ui]) :where(label):where(:not([data-slot])) {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  :where([data-ui]) :where(label):where(:not([data-slot])):has(> input[type="checkbox"], > input[type="radio"]) {
+    flex-direction: row;
+    align-items: center;
+    gap: 8px;
+  }
+  :where([data-ui]) :where(label):where(:not([data-slot])) > :where(span:first-child) {
+    color: var(--ui-muted-foreground);
+    font-size: 13px;
+    font-weight: 600;
+  }
+  /* Visible keyboard focus everywhere in the new UI (the legacy rules remove outlines). */
+  :where([data-ui], [data-slot]) :focus-visible,
+  :where([data-slot]):focus-visible {
+    outline: 2px solid var(--ui-ring);
+    outline-offset: 2px;
+  }
+}

@@ -73,6 +73,14 @@ import { CatalogCategoriesPanel } from "./CatalogCategoriesPanel";
 import { activeRecommendedParameters, parameterProblem, recommendedParameterKey, setParameterValue } from "../../domain/catalogParameters";
 import { CatalogDocumentsSection, CatalogHiddenAttachments } from "./CatalogDocumentsSection";
 import type { PriceVersionsPreselect } from "./priceVersions/PriceVersionsPage";
+import { cn } from "cn";
+import { Button } from "@/components/ui/button";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { ActionBar, BulkActionBar, ConfirmDialog, Field, FilterPanel, LoadingState, Notice, PageHeader, StatusBadge } from "@/components/ui/workspace";
 
 const PHOTO_ACCEPT = "image/jpeg,image/png,image/webp";
 const PHOTO_EXTENSIONS = ["jpg", "jpeg", "png", "webp"];
@@ -157,6 +165,7 @@ export function ComponentAdminPage({
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
   const [bulkMessage, setBulkMessage] = useState("");
+  const [bulkConfirm, setBulkConfirm] = useState<BulkLifecycleAction | null>(null);
   const [aliasRegister, setAliasRegister] = useState<CatalogAliasRegister | null>(null);
   const [aliasLoadError, setAliasLoadError] = useState("");
   const [variantSets, setVariantSets] = useState<readonly CatalogVariantSet[]>([]);
@@ -312,23 +321,16 @@ export function ComponentAdminPage({
     setCheckedIds(checked ? new Set(filteredEntries.map((entry) => entry.id)) : new Set());
   }
 
-  async function handleBulk(action: BulkLifecycleAction) {
+  function requestBulk(action: BulkLifecycleAction) {
+    if (checkedEntries.length === 0) return;
+    setBulkMessage("");
+    setBulkConfirm(action);
+  }
+
+  /** Active items feed the live generator — archived only when the admin explicitly includes them (the server enforces the same rule: includeActive defaults to false). */
+  async function runBulk(action: BulkLifecycleAction, includeActive: boolean) {
     const ids = checkedEntries.map((entry) => entry.id);
     if (ids.length === 0) return;
-    const activeChecked = checkedEntries.filter((entry) => entry.lifecycleStatus === "active");
-    let includeActive = false;
-    if (action === "archive") {
-      if (!window.confirm(`Archivovat ${ids.length} ${ids.length === 1 ? "položku" : "položek"}? Archivované položky se nemažou a lze je obnovit.`)) return;
-      if (activeChecked.length > 0) {
-        // Active items feed the live generator — they are skipped unless the admin explicitly
-        // confirms them here (the server enforces the same rule: includeActive defaults to false).
-        includeActive = window.confirm(
-          `Mezi označenými je ${activeChecked.length} aktivních položek, které používá generátor:\n` +
-            activeChecked.map((entry) => `• ${entry.internalCode ?? entry.abfCode ?? ""} ${entry.displayName}`).join("\n") +
-            "\n\nOK = archivovat i je, Zrušit = aktivní přeskočit.",
-        );
-      }
-    } else if (!window.confirm(`Obnovit ${ids.length} ${ids.length === 1 ? "položku" : "položek"} z archivu?`)) return;
     setBulkBusy(true);
     setBulkMessage("");
     try {
@@ -348,30 +350,33 @@ export function ComponentAdminPage({
     }
   }
 
-  return (
-    <div className="workspacePage adminPage">
-      <div className="adminPageHeader">
-        <div>
-          <h1>Katalog komponent</h1>
-          {items && <p className="adminPageCount">{view === "items" ? `Zobrazeno ${filteredEntries.length} z ${allItems.length} položek` : `${allItems.length} položek v katalogu`}</p>}
-        </div>
-        <div className="adminPageActions">
-          <button type="button" className="adminButton adminButtonSecondary" onClick={() => setView("import")} aria-pressed={view === "import"}>
-            Importovat Excel
-          </button>
-          <button type="button" className="adminButton adminButtonPrimary" onClick={() => { setView("items"); openItem(undefined); setCreating(true); }}>
-            + Nová položka
-          </button>
-        </div>
-      </div>
+  const activeChecked = checkedEntries.filter((entry) => entry.lifecycleStatus === "active");
+  const checkedCountText = `${checkedEntries.length} ${checkedEntries.length === 1 ? "položku" : checkedEntries.length < 5 ? "položky" : "položek"}`;
 
-      {loadError && <p className="adminError" role="alert">Katalog se nepodařilo načíst z databáze: {loadError}</p>}
-      {!items && !loadError && <p className="adminEmpty">Načítám katalog z databáze…</p>}
+  return (
+    <div className="catalogAdminPage">
+      <PageHeader
+        title="Katalog komponent"
+        description={items ? (view === "items" ? `Zobrazeno ${filteredEntries.length} z ${allItems.length} položek` : `${allItems.length} položek v katalogu`) : undefined}
+        actions={
+          <>
+            <Button type="button" variant="outline" onClick={() => setView("import")} aria-pressed={view === "import"}>
+              Importovat Excel
+            </Button>
+            <Button type="button" onClick={() => { setView("items"); openItem(undefined); setCreating(true); }}>
+              + Nová položka
+            </Button>
+          </>
+        }
+      />
+
+      {loadError && <Notice tone="error">Katalog se nepodařilo načíst z databáze: {loadError}</Notice>}
+      {!items && !loadError && <LoadingState label="Načítám katalog z databáze…" />}
 
       {view === "categories" && <CatalogCategoriesPanel onClose={() => setView("items")} />}
       {view === "variants" && (
         <>
-          {variantSetsError && <p className="adminError">{variantSetsError}</p>}
+          {variantSetsError && <Notice tone="error">{variantSetsError}</Notice>}
           <VariantSetsPanel variantSets={variantSets} allItems={allItems} onSave={handleSaveVariantSet} onClose={() => setView("items")} />
         </>
       )}
@@ -379,9 +384,9 @@ export function ComponentAdminPage({
 
       {view === "items" && items && selected && (
         <div className="catalogDetailView">
-          <button type="button" className="adminButton adminButtonGhost catalogBackButton" onClick={() => openItem(undefined)}>
+          <Button type="button" variant="ghost" className="-ml-2 justify-self-start" onClick={() => openItem(undefined)}>
             ← Zpět na seznam položek
-          </button>
+          </Button>
           <ComponentAdminDetail
             key={selected.id}
             item={selected}
@@ -399,10 +404,10 @@ export function ComponentAdminPage({
         </div>
       )}
       {view === "items" && items && selectedId && !selected && (
-        <p className="adminError" role="alert">
-          Položka z odkazu v katalogu není (mohla být smazána nebo odkaz neplatí).{" "}
-          <button type="button" className="adminButton adminButtonGhost" onClick={() => openItem(undefined)}>Zpět na seznam</button>
-        </p>
+        <Notice tone="error" title="Položka z odkazu v katalogu není">
+          Mohla být smazána nebo odkaz neplatí.{" "}
+          <Button type="button" variant="link" className="h-auto p-0" onClick={() => openItem(undefined)}>Zpět na seznam</Button>
+        </Notice>
       )}
 
       {view === "items" && items && !selectedId && (
@@ -412,16 +417,18 @@ export function ComponentAdminPage({
           <ComponentAdminFilters filters={filters} onChange={setFilters} categories={categoryOptions} needsTypeReviewCount={needsTypeReviewCount} />
 
           {checkedEntries.length > 0 ? (
-            <div className="adminBulkBar" role="region" aria-label="Hromadné akce">
-              <strong>Vybráno: {checkedEntries.length} {checkedEntries.length === 1 ? "položka" : checkedEntries.length < 5 ? "položky" : "položek"}</strong>
-              <span className="adminBulkHint">{checkedEntries.length === filteredEntries.length ? "všechny položky odpovídající filtru" : `z ${filteredEntries.length} zobrazených`}</span>
-              <button type="button" className="adminButton adminButtonSecondary" disabled={bulkBusy} onClick={() => void handleBulk("restore")}>Obnovit z archivu</button>
-              <button type="button" className="adminButton adminButtonDanger" disabled={bulkBusy} onClick={() => void handleBulk("archive")}>Archivovat</button>
-              <button type="button" className="adminButton adminButtonGhost" disabled={bulkBusy} onClick={() => toggleAllFiltered(false)}>Zrušit výběr</button>
-              {bulkMessage && <span className="adminBulkMessage" role="status">{bulkMessage}</span>}
-            </div>
+            <BulkActionBar
+              summary={`Vybráno: ${checkedEntries.length} ${checkedEntries.length === 1 ? "položka" : checkedEntries.length < 5 ? "položky" : "položek"}`}
+              detail={checkedEntries.length === filteredEntries.length ? "všechny položky odpovídající filtru" : `z ${filteredEntries.length} zobrazených`}
+              message={bulkMessage}
+              onClear={() => toggleAllFiltered(false)}
+              clearDisabled={bulkBusy}
+            >
+              <Button type="button" variant="outline" disabled={bulkBusy} onClick={() => requestBulk("restore")}>Obnovit z archivu</Button>
+              <Button type="button" variant="destructive" disabled={bulkBusy} onClick={() => requestBulk("archive")}>Archivovat</Button>
+            </BulkActionBar>
           ) : (
-            bulkMessage && <p className="adminNotice" role="status">{bulkMessage}</p>
+            bulkMessage && <Notice tone="info">{bulkMessage}</Notice>
           )}
 
           <ComponentAdminList
@@ -435,6 +442,36 @@ export function ComponentAdminPage({
           />
         </>
       )}
+
+      <ConfirmDialog
+        open={bulkConfirm === "restore"}
+        title={`Obnovit ${checkedCountText} z archivu?`}
+        description="Položky se vrátí do stavu, ve kterém byly před archivací."
+        choices={[{ label: "Obnovit", value: "restore" }]}
+        onChoose={() => { setBulkConfirm(null); void runBulk("restore", false); }}
+        onCancel={() => setBulkConfirm(null)}
+      />
+      <ConfirmDialog
+        open={bulkConfirm === "archive"}
+        title={`Archivovat ${checkedCountText}?`}
+        description="Archivované položky se nemažou a lze je obnovit."
+        choices={
+          activeChecked.length > 0
+            ? [{ label: "Archivovat, aktivní přeskočit", value: "skip-active" }, { label: "Archivovat včetně aktivních", value: "include-active", destructive: true }]
+            : [{ label: "Archivovat", value: "skip-active", destructive: true }]
+        }
+        onChoose={(choice) => { setBulkConfirm(null); void runBulk("archive", choice === "include-active"); }}
+        onCancel={() => setBulkConfirm(null)}
+      >
+        {activeChecked.length > 0 && (
+          <div className="rounded-lg border border-warning/30 bg-warning-soft p-3 text-sm text-warning">
+            <p className="font-semibold">Mezi označenými je {activeChecked.length} aktivních položek, které používá generátor:</p>
+            <ul className="mt-1 max-h-40 list-disc overflow-y-auto pl-5">
+              {activeChecked.map((entry) => <li key={entry.id}>{entry.internalCode ?? entry.abfCode ?? ""} {entry.displayName}</li>)}
+            </ul>
+          </div>
+        )}
+      </ConfirmDialog>
     </div>
   );
 }
@@ -463,90 +500,94 @@ export function ComponentAdminFilters({
   const activeMore = moreFiltersActive(filters);
   const [moreOpen, setMoreOpen] = useState(activeMore > 0);
   return (
-    <div className="adminFilterPanel" role="search">
-      <div className="adminFilterRow">
-        <label className="adminField adminFieldSearch">
-          <span>Hledat</span>
-          <input type="search" value={filters.query ?? ""} onChange={(event) => onChange({ ...filters, query: event.target.value })} placeholder="Název, generátorový nebo ABF kód" />
-        </label>
-        <label className="adminField">
-          <span>Typ</span>
-          <select value={filters.itemType ?? ""} onChange={(event) => onChange({ ...filters, itemType: event.target.value as CatalogItemType | "" })}>
-            <option value="">Všechny typy</option>
-            {CATALOG_ITEM_TYPES.map((itemType) => <option key={itemType} value={itemType}>{CATALOG_ITEM_TYPE_LABELS_CS[itemType]}</option>)}
-          </select>
-        </label>
-        <label className="adminField">
-          <span>Kategorie</span>
-          <select value={filters.category ?? ""} onChange={(event) => onChange({ ...filters, category: event.target.value })}>
-            <option value="">Všechny kategorie</option>
-            {categories.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}
-          </select>
-        </label>
-        <label className="adminField">
-          <span>Stav</span>
-          <select
-            value={statusFilterValue(filters)}
-            onChange={(event) => {
-              const value = event.target.value;
-              if (value === STATUS_FILTER_ARCHIVED) onChange({ ...filters, lifecycleStatus: "", onlyArchived: true, showArchived: false });
-              else if (value === STATUS_FILTER_ALL) onChange({ ...filters, lifecycleStatus: "", onlyArchived: false, showArchived: true });
-              else onChange({ ...filters, lifecycleStatus: value as CatalogItemStatus | "", onlyArchived: false, showArchived: false });
-            }}
-          >
-            <option value="">Aktuální (bez archivu)</option>
-            {CATALOG_ITEM_STATUSES.filter((status) => status !== "archived").map((status) => <option key={status} value={status}>{CATALOG_ITEM_STATUS_LABELS_CS[status]}</option>)}
-            <option value={STATUS_FILTER_ARCHIVED}>Jen archivované</option>
-            <option value={STATUS_FILTER_ALL}>Vše včetně archivu</option>
-          </select>
-        </label>
-        <div className="adminFilterButtons">
-          <button type="button" className={activeMore ? "adminButton adminButtonSecondary adminButtonActive" : "adminButton adminButtonSecondary"} aria-expanded={moreOpen} aria-controls="catalog-more-filters" onClick={() => setMoreOpen(!moreOpen)}>
-            Další filtry{activeMore ? ` (${activeMore} aktivní)` : ""} {moreOpen ? "▴" : "▾"}
-          </button>
-          {anyFilterActive(filters) && (
-            <button type="button" className="adminButton adminButtonGhost" onClick={() => onChange({})}>
-              Vymazat filtry
-            </button>
-          )}
-        </div>
-      </div>
-      {moreOpen && (
-        <div id="catalog-more-filters" className="adminFilterRow adminFilterMore">
-          <label className="adminField">
-            <span>Druh použití</span>
-            <select value={filters.kind ?? ""} onChange={(event) => onChange({ ...filters, kind: event.target.value as CatalogItemKind | "" })}>
+    <FilterPanel
+      more={moreOpen && (
+        <div id="catalog-more-filters" className="grid items-end gap-3 border-t pt-3 @xl:grid-cols-2 @5xl:grid-cols-4">
+          <Field id="catalog-filter-kind" label="Druh použití">
+            <NativeSelect id="catalog-filter-kind" value={filters.kind ?? ""} onChange={(event) => onChange({ ...filters, kind: event.target.value as CatalogItemKind | "" })}>
               <option value="">Všechny druhy</option>
               {CATALOG_ITEM_KINDS.map((kind) => <option key={kind} value={kind}>{CATALOG_ITEM_KIND_LABELS_CS[kind]}</option>)}
-            </select>
-          </label>
-          <label className="adminField">
-            <span>Připravenost k aktivaci</span>
-            <select value={filters.readiness ?? ""} onChange={(event) => onChange({ ...filters, readiness: event.target.value as CatalogItemAdminFilters["readiness"] })}>
+            </NativeSelect>
+          </Field>
+          <Field id="catalog-filter-readiness" label="Připravenost k aktivaci">
+            <NativeSelect id="catalog-filter-readiness" value={filters.readiness ?? ""} onChange={(event) => onChange({ ...filters, readiness: event.target.value as CatalogItemAdminFilters["readiness"] })}>
               <option value="">Vše</option>
               <option value="ready">Připravené</option>
               <option value="not-ready">Chybí podklady</option>
-            </select>
-          </label>
-          <label className="adminField">
-            <span>3D model</span>
-            <select value={filters.asset ?? ""} onChange={(event) => onChange({ ...filters, asset: event.target.value as CatalogItemAdminFilters["asset"] })}>
+            </NativeSelect>
+          </Field>
+          <Field id="catalog-filter-asset" label="3D model">
+            <NativeSelect id="catalog-filter-asset" value={filters.asset ?? ""} onChange={(event) => onChange({ ...filters, asset: event.target.value as CatalogItemAdminFilters["asset"] })}>
               <option value="">Vše</option>
               <option value="has-3d">Má 3D model</option>
               <option value="missing-3d">Chybí 3D model</option>
-            </select>
-          </label>
-          <label className="adminCheck">
-            <input type="checkbox" checked={Boolean(filters.needsTypeReview)} onChange={(event) => onChange({ ...filters, needsTypeReview: event.target.checked })} />
-            Jen k zařazení{needsTypeReviewCount ? ` (${needsTypeReviewCount})` : ""}
-          </label>
+            </NativeSelect>
+          </Field>
+          <div className="flex h-9 items-center gap-2">
+            <Checkbox id="catalog-filter-review" checked={Boolean(filters.needsTypeReview)} onCheckedChange={(checked) => onChange({ ...filters, needsTypeReview: checked === true })} />
+            <Label htmlFor="catalog-filter-review" className="text-sm font-normal">Jen k zařazení{needsTypeReviewCount ? ` (${needsTypeReviewCount})` : ""}</Label>
+          </div>
         </div>
       )}
-    </div>
+    >
+      <Field id="catalog-filter-query" label="Hledat">
+        <Input id="catalog-filter-query" type="search" value={filters.query ?? ""} onChange={(event) => onChange({ ...filters, query: event.target.value })} placeholder="Název, generátorový nebo ABF kód" />
+      </Field>
+      <Field id="catalog-filter-type" label="Typ">
+        <NativeSelect id="catalog-filter-type" value={filters.itemType ?? ""} onChange={(event) => onChange({ ...filters, itemType: event.target.value as CatalogItemType | "" })}>
+          <option value="">Všechny typy</option>
+          {CATALOG_ITEM_TYPES.map((itemType) => <option key={itemType} value={itemType}>{CATALOG_ITEM_TYPE_LABELS_CS[itemType]}</option>)}
+        </NativeSelect>
+      </Field>
+      <Field id="catalog-filter-category" label="Kategorie">
+        <NativeSelect id="catalog-filter-category" value={filters.category ?? ""} onChange={(event) => onChange({ ...filters, category: event.target.value })}>
+          <option value="">Všechny kategorie</option>
+          {categories.map((category) => <option key={category.id} value={category.id}>{category.label}</option>)}
+        </NativeSelect>
+      </Field>
+      <Field id="catalog-filter-status" label="Stav">
+        <NativeSelect
+          id="catalog-filter-status"
+          value={statusFilterValue(filters)}
+          onChange={(event) => {
+            const value = event.target.value;
+            if (value === STATUS_FILTER_ARCHIVED) onChange({ ...filters, lifecycleStatus: "", onlyArchived: true, showArchived: false });
+            else if (value === STATUS_FILTER_ALL) onChange({ ...filters, lifecycleStatus: "", onlyArchived: false, showArchived: true });
+            else onChange({ ...filters, lifecycleStatus: value as CatalogItemStatus | "", onlyArchived: false, showArchived: false });
+          }}
+        >
+          <option value="">Aktuální (bez archivu)</option>
+          {CATALOG_ITEM_STATUSES.filter((status) => status !== "archived").map((status) => <option key={status} value={status}>{CATALOG_ITEM_STATUS_LABELS_CS[status]}</option>)}
+          <option value={STATUS_FILTER_ARCHIVED}>Jen archivované</option>
+          <option value={STATUS_FILTER_ALL}>Vše včetně archivu</option>
+        </NativeSelect>
+      </Field>
+      <ActionBar className="adminFilterButtons">
+        <Button type="button" variant={activeMore ? "secondary" : "outline"} aria-expanded={moreOpen} aria-controls="catalog-more-filters" onClick={() => setMoreOpen(!moreOpen)}>
+          Další filtry{activeMore ? ` (${activeMore} aktivní)` : ""} <span aria-hidden="true">{moreOpen ? "▴" : "▾"}</span>
+        </Button>
+        {anyFilterActive(filters) && (
+          <Button type="button" variant="ghost" onClick={() => onChange({})}>
+            Vymazat filtry
+          </Button>
+        )}
+      </ActionBar>
+    </FilterPanel>
   );
 }
 
 const STATUS_SYMBOL: Readonly<Record<CatalogItemStatus, string>> = { active: "●", needs_review: "◐", draft: "○", inactive: "◌", archived: "▣" };
+const STATUS_TONE: Readonly<Record<CatalogItemStatus, "success" | "warning" | "neutral" | "muted">> = { active: "success", needs_review: "warning", draft: "neutral", inactive: "muted", archived: "muted" };
+
+function AssetMark({ present, label, title }: { present: boolean; label: string; title?: string }) {
+  return (
+    <span title={title} className={cn("inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-xs font-semibold", present ? "bg-success-soft text-success" : "bg-muted text-muted-foreground")}>
+      <span aria-hidden="true">{present ? "✓" : "✗"}</span>
+      <span className="sr-only">{present ? "má" : "chybí"} </span>
+      {label}
+    </span>
+  );
+}
 
 /**
  * The catalog table (also Knihovna stánků). checkedIds/onToggleChecked enable the selection
@@ -570,77 +611,89 @@ export function ComponentAdminList({
   categoryName?: (id: string | null) => string;
 }) {
   const selectable = Boolean(checkedIds && onToggleChecked);
-  const allChecked = selectable && entries.length > 0 && entries.every((entry) => checkedIds!.has(entry.id));
+  const checkedCount = selectable ? entries.filter((entry) => checkedIds!.has(entry.id)).length : 0;
+  const allChecked = selectable && entries.length > 0 && checkedCount === entries.length;
   return (
-    <div className="adminTableScroll">
-      <table className="adminTable catalogTable">
-        <thead>
-          <tr>
+    <div className="adminTableScroll overflow-hidden rounded-xl border bg-card">
+      <Table className="adminTable catalogTable min-w-[980px] text-sm">
+        <TableHeader className="bg-muted/60">
+          <TableRow className="hover:bg-transparent">
             {selectable && (
-              <th className="catalogColCheck" scope="col">
+              <TableHead className="catalogColCheck w-10 pl-4">
                 {onToggleAll && (
-                  <input type="checkbox" checked={allChecked} onChange={(event) => onToggleAll(event.target.checked)} aria-label={`Označit všech ${entries.length} položek odpovídajících filtru`} title={`Označit všech ${entries.length} položek odpovídajících filtru`} />
+                  <Checkbox
+                    checked={allChecked ? true : checkedCount > 0 ? "indeterminate" : false}
+                    onCheckedChange={(checked) => onToggleAll(checked === true)}
+                    aria-label={`Označit všech ${entries.length} položek odpovídajících filtru`}
+                    title={`Označit všech ${entries.length} položek odpovídajících filtru`}
+                  />
                 )}
-              </th>
+              </TableHead>
             )}
-            <th className="catalogColThumb" scope="col">Náhled</th>
-            <th className="catalogColCode" scope="col">Kód</th>
-            <th className="catalogColName" scope="col">Název</th>
-            <th scope="col">Typ</th>
-            <th scope="col">Kategorie</th>
-            <th scope="col">Stav</th>
-            <th scope="col">Podklady</th>
-          </tr>
-        </thead>
-        <tbody>
+            <TableHead className="catalogColThumb w-16 text-muted-foreground">Náhled</TableHead>
+            <TableHead className="catalogColCode w-32 text-muted-foreground">Kód</TableHead>
+            <TableHead className="catalogColName text-muted-foreground">Název</TableHead>
+            <TableHead className="text-muted-foreground">Typ</TableHead>
+            <TableHead className="text-muted-foreground">Kategorie</TableHead>
+            <TableHead className="text-muted-foreground">Stav</TableHead>
+            <TableHead className="text-muted-foreground">Podklady</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {entries.length === 0 && (
-            <tr>
-              <td colSpan={selectable ? 8 : 7} className="adminEmpty">Filtrům neodpovídá žádná položka.</td>
-            </tr>
+            <TableRow className="hover:bg-transparent">
+              <TableCell colSpan={selectable ? 8 : 7} className="py-10 text-center text-muted-foreground">Filtrům neodpovídá žádná položka.</TableCell>
+            </TableRow>
           )}
           {entries.map((entry) => {
             const hasPhoto = Boolean(entry.photoAsset || entry.photoUrl);
+            const checked = selectable && checkedIds!.has(entry.id);
             return (
-              <tr key={entry.id} className={entry.id === selectedId ? "active" : ""} onClick={(event) => { if (!(event.target as HTMLElement).closest("input,button")) onSelect(entry.id); }}>
+              <TableRow
+                key={entry.id}
+                data-state={checked || entry.id === selectedId ? "selected" : undefined}
+                className="cursor-pointer"
+                onClick={(event) => { if (!(event.target as HTMLElement).closest("input,button")) onSelect(entry.id); }}
+              >
                 {selectable && (
-                  <td className="catalogColCheck">
-                    <input type="checkbox" aria-label={`Označit ${entry.displayName}`} checked={checkedIds!.has(entry.id)} onChange={() => onToggleChecked!(entry.id)} />
-                  </td>
+                  <TableCell className="catalogColCheck pl-4">
+                    <Checkbox aria-label={`Označit ${entry.displayName}`} checked={checked} onCheckedChange={() => onToggleChecked!(entry.id)} />
+                  </TableCell>
                 )}
-                <td className="catalogColThumb"><ThumbnailCell photoAsset={entry.photoAsset} photoUrl={entry.photoUrl} label={entry.displayName} /></td>
-                <td className="catalogColCode">
-                  <strong>{entry.internalCode ?? "—"}</strong>
-                  {entry.abfCode && entry.abfCode !== entry.internalCode && <small>ABF {entry.abfCode}</small>}
-                </td>
-                <td className="catalogColName">
-                  <button type="button" className="catalogNameButton" onClick={() => onSelect(entry.id)} aria-label={`Otevřít detail: ${entry.displayName}`}>
+                <TableCell className="catalogColThumb"><ThumbnailCell photoAsset={entry.photoAsset} photoUrl={entry.photoUrl} label={entry.displayName} /></TableCell>
+                <TableCell className="catalogColCode">
+                  <strong className="font-mono text-[13px]">{entry.internalCode ?? "—"}</strong>
+                  {entry.abfCode && entry.abfCode !== entry.internalCode && <small className="block text-xs text-muted-foreground">ABF {entry.abfCode}</small>}
+                </TableCell>
+                <TableCell className="catalogColName min-w-[220px] whitespace-normal">
+                  <button type="button" className="catalogNameButton rounded-sm text-left font-semibold text-foreground underline-offset-4 hover:underline" onClick={() => onSelect(entry.id)} aria-label={`Otevřít detail: ${entry.displayName}`}>
                     {entry.displayName}
                   </button>
                   {(entry.itemTypeNeedsReview || ((entry.itemType === "BOOTH" || entry.itemType === "KIT") && entry.packageItemCount > 0)) && (
-                    <small>
+                    <small className="block text-xs text-muted-foreground">
                       {entry.itemTypeNeedsReview ? "k zařazení" : ""}
                       {(entry.itemType === "BOOTH" || entry.itemType === "KIT") && entry.packageItemCount > 0 ? `${entry.itemTypeNeedsReview ? " · " : ""}${entry.packageItemCount} položek v obsahu` : ""}
                     </small>
                   )}
-                </td>
-                <td>{CATALOG_ITEM_TYPE_LABELS_CS[entry.itemType]}</td>
-                <td>{entry.category ? categoryName(entry.category) : "—"}</td>
-                <td>
-                  <span className={`adminStatus adminStatus-${entry.lifecycleStatus}`}><span aria-hidden="true">{STATUS_SYMBOL[entry.lifecycleStatus]}</span> {CATALOG_ITEM_STATUS_LABELS_CS[entry.lifecycleStatus]}</span>
-                  <small className={entry.readiness.ready ? "adminReady" : "adminNotReady"}>{entry.readiness.ready ? "připraveno" : "chybí podklady"}</small>
-                </td>
-                <td>
-                  <span className="catalogAssets">
-                    <span className={hasPhoto ? "catalogAsset yes" : "catalogAsset no"}>{hasPhoto ? "✓" : "✗"} Foto</span>
-                    <span className={entry.has3DAsset ? "catalogAsset yes" : "catalogAsset no"}>{entry.has3DAsset ? "✓" : "✗"} 3D</span>
-                    <span className={entry.hasDimensions ? "catalogAsset yes" : "catalogAsset no"} title={entry.hasDimensions ? `${entry.widthMm} × ${entry.depthMm}${entry.heightMm ? ` × ${entry.heightMm}` : ""} mm` : "Chybí rozměry"}>{entry.hasDimensions ? "✓" : "✗"} Rozměry</span>
+                </TableCell>
+                <TableCell>{CATALOG_ITEM_TYPE_LABELS_CS[entry.itemType]}</TableCell>
+                <TableCell className="whitespace-normal">{entry.category ? categoryName(entry.category) : "—"}</TableCell>
+                <TableCell>
+                  <StatusBadge tone={STATUS_TONE[entry.lifecycleStatus]} symbol={STATUS_SYMBOL[entry.lifecycleStatus]}>{CATALOG_ITEM_STATUS_LABELS_CS[entry.lifecycleStatus]}</StatusBadge>
+                  <small className={cn("mt-0.5 block text-xs", entry.readiness.ready ? "text-success" : "text-warning")}>{entry.readiness.ready ? "připraveno" : "chybí podklady"}</small>
+                </TableCell>
+                <TableCell>
+                  <span className="catalogAssets flex flex-wrap gap-1">
+                    <AssetMark present={hasPhoto} label="Foto" />
+                    <AssetMark present={entry.has3DAsset} label="3D" />
+                    <AssetMark present={entry.hasDimensions} label="Rozměry" title={entry.hasDimensions ? `${entry.widthMm} × ${entry.depthMm}${entry.heightMm ? ` × ${entry.heightMm}` : ""} mm` : "Chybí rozměry"} />
                   </span>
-                </td>
-              </tr>
+                </TableCell>
+              </TableRow>
             );
           })}
-        </tbody>
-      </table>
+        </TableBody>
+      </Table>
     </div>
   );
 }
@@ -649,8 +702,8 @@ export function ComponentAdminList({
 function ThumbnailCell({ photoAsset, photoUrl, label }: { photoAsset: StoredAsset | undefined; photoUrl: string | undefined; label: string }) {
   const resolved = useAssetUrl(photoAsset, photoUrl);
   return (
-    <span className="catalogThumbnailCell">
-      {resolved.url ? <img className="catalogThumbnailImg" src={resolved.url} alt={`Náhled ${label}`} /> : <span className="catalogThumbnailPlaceholder" aria-hidden="true" />}
+    <span className="catalogThumbnailCell grid size-12 place-items-center overflow-hidden rounded-md border bg-background">
+      {resolved.url ? <img className="catalogThumbnailImg size-full object-contain" src={resolved.url} alt={`Náhled ${label}`} /> : <span className="catalogThumbnailPlaceholder size-full bg-muted" aria-hidden="true" />}
     </span>
   );
 }
@@ -1113,12 +1166,12 @@ export function ComponentAdminDetail({
   return (
     <div className="adminDetail catalogAdminDetail">
       <header className="catalogDetailHeader">
-        <span>
+        <span className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
           {CATALOG_ITEM_TYPE_LABELS_CS[currentItemType]} · {item.internalCode ?? "Bez interního kódu"}
           {item.abfCode ? ` · ABF ${item.abfCode}` : ""}
         </span>
         <h2>{item.displayName}</h2>
-        <span className={`lifecycleBadge ${item.lifecycleStatus}`}>{CATALOG_ITEM_STATUS_LABELS_CS[item.lifecycleStatus]}</span>
+        <StatusBadge tone={STATUS_TONE[item.lifecycleStatus]} symbol={STATUS_SYMBOL[item.lifecycleStatus]} className="lifecycleBadge justify-self-start">{CATALOG_ITEM_STATUS_LABELS_CS[item.lifecycleStatus]}</StatusBadge>
       </header>
 
       <div className="eventSaveBar catalogAdminSaveBar">
@@ -1126,7 +1179,7 @@ export function ComponentAdminDetail({
           {stateLabel === "dirty" ? "Neuložené změny" : stateLabel === "saving" ? "Ukládám…" : "Uloženo"}
           {error && <small className="uploadError">{error}</small>}
         </span>
-        <button type="button" className="primaryButton" onClick={handleSaveClick} disabled={!dirty || busy !== "idle"}>Uložit změny</button>
+        <Button variant="default" type="button" onClick={handleSaveClick} disabled={!dirty || busy !== "idle"}>Uložit změny</Button>
       </div>
 
       <div className="catalogDetailSections">
@@ -1146,7 +1199,7 @@ export function ComponentAdminDetail({
                 <span className="readOnlyField">{CATALOG_ITEM_TYPE_LABELS_CS[currentItemType]} <small className="fieldHint">— specializovaná karta (obsah, zahrnuté položky, náhrady); druh se zde nemění.</small></span>
               ) : (
                 <>
-                  <select
+                  <NativeSelect
                     aria-label="Druh komponenty"
                     value={isComponentGroup(group) ? group : ""}
                     onChange={(event) => handleGroupChange(event.target.value as ComponentGroup)}
@@ -1154,7 +1207,7 @@ export function ComponentAdminDetail({
                     title={item.lifecycleStatus === "active" ? "Aktivní položce nelze měnit druh — používá ji generátor." : undefined}
                   >
                     {COMPONENT_GROUPS.map((value) => <option key={value} value={value}>{COMPONENT_GROUP_LABELS_CS[value]}</option>)}
-                  </select>
+                  </NativeSelect>
                   {isComponentGroup(group) && <small className="fieldHint">{COMPONENT_GROUP_HINTS_CS[group]}</small>}
                   {group !== storedGroup && <small className="fieldWarning">Změna druhu změní interní typ karty a její cenové zařazení; formulář pak nabídne jiné sekce. Žádné přílohy ani údaje se nesmažou.</small>}
                 </>
@@ -1162,20 +1215,20 @@ export function ComponentAdminDetail({
             </EditRow>
             <EditRow label="Kategorie">
               {isSpecialCard ? (
-                <select value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
+                <NativeSelect value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
                   {category && !CATALOG_ITEM_CATEGORY_OPTIONS.some((option) => option.value === category) && <option value={category}>{category} (zachována)</option>}
                   {!category && <option value="">— nevybráno —</option>}
                   {CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-                </select>
+                </NativeSelect>
               ) : (
                 <>
-                  <select aria-label="Kategorie" value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
+                  <NativeSelect aria-label="Kategorie" value={category} onChange={(event) => { setCategory(event.target.value); setDirty(true); }}>
                     <option value="">— vyberte kategorii —</option>
                     {item.category && category === item.category && (!storedCategoryDef || storedCategoryDef.group !== group || !storedCategoryDef.isActive) && (
                       <option value={item.category}>{storedCategoryDef?.name ?? item.category} (uloženo — {storedCategoryDef ? (storedCategoryDef.isActive ? `patří k druhu ${COMPONENT_GROUP_LABELS_CS[storedCategoryDef.group]}` : "neaktivní") : "není v registru"})</option>
                     )}
                     {isComponentGroup(group) && categoriesForGroup(categoryRegister.categories, group).map((option) => <option key={option.id} value={option.id}>{option.name}</option>)}
-                  </select>
+                  </NativeSelect>
                   {classificationChanged && classificationProblem && <small className="fieldWarning">{classificationProblem}</small>}
                   {categoryDef && derivedPriceCategory(categoryDef) === "electricity" && <small className="fieldHint">Cenové zařazení: Elektřina → ceník elektřiny.</small>}
                   {categoryDef?.group === "technical_point" && <small className="fieldHint">Technický bod se samostatně neúčtuje.</small>}
@@ -1199,14 +1252,14 @@ export function ComponentAdminDetail({
               </EditRow>
             )}
             <EditRow label="ABF kód">
-              <input
+              <Input
                 value={abfCode}
                 onChange={(event) => { setAbfCode(event.target.value); setDirty(true); }}
                 placeholder={itemTypeExpectsAbfCode(itemType) ? "Bez ABF kódu" : "Interní komponenta — ABF kód není potřeba"}
               />
             </EditRow>
             <EditRow label="Interní / generátorový kód">
-              <input
+              <Input
                 aria-label="Interní / generátorový kód"
                 className={codeDerivedFromAbf ? "derivedCodeField" : undefined}
                 value={codeDerivedFromAbf ? resultingCode : codeDraft}
@@ -1235,29 +1288,29 @@ export function ComponentAdminDetail({
               )}
             </EditRow>
             <EditRow label="Oficiální název ABF (CZ)">
-              <input value={officialName} onChange={(event) => { setOfficialName(event.target.value); setDirty(true); }} placeholder={itemTypeExpectsAbfCode(itemType) ? "Podle oficiálního ceníku ABF" : "Interní komponenta — obvykle bez ABF názvu"} />
+              <Input value={officialName} onChange={(event) => { setOfficialName(event.target.value); setDirty(true); }} placeholder={itemTypeExpectsAbfCode(itemType) ? "Podle oficiálního ceníku ABF" : "Interní komponenta — obvykle bez ABF názvu"} />
             </EditRow>
             <EditRow label="Oficiální název ABF (EN)">
-              <input value={officialNameEn} onChange={(event) => { setOfficialNameEn(event.target.value); setDirty(true); }} placeholder="Official ABF name" />
+              <Input value={officialNameEn} onChange={(event) => { setOfficialNameEn(event.target.value); setDirty(true); }} placeholder="Official ABF name" />
             </EditRow>
             <EditRow label="Interní název HomeworkStudio">
-              <input value={displayName} onChange={(event) => { setDisplayName(event.target.value); setDirty(true); }} />
+              <Input value={displayName} onChange={(event) => { setDisplayName(event.target.value); setDirty(true); }} />
             </EditRow>
             <EditRow label="CZ název (interní)">
-              <input value={name} onChange={(event) => { setName(event.target.value); setDirty(true); }} />
+              <Input value={name} onChange={(event) => { setName(event.target.value); setDirty(true); }} />
             </EditRow>
             <EditRow label="Měrná jednotka">
-              <select value={unitCode} onChange={(event) => { setUnitCode(event.target.value); setDirty(true); }}>
+              <NativeSelect value={unitCode} onChange={(event) => { setUnitCode(event.target.value); setDirty(true); }}>
                 <option value="">— nevybráno —</option>
                 {CATALOG_UNITS.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol} — {unit.nameCs}</option>)}
-              </select>
+              </NativeSelect>
               {!item.unitCode && item.unit && legacyUnit.status !== "known" && (
                 <small className="fieldHint">Původní text „{item.unit}“ nebyl převeden: {legacyUnit.status === "empty" ? "" : legacyUnit.message}</small>
               )}
             </EditRow>
             {kind === "graphics_service" && <GraphicsPricingUnitRow category={category} unitCode={unitCode} explicitPricingUnit={(itemDocument as Partial<ComponentDefinition>).pricingUnit} />}
             <EditRow label="Poznámka">
-              <input value={note} onChange={(event) => { setNote(event.target.value); setDirty(true); }} placeholder="Interní poznámka" />
+              <Input value={note} onChange={(event) => { setNote(event.target.value); setDirty(true); }} placeholder="Interní poznámka" />
             </EditRow>
             <Row label="Zdroj (traceability)" value={trace.sourceSystem ? `${trace.sourceSystem} · ${trace.sourceKey ?? "—"}` : "—"} />
             <Row label="Import ABF" value={abfImport ? `${abfImport.sourceFile} · ř. ${abfImport.sourceRow} · „${abfImport.abfName}“` : "—"} />
@@ -1267,7 +1320,7 @@ export function ComponentAdminDetail({
             <div className="readinessIssues">
               <strong>K zařazení:</strong> typ karty nešel při importu z dat bezpečně určit. Zkontrolujte typ (a druh) a uložte, nebo potvrďte současný.
               <div className="assetActions">
-                <button type="button" className="secondaryButton" onClick={() => void handleConfirmType()}>Potvrdit typ „{CATALOG_ITEM_TYPE_LABELS_CS[currentItemType]}“</button>
+                <Button variant="outline" type="button" onClick={() => void handleConfirmType()}>Potvrdit typ „{CATALOG_ITEM_TYPE_LABELS_CS[currentItemType]}“</Button>
               </div>
             </div>
           )}
@@ -1280,30 +1333,30 @@ export function ComponentAdminDetail({
             {showDimensions && (
               <>
                 <EditRow label="Šířka (mm)">
-                  <input type="number" min="0" value={widthMm} onChange={(event) => { setWidthMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
+                  <Input type="number" min="0" value={widthMm} onChange={(event) => { setWidthMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
                 </EditRow>
                 <EditRow label="Hloubka (mm)">
-                  <input type="number" min="0" value={depthMm} onChange={(event) => { setDepthMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
+                  <Input type="number" min="0" value={depthMm} onChange={(event) => { setDepthMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
                 </EditRow>
                 <EditRow label="Výška (mm)">
-                  <input type="number" min="0" value={heightMm} onChange={(event) => { setHeightMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
+                  <Input type="number" min="0" value={heightMm} onChange={(event) => { setHeightMm(event.target.value); setDirty(true); }} placeholder="Neznámo" />
                 </EditRow>
               </>
             )}
             {showMaterial && (
               <>
                 <EditRow label="Barva">
-                  <input value={color} onChange={(event) => { setColor(event.target.value); setDirty(true); }} placeholder="např. černá, RAL 9016" />
+                  <Input value={color} onChange={(event) => { setColor(event.target.value); setDirty(true); }} placeholder="např. černá, RAL 9016" />
                 </EditRow>
                 <EditRow label="Materiál">
-                  <input value={material} onChange={(event) => { setMaterial(event.target.value); setDirty(true); }} placeholder="např. lamino, hliník" />
+                  <Input value={material} onChange={(event) => { setMaterial(event.target.value); setDirty(true); }} placeholder="např. lamino, hliník" />
                 </EditRow>
               </>
             )}
             {showPower && (
               <EditRow label="Výkon (kW)">
                 <span className="inlineFieldWithAction">
-                  <input aria-label="Výkon (kW)" inputMode="decimal" value={powerKw} onChange={(event) => { setPowerKw(event.target.value); setDirty(true); }} placeholder="např. 2" />
+                  <Input aria-label="Výkon (kW)" inputMode="decimal" value={powerKw} onChange={(event) => { setPowerKw(event.target.value); setDirty(true); }} placeholder="např. 2" />
                   <span className="fieldHint">kW</span>
                 </span>
                 {powerProblem && <small className="fieldWarning">{powerProblem}</small>}
@@ -1314,7 +1367,7 @@ export function ComponentAdminDetail({
               const key = recommendedParameterKey(parameter);
               return (
                 <EditRow key={parameter.id} label={parameter.unit ? `${parameter.name} (${parameter.unit})` : parameter.name}>
-                  <input
+                  <Input
                     aria-label={key}
                     inputMode={parameter.valueType === "number" ? "decimal" : undefined}
                     value={parameterStore.find((entry) => entry.key === key)?.value ?? ""}
@@ -1328,15 +1381,15 @@ export function ComponentAdminDetail({
             {parameterStore.map((param, index) => recommendedKeys.has(param.key) ? null : (
               <EditRow key={index} label="Vlastní parametr">
                 <span className="inlineFieldWithAction">
-                  <input aria-label="Název parametru" value={param.key} onChange={(event) => setParameterStore(parameterStore.map((entry, entryIndex) => entryIndex === index ? { ...entry, key: event.target.value } : entry))} placeholder="Název (např. napětí)" />
-                  <input aria-label="Hodnota parametru" value={param.value} onChange={(event) => setParameterStore(parameterStore.map((entry, entryIndex) => entryIndex === index ? { ...entry, value: event.target.value } : entry))} placeholder="Hodnota (např. 230 V)" />
-                  <button type="button" className="secondaryButton" onClick={() => setParameterStore(parameterStore.filter((_, entryIndex) => entryIndex !== index))}>Odebrat</button>
+                  <Input aria-label="Název parametru" value={param.key} onChange={(event) => setParameterStore(parameterStore.map((entry, entryIndex) => entryIndex === index ? { ...entry, key: event.target.value } : entry))} placeholder="Název (např. napětí)" />
+                  <Input aria-label="Hodnota parametru" value={param.value} onChange={(event) => setParameterStore(parameterStore.map((entry, entryIndex) => entryIndex === index ? { ...entry, value: event.target.value } : entry))} placeholder="Hodnota (např. 230 V)" />
+                  <Button variant="outline" type="button" onClick={() => setParameterStore(parameterStore.filter((_, entryIndex) => entryIndex !== index))}>Odebrat</Button>
                 </span>
               </EditRow>
             ))}
           </dl>
           <div className="assetActions">
-            <button type="button" className="secondaryButton" onClick={() => setParameterStore([...parameterStore, { key: "", value: "" }])}>+ Přidat parametr</button>
+            <Button variant="outline" type="button" onClick={() => setParameterStore([...parameterStore, { key: "", value: "" }])}>+ Přidat parametr</Button>
           </div>
           {parametersProblem && <small className="fieldWarning">{parametersProblem}</small>}
           <p className="fieldHint">Vše se uloží tlačítkem Uložit spolu s ostatními údaji karty. Nevyplněné parametry nejsou povinné.</p>
@@ -1391,33 +1444,32 @@ export function ComponentAdminDetail({
             </div>
           )}
           <div className="catalogAdminReviewActions">
-            <button type="button" className="secondaryButton" onClick={handleMarkReviewed} disabled={reviewBusy}>
+            <Button variant="outline" type="button" onClick={handleMarkReviewed} disabled={reviewBusy}>
               {reviewBusy ? "Označuji…" : "Označit jako zkontrolované"}
-            </button>
+            </Button>
             {item.lifecycleStatus !== "active" && item.lifecycleStatus !== "archived" && (
-              <button
+              <Button variant="default"
                 type="button"
-                className="primaryButton"
                 onClick={handleActivate}
                 disabled={!readiness.ready || busy !== "idle"}
                 title={!readiness.ready ? "Nelze aktivovat — položka nesplňuje readiness pravidla pro generátor." : undefined}
               >
                 {busy === "activating" ? "Aktivuji…" : "Aktivovat"}
-              </button>
+              </Button>
             )}
             {onDuplicate && (
-              <button type="button" className="secondaryButton" onClick={() => void handleDuplicateClick()} disabled={duplicateBusy} title="Vytvoří novou kartu (K doplnění) se stejným obsahem — bez kódů, cen a provenance.">
+              <Button variant="outline" type="button" onClick={() => void handleDuplicateClick()} disabled={duplicateBusy} title="Vytvoří novou kartu (K doplnění) se stejným obsahem — bez kódů, cen a provenance.">
                 {duplicateBusy ? "Duplikuji…" : "Duplikovat"}
-              </button>
+              </Button>
             )}
             {item.lifecycleStatus === "archived" ? (
-              <button type="button" className="secondaryButton" onClick={handleRestore} disabled={archiveBusy} title="Vrátí položku do stavu před archivací; dříve aktivní položka se vrátí jako aktivní jen pokud stále splňuje readiness, jinak K doplnění.">
+              <Button variant="outline" type="button" onClick={handleRestore} disabled={archiveBusy} title="Vrátí položku do stavu před archivací; dříve aktivní položka se vrátí jako aktivní jen pokud stále splňuje readiness, jinak K doplnění.">
                 {archiveBusy ? "Obnovuji…" : "Obnovit"}
-              </button>
+              </Button>
             ) : (
-              <button type="button" className="dangerText" onClick={handleArchive} disabled={archiveBusy} title="Skryje položku z výchozího seznamu, zachová všechna data (ceny, assety, mappings, provenance). Nemaže nic.">
+              <Button variant="destructive" type="button" onClick={handleArchive} disabled={archiveBusy} title="Skryje položku z výchozího seznamu, zachová všechna data (ceny, assety, mappings, provenance). Nemaže nic.">
                 {archiveBusy ? "Archivuji…" : "Archivovat"}
-              </button>
+              </Button>
             )}
           </div>
           {reviewError && <small className="uploadError">{reviewError}</small>}
@@ -1471,9 +1523,9 @@ export function ComponentAdminDetail({
               />
             </label>
             {photoAsset && (
-              <button type="button" className="dangerText" onClick={handlePhotoRemove} disabled={photoProgress?.state === "uploading"}>
+              <Button variant="destructive" type="button" onClick={handlePhotoRemove} disabled={photoProgress?.state === "uploading"}>
                 Odebrat referenci
-              </button>
+              </Button>
             )}
           </div>
           {photoProgress && (
@@ -1509,9 +1561,9 @@ export function ComponentAdminDetail({
               />
             </label>
             {modelAsset && (
-              <button type="button" className="dangerText" onClick={handleModelRemove} disabled={modelProgress?.state === "uploading"}>
+              <Button variant="destructive" type="button" onClick={handleModelRemove} disabled={modelProgress?.state === "uploading"}>
                 Odebrat referenci
-              </button>
+              </Button>
             )}
           </div>
           {modelProgress && (
@@ -1553,19 +1605,19 @@ export function ComponentAdminDetail({
                 <li key={entry.id} className="sourceAssetListItem">
                   <span className="sourceAssetKindBadge">{SOURCE_ASSET_KIND_LABELS_CS[entry.kind]}</span>
                   <span>{entry.label || entry.asset.originalFileName}</span>
-                  <button type="button" className="dangerText" onClick={() => handleSourceAssetRemove(entry)} disabled={sourceAssetRemovingId === entry.id}>
+                  <Button variant="destructive" type="button" onClick={() => handleSourceAssetRemove(entry)} disabled={sourceAssetRemovingId === entry.id}>
                     {sourceAssetRemovingId === entry.id ? "Odebírám…" : "Odebrat referenci"}
-                  </button>
+                  </Button>
                 </li>
               ))}
             </ul>
           )}
           <div className="assetActions">
-            <select value={sourceAssetKind} onChange={(event) => setSourceAssetKind(event.target.value as SourceAssetKind)}>
+            <NativeSelect value={sourceAssetKind} onChange={(event) => setSourceAssetKind(event.target.value as SourceAssetKind)}>
               {SOURCE_ASSET_KINDS.filter((kind) => kind !== "pdf").map((kind) => (
                 <option key={kind} value={kind}>{SOURCE_ASSET_KIND_LABELS_CS[kind]}</option>
               ))}
-            </select>
+            </NativeSelect>
             <label className="smallUploadButton">
               {sourceAssetKind === "sketchup" ? "Nahrát SKP" : "Nahrát soubor"}
               <input
@@ -1806,25 +1858,25 @@ function TechnicalRasterSection({
 
       <dl>
         <EditRow label="Zobrazovat v technickém rastru">
-          <select value={enabledChoice} onChange={(event) => setEnabledChoice(event.target.value as "" | "true" | "false")}>
+          <NativeSelect value={enabledChoice} onChange={(event) => setEnabledChoice(event.target.value as "" | "true" | "false")}>
             <option value="">Automaticky</option>
             <option value="true">Ano</option>
             <option value="false">Ne</option>
-          </select>
+          </NativeSelect>
         </EditRow>
         <EditRow label="Způsob umístění">
-          <select value={placementBehaviorChoice} onChange={(event) => setPlacementBehaviorChoice(event.target.value as "" | TechnicalServicePlacementBehavior)}>
+          <NativeSelect value={placementBehaviorChoice} onChange={(event) => setPlacementBehaviorChoice(event.target.value as "" | TechnicalServicePlacementBehavior)}>
             {TECHNICAL_RASTER_PLACEMENT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-          </select>
+          </NativeSelect>
         </EditRow>
         <EditRow label="Typ značky">
-          <select value={rendererChoice} onChange={(event) => setRendererChoice(event.target.value as TechnicalRasterRendererChoice)}>
+          <NativeSelect value={rendererChoice} onChange={(event) => setRendererChoice(event.target.value as TechnicalRasterRendererChoice)}>
             <option value="">Automatická</option>
             <option value="text">Text</option>
-          </select>
+          </NativeSelect>
         </EditRow>
         <EditRow label="Krátký text">
-          <input value={displayLabel} onChange={(event) => setDisplayLabel(event.target.value)} placeholder="Automaticky" maxLength={16} />
+          <Input value={displayLabel} onChange={(event) => setDisplayLabel(event.target.value)} placeholder="Automaticky" maxLength={16} />
         </EditRow>
         <EditRow label="Barva">
           <span className="technicalRasterColorInput">
@@ -1833,11 +1885,11 @@ function TechnicalRasterSection({
               value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : "#6b6f72"}
               onChange={(event) => setColor(event.target.value)}
             />
-            <input value={color} onChange={(event) => setColor(event.target.value)} placeholder="Automaticky (#RRGGBB)" />
+            <Input value={color} onChange={(event) => setColor(event.target.value)} placeholder="Automaticky (#RRGGBB)" />
           </span>
         </EditRow>
         <EditRow label="Legenda">
-          <input value={legendLabel} onChange={(event) => setLegendLabel(event.target.value)} placeholder="Automaticky" maxLength={80} />
+          <Input value={legendLabel} onChange={(event) => setLegendLabel(event.target.value)} placeholder="Automaticky" maxLength={80} />
         </EditRow>
       </dl>
 
@@ -1853,7 +1905,7 @@ function TechnicalRasterSection({
             {iconAsset ? "Nahradit" : "Nahrát"}
             <input type="file" accept={TECHNICAL_ICON_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void handleIconUpload(file); }} />
           </label>
-          {iconAsset && <button type="button" className="dangerText" onClick={() => void handleIconRemove()} disabled={iconProgress?.state === "uploading"}>Odebrat referenci</button>}
+          {iconAsset && <Button variant="destructive" type="button" onClick={() => void handleIconRemove()} disabled={iconProgress?.state === "uploading"}>Odebrat referenci</Button>}
         </div>
       </div>
       {iconProgress && (
@@ -1871,12 +1923,12 @@ function TechnicalRasterSection({
       <TechnicalRasterPreview config={draftConfig} iconUrl={iconResolved.url} />
 
       <div className="assetActions">
-        <button type="button" className="primaryButton" onClick={() => void handleSaveClick()} disabled={!dirty || busy}>
+        <Button variant="default" type="button" onClick={() => void handleSaveClick()} disabled={!dirty || busy}>
           {busy ? "Ukládám…" : "Uložit technické rastry"}
-        </button>
-        <button type="button" className="secondaryButton" onClick={() => void handleResetClick()} disabled={busy || !existingConfig}>
+        </Button>
+        <Button variant="outline" type="button" onClick={() => void handleResetClick()} disabled={busy || !existingConfig}>
           Obnovit výchozí nastavení
-        </button>
+        </Button>
       </div>
       {error && <small className="uploadError">{error}</small>}
     </details>
@@ -1996,14 +2048,14 @@ function VariantRow({
           <input type="file" accept=".glb" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void handleModelUpload(file); }} />
         </label>
         {variant.modelAsset && (
-          <button type="button" className="dangerText" onClick={handleModelRemove} disabled={modelProgress?.state === "uploading"}>Odebrat GLB</button>
+          <Button variant="destructive" type="button" onClick={handleModelRemove} disabled={modelProgress?.state === "uploading"}>Odebrat GLB</Button>
         )}
         <label className="smallUploadButton">
           {variant.photoAsset ? "Nahradit foto" : "Nahrát foto"}
           <input type="file" accept={PHOTO_ACCEPT} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void handlePhotoUpload(file); }} />
         </label>
         {variant.photoAsset && (
-          <button type="button" className="dangerText" onClick={handlePhotoRemove} disabled={photoProgress?.state === "uploading"}>Odebrat foto</button>
+          <Button variant="destructive" type="button" onClick={handlePhotoRemove} disabled={photoProgress?.state === "uploading"}>Odebrat foto</Button>
         )}
       </div>
       {modelProgress && (
@@ -2028,19 +2080,19 @@ function VariantRow({
               <li key={entry.id} className="sourceAssetListItem">
                 <span className="sourceAssetKindBadge">{SOURCE_ASSET_KIND_LABELS_CS[entry.kind]}</span>
                 <span>{entry.label || entry.asset.originalFileName}</span>
-                <button type="button" className="dangerText" onClick={() => handleSourceAssetRemove(entry)} disabled={sourceAssetRemovingId === entry.id}>
+                <Button variant="destructive" type="button" onClick={() => handleSourceAssetRemove(entry)} disabled={sourceAssetRemovingId === entry.id}>
                   {sourceAssetRemovingId === entry.id ? "Odebírám…" : "Odebrat referenci"}
-                </button>
+                </Button>
               </li>
             ))}
           </ul>
         )}
         <div className="assetActions">
-          <select value={sourceAssetKind} onChange={(event) => setSourceAssetKind(event.target.value as SourceAssetKind)}>
+          <NativeSelect value={sourceAssetKind} onChange={(event) => setSourceAssetKind(event.target.value as SourceAssetKind)}>
             {SOURCE_ASSET_KINDS.map((kind) => (
               <option key={kind} value={kind}>{SOURCE_ASSET_KIND_LABELS_CS[kind]}</option>
             ))}
-          </select>
+          </NativeSelect>
           <label className="smallUploadButton">
             {sourceAssetKind === "sketchup" ? "Nahrát SKP" : "Nahrát soubor"}
             <input
@@ -2083,8 +2135,8 @@ function GalleryPhoto({ photo, busy, onPromote, onRemove }: { photo: StoredAsset
       {resolved.url ? <img src={resolved.url} alt={photo.originalFileName} /> : <span className="catalogThumbnailPlaceholder" aria-hidden="true" />}
       <small title={photo.originalFileName}>{photo.originalFileName}</small>
       <span className="assetActions">
-        <button type="button" className="linkButton" disabled={busy} onClick={onPromote}>Nastavit jako hlavní</button>
-        <button type="button" className="dangerText" disabled={busy} onClick={onRemove}>Odebrat</button>
+        <Button variant="link" type="button" disabled={busy} onClick={onPromote}>Nastavit jako hlavní</Button>
+        <Button variant="destructive" type="button" disabled={busy} onClick={onRemove}>Odebrat</Button>
       </span>
     </li>
   );
@@ -2093,8 +2145,8 @@ function GalleryPhoto({ photo, busy, onPromote, onRemove }: { photo: StoredAsset
 function EditRow({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="catalogAdminEditRow">
-      <dt>{label}</dt>
-      <dd>{children}</dd>
+      <dt className="text-[13px] font-medium text-muted-foreground">{label}</dt>
+      <dd className="text-sm">{children}</dd>
     </div>
   );
 }
@@ -2116,8 +2168,8 @@ function GraphicsPricingUnitRow({ category, unitCode, explicitPricingUnit }: { c
 function Row({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div>
-      <dt>{label}</dt>
-      <dd>{value || "—"}</dd>
+      <dt className="text-[13px] font-medium text-muted-foreground">{label}</dt>
+      <dd className="text-sm">{value || "—"}</dd>
     </div>
   );
 }

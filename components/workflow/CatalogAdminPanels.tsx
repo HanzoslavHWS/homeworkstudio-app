@@ -30,6 +30,10 @@ import { catalogTypeHasField } from "../../domain/catalogItemFields";
 import { categoriesForGroup, COMPONENT_GROUP_HINTS_CS, COMPONENT_GROUP_LABELS_CS, COMPONENT_GROUP_TARGETS, COMPONENT_GROUPS, type ComponentGroup } from "../../domain/catalogClassification";
 import { useCatalogCategories } from "../../lib/db/catalogCategories.remoteApi.client";
 import { INTERNAL_COMPONENT_USAGE_HINTS_CS, INTERNAL_COMPONENT_USAGE_LABELS_CS, usagesForCategory, type InternalComponentUsage } from "../../domain/internalComponentUsage";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
 
 /** Types whose cards physically exist (dimensions make sense). SERVICE never needs them. */
 const TYPES_WITH_DIMENSIONS: readonly CatalogItemType[] = ["PRODUCT", "BOOTH", "INTERNAL_COMPONENT"];
@@ -156,10 +160,10 @@ export function CatalogItemCreateForm({
       {itemType && (
         <dl>
           <Field label="Interní název HomeworkStudio *">
-            <input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
+            <Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} />
           </Field>
           <Field label={itemTypeExpectsAbfCode(itemType) ? "ABF kód" : "ABF kód (nepovinný)"}>
-            <input value={abfCode} onChange={(event) => setAbfCode(event.target.value)} placeholder={itemTypeExpectsAbfCode(itemType) ? "např. M57 (podle oficiálního ceníku ABF)" : "Interní komponenta obvykle ABF kód nemá"} />
+            <Input value={abfCode} onChange={(event) => setAbfCode(event.target.value)} placeholder={itemTypeExpectsAbfCode(itemType) ? "např. M57 (podle oficiálního ceníku ABF)" : "Interní komponenta obvykle ABF kód nemá"} />
           </Field>
           <Field label={isInternal ? "Interní / generátorový kód *" : "Generátorový kód"}>
             {abfCode.trim() && (
@@ -168,29 +172,29 @@ export function CatalogItemCreateForm({
               </label>
             )}
             {abfCode.trim() && codeFromAbf ? (
-              <input value={abfCode.trim().toUpperCase()} readOnly disabled aria-label="Generátorový kód" />
+              <Input value={abfCode.trim().toUpperCase()} readOnly disabled aria-label="Generátorový kód" />
             ) : (
-              <input aria-label="Generátorový kód" value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder={itemType === "INTERNAL_COMPONENT" ? "např. INT-PANEL-950" : "Ponechte prázdné, pokud kód neznáte"} />
+              <Input aria-label="Generátorový kód" value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder={itemType === "INTERNAL_COMPONENT" ? "např. INT-PANEL-950" : "Ponechte prázdné, pokud kód neznáte"} />
             )}
             {missingInternalCode && <small className="fieldWarning">Interní komponenta musí mít vlastní interní/generátorový kód — je to její hlavní identifikátor (ABF kód je nepovinný).</small>}
           </Field>
           {itemTypeExpectsAbfCode(itemType) && (
             <>
               <Field label="Oficiální název ABF (CZ)">
-                <input value={officialName} onChange={(event) => setOfficialName(event.target.value)} placeholder="Oficiální název ABF" />
+                <Input value={officialName} onChange={(event) => setOfficialName(event.target.value)} placeholder="Oficiální název ABF" />
               </Field>
               <Field label="Oficiální název ABF (EN)">
-                <input value={officialNameEn} onChange={(event) => setOfficialNameEn(event.target.value)} placeholder="Official ABF name" />
+                <Input value={officialNameEn} onChange={(event) => setOfficialNameEn(event.target.value)} placeholder="Official ABF name" />
               </Field>
             </>
           )}
           <Field label="Kategorie *">
-            <select value={category} onChange={(event) => { setCategory(event.target.value); setUsage(""); }}>
+            <NativeSelect value={category} onChange={(event) => { setCategory(event.target.value); setUsage(""); }}>
               <option value="">— vyberte —</option>
               {isGroup
                 ? groupCategories.map((option) => <option key={option.id} value={option.id}>{option.name}</option>)
                 : CATALOG_ITEM_CATEGORY_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
-            </select>
+            </NativeSelect>
             {categoryDef?.priceCategory === "electricity" && <small className="fieldHint">Cenové zařazení: Elektřina → ceník elektřiny.</small>}
             {isGroup && pick === "technical_point" && <small className="fieldHint">Technický bod se samostatně neúčtuje.</small>}
           </Field>
@@ -212,26 +216,26 @@ export function CatalogItemCreateForm({
             </Field>
           )}
           <Field label="Měrná jednotka">
-            <select aria-label="Měrná jednotka" value={unitCode} onChange={(event) => setUnitCode(event.target.value)}>
+            <NativeSelect aria-label="Měrná jednotka" value={unitCode} onChange={(event) => setUnitCode(event.target.value)}>
               <option value="">— nevybráno —</option>
               {CATALOG_UNITS.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol} — {unit.nameCs}</option>)}
-            </select>
+            </NativeSelect>
           </Field>
           {catalogTypeHasField(itemType, "color") && (
             <>
-              <Field label="Barva"><input value={color} onChange={(event) => setColor(event.target.value)} placeholder="např. černá" /></Field>
-              <Field label="Materiál"><input value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="např. lamino" /></Field>
+              <Field label="Barva"><Input value={color} onChange={(event) => setColor(event.target.value)} placeholder="např. černá" /></Field>
+              <Field label="Materiál"><Input value={material} onChange={(event) => setMaterial(event.target.value)} placeholder="např. lamino" /></Field>
             </>
           )}
           {TYPES_WITH_DIMENSIONS.includes(itemType) && (
             <>
-              <Field label="Šířka (mm)"><input type="number" value={widthMm} onChange={(event) => setWidthMm(event.target.value)} placeholder="Neznámo" /></Field>
-              <Field label="Hloubka (mm)"><input type="number" value={depthMm} onChange={(event) => setDepthMm(event.target.value)} placeholder="Neznámo" /></Field>
-              <Field label="Výška (mm)"><input type="number" value={heightMm} onChange={(event) => setHeightMm(event.target.value)} placeholder="Neznámo" /></Field>
+              <Field label="Šířka (mm)"><Input type="number" value={widthMm} onChange={(event) => setWidthMm(event.target.value)} placeholder="Neznámo" /></Field>
+              <Field label="Hloubka (mm)"><Input type="number" value={depthMm} onChange={(event) => setDepthMm(event.target.value)} placeholder="Neznámo" /></Field>
+              <Field label="Výška (mm)"><Input type="number" value={heightMm} onChange={(event) => setHeightMm(event.target.value)} placeholder="Neznámo" /></Field>
             </>
           )}
           <Field label="Poznámka">
-            <input value={note} onChange={(event) => setNote(event.target.value)} />
+            <Input value={note} onChange={(event) => setNote(event.target.value)} />
           </Field>
         </dl>
       )}
@@ -239,10 +243,10 @@ export function CatalogItemCreateForm({
       {itemType === "KIT" && <p className="fieldHint">Obsah kompletu nastavíte po založení v detailu karty. Náhrady a doplatky přibudou ve V1-DATA-04.</p>}
       {itemType === "SERVICE" && <p className="fieldHint">Technická metadata (výkon, parametry) a prezentaci v technickém rastru nastavíte po založení v detailu karty.</p>}
       <div className="catalogAdminReviewActions">
-        <button type="button" className="secondaryButton" onClick={onCancel} disabled={busy}>Zrušit</button>
-        <button type="button" className="primaryButton" onClick={() => void handleSubmit()} disabled={!canSubmit}>
+        <Button variant="outline" type="button" onClick={onCancel} disabled={busy}>Zrušit</Button>
+        <Button variant="default" type="button" onClick={() => void handleSubmit()} disabled={!canSubmit}>
           {busy ? "Vytvářím…" : "Vytvořit"}
-        </button>
+        </Button>
       </div>
       {error && <small className="uploadError">{error}</small>}
     </div>
@@ -325,13 +329,13 @@ export function CatalogPublicationSection({ item, ownerId, onSave }: { item: Cat
       {visible && item.lifecycleStatus === "archived" && <p className="fieldHint">Položka je archivovaná — v katalogu se neobjeví, dokud ji neobnovíte.</p>}
       <dl>
         <Field label="Katalogový název">
-          <input value={name} maxLength={CATALOG_PUBLICATION_NAME_MAX} onChange={(event) => setName(event.target.value)} placeholder={item.displayName} />
+          <Input value={name} maxLength={CATALOG_PUBLICATION_NAME_MAX} onChange={(event) => setName(event.target.value)} placeholder={item.displayName} />
         </Field>
         <Field label="Krátký popis">
-          <textarea value={shortDescription} maxLength={CATALOG_PUBLICATION_DESCRIPTION_MAX} rows={3} onChange={(event) => setShortDescription(event.target.value)} placeholder="Text pro zákazníka" />
+          <Textarea value={shortDescription} maxLength={CATALOG_PUBLICATION_DESCRIPTION_MAX} rows={3} onChange={(event) => setShortDescription(event.target.value)} placeholder="Text pro zákazníka" />
         </Field>
         <Field label="Pořadí">
-          <input inputMode="numeric" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} placeholder="Podle názvu" />
+          <Input inputMode="numeric" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} placeholder="Podle názvu" />
         </Field>
       </dl>
       {imageResolved.url && <img className="catalogPhotoPreview" src={imageResolved.url} alt={`Katalogový obrázek ${item.displayName}`} />}
@@ -349,18 +353,17 @@ export function CatalogPublicationSection({ item, ownerId, onSave }: { item: Cat
           />
         </label>
         {publication.image && (
-          <button type="button" className="dangerText" disabled={busy} onClick={() => void run({ catalogPublication: { image: null } }, "Odebrání obrázku selhalo.")}>
+          <Button variant="destructive" type="button" disabled={busy} onClick={() => void run({ catalogPublication: { image: null } }, "Odebrání obrázku selhalo.")}>
             Odebrat obrázek
-          </button>
+          </Button>
         )}
-        <button
+        <Button variant="default"
           type="button"
-          className="primaryButton"
           disabled={!dirty || !sortOrderValid || busy}
           onClick={() => void run({ catalogPublication: { visible, name: name.trim() || null, shortDescription: shortDescription.trim() || null, sortOrder: parsedSortOrder } }, "Uložení selhalo.")}
         >
           {busy ? "Ukládám…" : "Uložit publikaci"}
-        </button>
+        </Button>
       </div>
       {imageProgress?.state === "uploading" && (
         <div className="assetUploadState uploading">

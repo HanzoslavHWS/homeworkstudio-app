@@ -7,6 +7,9 @@ import type { PricingCatalogItem } from "../../../lib/db/priceVersions.supabase"
 import { comparePriceItemsByCode, matchesPriceItemSearch } from "../../../domain/priceVersions";
 import { amountText, ItemCodeCell, ListForm, PublishCheckView, StatusBadge, VersionActions, VersionHeaderForm, VersionTable, versionTitle } from "./PriceVersionParts";
 import type { PriceVersionsPreselect } from "./PriceVersionsPage";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
 
 const EMPTY: PurchasePriceRegister = { lists: [], versions: [], links: [], companies: [], items: [] };
 
@@ -89,7 +92,7 @@ export function PurchasePricesPanel({ actorName, preselect }: { actorName?: stri
               <span>{candidate.code}</span>
             </button>
           ))}
-          <button type="button" onClick={() => setEditingList("new")}><strong>+ Nový nákupní ceník</strong><span>pro smluvní výjimku</span></button>
+          <Button variant="outline" size="sm" type="button" onClick={() => setEditingList("new")}><strong>+ Nový nákupní ceník</strong><span>pro smluvní výjimku</span></Button>
         </div>
         <div className="priceVersionsMain">
           {editingList && (
@@ -111,8 +114,8 @@ export function PurchasePricesPanel({ actorName, preselect }: { actorName?: stri
                 <div className="priceVersionListHeader">
                   <div><h2>{list.name}</h2><p className="fieldHint">{list.code}{list.note ? ` · ${list.note}` : ""}</p></div>
                   <div className="assetActions">
-                    <button type="button" className="secondaryButton" onClick={() => setEditingList("edit")}>Upravit ceník</button>
-                    <button type="button" className="primaryButton" disabled={busy} onClick={() => run(() => api.createVersion(list.id), "Vznikl nový prázdný koncept.", (id) => setSelectedVersionId(id as string))}>+ Nová prázdná verze</button>
+                    <Button variant="outline" type="button" onClick={() => setEditingList("edit")}>Upravit ceník</Button>
+                    <Button variant="default" type="button" disabled={busy} onClick={() => run(() => api.createVersion(list.id), "Vznikl nový prázdný koncept.", (id) => setSelectedVersionId(id as string))}>+ Nová prázdná verze</Button>
                   </div>
                 </div>
                 <h3>Realizační firmy nakupující podle tohoto ceníku</h3>
@@ -231,14 +234,14 @@ function PurchaseVersionEditor({ version, items, api, onChanged, initialFilter }
   const used = new Set(rows.map((row) => row.catalogItemId));
   return (
     <>
-      {conflict && <div className="priceVersionConflict"><strong>Konflikt úprav — nic nebylo uloženo.</strong><button type="button" className="secondaryButton" onClick={() => { if (!dirty || window.confirm("Načíst aktuální stav? Vaše neuložené změny se zahodí.")) { setConflict(false); setReloadKey((key) => key + 1); void onChanged(); } }}>Načíst aktuální stav</button></div>}
+      {conflict && <div className="priceVersionConflict"><strong>Konflikt úprav — nic nebylo uloženo.</strong><Button variant="outline" type="button" onClick={() => { if (!dirty || window.confirm("Načíst aktuální stav? Vaše neuložené změny se zahodí.")) { setConflict(false); setReloadKey((key) => key + 1); void onChanged(); } }}>Načíst aktuální stav</Button></div>}
       <VersionHeaderForm version={{ ...version, revision }} showEur={false} onSave={async (header) => { try { const result = await api.updateVersion(version.id, revision, header); setRevision(result.revision); await onChanged(); } catch (caught) { if (isPriceVersionConflict(caught)) setConflict(true); throw caught; } }} />
       <div className="eventSaveBar">
         <span className={dirty ? "dirty" : "saved"}>{saving ? "Ukládám…" : dirty ? "Neuložené změny" : editable ? "Uloženo" : "Publikovaná verze je jen pro čtení"}</span>
-        {editable && <button type="button" className="primaryButton" onClick={save} disabled={!dirty || saving}>Uložit nákupní ceny</button>}
+        {editable && <Button variant="default" type="button" onClick={save} disabled={!dirty || saving}>Uložit nákupní ceny</Button>}
       </div>
       {error && <p className="uploadError">{error}</p>}
-      {!loading && <div className="adminFilters"><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Hledat podle ABF / generátorového kódu nebo názvu…" /></div>}
+      {!loading && <div className="adminFilters"><Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Hledat podle ABF / generátorového kódu nebo názvu…" /></div>}
       {loading ? <p className="workspaceEmpty">Načítám…</p> : (
         <table className="priceVersionTable priceVersionRows">
           <thead><tr><th className="priceItemCodeHead">Kód</th><th>Položka</th><th>Nákupní cena Kč bez DPH</th><th>Jednotka</th><th>Poznámka</th>{editable && <th />}</tr></thead>
@@ -247,10 +250,10 @@ function PurchaseVersionEditor({ version, items, api, onChanged, initialFilter }
               <tr key={row.key}>
                 <ItemCodeCell item={itemById.get(row.catalogItemId)} />
                 <td>{itemById.get(row.catalogItemId)?.displayName ?? row.catalogItemId}</td>
-                <td><input value={row.purchaseCzk} onChange={(event) => patch(row.key, { purchaseCzk: event.target.value })} disabled={!editable} inputMode="decimal" /></td>
-                <td><input value={row.unitCode} onChange={(event) => patch(row.key, { unitCode: event.target.value })} disabled={!editable} className="priceVersionUnit" /></td>
-                <td><input value={row.note} onChange={(event) => patch(row.key, { note: event.target.value })} disabled={!editable} /></td>
-                {editable && <td><button type="button" className="linkButton" onClick={() => { setRows((current) => current.filter((candidate) => candidate.key !== row.key)); setDirty(true); }}>Odebrat</button></td>}
+                <td><Input value={row.purchaseCzk} onChange={(event) => patch(row.key, { purchaseCzk: event.target.value })} disabled={!editable} inputMode="decimal" /></td>
+                <td><Input value={row.unitCode} onChange={(event) => patch(row.key, { unitCode: event.target.value })} disabled={!editable} className="priceVersionUnit" /></td>
+                <td><Input value={row.note} onChange={(event) => patch(row.key, { note: event.target.value })} disabled={!editable} /></td>
+                {editable && <td><Button variant="link" type="button" onClick={() => { setRows((current) => current.filter((candidate) => candidate.key !== row.key)); setDirty(true); }}>Odebrat</Button></td>}
               </tr>
             ))}
           </tbody>
@@ -258,11 +261,11 @@ function PurchaseVersionEditor({ version, items, api, onChanged, initialFilter }
       )}
       {editable && (
         <div className="priceVersionAddRow">
-          <select value={newItemId} onChange={(event) => setNewItemId(event.target.value)}>
+          <NativeSelect value={newItemId} onChange={(event) => setNewItemId(event.target.value)}>
             <option value="">— vyberte položku katalogu —</option>
             {items.filter((item) => item.lifecycleStatus !== "archived").map((item) => <option key={item.id} value={item.id} disabled={used.has(item.id)}>{itemLabel(item, item.id)}</option>)}
-          </select>
-          <button type="button" className="secondaryButton" disabled={!newItemId} onClick={() => { const item = itemById.get(newItemId); setRows([...rows, { key: `new-${++rowCounter}`, catalogItemId: newItemId, purchaseCzk: "", unitCode: item?.unitCode ?? "", note: "" }]); setNewItemId(""); setDirty(true); }}>+ Přidat položku</button>
+          </NativeSelect>
+          <Button variant="outline" type="button" disabled={!newItemId} onClick={() => { const item = itemById.get(newItemId); setRows([...rows, { key: `new-${++rowCounter}`, catalogItemId: newItemId, purchaseCzk: "", unitCode: item?.unitCode ?? "", note: "" }]); setNewItemId(""); setDirty(true); }}>+ Přidat položku</Button>
         </div>
       )}
     </>

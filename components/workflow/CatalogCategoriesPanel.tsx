@@ -13,6 +13,10 @@ import { TECHNICAL_SERVICE_CATEGORIES } from "../../domain/technicalServiceCatal
 import type { CatalogItemKind } from "../../domain/models";
 import type { ParameterValueType } from "../../domain/catalogParameters";
 import { saveCatalogCategoryRemote, useCatalogCategories } from "../../lib/db/catalogCategories.remoteApi.client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
 
 type Draft = Readonly<{
   isNew: boolean;
@@ -103,10 +107,10 @@ export function CatalogCategoriesPanel({ onClose }: { onClose: () => void }) {
   const technical = draft && (draft.group === "technical_service" || draft.group === "technical_point");
 
   return (
-    <div className="catalogDetailSection adminDetail catalogCategoriesPanel">
+    <div className="catalogDetailSection adminDetail catalogCategoriesPanel rounded-xl border bg-card p-5">
       <div className="priceVersionListHeader">
-        <h3>Kategorie katalogu</h3>
-        <button type="button" className="secondaryButton" onClick={onClose}>Zavřít</button>
+        <h3 className="text-lg font-semibold tracking-normal normal-case text-foreground">Kategorie katalogu</h3>
+        <Button variant="outline" type="button" onClick={onClose}>Zavřít</Button>
       </div>
       <p className="fieldHint">Druh komponenty → Kategorie. Kategorie určuje interní typ karty, cenové zařazení a technickou kategorii služby. Kategorie se nemažou, jen deaktivují; kategorii použité kartami nelze změnit druh.</p>
       {!register.persisted && register.loaded && (
@@ -117,7 +121,7 @@ export function CatalogCategoriesPanel({ onClose }: { onClose: () => void }) {
         <div key={group} className="catalogCategoryGroup">
           <h4>
             {COMPONENT_GROUP_LABELS_CS[group]}
-            {register.persisted && <button type="button" className="linkButton" onClick={() => setDraft(newDraft(group))}>+ Nová kategorie</button>}
+            {register.persisted && <Button variant="link" type="button" onClick={() => setDraft(newDraft(group))}>+ Nová kategorie</Button>}
           </h4>
           <ul className="sourceAssetList">
             {register.categories.filter((category) => category.group === group).map((category) => (
@@ -126,7 +130,7 @@ export function CatalogCategoriesPanel({ onClose }: { onClose: () => void }) {
                 <span>
                   <strong>{category.name}</strong> <small className="fieldHint">({category.id} · {category.kinds.map((kind) => CATALOG_ITEM_KIND_LABELS_CS[kind]).join(", ")}{category.priceCategory === "electricity" ? " · ceník elektřiny" : ""}{category.serviceCategory ? ` · technická kategorie ${category.serviceCategory}` : ""}{category.recommendedParameters?.length ? ` · doporučené parametry: ${category.recommendedParameters.filter((parameter) => parameter.isActive).map((parameter) => parameter.name).join(", ") || "jen neaktivní"}` : ""})</small>
                 </span>
-                {register.persisted && <button type="button" className="linkButton" onClick={() => setDraft(toDraft(category))}>Upravit</button>}
+                {register.persisted && <Button variant="link" type="button" onClick={() => setDraft(toDraft(category))}>Upravit</Button>}
               </li>
             ))}
           </ul>
@@ -138,38 +142,38 @@ export function CatalogCategoriesPanel({ onClose }: { onClose: () => void }) {
           <div className="catalogCategoryForm">
             <label className="catalogCategoryField">
               <span>Název *</span>
-              <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="např. Barové židle" />
+              <Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="např. Barové židle" />
             </label>
             <div className="catalogCategoryField">
               <span>Identifikátor</span>
-              {draft.isNew ? <input aria-label="Identifikátor" value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="Nevyplněno = vytvoří se z názvu" /> : <span className="catalogCategoryReadOnly">{draft.id} <small>(stabilní, nelze měnit)</small></span>}
+              {draft.isNew ? <Input aria-label="Identifikátor" value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="Nevyplněno = vytvoří se z názvu" /> : <span className="catalogCategoryReadOnly">{draft.id} <small>(stabilní, nelze měnit)</small></span>}
             </div>
             <label className="catalogCategoryField">
               <span>Druh komponenty</span>
-              <select value={draft.group} onChange={(event) => { const group = event.target.value as ComponentGroup; setDraft({ ...draft, group, kinds: [COMPONENT_GROUP_TARGETS[group].kinds[0]!], serviceCategory: "", priceCategory: "" }); }}>
+              <NativeSelect value={draft.group} onChange={(event) => { const group = event.target.value as ComponentGroup; setDraft({ ...draft, group, kinds: [COMPONENT_GROUP_TARGETS[group].kinds[0]!], serviceCategory: "", priceCategory: "" }); }}>
                 {COMPONENT_GROUPS.map((group) => <option key={group} value={group}>{COMPONENT_GROUP_LABELS_CS[group]}</option>)}
-              </select>
+              </NativeSelect>
             </label>
             <label className="catalogCategoryField">
               <span>Pořadí</span>
-              <input type="number" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} />
+              <Input type="number" value={draft.sortOrder} onChange={(event) => setDraft({ ...draft, sortOrder: event.target.value })} />
             </label>
             {technical && (
               <label className="catalogCategoryField">
                 <span>Technická kategorie</span>
-                <select value={draft.serviceCategory} onChange={(event) => setDraft({ ...draft, serviceCategory: event.target.value })}>
+                <NativeSelect value={draft.serviceCategory} onChange={(event) => setDraft({ ...draft, serviceCategory: event.target.value })}>
                   <option value="">— žádná —</option>
                   {TECHNICAL_SERVICE_CATEGORIES.map((category) => <option key={category.id} value={category.id}>{category.labelCz}</option>)}
-                </select>
+                </NativeSelect>
               </label>
             )}
             {draft.group === "technical_service" && (
               <label className="catalogCategoryField">
                 <span>Prodejní ceník</span>
-                <select value={draft.priceCategory} onChange={(event) => setDraft({ ...draft, priceCategory: event.target.value as Draft["priceCategory"] })}>
+                <NativeSelect value={draft.priceCategory} onChange={(event) => setDraft({ ...draft, priceCategory: event.target.value as Draft["priceCategory"] })}>
                   <option value="">Základní prodejní ceník</option>
                   <option value="electricity">Ceník elektřiny</option>
-                </select>
+                </NativeSelect>
               </label>
             )}
             <fieldset className="catalogCategoryField catalogCategoryFieldWide">
@@ -185,7 +189,7 @@ export function CatalogCategoriesPanel({ onClose }: { onClose: () => void }) {
             </fieldset>
             <label className="catalogCategoryField catalogCategoryFieldWide">
               <span>Popis</span>
-              <textarea rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Volitelný" />
+              <Textarea rows={2} value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Volitelný" />
             </label>
             <div className="catalogCategoryField catalogCategoryFieldWide">
               <span>Stav</span>
@@ -212,28 +216,28 @@ export function CatalogCategoriesPanel({ onClose }: { onClose: () => void }) {
                     <div key={parameter.rowKey} className={`catalogParameterRow${parameter.isActive ? "" : " isInactive"}${parameter.isNew ? " isUnsaved" : ""}`} role="row">
                       <label className="catalogParameterCell catalogParameterNameCell">
                         <span className="catalogParameterCellLabel">Název parametru{parameter.isNew && <em className="catalogParameterUnsavedBadge">nový, neuložený</em>}</span>
-                        <input aria-label="Název parametru" aria-invalid={missingName || undefined} value={parameter.name} disabled={!register.parametersMigrated} onChange={(event) => update({ name: event.target.value })} placeholder="např. Rychlost připojení" />
+                        <Input aria-label="Název parametru" aria-invalid={missingName || undefined} value={parameter.name} disabled={!register.parametersMigrated} onChange={(event) => update({ name: event.target.value })} placeholder="např. Rychlost připojení" />
                         {missingName && <small className="catalogParameterError">Uložený parametr musí mít název. Pokud ho už nechcete nabízet, deaktivujte ho.</small>}
                       </label>
                       <label className="catalogParameterCell">
                         <span className="catalogParameterCellLabel">Typ hodnoty</span>
-                        <select aria-label="Typ hodnoty" value={parameter.valueType} disabled={!register.parametersMigrated} onChange={(event) => update({ valueType: event.target.value as ParameterValueType })}>
+                        <NativeSelect aria-label="Typ hodnoty" value={parameter.valueType} disabled={!register.parametersMigrated} onChange={(event) => update({ valueType: event.target.value as ParameterValueType })}>
                           <option value="text">Text</option>
                           <option value="number">Číslo</option>
-                        </select>
+                        </NativeSelect>
                       </label>
                       <label className="catalogParameterCell">
                         <span className="catalogParameterCellLabel">Jednotka</span>
-                        <input aria-label="Jednotka" value={parameter.unit} disabled={!register.parametersMigrated} onChange={(event) => update({ unit: event.target.value })} placeholder="např. Mb/s" />
+                        <Input aria-label="Jednotka" value={parameter.unit} disabled={!register.parametersMigrated} onChange={(event) => update({ unit: event.target.value })} placeholder="např. Mb/s" />
                       </label>
                       <label className="catalogParameterCell">
                         <span className="catalogParameterCellLabel">Pořadí</span>
-                        <input aria-label="Pořadí" type="number" value={parameter.sortOrder} disabled={!register.parametersMigrated} onChange={(event) => update({ sortOrder: event.target.value })} />
+                        <Input aria-label="Pořadí" type="number" value={parameter.sortOrder} disabled={!register.parametersMigrated} onChange={(event) => update({ sortOrder: event.target.value })} />
                       </label>
                       <div className="catalogParameterCell catalogParameterStateCell">
                         <span className="catalogParameterCellLabel">Stav</span>
                         <label className="catalogCategoryCheck"><input type="checkbox" checked={parameter.isActive} disabled={!register.parametersMigrated} onChange={(event) => update({ isActive: event.target.checked })} /> <span>aktivní</span></label>
-                        {parameter.isNew && <button type="button" className="catalogParameterRemoveButton" onClick={() => setDraft({ ...draft, recommended: draft.recommended.filter((_, candidateIndex) => candidateIndex !== index) })} title="Odebrat tento dosud neuložený parametr">Odebrat</button>}
+                        {parameter.isNew && <Button variant="destructive" type="button" onClick={() => setDraft({ ...draft, recommended: draft.recommended.filter((_, candidateIndex) => candidateIndex !== index) })} title="Odebrat tento dosud neuložený parametr">Odebrat</Button>}
                       </div>
                     </div>
                   );
@@ -241,11 +245,11 @@ export function CatalogCategoriesPanel({ onClose }: { onClose: () => void }) {
               </div>
             )}
             {draft.recommended.some((parameter) => parameter.isNew) && <p className="catalogCategoryHint catalogParameterLegend"><span className="catalogParameterLegendMark" aria-hidden="true" /> Žlutě označené parametry jsou nové — uloží se až tlačítkem Uložit kategorii, do té doby je lze odebrat.</p>}
-            {register.parametersMigrated && <button type="button" className="catalogCategoryAddButton" onClick={() => setDraft({ ...draft, recommended: [...draft.recommended, { rowKey: nextRowKey(), id: "", name: "", valueType: "text", unit: "", sortOrder: String((draft.recommended.length + 1) * 10), isActive: true, isNew: true }] })}>+ Přidat doporučený parametr</button>}
+            {register.parametersMigrated && <Button variant="outline" type="button" onClick={() => setDraft({ ...draft, recommended: [...draft.recommended, { rowKey: nextRowKey(), id: "", name: "", valueType: "text", unit: "", sortOrder: String((draft.recommended.length + 1) * 10), isActive: true, isNew: true }] })}>+ Přidat doporučený parametr</Button>}
           </section>
           <div className="catalogCategoryActions">
-            <button type="button" className="catalogCategorySaveButton" disabled={busy || !draft.name.trim() || draft.kinds.length === 0 || draft.recommended.some((parameter) => !parameter.isNew && !parameter.name.trim())} onClick={() => void save()}>{busy ? "Ukládám…" : "Uložit kategorii"}</button>
-            <button type="button" className="catalogCategoryCancelButton" onClick={() => setDraft(undefined)}>Zrušit</button>
+            <Button variant="default" type="button" disabled={busy || !draft.name.trim() || draft.kinds.length === 0 || draft.recommended.some((parameter) => !parameter.isNew && !parameter.name.trim())} onClick={() => void save()}>{busy ? "Ukládám…" : "Uložit kategorii"}</Button>
+            <Button variant="outline" type="button" onClick={() => setDraft(undefined)}>Zrušit</Button>
           </div>
         </div>
       )}

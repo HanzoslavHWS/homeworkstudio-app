@@ -21,6 +21,10 @@ import {
 } from "../../../domain/priceVersions";
 import type { ListDraft } from "../../../lib/db/priceVersions.remoteApi.client";
 import type { PricingCatalogItem } from "../../../lib/db/priceVersions.supabase";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Textarea } from "@/components/ui/textarea";
+import { Button } from "@/components/ui/button";
 
 /** Shared pieces of the sale page and the purchase panel (V1-DATA-05). */
 
@@ -88,21 +92,21 @@ export function ListForm({ kinds, initial, onSave, onCancel }: {
     <section className="adminDetail">
       <div className="eventForm">
         <h2>{initial ? "Upravit ceník" : "Nový ceník"}</h2>
-        <div className="twoColumns">
-          <label><span>Kód *</span><input value={draft.code} onChange={(event) => setDraft({ ...draft, code: event.target.value.toUpperCase() })} placeholder="např. ZAKLADNI" disabled={Boolean(initial)} /></label>
+        <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+          <label><span>Kód *</span><Input value={draft.code} onChange={(event) => setDraft({ ...draft, code: event.target.value.toUpperCase() })} placeholder="např. ZAKLADNI" disabled={Boolean(initial)} /></label>
           <label><span>Druh</span>
-            <select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as PriceListKind })} disabled={Boolean(initial) || kinds.length === 1}>
+            <NativeSelect value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value as PriceListKind })} disabled={Boolean(initial) || kinds.length === 1}>
               {kinds.map((kind) => <option key={kind} value={kind}>{PRICE_LIST_KIND_LABELS_CS[kind]}</option>)}
-            </select>
+            </NativeSelect>
           </label>
         </div>
-        <label><span>Název *</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-        <label><span>Poznámka</span><textarea value={draft.note ?? ""} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></label>
+        <label><span>Název *</span><Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+        <label><span>Poznámka</span><Textarea value={draft.note ?? ""} onChange={(event) => setDraft({ ...draft, note: event.target.value })} /></label>
         <label className="checkLabel"><input type="checkbox" checked={draft.isActive} onChange={(event) => setDraft({ ...draft, isActive: event.target.checked })} /> Aktivní ceník</label>
         {error && <p className="uploadError">{error}</p>}
         <div className="assetActions">
-          <button type="button" className="primaryButton" onClick={save} disabled={saving}>{saving ? "Ukládám…" : initial ? "Uložit ceník" : "Založit ceník"}</button>
-          <button type="button" className="secondaryButton" onClick={onCancel}>Zrušit</button>
+          <Button variant="default" type="button" onClick={save} disabled={saving}>{saving ? "Ukládám…" : initial ? "Uložit ceník" : "Založit ceník"}</Button>
+          <Button variant="outline" type="button" onClick={onCancel}>Zrušit</Button>
         </div>
       </div>
     </section>
@@ -179,33 +183,33 @@ export function VersionHeaderForm({ version, showEur, onSave, onRuleChange }: {
 
   return (
     <div className="priceVersionHeader">
-      <div className="twoColumns">
-        <label><span>Označení verze</span><input value={draft.label} onChange={(event) => update({ label: event.target.value })} disabled={!editable} placeholder="např. 2026 podzim" /></label>
-        <label><span>Poznámka</span><input value={draft.note} onChange={(event) => update({ note: event.target.value })} disabled={!editable} /></label>
+      <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+        <label><span>Označení verze</span><Input value={draft.label} onChange={(event) => update({ label: event.target.value })} disabled={!editable} placeholder="např. 2026 podzim" /></label>
+        <label><span>Poznámka</span><Input value={draft.note} onChange={(event) => update({ note: event.target.value })} disabled={!editable} /></label>
       </div>
-      <div className="twoColumns">
-        <label><span>Evidenční platnost od</span><input type="date" value={draft.validFrom} onChange={(event) => update({ validFrom: event.target.value })} disabled={!editable} /></label>
-        <label><span>Evidenční platnost do</span><input type="date" value={draft.validTo} onChange={(event) => update({ validTo: event.target.value })} disabled={!editable} /></label>
+      <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+        <label><span>Evidenční platnost od</span><Input type="date" value={draft.validFrom} onChange={(event) => update({ validFrom: event.target.value })} disabled={!editable} /></label>
+        <label><span>Evidenční platnost do</span><Input type="date" value={draft.validTo} onChange={(event) => update({ validTo: event.target.value })} disabled={!editable} /></label>
       </div>
       <p className="fieldHint">Platnost je jen evidenční. Veletrh používá verzi, která mu je výslovně přiřazená, bez ohledu na datum konání.</p>
       {showEur && (
         <div className="priceVersionEurRule">
-          <label><span>Kurz (Kč za 1 €)</span><input value={draft.eurRate} onChange={(event) => update({ eurRate: event.target.value })} disabled={!editable} inputMode="decimal" /></label>
+          <label><span>Kurz (Kč za 1 €)</span><Input value={draft.eurRate} onChange={(event) => update({ eurRate: event.target.value })} disabled={!editable} inputMode="decimal" /></label>
           <label><span>Zaokrouhlení EUR</span>
-            <select value={draft.eurRoundingMode} onChange={(event) => update({ eurRoundingMode: event.target.value as EurRoundingMode })} disabled={!editable}>
+            <NativeSelect value={draft.eurRoundingMode} onChange={(event) => update({ eurRoundingMode: event.target.value as EurRoundingMode })} disabled={!editable}>
               {EUR_ROUNDING_MODES.map((mode) => <option key={mode} value={mode}>{EUR_ROUNDING_MODE_LABELS_CS[mode]}</option>)}
-            </select>
+            </NativeSelect>
           </label>
           <label><span>Krok</span>
-            <select value={draft.eurRoundingStep} onChange={(event) => update({ eurRoundingStep: event.target.value })} disabled={!editable}>
+            <NativeSelect value={draft.eurRoundingStep} onChange={(event) => update({ eurRoundingStep: event.target.value })} disabled={!editable}>
               {EUR_ROUNDING_STEPS.map((step) => <option key={step} value={String(step)}>{step.toLocaleString("cs-CZ")} €</option>)}
-            </select>
+            </NativeSelect>
           </label>
         </div>
       )}
       {showEur && <p className="fieldHint">Zaokrouhluje se jednotková cena, ne součet. Změnu kurzu u publikované verze řeší nová verze, staré ceny se nepřepočítají.</p>}
       {error && <p className="uploadError">{error}</p>}
-      {editable && <div className="assetActions"><button type="button" className="secondaryButton" onClick={save} disabled={!dirty || saving}>{saving ? "Ukládám…" : "Uložit hlavičku verze"}</button></div>}
+      {editable && <div className="assetActions"><Button variant="outline" type="button" onClick={save} disabled={!dirty || saving}>{saving ? "Ukládám…" : "Uložit hlavičku verze"}</Button></div>}
     </div>
   );
 }
@@ -226,7 +230,7 @@ export function VersionTable({ versions, selectedId, usage, gaps, onSelect }: {
       <tbody>
         {versions.map((version) => (
           <tr key={version.id} className={version.id === selectedId ? "selected" : ""} onClick={() => onSelect(version.id)}>
-            <td><button type="button" className="linkButton">{versionTitle(version)}</button></td>
+            <td><Button variant="link" type="button">{versionTitle(version)}</Button></td>
             <td><StatusBadge status={version.status} /></td>
             <td>{validityText(version)}</td>
             <td>{version.eurRate.toLocaleString("cs-CZ")}</td>
@@ -252,11 +256,11 @@ export function VersionActions({ version, busy, onCheck, onPublish, onDelete, on
 }) {
   return (
     <div className="assetActions priceVersionActions">
-      {version.status === "draft" && <button type="button" className="secondaryButton" onClick={onCheck} disabled={busy}>Zkontrolovat</button>}
-      {version.status === "draft" && <button type="button" className="primaryButton" onClick={onPublish} disabled={busy}>Publikovat</button>}
-      {version.status === "draft" && <button type="button" className="secondaryButton dangerText" onClick={onDelete} disabled={busy}>Smazat koncept</button>}
-      <button type="button" className="secondaryButton" onClick={onCopy} disabled={busy}>{version.status === "draft" ? "Kopírovat do nové verze" : "Vytvořit opravnou verzi"}</button>
-      {version.status === "published" && <button type="button" className="secondaryButton" onClick={onArchive} disabled={busy}>Archivovat</button>}
+      {version.status === "draft" && <Button variant="outline" type="button" onClick={onCheck} disabled={busy}>Zkontrolovat</Button>}
+      {version.status === "draft" && <Button variant="default" type="button" onClick={onPublish} disabled={busy}>Publikovat</Button>}
+      {version.status === "draft" && <Button variant="destructive" type="button" onClick={onDelete} disabled={busy}>Smazat koncept</Button>}
+      <Button variant="outline" type="button" onClick={onCopy} disabled={busy}>{version.status === "draft" ? "Kopírovat do nové verze" : "Vytvořit opravnou verzi"}</Button>
+      {version.status === "published" && <Button variant="outline" type="button" onClick={onArchive} disabled={busy}>Archivovat</Button>}
     </div>
   );
 }

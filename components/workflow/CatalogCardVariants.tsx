@@ -13,6 +13,8 @@ import {
   type CatalogVariantSet,
 } from "../../domain/catalogVariants";
 import { useAssetUrl } from "../../hooks/useAssetUrl";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Input } from "@/components/ui/input";
 
 /**
  * Katalog → karta → "Barevné varianty" (V1-CARPET-02). Which colours of which swatch book the card
@@ -71,10 +73,10 @@ export function CatalogCardVariants({
       <div className="catalogCardVariantControls">
         <label>
           Vzorník
-          <select value={setId} onChange={(event) => setSetId(event.target.value)}>
+          <NativeSelect value={setId} onChange={(event) => setSetId(event.target.value)}>
             <option value="">— bez barevných variant —</option>
             {variantSets.map((set) => <option key={set.id} value={set.id}>{set.name} ({set.code}){set.isActive ? "" : " — neaktivní"}</option>)}
-          </select>
+          </NativeSelect>
         </label>
         {setId && (
           <div className="catalogUsageChoice" role="radiogroup" aria-label="Rozsah barev">
@@ -93,7 +95,7 @@ export function CatalogCardVariants({
         {agreementOn && (
           <label>
             Náklady nese
-            <input value={payer} onChange={(event) => setPayer(event.target.value)} placeholder="např. PVA" />
+            <Input value={payer} onChange={(event) => setPayer(event.target.value)} placeholder="např. PVA" />
           </label>
         )}
         <div className="assetActions">

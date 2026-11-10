@@ -44,6 +44,8 @@ textarea {
   font-family: "Segoe UI", Arial, Helvetica, sans-serif !important;
 }
 
+/* Bare form-element rules below skip the shadcn/ui region (SHAD-01): [data-ui], [data-slot]. */
+
 /* ================================================= */
 /* SHELL                                             */
 /* ================================================= */
@@ -851,14 +853,14 @@ textarea {
   gap: 22px;
 }
 
-label {
+label:where(:not([data-ui] *, [data-slot], [data-slot] *)) {
   display: flex;
   flex-direction: column;
 
   gap: 8px;
 }
 
-label > span,
+label:where(:not([data-ui] *, [data-slot], [data-slot] *)) > span,
 .fieldTitle {
   color: #52565a;
 
@@ -866,8 +868,8 @@ label > span,
   font-weight: 700;
 }
 
-input,
-select {
+input:where(:not([data-ui] *, [data-slot], [data-slot] *)),
+select:where(:not([data-ui] *, [data-slot], [data-slot] *)) {
   width: 100%;
   height: 50px;
 
@@ -885,16 +887,16 @@ select {
   transition: 0.15s;
 }
 
-select {
+select:where(:not([data-ui] *, [data-slot], [data-slot] *)) {
   cursor: pointer;
 }
 
-input::placeholder {
+input:where(:not([data-ui] *, [data-slot], [data-slot] *))::placeholder {
   color: #b2b4b6;
 }
 
-input:focus,
-select:focus {
+input:where(:not([data-ui] *, [data-slot], [data-slot] *)):focus,
+select:where(:not([data-ui] *, [data-slot], [data-slot] *)):focus {
   background: white;
 
   border-color: #777;
@@ -5660,19 +5662,19 @@ select:focus {
 
 .eventMediaArea { display: grid; grid-template-columns: minmax(150px, .65fr) minmax(240px, 1.35fr); gap: 10px; }
 .eventMediaEditor { min-width: 0; padding: 9px; border: 1px solid #e0e2e3; border-radius: 8px; background: #f8f9f9; }
-.eventMediaEditor > span { display: block; margin-bottom: 6px; color: #85898c; font-size: 7px; font-weight: 850; letter-spacing: 1px; text-transform: uppercase; }
-.eventMediaPreview { width: 100%; height: 82px; display: grid; place-items: center; overflow: hidden; padding: 0; border: 1px dashed #d4d6d7; border-radius: 6px; background: white; color: #a0a3a6; font-size: 8px; }
+.eventMediaEditor > span { display: block; margin-bottom: 6px; color: #85898c; font-size: 12px; font-weight: 850; letter-spacing: 1px; text-transform: uppercase; }
+.eventMediaPreview { width: 100%; height: 82px; display: grid; place-items: center; overflow: hidden; padding: 0; border: 1px dashed #d4d6d7; border-radius: 6px; background: white; color: #a0a3a6; font-size: 13px; }
 .eventMediaPreview img { width: 100%; height: 100%; object-fit: contain; }
 .eventMediaPreview.compact { width: 76px; height: 54px; }
 .eventMediaEditor.wide .eventMediaPreview img { object-fit: contain; }
 .eventMediaEditor .eventMediaPreview { background: #f7f8f8; }
 .eventSaveBar { position: sticky; z-index: 4; top: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; padding: 8px 0; background: rgba(255,255,255,.96); }
-.eventSaveBar span { color: #8a8e91; font-size: 8px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
+.eventSaveBar span { color: #8a8e91; font-size: 13px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
 .eventSaveBar span.dirty { color: #6f6251; }
 .eventSaveBar .primaryButton { min-height: 30px; }
 .eventMediaEditor > div:last-child { display: flex; gap: 6px; margin-top: 6px; }
 .eventMediaEditor button,
-.smallUploadButton { min-height: 25px; display: inline-grid; place-items: center; padding: 0 8px; border: 1px solid #dcdedf; border-radius: 4px; background: white; color: #55595c; font-size: 8px; cursor: pointer; }
+.smallUploadButton { min-height: 25px; display: inline-grid; place-items: center; padding: 0 8px; border: 1px solid #dcdedf; border-radius: 4px; background: white; color: #55595c; font-size: 13px; cursor: pointer; }
 .smallUploadButton input { display: none; }
 .eventMediaLightbox { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 40px; background: rgba(20, 22, 23, .72); }
 .eventMediaLightbox > div { position: relative; width: min(900px, 90vw); height: min(680px, 80vh); padding: 20px; border-radius: 10px; background: #fff; }
@@ -5681,12 +5683,12 @@ select:focus {
 .eventDocuments { display: grid; gap: 8px; padding: 12px; border: 1px solid #e1e3e4; border-radius: 8px; }
 .eventDocumentsHeader { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .eventDocumentsHeader > div { display: grid; gap: 2px; }
-.eventDocumentsHeader small { color: #a0a3a6; font-size: 7px; }
+.eventDocumentsHeader small { color: #a0a3a6; font-size: 12px; }
 .eventDocumentRow { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 7px; align-items: center; padding-top: 7px; border-top: 1px solid #eceeef; }
 .eventDocumentRow > div { display: grid; grid-template-columns: minmax(120px, 1fr) 120px 58px auto; gap: 5px; align-items: center; }
 .eventDocumentDefaults { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 8px; }
-.eventDocumentDropzone { padding: 12px; border: 1px dashed #ced1d3; border-radius: 5px; background: #fafafa; color: #8b8f92; font-size: 8px; text-align: center; }
-.eventDocumentRow span { color: #888c8f; font-size: 7px; }
+.eventDocumentDropzone { padding: 12px; border: 1px dashed #ced1d3; border-radius: 5px; background: #fafafa; color: #8b8f92; font-size: 13px; text-align: center; }
+.eventDocumentRow span { color: #888c8f; font-size: 12px; }
 .catalogPhotoPreview { width: 100%; height: 180px; display: block; object-fit: contain; border: 1px solid #e2e4e5; border-radius: 7px; background: #f8f9f9; }
 .catalogAdminList { min-width: 0; }
 .adminList .catalogListCard { grid-template-columns: 72px minmax(0, 1fr); align-items: stretch; gap: 10px; padding: 9px; }
@@ -5705,10 +5707,10 @@ select:focus {
 .catalogDetailSection { min-width: 0; padding: 13px; border: 1px solid #e7e8e9; border-radius: 8px; background: #fbfbfb; }
 .catalogDetailSection h3 { margin-bottom: 9px; color: #686c6f; font-size: 8px; letter-spacing: 1.2px; text-transform: uppercase; }
 .catalogDetailSection dl { display: grid; gap: 7px; }
-.catalogDetailSection dl div { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 8px; align-items: baseline; padding-bottom: 6px; border-bottom: 1px solid #eceeef; }
-.catalogDetailSection dl div:last-child { padding-bottom: 0; border-bottom: 0; }
-.catalogDetailSection dt { color: #989b9e; font-size: 7px; }
-.catalogDetailSection dd { min-width: 0; overflow-wrap: anywhere; color: #3c4042; font-size: 8px; text-align: right; }
+.catalogDetailSection dl > div { display: grid; grid-template-columns: minmax(0, .9fr) minmax(0, 1.1fr); gap: 8px; align-items: baseline; padding-bottom: 6px; border-bottom: 1px solid #eceeef; }
+.catalogDetailSection dl > div:last-child { padding-bottom: 0; border-bottom: 0; }
+.catalogDetailSection dt { color: #5c6166; font-size: 13px; }
+.catalogDetailSection dd { min-width: 0; overflow-wrap: anywhere; color: #3c4042; font-size: 14px; text-align: right; }
 .catalogAssetPreviews { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 
 .catalogAdminCount { color: #8a8e91; font-size: 8px; font-weight: 700; letter-spacing: .04em; }
@@ -5721,28 +5723,28 @@ select:focus {
 .catalogThumbnailCell { display: flex; align-items: center; justify-content: center; width: 36px; height: 36px; }
 .catalogThumbnailImg { width: 36px; height: 36px; object-fit: cover; border-radius: 6px; border: 1px solid #e3e4e5; }
 .catalogThumbnailPlaceholder { width: 36px; height: 36px; border-radius: 6px; background: #f0f1f1; border: 1px dashed #d7d9da; }
-.lifecycleBadge { width: fit-content; padding: 3px 7px; border-radius: 20px; background: #f0f1f1; color: #666a6d; font-size: 7px; white-space: nowrap; }
+.lifecycleBadge { width: fit-content; padding: 3px 7px; border-radius: 20px; background: #f0f1f1; color: #666a6d; font-size: 12px; white-space: nowrap; }
 .lifecycleBadge.active { background: #edf5ef; color: #45634f; }
 .lifecycleBadge.needs_review { background: #faf3e6; color: #8a6d2f; }
 .lifecycleBadge.inactive,
 .lifecycleBadge.archived { background: #f1eeee; color: #7a7472; }
-.readinessBadge { width: fit-content; padding: 3px 7px; border-radius: 20px; font-size: 7px; font-weight: 700; white-space: nowrap; }
+.readinessBadge { width: fit-content; padding: 3px 7px; border-radius: 20px; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .readinessBadge.ready { background: #e9f5ec; color: #2f7a45; }
 .readinessBadge.blocked { background: #fbeceb; color: #a1372c; }
-.readOnlyField { color: #7d8083; font-size: 8px; }
-.catalogAdminEditRow dd input { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; text-align: left; font-size: 8px; }
-.readinessIssues { margin-top: 9px; padding: 8px; border: 1px dashed #e2b6ae; border-radius: 6px; background: #fdf4f3; font-size: 7px; color: #8a3f35; }
+.readOnlyField { color: #7d8083; font-size: 13px; }
+.catalogAdminEditRow dd input { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; text-align: left; font-size: 13px; }
+.readinessIssues { margin-top: 9px; padding: 8px; border: 1px dashed #e2b6ae; border-radius: 6px; background: #fdf4f3; font-size: 12px; color: #8a3f35; }
 .readinessIssues ul { margin: 4px 0 0 14px; }
 .catalogAdminSaveBar .primaryButton:disabled { opacity: .45; cursor: not-allowed; }
 .assetActions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
 .sourceAssetList { display: grid; gap: 6px; margin: 9px 0 0; padding: 0; list-style: none; }
-.sourceAssetListItem { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #eceeef; border-radius: 6px; background: white; font-size: 8px; }
+.sourceAssetListItem { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid #eceeef; border-radius: 6px; background: white; font-size: 13px; }
 .sourceAssetListItem span:nth-child(2) { flex: 1; min-width: 0; overflow-wrap: anywhere; color: #3c4042; }
-.sourceAssetKindBadge { padding: 2px 7px; border-radius: 999px; background: #eef0f1; color: #55595c; font-size: 7px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
+.sourceAssetKindBadge { padding: 2px 7px; border-radius: 999px; background: #eef0f1; color: #55595c; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; white-space: nowrap; }
 .checkboxRow { display: flex; align-items: center; gap: 7px; margin-top: 7px; font-size: 8px; color: #3c4042; }
 .checkboxRow input { width: auto; height: auto; }
 .fieldHint { margin-top: 8px; color: #96999c; font-size: 7px; }
-.capabilityStatus { margin: 3px 0 0 20px; color: #4d6b53; font-size: 7px; }
+.capabilityStatus { margin: 3px 0 0 20px; color: #4d6b53; font-size: 12px; }
 .catalogAdminReviewActions { display: flex; align-items: center; gap: 8px; margin-top: 9px; }
 .catalogAdminReviewActions .primaryButton:disabled { opacity: .45; cursor: not-allowed; }
 .catalogPhotoPlaceholder { min-height: 180px; display: grid; place-items: center; margin-top: 8px; padding: 18px; border: 1px dashed #d5d8da; border-radius: 7px; background: #fbfbfb; color: #969a9d; font-size: 8px; text-align: center; }
@@ -5972,7 +5974,7 @@ select:focus {
 .deadlineEditor { display: grid; gap: 6px; padding: 9px; border: 1px solid #e3e4e5; border-radius: 7px; }
 .deadlineEditor > div { display: grid; grid-template-columns: 1fr 150px; align-items: center; gap: 7px; }
 .deadlineEditor > div:first-child { display: flex; justify-content: space-between; }
-.deadlineEditor button { min-height: 28px; padding: 0 9px; border: 1px solid #dfe0e1; border-radius: 5px; background: #fafafa; font-size: 8px; }
+.deadlineEditor button { min-height: 28px; padding: 0 9px; border: 1px solid #dfe0e1; border-radius: 5px; background: #fafafa; font-size: 13px; }
 
 .emailsTopRow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-bottom: 14px; }
 .emailsTopRow select,
@@ -6134,12 +6136,12 @@ select:focus {
   border: 2px solid rgba(255, 255, 255, 0.9);
   box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.18);
   color: #fff;
-  font-size: 8px;
+  font-size: 13px;
   font-weight: 700;
 }
 .technicalRasterConfigPreviewDot.hidden { color: #7a7d80; }
 .technicalRasterConfigPreviewIcon { width: 60%; height: 60%; object-fit: contain; }
-.technicalRasterConfigPreviewCaption { color: #55595c; font-size: 8px; }
+.technicalRasterConfigPreviewCaption { color: #55595c; font-size: 13px; }
 .eventDocumentActions { display: flex; gap: 5px; }
 .summaryVisuals figure { display: grid; gap: 3px; }
 .summaryVisuals figcaption { color: #999ca0; font-size: 7px; }
@@ -6166,10 +6168,10 @@ select:focus {
 /* PRICING ADMIN (Správa cen)                       */
 /* ================================================= */
 
-.pricingAdminNotice { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #e2e3e4; border-radius: 7px; background: #fafafa; color: #767a7d; font-size: 8px; }
+.pricingAdminNotice { margin-bottom: 14px; padding: 10px 12px; border: 1px solid #e2e3e4; border-radius: 7px; background: #fafafa; color: #767a7d; font-size: 13px; }
 
-.pricingEntriesTable, .pricingMatrixTable { width: 100%; border-collapse: collapse; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: white; font-size: 8px; }
-.pricingEntriesTable th, .pricingMatrixTable th { padding: 8px 10px; border-bottom: 1px solid var(--border); background: #fafafa; color: #7c8085; font-size: 7px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; text-align: left; white-space: nowrap; }
+.pricingEntriesTable, .pricingMatrixTable { width: 100%; border-collapse: collapse; overflow: hidden; border: 1px solid var(--border); border-radius: 10px; background: white; font-size: 13px; }
+.pricingEntriesTable th, .pricingMatrixTable th { padding: 8px 10px; border-bottom: 1px solid var(--border); background: #fafafa; color: #7c8085; font-size: 12px; font-weight: 700; letter-spacing: .8px; text-transform: uppercase; text-align: left; white-space: nowrap; }
 .pricingEntriesTable td, .pricingMatrixTable td { padding: 7px 10px; border-bottom: 1px solid #ededee; vertical-align: middle; }
 .pricingEntriesTable tr:last-child td, .pricingMatrixTable tr:last-child td { border-bottom: 0; }
 .pricingMatrixTable { display: block; overflow-x: auto; }
@@ -6178,14 +6180,14 @@ select:focus {
 .pricingMatrixRowLabel strong { display: block; }
 .pricingMatrixRowLabel span { color: #96999c; }
 .pricingCell { display: flex; align-items: flex-start; gap: 6px; min-width: 140px; }
-.pricingCell select { min-height: 26px; padding: 0 6px; font-size: 8px; }
-.pricingCell input[type="number"] { min-height: 26px; width: 84px; padding: 0 6px; font-size: 8px; }
+.pricingCell select { min-height: 26px; padding: 0 6px; font-size: 13px; }
+.pricingCell input[type="number"] { min-height: 26px; width: 84px; padding: 0 6px; font-size: 13px; }
 .pricingCell.pricingCellDirty { background: #fff8e8; border-radius: 5px; }
 .pricingCell.pricingCellDisabled { color: #b7babd; opacity: .55; }
 .pricingCellInputs { display: flex; flex-direction: column; gap: 3px; }
 .pricingCellInputs > div { display: flex; gap: 6px; }
 .pricingCellBefore { color: #9a8a4d; font-style: italic; }
-.pricingCellStatic { color: #767a7d; font-size: 8px; }
+.pricingCellStatic { color: #767a7d; font-size: 13px; }
 .pricingMissing { color: #b0413e; font-style: italic; }
 .pricingSourceDot { display: inline-block; margin-top: 8px; width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
 .pricingSourceDot.import { background: #9aa3ad; }
@@ -6197,22 +6199,22 @@ select:focus {
 .pricingModeBadge.included { background: #f1f1f2; color: #55595c; }
 .pricingModeBadge.missing { background: #fbecec; color: #a24040; }
 
-.pricingSourceBadge { display: inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 7px; font-weight: 700; letter-spacing: .4px; }
+.pricingSourceBadge { display: inline-flex; padding: 3px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; letter-spacing: .4px; }
 .pricingSourceBadge.import { background: #f1f2f3; color: #7c8085; }
 .pricingSourceBadge.manual { background: #fbf2df; color: #8a6a1f; }
 
 .pricingSaveBar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid #e2e3e4; border-radius: 8px; background: white; }
-.pricingSaveBar span { font-size: 8px; color: #767a7d; }
+.pricingSaveBar span { font-size: 13px; color: #767a7d; }
 .pricingSaveBar span.saveOk { color: #2f6d46; }
 .pricingSaveBar span.saveError { color: #a24040; }
 
 .pricingFilters { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 14px; }
-.pricingFilters label { display: grid; gap: 4px; font-size: 7px; color: #7c8085; text-transform: uppercase; letter-spacing: .6px; }
-.pricingFilters select, .pricingFilters input { min-height: 30px; padding: 0 8px; font-size: 8px; }
+.pricingFilters label { display: grid; gap: 4px; font-size: 12px; color: #7c8085; text-transform: uppercase; letter-spacing: .6px; }
+.pricingFilters select, .pricingFilters input { min-height: 30px; padding: 0 8px; font-size: 13px; }
 .pricingFilters select[multiple] { min-height: 62px; }
 
 .pricingCatalogList { display: grid; gap: 6px; margin-bottom: 16px; }
-.pricingCatalogRow { display: grid; grid-template-columns: auto minmax(160px, 1fr) 90px 90px auto; align-items: center; gap: 12px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: white; font-size: 8px; }
+.pricingCatalogRow { display: grid; grid-template-columns: auto minmax(160px, 1fr) 90px 90px auto; align-items: center; gap: 12px; padding: 9px 12px; border: 1px solid var(--border); border-radius: 8px; background: white; font-size: 13px; }
 .pricingCatalogRow small { display: block; color: #96999c; }
 .pricingCatalogRow input[type="checkbox"] { width: auto; height: auto; }
 
@@ -7117,10 +7119,10 @@ select:focus {
 .catalogCreatePanel, .catalogImportPanel { margin-bottom: 14px; padding: 16px; }
 .catalogTypePicker { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin: 10px 0 12px; }
 .catalogTypePicker button { display: grid; gap: 4px; padding: 10px; border: 1px solid #dcdedf; border-radius: 8px; background: white; text-align: left; cursor: pointer; }
-.catalogTypePicker button strong { font-size: 10px; color: #2f3335; }
-.catalogTypePicker button small { font-size: 7px; color: #85898c; line-height: 1.4; }
+.catalogTypePicker button strong { font-size: 14px; color: #2f3335; }
+.catalogTypePicker button small { font-size: 12px; color: #85898c; line-height: 1.4; }
 .catalogTypePicker button.active { border-color: #45634f; background: #f3f6f4; box-shadow: inset 0 0 0 1px #45634f; }
-.catalogAdminEditRow dd select { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
+.catalogAdminEditRow dd select { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 13px; }
 .catalogPackageSection { grid-column: 1 / -1; }
 .catalogPackageLine { display: grid; grid-template-columns: minmax(0, 2fr) 70px auto minmax(0, 1fr) auto; align-items: center; gap: 8px; margin-top: 8px; font-size: 8px; }
 .catalogPackageLine input, .catalogPackageLine select { min-width: 0; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
@@ -7221,7 +7223,7 @@ select:focus {
 .ccContents { margin-top: 4px; font-size: 10px; }
 .ccContents ul { margin-top: 3px; padding-left: 14px; color: #46484b; list-style: "–  "; line-height: 1.5; }
 .ccFootnote { margin-top: 22px; color: #8c8e91; font-size: 9px; }
-.catalogAdminEditRow dd textarea { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font: inherit; font-size: 8px; resize: vertical; }
+.catalogAdminEditRow dd textarea { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font: inherit; font-size: 13px; resize: vertical; }
 
 @media (max-width: 1100px) {
   .customerCatalogContext { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -7314,26 +7316,26 @@ select:focus {
 .catalogAdminEditRow dd .inlineFieldWithAction { display: flex; gap: 6px; align-items: center; }
 .catalogAdminEditRow dd .inlineFieldWithAction input { flex: 1; min-width: 0; }
 .catalogAdminEditRow dd .inlineFieldWithAction button { white-space: nowrap; }
-.catalogAliasTable { width: 100%; border-collapse: collapse; font-size: 8px; margin: 6px 0; }
+.catalogAliasTable { width: 100%; border-collapse: collapse; font-size: 13px; margin: 6px 0; }
 .catalogAliasTable th { text-align: left; font-weight: 600; padding: 4px; border-bottom: 1px solid #dcdedf; }
 .catalogAliasTable td { padding: 3px 4px; vertical-align: middle; }
-.catalogAliasTable input, .catalogAliasTable select { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
+.catalogAliasTable input, .catalogAliasTable select { width: 100%; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 13px; }
 .catalogAliasTable td:last-child { width: 1%; white-space: nowrap; }
 
 /* V1-DATA-04 — kit editor (Obsah kompletu) and swatch books (Vzorníky) */
-.kitLine { margin-top: 8px; padding: 8px; border: 1px solid #e3e5e6; border-radius: 6px; background: #fff; font-size: 8px; }
+.kitLine { margin-top: 8px; padding: 8px; border: 1px solid #e3e5e6; border-radius: 6px; background: #fff; font-size: 13px; }
 .kitLineText { background: #fafaf7; }
 .kitLineMain { display: grid; grid-template-columns: auto auto minmax(0, 2fr) 56px 72px auto auto auto; align-items: center; gap: 6px; }
-.kitLine input, .kitLine select, .variantSetsPanel input, .variantSetsPanel select { min-width: 0; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
+.kitLine input, .kitLine select, .variantSetsPanel input, .variantSetsPanel select { min-width: 0; padding: 4px 6px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 13px; }
 .kitLineOrder { display: flex; flex-direction: column; gap: 1px; }
-.kitLineOrder button { padding: 0 4px; border: 1px solid #dcdedf; border-radius: 3px; background: #fff; font-size: 6px; line-height: 1.4; cursor: pointer; }
+.kitLineOrder button { padding: 0 4px; border: 1px solid #dcdedf; border-radius: 3px; background: #fff; font-size: 12px; line-height: 1.4; cursor: pointer; }
 .kitLineOrder button:disabled { opacity: .35; cursor: default; }
-.kitLineBadge { padding: 2px 6px; border-radius: 999px; background: #eef0f1; color: #5b5f62; font-size: 7px; font-weight: 700; white-space: nowrap; }
+.kitLineBadge { padding: 2px 6px; border-radius: 999px; background: #eef0f1; color: #5b5f62; font-size: 12px; font-weight: 700; white-space: nowrap; }
 .kitLineQuantity { width: 100%; }
 .kitLineSummary { display: block; margin-top: 4px; color: #7a7e81; }
 .kitLineDetail { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 8px; margin-top: 8px; padding-top: 8px; border-top: 1px dashed #e3e5e6; }
 .kitLineDetail label { display: grid; gap: 3px; }
-.kitLineDetail label > span, .kitLineGroupTitle { color: #989b9e; font-size: 7px; }
+.kitLineDetail label > span, .kitLineGroupTitle { color: #989b9e; font-size: 12px; }
 .kitLineDetail label.checkboxRow { display: flex; }
 .kitLineGroup { display: grid; gap: 6px; grid-column: 1 / -1; padding: 6px; border-radius: 4px; background: #f6f7f7; }
 .kitSubstituteRow { display: grid; grid-template-columns: minmax(0, 2fr) repeat(auto-fit, minmax(70px, 1fr)); align-items: center; gap: 6px; }
@@ -7342,7 +7344,7 @@ select:focus {
 .variantSetsPanel { margin-bottom: 12px; }
 .variantSetsHeader { display: flex; justify-content: space-between; align-items: center; }
 .variantSetsTabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
-.variantSetFields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; font-size: 8px; }
+.variantSetFields { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; align-items: end; font-size: 13px; }
 .variantSetFields label { display: grid; gap: 3px; }
 .variantSetFields label.checkboxRow { display: flex; }
 .variantTable input[type="color"] { width: 32px; height: 20px; padding: 0; }
@@ -7354,16 +7356,16 @@ select:focus {
 
 /* V1-DATA-05 — Ceníky (verze) */
 .priceVersionsMain { display: grid; gap: 14px; min-width: 0; }
-.priceVersionsPage h3 { margin: 12px 0 4px; font-size: 10px; }
+.priceVersionsPage h3 { margin: 12px 0 4px; font-size: 14px; }
 .priceVersionListHeader { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: flex-start; gap: 10px; }
 .priceVersionListHeader h2 { margin: 0 0 4px; }
 .priceVersionTableWrap { overflow-x: auto; }
-.priceVersionTable { width: 100%; border-collapse: collapse; font-size: 8px; }
-.priceVersionTable th { padding: 5px 6px; border-bottom: 1px solid #e3e4e5; color: #8a8e91; font-size: 7px; font-weight: 700; text-align: left; text-transform: uppercase; letter-spacing: .03em; }
+.priceVersionTable { width: 100%; border-collapse: collapse; font-size: 13px; }
+.priceVersionTable th { padding: 5px 6px; border-bottom: 1px solid #e3e4e5; color: #8a8e91; font-size: 12px; font-weight: 700; text-align: left; text-transform: uppercase; letter-spacing: .03em; }
 .priceVersionTable td { padding: 5px 6px; border-bottom: 1px solid #f0f1f1; vertical-align: middle; }
 .priceVersionTable tr.selected td { background: #f4f6f7; }
 .priceVersionTable tbody tr { cursor: default; }
-.priceVersionTable input, .priceVersionTable select, .priceVersionAddRow select { min-width: 0; width: 100%; height: 26px; padding: 3px 5px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 8px; }
+.priceVersionTable input, .priceVersionTable select, .priceVersionAddRow select { min-width: 0; width: 100%; height: 26px; padding: 3px 5px; border: 1px solid #dcdedf; border-radius: 4px; font-size: 13px; }
 .priceVersionTable input:disabled, .priceVersionTable select:disabled { background: #f7f7f7; color: #55595c; }
 .priceVersionRows td:first-child { min-width: 160px; }
 .priceVersionUnit { max-width: 56px; }
@@ -7373,33 +7375,33 @@ select:focus {
 .priceVersionHeader { display: grid; gap: 8px; padding: 10px; border: 1px solid #ecedee; border-radius: 8px; background: #fbfbfa; }
 .priceVersionAddRow { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; }
 .priceVersionAddRow select { flex: 1 1 260px; width: auto; height: 30px; }
-.priceVersionCompanies { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 8px; }
+.priceVersionCompanies { display: flex; flex-wrap: wrap; gap: 6px 16px; font-size: 13px; }
 .priceVersionCompanies input[type="checkbox"] { width: auto; height: auto; }
 .priceVersionCheck { display: grid; gap: 2px; padding: 6px 8px; border-radius: 6px; background: #fbf7ef; }
-.priceVersionCheck.ok { background: #eef6f0; color: #2f6d46; font-size: 8px; }
-.priceVersionStatus { display: inline-block; padding: 2px 7px; border-radius: 999px; background: #eef0f1; color: #5b5f62; font-size: 7px; font-weight: 700; }
+.priceVersionCheck.ok { background: #eef6f0; color: #2f6d46; font-size: 13px; }
+.priceVersionStatus { display: inline-block; padding: 2px 7px; border-radius: 999px; background: #eef0f1; color: #5b5f62; font-size: 12px; font-weight: 700; }
 .priceVersionStatus.draft { background: #fbf1df; color: #8a5a12; }
 .priceVersionStatus.published { background: #e6f4ea; color: #2b7a41; }
 .priceVersionStatus.archived { background: #eceded; color: #7b7f82; }
-.priceVersionsPage .linkButton { padding: 0; border: 0; background: none; color: #2f6f9f; font-size: 8px; text-decoration: underline; cursor: pointer; }
-.priceVersionsPage .saveOk { color: #2f6d46; font-size: 8px; }
+.priceVersionsPage .linkButton { padding: 0; border: 0; background: none; color: #2f6f9f; font-size: 13px; text-decoration: underline; cursor: pointer; }
+.priceVersionsPage .saveOk { color: #2f6d46; font-size: 13px; }
 @media (max-width: 900px) { .priceVersionEurRule { grid-template-columns: 1fr; } }
 .priceVersionTable th.priceTrackHead { color: #3d4246; background: #f3f5f6; }
 .priceVersionTable td.priceTrackCell { min-width: 96px; background: #fafbfb; }
 .priceVersionEurInput select { margin-bottom: 2px; }
-.priceVersionConflict { display: grid; gap: 6px; padding: 10px; border: 1px solid #e2b9b9; border-radius: 8px; background: #fbefef; color: #7a2f2f; font-size: 8px; }
+.priceVersionConflict { display: grid; gap: 6px; padding: 10px; border: 1px solid #e2b9b9; border-radius: 8px; background: #fbefef; color: #7a2f2f; font-size: 13px; }
 .priceVersionConflict p { margin: 0; }
-.priceVersionCoverage { display: block; margin-top: 3px; font-size: 7px; }
+.priceVersionCoverage { display: block; margin-top: 3px; font-size: 12px; }
 .priceVersionTable th.priceItemCodeHead, .priceVersionTable td.priceItemCode { width: 1%; white-space: nowrap; }
-.priceVersionTable td.priceItemCode code { font-size: 8px; font-weight: 700; }
-.priceVersionTable .priceSortButton { color: inherit; font-size: 7px; font-weight: 700; text-decoration: none; text-transform: uppercase; }
+.priceVersionTable td.priceItemCode code { font-size: 13px; font-weight: 700; }
+.priceVersionTable .priceSortButton { color: inherit; font-size: 12px; font-weight: 700; text-decoration: none; text-transform: uppercase; }
 
 /* V1-DATA-06 — karta veletrhu: realizační firmy, složky, ceníky */
 .eventSettingsSection { display: grid; gap: 8px; padding: 10px; border: 1px solid #e3e4e5; border-radius: 8px; background: #fcfcfb; }
-.eventSettingsSection h3 { margin: 0; font-size: 10px; }
-.eventSettingsSection .linkButton { justify-self: start; padding: 0; border: 0; background: none; color: #2f6f9f; font-size: 8px; text-decoration: underline; cursor: pointer; }
+.eventSettingsSection h3 { margin: 0; font-size: 14px; }
+.eventSettingsSection .linkButton { justify-self: start; padding: 0; border: 0; background: none; color: #2f6f9f; font-size: 13px; text-decoration: underline; cursor: pointer; }
 .eventSettingsNotice { padding: 8px 10px; border: 1px dashed #d8dadb; border-radius: 8px; }
-.eventLegacyValue { margin: 0; padding: 6px 8px; border-radius: 6px; background: #f3f1ec; font-size: 8px; }
+.eventLegacyValue { margin: 0; padding: 6px 8px; border-radius: 6px; background: #f3f1ec; font-size: 13px; }
 .eventLegacySection { background: #faf8f4; }
 .eventRealizationRoles { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 8px; }
 .eventRealizationRole { display: grid; gap: 5px; align-content: start; padding: 8px; border: 1px solid #ecedee; border-radius: 6px; background: #fff; font-size: 8px; }
@@ -7410,18 +7412,18 @@ select:focus {
 .eventRealizationNote { flex: 1 1 100px; height: 26px; }
 .eventPathRows, .eventPricingRows { display: grid; gap: 8px; }
 .eventPathRow { display: grid; gap: 3px; }
-.eventPathRow small { font-size: 7px; }
+.eventPathRow small { font-size: 12px; }
 .eventSectionBar { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
-.eventSectionBar > span { color: #8a8e91; font-size: 8px; font-weight: 700; text-transform: uppercase; }
+.eventSectionBar > span { color: #8a8e91; font-size: 13px; font-weight: 700; text-transform: uppercase; }
 .eventSectionBar > span.dirty { color: #6f6251; }
 .eventDeadlines > div.eventDeadlineRow { display: grid; grid-template-columns: minmax(0, 2fr) 130px 150px 120px auto; gap: 6px; }
-.eventPricingHistory { margin: 0; padding-left: 14px; font-size: 8px; }
+.eventPricingHistory { margin: 0; padding-left: 14px; font-size: 13px; }
 @media (max-width: 900px) { .eventDeadlines > div.eventDeadlineRow { grid-template-columns: 1fr 1fr; } }
-.eventRealizationList { display: grid; gap: 6px; padding: 8px; border: 1px solid #ecedee; border-radius: 6px; background: #fff; font-size: 8px; }
-.eventPathModes { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 8px; }
+.eventRealizationList { display: grid; gap: 6px; padding: 8px; border: 1px solid #ecedee; border-radius: 6px; background: #fff; font-size: 13px; }
+.eventPathModes { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
 .eventPathModes input[type="radio"] { width: auto; height: auto; }
 .eventPathTable td input { width: 100%; height: 26px; }
-.eventPathTable td code { font-size: 8px; }
+.eventPathTable td code { font-size: 13px; }
 .eventPathPreview { word-break: break-all; }
 .eventTasksList { display: grid; flex-basis: 100%; gap: 3px; }
 .eventTasksList ul { margin: 0; padding-left: 14px; }
@@ -7437,48 +7439,48 @@ select:focus {
 .catalogBatchUpload { grid-column: 1 / -1; }
 .catalogBatchDrop { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 12px; border: 1px dashed #c9cccf; border-radius: 8px; background: #fff; }
 .catalogBatchDrop.active { border-color: #45634f; background: #f3f6f4; }
-.catalogBatchButton { min-width: 0; height: 34px; display: inline-grid; place-items: center; font-size: 9px; cursor: pointer; }
+.catalogBatchButton { min-width: 0; height: 34px; display: inline-grid; place-items: center; font-size: 13px; cursor: pointer; }
 .catalogBatchButton input { display: none; }
 .catalogBatchButton.disabled { opacity: .45; cursor: not-allowed; }
-.catalogBatchTable { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 8px; }
+.catalogBatchTable { width: 100%; margin-top: 10px; border-collapse: collapse; font-size: 13px; }
 .catalogBatchTable th { padding: 4px; border-bottom: 1px solid #dcdedf; font-weight: 600; text-align: left; }
 .catalogBatchTable td { padding: 5px 4px; border-bottom: 1px solid #eceeef; vertical-align: middle; }
 .catalogBatchTable td small { display: block; }
 .catalogBatchTable tr.error td { background: #fdf6f5; }
-.catalogBatchTable select { width: 100%; height: 28px; padding: 0 6px; border-radius: 4px; font-size: 8px; }
+.catalogBatchTable select { width: 100%; height: 28px; padding: 0 6px; border-radius: 4px; font-size: 13px; }
 .catalogBatchTable progress { width: 100%; }
 .catalogMainPhoto { margin: 0; }
-.catalogMainPhoto figcaption { margin-top: 3px; color: #45634f; font-size: 7px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
+.catalogMainPhoto figcaption { margin-top: 3px; color: #45634f; font-size: 12px; font-weight: 700; letter-spacing: .04em; text-transform: uppercase; }
 .catalogGallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; margin: 9px 0 0; padding: 0; list-style: none; }
-.catalogGalleryItem { display: grid; gap: 3px; padding: 5px; border: 1px solid #e2e4e5; border-radius: 6px; background: #fff; font-size: 7px; }
+.catalogGalleryItem { display: grid; gap: 3px; padding: 5px; border: 1px solid #e2e4e5; border-radius: 6px; background: #fff; font-size: 12px; }
 .catalogGalleryItem img, .catalogGalleryItem .catalogThumbnailPlaceholder { width: 100%; height: 70px; object-fit: contain; background: #f8f9f9; }
 .catalogGalleryItem small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .catalogGalleryItem .assetActions { margin-top: 0; flex-wrap: wrap; gap: 6px; }
 .catalogCardPrices { grid-column: 1 / -1; }
 .catalogCardPriceBlock { margin-top: 10px; padding-top: 8px; border-top: 1px solid #eceeef; }
-.catalogCardPriceBlock h4 { margin-bottom: 6px; color: #3c4042; font-size: 8px; }
+.catalogCardPriceBlock h4 { margin-bottom: 6px; color: #3c4042; font-size: 13px; }
 .catalogCardPricePickers { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 6px; margin-bottom: 8px; }
-.catalogCardPricePickers select { height: 30px; padding: 0 8px; border-radius: 5px; font-size: 8px; }
+.catalogCardPricePickers select { height: 30px; padding: 0 8px; border-radius: 5px; font-size: 13px; }
 .catalogCardPriceBlock dd small { display: block; }
-.catalogCardLegacyPrices { margin-top: 12px; padding-top: 8px; border-top: 1px dashed #dcdedf; color: #6b6f72; font-size: 8px; }
+.catalogCardLegacyPrices { margin-top: 12px; padding-top: 8px; border-top: 1px dashed #dcdedf; color: #6b6f72; font-size: 13px; }
 .catalogCardLegacyPrices summary { cursor: pointer; }
-.catalogBatchUpload .assetActions .primaryButton { min-width: 0; height: 30px; padding: 0 14px; font-size: 9px; }
-.catalogBatchUpload .assetActions .secondaryButton { font-size: 9px; }
-.catalogCardFixedSource { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 8px; border: 1px solid #e2e4e5; border-radius: 5px; background: #f4f5f5; color: #3c4042; font-size: 8px; font-weight: 600; }
-.catalogCardEventContext { display: grid; gap: 3px; margin-bottom: 8px; font-size: 8px; color: #6b6f72; }
+.catalogBatchUpload .assetActions .primaryButton { min-width: 0; height: 30px; padding: 0 14px; font-size: 13px; }
+.catalogBatchUpload .assetActions .secondaryButton { font-size: 13px; }
+.catalogCardFixedSource { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 8px; border: 1px solid #e2e4e5; border-radius: 5px; background: #f4f5f5; color: #3c4042; font-size: 13px; font-weight: 600; }
+.catalogCardEventContext { display: grid; gap: 3px; margin-bottom: 8px; font-size: 13px; color: #6b6f72; }
 .catalogCardEventContext label { display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 8px; }
-.catalogCardEventContext select { height: 28px; padding: 0 8px; border-radius: 5px; font-size: 8px; }
+.catalogCardEventContext select { height: 28px; padding: 0 8px; border-radius: 5px; font-size: 13px; }
 .catalogAdminEditRow dd input.derivedCodeField { background: #f1f3f2; color: #3c4042; font-weight: 600; }
 .catalogAdminEditRow dd .checkboxRow { flex-direction: row; align-items: center; justify-content: flex-start; gap: 6px; margin-top: 4px; text-align: left; }
 .catalogAdminEditRow dd .checkboxRow input { width: auto; height: auto; }
 .catalogAdminEditRow dd > small { display: block; margin-top: 3px; text-align: left; }
-.fieldWarning { display: block; margin-top: 4px; color: #8a5a12; font-size: 7px; }
+.fieldWarning { display: block; margin-top: 4px; color: #8a5a12; font-size: 12px; }
 
 /* V1-CATALOG — Druh komponenty → Kategorie */
 .catalogClassificationWarning { margin: 0 0 8px; }
 .catalogCategoriesPanel { grid-column: 1 / -1; }
 .catalogCategoryGroup { margin-top: 10px; }
-.catalogCategoryGroup h4 { display: flex; align-items: center; gap: 10px; color: #3c4042; font-size: 8px; }
+.catalogCategoryGroup h4 { display: flex; align-items: center; gap: 10px; color: #3c4042; font-size: 13px; }
 .catalogCategoryEditor { margin-top: 12px; padding: 10px; border: 1px solid #e2e4e5; border-radius: 6px; background: #fff; }
 .purchaseNotEntered { color: #6b6f72; font-weight: 600; }
 /* Category editor: labels above fields, capped width, two columns on wide screens. Scoped field
@@ -7555,7 +7557,7 @@ select:focus {
 .catalogUsageChoice { display: grid; gap: 6px; text-align: left; }
 /* Inside a detail list the generic ".catalogDetailSection dl div" two-column row rule would split the options side by side. */
 .catalogDetailSection dl div.catalogUsageChoice { grid-template-columns: 1fr; gap: 8px; padding-bottom: 0; border-bottom: 0; }
-.catalogUsageChoice .checkboxRow > span { color: #3c4042; font-size: 8px; font-weight: 400; line-height: 1.5; }
+.catalogUsageChoice .checkboxRow > span { color: #3c4042; font-size: 13px; font-weight: 400; line-height: 1.5; }
 .catalogUsageChoice .checkboxRow > span strong { font-weight: 700; }
 .catalogUsageChoice .checkboxRow { flex-direction: row; align-items: flex-start; gap: 7px; margin-top: 0; line-height: 1.45; }
 .catalogUsageChoice input[type="radio"] { flex: none; width: 13px; height: 13px; margin: 1px 0 0; padding: 0; }
@@ -7564,19 +7566,19 @@ select:focus {
 /* V1-CARPET-02 — Katalog → karta → Barevné varianty (swatch grid) and the per-line rate table. */
 .catalogCardVariants { grid-column: 1 / -1; }
 .catalogCardVariantControls { display: grid; gap: 8px; margin: 8px 0 10px; max-width: 640px; }
-.catalogCardVariantControls > label:not(.checkboxRow) { display: grid; gap: 4px; color: #52565a; font-size: 9px; font-weight: 700; }
-.catalogCardVariantControls select, .catalogCardVariantControls input:not([type="checkbox"]):not([type="radio"]) { height: 30px; padding: 0 8px; border-radius: 6px; font-size: 9px; }
+.catalogCardVariantControls > label:not(.checkboxRow) { display: grid; gap: 4px; color: #52565a; font-size: 13px; font-weight: 700; }
+.catalogCardVariantControls select, .catalogCardVariantControls input:not([type="checkbox"]):not([type="radio"]) { height: 30px; padding: 0 8px; border-radius: 6px; font-size: 13px; }
 .catalogCardVariantControls label.checkboxRow { flex-direction: row; justify-content: flex-start; align-items: center; margin-top: 0; }
 .catalogCardVariantControls .checkboxRow input[type="checkbox"] { flex: none; width: 13px; height: 13px; margin: 0; }
-.catalogCardVariantControls .checkboxRow > span { color: #3c4042; font-size: 8px; font-weight: 400; }
+.catalogCardVariantControls .checkboxRow > span { color: #3c4042; font-size: 13px; font-weight: 400; }
 .catalogVariantSeries { margin-top: 12px; }
-.catalogVariantSeries h4 { color: #3c4042; font-size: 9px; }
+.catalogVariantSeries h4 { color: #3c4042; font-size: 13px; }
 .catalogVariantGrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; margin-top: 6px; padding: 0; list-style: none; }
-.catalogVariantTile { display: grid; gap: 2px; padding: 6px; border: 1px solid #e2e4e5; border-radius: 6px; background: #fff; font-size: 8px; color: #3c4042; }
+.catalogVariantTile { display: grid; gap: 2px; padding: 6px; border: 1px solid #e2e4e5; border-radius: 6px; background: #fff; font-size: 13px; color: #3c4042; }
 .catalogVariantTile.isInactive { opacity: .55; }
 .catalogVariantSwatch { display: grid; place-items: center; height: 40px; margin-bottom: 3px; overflow: hidden; border-radius: 4px; background: repeating-linear-gradient(45deg, #f1f3f2, #f1f3f2 6px, #e7e9e8 6px, #e7e9e8 12px); text-align: center; }
 .catalogVariantSwatch img { width: 100%; height: 100%; object-fit: cover; }
-.catalogVariantSwatch small { padding: 0 4px; color: #6b6f72; font-size: 7px; line-height: 1.3; }
+.catalogVariantSwatch small { padding: 0 4px; color: #6b6f72; font-size: 12px; line-height: 1.3; }
 .catalogCardSeriesPrices { margin-top: 10px; }
 .catalogCardSeriesPrices h4 { margin-bottom: 4px; }
 .catalogCardSeriesVariantRow td { color: #55595c; }
@@ -7673,68 +7675,24 @@ select:focus {
 @media (max-width: 640px) { .excelImportSummary > div:first-child, .excelImportSummary > div:nth-child(2) { grid-column: auto; } }
 
 /* ================================================= */
-/* V1-ADMIN-01: shared administration                */
-/* Scoped to .adminShell — the generator and the     */
-/* operational modules keep their own styles.        */
+/* V1-ADMIN-01 / SHAD-01: admin transition bridge    */
+/* Scoped to .adminShell. Only the inner parts of    */
+/* admin screens not yet rebuilt on components/ui    */
+/* use these; delete a rule with its last user       */
+/* (docs/UI_MIGRATION.md).                           */
 /* ================================================= */
 .adminShell { --admin-ink: #1d2124; --admin-muted: #5f666b; --admin-line: #dfe2e4; --admin-soft: #f4f6f7; --admin-accent: #1d4ed8; --admin-danger: #b42318; color: var(--admin-ink); font-size: 14px; }
-.adminShellHeader { max-width: 1480px; margin: 0 auto; padding: 28px 48px 0; }
-.adminShellEyebrow { display: block; margin-bottom: 10px; color: var(--admin-muted); font-size: 12px; font-weight: 700; letter-spacing: 1.5px; }
-.adminTabs { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: thin; }
-.adminAreaTabs { border-bottom: 1px solid var(--admin-line); }
-.adminTab { flex: 0 0 auto; padding: 10px 14px; border-bottom: 3px solid transparent; color: var(--admin-muted); font-size: 15px; font-weight: 700; text-decoration: none; white-space: nowrap; }
-.adminTab:hover { color: var(--admin-ink); }
-.adminTab.active { border-bottom-color: var(--admin-ink); color: var(--admin-ink); }
-.adminSubTabs { padding: 12px 0 0; gap: 6px; }
-.adminSubTab { flex: 0 0 auto; padding: 7px 12px; border: 1px solid var(--admin-line); border-radius: 999px; background: white; color: var(--admin-muted); font-size: 13px; font-weight: 600; text-decoration: none; white-space: nowrap; }
-.adminSubTab:hover { border-color: #b9bec2; color: var(--admin-ink); }
-.adminSubTab.active { border-color: var(--admin-ink); background: var(--admin-ink); color: white; }
-.adminShell a:focus-visible, .adminShell button:focus-visible, .adminShell input:focus-visible, .adminShell select:focus-visible, .adminShell textarea:focus-visible { outline: 3px solid #93b4ff; outline-offset: 2px; }
-.adminShellBody .workspacePage { padding-top: 22px; }
-.adminShell .workspacePageHeader .eyebrow { display: none; }
-.adminShell .workspacePageHeader h1 { font-size: 30px; letter-spacing: -0.8px; }
 
-/* page header */
-.adminPageHeader { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 18px; }
-.adminPageHeader h1 { font-size: 30px; letter-spacing: -0.8px; line-height: 1.1; }
-.adminPageCount { margin-top: 6px; color: var(--admin-muted); font-size: 14px; }
-.adminPageActions { display: flex; flex-wrap: wrap; gap: 8px; }
-
-/* buttons: primary / secondary / danger / ghost */
-.adminButton { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 38px; padding: 0 14px; border: 1px solid transparent; border-radius: 8px; font-size: 14px; font-weight: 700; line-height: 1; cursor: pointer; white-space: nowrap; }
-.adminButton:disabled { opacity: 0.55; cursor: not-allowed; }
-.adminButtonPrimary { background: var(--admin-ink); color: white; }
-.adminButtonPrimary:hover:not(:disabled) { background: #000; }
-.adminButtonSecondary { border-color: #c9cdd0; background: white; color: var(--admin-ink); }
-.adminButtonSecondary:hover:not(:disabled), .adminButtonActive { border-color: var(--admin-ink); }
-.adminButtonActive { background: #eef2ff; }
-.adminButtonDanger { border-color: #f0b4ae; background: #fff5f4; color: var(--admin-danger); }
-.adminButtonDanger:hover:not(:disabled) { border-color: var(--admin-danger); }
-.adminButtonGhost { background: transparent; color: var(--admin-muted); text-decoration: underline; text-underline-offset: 3px; }
-.adminButtonGhost:hover:not(:disabled) { color: var(--admin-ink); }
-/* existing admin screens: the legacy button classes and bare buttons get a real button look here */
-.adminShell .primaryButton { min-width: 0; height: auto; min-height: 40px; padding: 0 16px; font-size: 14px; }
-.adminShell .secondaryButton { min-height: 36px; padding: 0 12px; border: 1px solid #c9cdd0; border-radius: 8px; background: white; color: var(--admin-ink); font-size: 13px; font-weight: 600; }
-.adminShell .secondaryButton:hover:not(:disabled) { border-color: var(--admin-ink); }
-.adminShell button.dangerText { min-height: 36px; padding: 0 12px; border: 1px solid #f0b4ae; border-radius: 8px; background: #fff5f4; font-size: 13px; font-weight: 600; }
-.adminShell button:not([class]) { min-height: 32px; padding: 0 10px; border: 1px solid #c9cdd0; border-radius: 6px; background: white; color: var(--admin-ink); font-size: 13px; font-weight: 600; cursor: pointer; }
-.adminShell button:not([class]):hover:not(:disabled) { border-color: var(--admin-ink); }
 .adminShell button:disabled { cursor: not-allowed; }
 
 /* readable sizes for the existing admin screens (they were authored at 7–10 px) */
 .adminShell .fieldHint, .adminShell .temporaryNotice { font-size: 13px; line-height: 1.5; }
 .adminShell .uploadError, .adminError { font-size: 13px; line-height: 1.5; }
-.adminError { padding: 10px 12px; border: 1px solid #f3c0ba; border-radius: 8px; background: #fff6f5; color: var(--admin-danger); }
-.adminNotice { padding: 8px 12px; border: 1px solid #cfe0f5; border-radius: 8px; background: #f3f8ff; color: #1f4a7a; font-size: 13px; }
-.adminEmpty { padding: 18px; color: var(--admin-muted); font-size: 14px; text-align: center; }
+
 .adminShell .adminList strong { font-size: 14px; }
 .adminShell .adminList span { color: var(--admin-muted); font-size: 12px; }
 .adminShell .adminList button { padding: 12px 14px; }
-.adminShell .adminFilters input:not([type="checkbox"]), .adminShell .adminFilters select { height: 40px; font-size: 14px; }
 .adminShell label.checkboxRow { flex-direction: row; }
-.adminShell .adminFilters .checkboxRow { align-self: center; margin-top: 0; }
-.adminShell .adminCategoryTabs button { min-height: 34px; padding: 0 14px; font-size: 13px; }
-.adminShell .catalogAdminCount { font-size: 13px; }
 .adminShell .eventForm label > span { font-size: 12px; }
 .adminShell .eventForm input, .adminShell .eventForm select, .adminShell .eventForm textarea { font-size: 14px; }
 .adminShell .eventSaveBar span, .adminShell .eventSaveBar small { font-size: 13px; }
@@ -7751,76 +7709,16 @@ select:focus {
 .adminShell .sourceAssetKindBadge { font-size: 11px; }
 .adminShell .catalogCategoryGroup { margin-top: 18px; }
 .adminShell .catalogCategoryGroup h4 { margin: 0 0 8px; font-size: 14px; }
-.adminShell button.linkButton { padding: 4px 8px; border: 0; background: transparent; color: var(--admin-accent, #1f4a7a); font-size: 13px; font-weight: 600; text-decoration: underline; cursor: pointer; }
 .adminShell section.adminDetail { margin-top: 18px; padding: 16px; }
 .adminShell .dataTable { width: 100%; border-collapse: collapse; }
 .adminShell .dataTable th, .adminShell .dataTable td { padding: 8px 10px; border-bottom: 1px solid var(--admin-line); text-align: left; vertical-align: top; }
 .adminShell .dataTable th { color: var(--admin-muted); font-size: 12px; }
 
-/* filters */
-.adminFilterPanel { display: grid; gap: 10px; margin-bottom: 14px; padding: 14px; border: 1px solid var(--admin-line); border-radius: 12px; background: white; }
-.adminFilterRow { display: grid; grid-template-columns: minmax(240px, 2fr) repeat(3, minmax(150px, 1fr)) auto; align-items: end; gap: 10px; }
-.adminFilterMore { grid-template-columns: repeat(3, minmax(170px, 1fr)) auto; padding-top: 10px; border-top: 1px dashed var(--admin-line); }
-.adminField { display: grid; gap: 5px; min-width: 0; }
-.adminField > span { color: var(--admin-muted); font-size: 12px; font-weight: 700; }
-.adminField input, .adminField select { width: 100%; height: 40px; padding: 0 10px; border: 1px solid #c9cdd0; border-radius: 8px; background: white; font-size: 14px; }
-.adminCheck { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 14px; }
-.adminCheck input { width: 18px; height: 18px; }
-.adminFilterButtons { display: flex; align-items: center; gap: 6px; }
-
-/* bulk actions — only with a selection */
-.adminBulkBar { position: sticky; top: 0; z-index: 2; display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px 14px; border: 1px solid #c7d6f5; border-radius: 10px; background: #f3f7ff; font-size: 14px; }
-.adminBulkHint { color: var(--admin-muted); font-size: 13px; }
-.adminBulkMessage { flex-basis: 100%; color: #1f4a7a; font-size: 13px; }
-
-/* tables */
-.adminTableScroll { overflow-x: auto; border: 1px solid var(--admin-line); border-radius: 12px; background: white; }
-.adminTable { width: 100%; min-width: 980px; border-collapse: collapse; font-size: 14px; }
-.adminTable th { padding: 10px 12px; border-bottom: 1px solid var(--admin-line); background: var(--admin-soft); color: var(--admin-muted); font-size: 12px; font-weight: 700; text-align: left; white-space: nowrap; }
-.adminTable td { padding: 10px 12px; border-bottom: 1px solid #edf0f1; vertical-align: middle; }
-.adminTable tbody tr:last-child td { border-bottom: 0; }
-.adminTable tbody tr { cursor: pointer; }
-.adminTable tbody tr:hover td { background: #fafbfc; }
-.adminTable tbody tr.active td { background: #eef3ff; }
-.adminTable td small { display: block; margin-top: 3px; color: var(--admin-muted); font-size: 12px; }
-.catalogColCheck { width: 44px; }
-.catalogColCheck input { width: 18px; height: 18px; cursor: pointer; }
-.catalogColThumb { width: 72px; }
-.catalogTable .catalogThumbnailCell { width: 48px; height: 48px; }
-.catalogTable .catalogThumbnailImg, .catalogTable .catalogThumbnailPlaceholder { width: 48px; height: 48px; object-fit: contain; background: #f7f8f8; }
-.catalogColCode { width: 120px; white-space: nowrap; }
-.catalogColCode strong { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
-.catalogColName { min-width: 240px; }
-.catalogNameButton { padding: 0; border: 0; background: none; color: var(--admin-ink); font-size: 14px; font-weight: 700; line-height: 1.35; text-align: left; overflow-wrap: anywhere; cursor: pointer; }
-.catalogNameButton:hover { color: var(--admin-accent); text-decoration: underline; text-underline-offset: 3px; }
-.adminStatus { display: inline-flex; align-items: center; gap: 5px; padding: 2px 9px; border: 1px solid; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
-.adminStatus-active { border-color: #9fd5b2; background: #effaf2; color: #1f6b3a; }
-.adminStatus-needs_review { border-color: #f1d08b; background: #fffaeb; color: #8a5a00; }
-.adminStatus-draft { border-color: #cfd4d8; background: #f6f7f8; color: #4b5257; }
-.adminStatus-inactive { border-color: #cfd4d8; background: #f6f7f8; color: #6b7277; }
-.adminStatus-archived { border-color: #d6d0e8; background: #f6f4fb; color: #5b4c86; }
-.adminTable td small.adminReady { color: #1f6b3a; }
-.adminTable td small.adminNotReady { color: #8a5a00; }
-.catalogAssets { display: flex; flex-wrap: wrap; gap: 4px; }
-.catalogAsset { padding: 1px 7px; border-radius: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
-.catalogAsset.yes { background: #effaf2; color: #1f6b3a; }
-.catalogAsset.no { background: #f6f7f8; color: #80878c; }
-
 /* card detail as its own view (list and detail, filters kept) */
 .catalogDetailView { display: grid; gap: 12px; }
-.catalogBackButton { justify-self: start; padding-left: 0; }
 .adminShell .catalogImportPanel { margin-bottom: 16px; }
 
-@media (max-width: 1100px) {
-  .adminFilterRow { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .adminFieldSearch { grid-column: 1 / -1; }
-  .adminFilterMore { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-}
 @media (max-width: 720px) {
-  .adminShellHeader { padding: 18px 16px 0; }
-  .adminShellBody .workspacePage { padding: 16px; }
-  .adminFilterRow, .adminFilterMore { grid-template-columns: 1fr; }
-  .adminFilterButtons { flex-wrap: wrap; }
-  .adminPageHeader h1, .adminShell .workspacePageHeader h1 { font-size: 24px; }
+
   .adminShell .adminSplit { grid-template-columns: 1fr; }
 }

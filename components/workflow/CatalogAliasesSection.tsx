@@ -4,6 +4,9 @@ import { useState } from "react";
 import type { CatalogItemAdmin } from "../../domain/catalogItemsAdmin";
 import type { CatalogItemAlias, CatalogItemAliasInput, CatalogItemAliasKind } from "../../domain/catalogItemAliases";
 import type { CatalogAliasRegister } from "../../lib/db/catalogItemsAdmin.remoteApi.client";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 type DraftRow = CatalogItemAliasInput & Readonly<{ key: string }>;
 
@@ -89,7 +92,8 @@ export function CatalogAliasesSection({
       </p>
       {rows.length === 0 && <p className="fieldHint">Zatím bez aliasů.</p>}
       {rows.length > 0 && (
-        <table className="dataTable catalogAliasTable">
+        <div className="overflow-x-auto">
+        <table className="dataTable catalogAliasTable min-w-[560px]">
           <thead>
             <tr><th>Druh</th><th>Realizačka</th><th>Text</th><th>Jednotka u firmy</th><th /></tr>
           </thead>
@@ -97,35 +101,36 @@ export function CatalogAliasesSection({
             {rows.map((row) => (
               <tr key={row.key}>
                 <td>
-                  <select aria-label="Druh aliasu" value={row.aliasKind} onChange={(event) => update(row.key, { aliasKind: event.target.value as CatalogItemAliasKind })}>
+                  <NativeSelect aria-label="Druh aliasu" value={row.aliasKind} onChange={(event) => update(row.key, { aliasKind: event.target.value as CatalogItemAliasKind })}>
                     {(Object.keys(KIND_LABELS) as CatalogItemAliasKind[]).map((kind) => <option key={kind} value={kind}>{KIND_LABELS[kind]}</option>)}
-                  </select>
+                  </NativeSelect>
                 </td>
                 <td>
-                  <select aria-label="Realizačka" value={row.realizationCompanyId ?? ""} onChange={(event) => update(row.key, { realizationCompanyId: event.target.value || undefined })}>
+                  <NativeSelect aria-label="Realizačka" value={row.realizationCompanyId ?? ""} onChange={(event) => update(row.key, { realizationCompanyId: event.target.value || undefined })}>
                     <option value="">Obecný</option>
                     {activeCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}{company.isActive ? "" : " (neaktivní)"}</option>)}
-                  </select>
+                  </NativeSelect>
                 </td>
                 <td>
-                  <input aria-label="Text aliasu" value={row.aliasText} onChange={(event) => update(row.key, { aliasText: event.target.value })} placeholder={row.aliasKind === "code" ? "např. CR-ZID-01" : "např. Židle čalouněná černá"} />
+                  <Input aria-label="Text aliasu" value={row.aliasText} onChange={(event) => update(row.key, { aliasText: event.target.value })} placeholder={row.aliasKind === "code" ? "např. CR-ZID-01" : "např. Židle čalouněná černá"} />
                 </td>
                 <td>
-                  <select aria-label="Jednotka u firmy" value={row.unitCode ?? ""} onChange={(event) => update(row.key, { unitCode: event.target.value || undefined })}>
+                  <NativeSelect aria-label="Jednotka u firmy" value={row.unitCode ?? ""} onChange={(event) => update(row.key, { unitCode: event.target.value || undefined })}>
                     <option value="">jako karta</option>
                     {register.units.map((unit) => <option key={unit.code} value={unit.code}>{unit.symbol}</option>)}
-                  </select>
+                  </NativeSelect>
                 </td>
-                <td><button type="button" className="secondaryButton" onClick={() => remove(row.key)}>Odebrat</button></td>
+                <td><Button variant="outline" type="button" onClick={() => remove(row.key)}>Odebrat</Button></td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
       )}
       <div className="assetActions">
-        <button type="button" className="secondaryButton" onClick={() => add("name")}>+ Název</button>
-        <button type="button" className="secondaryButton" onClick={() => add("code")}>+ Kód</button>
-        <button type="button" className="primaryButton" onClick={() => void save()} disabled={!dirty || busy}>{busy ? "Ukládám…" : "Uložit aliasy"}</button>
+        <Button variant="outline" type="button" onClick={() => add("name")}>+ Název</Button>
+        <Button variant="outline" type="button" onClick={() => add("code")}>+ Kód</Button>
+        <Button variant="default" type="button" onClick={() => void save()} disabled={!dirty || busy}>{busy ? "Ukládám…" : "Uložit aliasy"}</Button>
       </div>
       {error && <p className="uploadError">{error}</p>}
       {saved && !dirty && <p className="fieldHint">Aliasy uloženy ({rows.length}). {rows.filter((row) => row.realizationCompanyId).length > 0 ? `Firmy: ${[...new Set(rows.filter((row) => row.realizationCompanyId).map((row) => companyName(row.realizationCompanyId)))].join(", ")}.` : ""}</p>}

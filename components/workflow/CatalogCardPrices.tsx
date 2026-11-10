@@ -30,6 +30,8 @@ import { purchasePriceVersionsApi, salePriceVersionsApi } from "../../lib/db/pri
 import type { PricingCatalogItem, PricingEvent } from "../../lib/db/priceVersions.supabase";
 import { formatAmount, versionTitle } from "./priceVersions/PriceVersionParts";
 import type { PriceVersionsPreselect } from "./priceVersions/PriceVersionsPage";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Button } from "@/components/ui/button";
 
 type SaleSource = Readonly<{
   lists: readonly VersionedPriceList[];
@@ -92,9 +94,9 @@ function ListSource({ choice, listId, onSelect, label, sourceLabel }: { choice: 
     );
   }
   return (
-    <select aria-label={label} value={listId ?? ""} onChange={(event) => onSelect(event.target.value)}>
+    <NativeSelect aria-label={label} value={listId ?? ""} onChange={(event) => onSelect(event.target.value)}>
       {choice.lists.map((list) => <option key={list.id} value={list.id}>{list.name} ({list.code}){list.isActive ? "" : " — neaktivní"}</option>)}
-    </select>
+    </NativeSelect>
   );
 }
 
@@ -217,10 +219,10 @@ export function CatalogCardPrices({
         {saleChoice && saleChoice.lists.length > 0 && (
           <div className="catalogCardPricePickers">
             <ListSource choice={saleChoice} listId={saleSelection.listId} onSelect={saleSelection.selectList} label="Prodejní ceník" />
-            <select aria-label="Verze prodejního ceníku" value={saleVersion?.id ?? ""} onChange={(event) => saleSelection.selectVersion(event.target.value)} disabled={saleSelection.versions.length === 0}>
+            <NativeSelect aria-label="Verze prodejního ceníku" value={saleVersion?.id ?? ""} onChange={(event) => saleSelection.selectVersion(event.target.value)} disabled={saleSelection.versions.length === 0}>
               {saleSelection.versions.length === 0 && <option value="">Ceník nemá žádnou verzi</option>}
               {saleSelection.versions.map((version) => <option key={version.id} value={version.id}>{versionOptionLabel(version)}</option>)}
-            </select>
+            </NativeSelect>
           </div>
         )}
         {saleVersion && (
@@ -291,10 +293,10 @@ export function CatalogCardPrices({
           <div className="catalogCardEventContext">
             <label>
               Cena podle veletrhu
-              <select value={eventId} onChange={(event) => setEventId(event.target.value)}>
+              <NativeSelect value={eventId} onChange={(event) => setEventId(event.target.value)}>
                 <option value="">— zvolit veletrh (jen náhled) —</option>
                 {activeEvents.map((event) => <option key={event.id} value={event.id}>{event.name}{event.year ? ` ${event.year}` : ""}</option>)}
-              </select>
+              </NativeSelect>
             </label>
             {eventError && <small className="uploadError">{eventError}</small>}
             {eventId && !eventResults && !eventError && <small className="fieldHint">Načítám…</small>}
@@ -331,10 +333,10 @@ export function CatalogCardPrices({
         {purchaseChoice && purchaseChoice.lists.length > 0 && (
           <div className="catalogCardPricePickers">
             <ListSource choice={purchaseChoice} listId={purchaseSelection.listId} onSelect={purchaseSelection.selectList} label="Nákupní ceník" sourceLabel="Společný nákupní ceník" />
-            <select aria-label="Verze nákupního ceníku" value={purchaseVersion?.id ?? ""} onChange={(event) => purchaseSelection.selectVersion(event.target.value)} disabled={purchaseSelection.versions.length === 0}>
+            <NativeSelect aria-label="Verze nákupního ceníku" value={purchaseVersion?.id ?? ""} onChange={(event) => purchaseSelection.selectVersion(event.target.value)} disabled={purchaseSelection.versions.length === 0}>
               {purchaseSelection.versions.length === 0 && <option value="">Ceník nemá žádnou verzi</option>}
               {purchaseSelection.versions.map((version) => <option key={version.id} value={version.id}>{versionOptionLabel(version)}</option>)}
-            </select>
+            </NativeSelect>
           </div>
         )}
         {purchaseVersion && (
@@ -359,7 +361,7 @@ export function CatalogCardPrices({
           <div><dt>Base cena CZK</dt><dd>{legacy.czk !== null ? `${legacy.czk.toLocaleString("cs-CZ")} Kč` : "není nastavena"}</dd></div>
           <div><dt>Base cena EUR</dt><dd>{legacy.eur !== null ? `${legacy.eur.toLocaleString("cs-CZ")} €` : "není nastavena"}</dd></div>
         </dl>
-        <button type="button" className="linkButton" onClick={onOpenLegacyPricing}>Otevřít starou správu cen</button>
+        <Button variant="link" type="button" onClick={onOpenLegacyPricing}>Otevřít starou správu cen</Button>
       </details>
     </section>
   );

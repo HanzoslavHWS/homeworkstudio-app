@@ -53,6 +53,10 @@ import {
   VersionTable,
   versionTitle,
 } from "./PriceVersionParts";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Input } from "@/components/ui/input";
+import { PageHeader } from "@/components/ui/workspace";
 
 type Tab = "sale" | "events" | "electricity" | "test" | "purchase";
 
@@ -80,9 +84,9 @@ function SortHeader({ label, sortKey, sort, onSort, className }: { label: string
   const active = sort.key === sortKey;
   return (
     <th className={className} aria-sort={active ? (sort.direction === 1 ? "ascending" : "descending") : "none"}>
-      <button type="button" className="linkButton priceSortButton" onClick={() => onSort({ key: sortKey, direction: active ? (sort.direction === 1 ? -1 : 1) : 1 })}>
+      <Button variant="link" className="priceSortButton" type="button" onClick={() => onSort({ key: sortKey, direction: active ? (sort.direction === 1 ? -1 : 1) : 1 })}>
         {label}{active ? (sort.direction === 1 ? " ▲" : " ▼") : ""}
-      </button>
+      </Button>
     </th>
   );
 }
@@ -124,13 +128,13 @@ export function PriceVersionsPage({ actorName, preselect }: { actorName?: string
   }, []);
 
   return (
-    <div className="workspacePage priceVersionsPage">
-      <div className="workspacePageHeader"><div><span className="eyebrow">ADMINISTRACE</span><h1>Ceníky (verze)</h1></div></div>
-      <p className="temporaryNotice">Ceny jsou vždy bez DPH. Publikovaná verze je neměnná, oprava = nová verze. Veletrh používá jen výslovně přiřazenou verzi; datum konání ani publikace nové verze ceny veletrhu nemění. Generátor a stávající projekty zatím počítají ze starých ceníků (napojení přijde ve V1-DATA-07).</p>
-      {loadError && <p className="uploadError">{loadError}</p>}
+    <div className="priceVersionsPage">
+      <PageHeader title="Ceníky (verze)" />
+      <p className="mb-4 max-w-5xl text-sm text-muted-foreground">Ceny jsou vždy bez DPH. Publikovaná verze je neměnná, oprava = nová verze. Veletrh používá jen výslovně přiřazenou verzi; datum konání ani publikace nové verze ceny veletrhu nemění. Generátor a stávající projekty zatím počítají ze starých ceníků (napojení přijde ve V1-DATA-07).</p>
+      {loadError && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{loadError}</p>}
       <div className="variantSetsTabs">
         {(Object.keys(TAB_LABELS) as Tab[]).map((key) => (
-          <button key={key} type="button" className={tab === key ? "primaryButton" : "secondaryButton"} onClick={() => setTab(key)}>{TAB_LABELS[key]}</button>
+          <Button variant={tab === key ? "default" : "outline"} key={key} type="button" onClick={() => setTab(key)}>{TAB_LABELS[key]}</Button>
         ))}
       </div>
       {!loaded && <p className="workspaceEmpty">Načítám…</p>}
@@ -195,7 +199,7 @@ function SaleListsTab({ register, api, onChanged, preselect }: { register: SaleP
             <span>{candidate.code} · {PRICE_LIST_KIND_LABELS_CS[candidate.kind]}</span>
           </button>
         ))}
-        <button type="button" onClick={() => setEditingList("new")}><strong>+ Nový prodejní ceník</strong><span>základní nebo elektřina</span></button>
+        <Button variant="outline" size="sm" type="button" onClick={() => setEditingList("new")}><strong>+ Nový prodejní ceník</strong><span>základní nebo elektřina</span></Button>
       </div>
       <div className="priceVersionsMain">
         {editingList && (
@@ -217,14 +221,14 @@ function SaleListsTab({ register, api, onChanged, preselect }: { register: SaleP
               <div className="priceVersionListHeader">
                 <div><h2>{list.name}</h2><p className="fieldHint">{list.code} · {PRICE_LIST_KIND_LABELS_CS[list.kind]}{list.note ? ` · ${list.note}` : ""}</p></div>
                 <div className="assetActions">
-                  <button type="button" className="secondaryButton" onClick={() => setEditingList("edit")}>Upravit ceník</button>
-                  <button type="button" className="primaryButton" disabled={busy} onClick={() => run(() => api.createVersion(list.id), "Vznikl nový prázdný koncept.", (id) => setSelectedVersionId(id as string))}>+ Nová prázdná verze</button>
+                  <Button variant="outline" type="button" onClick={() => setEditingList("edit")}>Upravit ceník</Button>
+                  <Button variant="default" type="button" disabled={busy} onClick={() => run(() => api.createVersion(list.id), "Vznikl nový prázdný koncept.", (id) => setSelectedVersionId(id as string))}>+ Nová prázdná verze</Button>
                 </div>
               </div>
               {list.kind === "electricity" && <p className="fieldHint">Ceník elektřiny smí obsahovat jen položky kategorie Elektřina (záložka Služby elektřiny). Položka, která v něm chybí, se vezme ze základního ceníku veletrhu.</p>}
               <VersionTable versions={versions} selectedId={selectedVersionId} usage={(id) => eventsUsingVersion(register.assignments, id).map(eventName)} gaps={(id) => uncoveredTracks(register.coverage[id])} onSelect={(id) => { setSelectedVersionId(id); setCheck(null); setMessage(""); setError(""); }} />
               {message && <p className="saveOk">{message}</p>}
-              {error && <p className="uploadError">{error}</p>}
+              {error && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{error}</p>}
             </div>
           </section>
         )}
@@ -347,12 +351,12 @@ function EurSkCell({ czk, mode, eur, rule, disabled, onMode, onEur }: { czk: str
   const derived = czkValue !== undefined && rule.eurRate > 0 ? convertCzkToEur(czkValue, rule) : undefined;
   return (
     <span className="priceVersionEurInput">
-      <select value={mode} disabled={disabled} onChange={(event) => { const next = event.target.value as EurSkMode; onMode(next); if (next === "manual" && !eur && derived !== undefined) onEur(amountText(derived)); }}>
+      <NativeSelect value={mode} disabled={disabled} onChange={(event) => { const next = event.target.value as EurSkMode; onMode(next); if (next === "manual" && !eur && derived !== undefined) onEur(amountText(derived)); }}>
         {EUR_SK_MODES.map((option) => <option key={option} value={option}>{EUR_MODE_LABELS_CS[option]}</option>)}
-      </select>
+      </NativeSelect>
       {mode === "derived"
         ? <strong title={czkValue !== undefined ? `${czkValue} / ${rule.eurRate} = ${(czkValue / rule.eurRate).toFixed(4)}` : ""}>{formatAmount(derived, "EUR")}</strong>
-        : <input value={eur} onChange={(event) => onEur(event.target.value)} disabled={disabled} inputMode="decimal" />}
+        : <Input value={eur} onChange={(event) => onEur(event.target.value)} disabled={disabled} inputMode="decimal" />}
       {mode === "manual" && <small className="fieldHint">ruční cena · přepočet by dal {formatAmount(derived, "EUR")}</small>}
     </span>
   );
@@ -498,7 +502,7 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
         <div className="priceVersionConflict">
           <strong>Konflikt úprav — nic nebylo uloženo.</strong>
           <p>{conflict} Vaše rozpracované hodnoty zůstávají zobrazené, abyste si je mohli opsat.</p>
-          <button type="button" className="secondaryButton" onClick={() => { if (!dirty || window.confirm("Načíst aktuální stav? Vaše neuložené změny se zahodí.")) { setReloadKey((key) => key + 1); void onChanged(); } }}>Načíst aktuální stav</button>
+          <Button variant="outline" type="button" onClick={() => { if (!dirty || window.confirm("Načíst aktuální stav? Vaše neuložené změny se zahodí.")) { setReloadKey((key) => key + 1); void onChanged(); } }}>Načíst aktuální stav</Button>
         </div>
       )}
       <VersionHeaderForm
@@ -518,13 +522,13 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
       />
       <div className="eventSaveBar">
         <span className={dirty ? "dirty" : "saved"}>{saving ? "Ukládám…" : dirty ? "Neuložené změny řádků" : editable ? "Řádky uloženy" : "Publikovaná verze je jen pro čtení"}{saved && <small>{saved}</small>}</span>
-        {editable && <button type="button" className="primaryButton" onClick={save} disabled={!dirty || saving}>Uložit řádky</button>}
+        {editable && <Button variant="default" type="button" onClick={save} disabled={!dirty || saving}>Uložit řádky</Button>}
       </div>
-      {error && <p className="uploadError">{error}</p>}
+      {error && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{error}</p>}
       {loading ? <p className="workspaceEmpty">Načítám řádky…</p> : (
         <>
           <h3>Ceny položek ({entries.length})</h3>
-          <div className="adminFilters"><input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Hledat podle ABF / generátorového kódu nebo názvu…" /></div>
+          <div className="adminFilters"><Input value={filter} onChange={(event) => setFilter(event.target.value)} placeholder="Hledat podle ABF / generátorového kódu nebo názvu…" /></div>
           <div className="priceVersionTableWrap">
             <table className="priceVersionTable priceVersionRows">
               <thead><tr><SortHeader label="Kód" sortKey="code" sort={sort} onSort={setSort} className="priceItemCodeHead" /><SortHeader label="Položka" sortKey="name" sort={sort} onSort={setSort} /><th>Varianta</th><th>Režim</th><th className="priceTrackHead">CZK</th><th className="priceTrackHead">EUR SK · kurz {rule.eurRate.toLocaleString("cs-CZ")}</th><th className="priceTrackHead">EUR WORLD</th><th>Jedn.</th><th>Poznámka</th>{editable && <th />}</tr></thead>
@@ -539,7 +543,7 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
                       <ItemCodeCell item={itemById.get(entry.catalogItemId)} />
                       <td>{itemName(itemById.get(entry.catalogItemId), entry.catalogItemId)}</td>
                       <td>
-                        <select
+                        <NativeSelect
                           aria-label="Varianta"
                           value={scopeValue}
                           onChange={(event) => {
@@ -551,19 +555,19 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
                           <option value="">všechny varianty</option>
                           {seriesOptions.map((series) => <option key={series} value={`series:${series}`}>řada {series} (všechny její barvy)</option>)}
                           {variants.map((variant) => <option key={variant.id} value={`variant:${variant.id}`}>{variant.setName} · {variant.name}</option>)}
-                        </select>
+                        </NativeSelect>
                       </td>
                       <td>
-                        <select value={entry.priceMode} onChange={(event) => patchEntry(entry.key, { priceMode: event.target.value as SalePriceMode })} disabled={!editable}>
+                        <NativeSelect value={entry.priceMode} onChange={(event) => patchEntry(entry.key, { priceMode: event.target.value as SalePriceMode })} disabled={!editable}>
                           {SALE_PRICE_MODES.map((mode) => <option key={mode} value={mode}>{SALE_PRICE_MODE_LABELS_CS[mode]}</option>)}
-                        </select>
+                        </NativeSelect>
                       </td>
-                      <td className="priceTrackCell"><input value={entry.priceMode === "fixed" ? entry.saleCzk : ""} onChange={(event) => patchEntry(entry.key, { saleCzk: event.target.value })} disabled={!editable || entry.priceMode !== "fixed"} inputMode="decimal" /></td>
+                      <td className="priceTrackCell"><Input value={entry.priceMode === "fixed" ? entry.saleCzk : ""} onChange={(event) => patchEntry(entry.key, { saleCzk: event.target.value })} disabled={!editable || entry.priceMode !== "fixed"} inputMode="decimal" /></td>
                       <td className="priceTrackCell">{entry.priceMode === "fixed" ? <EurSkCell czk={entry.saleCzk} mode={entry.eurMode} eur={entry.saleEur} rule={rule} disabled={!editable} onMode={(mode) => patchEntry(entry.key, { eurMode: mode })} onEur={(value) => patchEntry(entry.key, { saleEur: value })} /> : <span className="fieldHint">{SALE_PRICE_MODE_LABELS_CS[entry.priceMode]}</span>}</td>
-                      <td className="priceTrackCell">{entry.priceMode === "fixed" ? <input value={entry.saleEurWorld} onChange={(event) => patchEntry(entry.key, { saleEurWorld: event.target.value })} disabled={!editable} inputMode="decimal" placeholder="povinné" /> : <span className="fieldHint">—</span>}</td>
-                      <td><input value={entry.unitCode} onChange={(event) => patchEntry(entry.key, { unitCode: event.target.value })} disabled={!editable} className="priceVersionUnit" /></td>
-                      <td><input value={entry.note} onChange={(event) => patchEntry(entry.key, { note: event.target.value })} disabled={!editable} /></td>
-                      {editable && <td><button type="button" className="linkButton" onClick={() => { setEntries((current) => current.filter((candidate) => candidate.key !== entry.key)); setDirty(true); }}>Odebrat</button></td>}
+                      <td className="priceTrackCell">{entry.priceMode === "fixed" ? <Input value={entry.saleEurWorld} onChange={(event) => patchEntry(entry.key, { saleEurWorld: event.target.value })} disabled={!editable} inputMode="decimal" placeholder="povinné" /> : <span className="fieldHint">—</span>}</td>
+                      <td><Input value={entry.unitCode} onChange={(event) => patchEntry(entry.key, { unitCode: event.target.value })} disabled={!editable} className="priceVersionUnit" /></td>
+                      <td><Input value={entry.note} onChange={(event) => patchEntry(entry.key, { note: event.target.value })} disabled={!editable} /></td>
+                      {editable && <td><Button variant="link" type="button" onClick={() => { setEntries((current) => current.filter((candidate) => candidate.key !== entry.key)); setDirty(true); }}>Odebrat</Button></td>}
                     </tr>
                   );
                 })}
@@ -572,15 +576,15 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
           </div>
           {editable && (
             <div className="priceVersionAddRow">
-              <select value={newItemId} onChange={(event) => setNewItemId(event.target.value)}>
+              <NativeSelect value={newItemId} onChange={(event) => setNewItemId(event.target.value)}>
                 <option value="">— vyberte položku katalogu —</option>
                 {register.items.filter((item) => item.lifecycleStatus !== "archived").map((item) => (
                   <option key={item.id} value={item.id} disabled={usedItemIds.has(item.id) && !allVariants.some((variant) => variant.priceItemId === item.id)}>
                     {itemLabel(item)}{item.priceCategory === "electricity" ? " · elektřina" : ""}
                   </option>
                 ))}
-              </select>
-              <button type="button" className="secondaryButton" onClick={addEntry} disabled={!newItemId}>+ Přidat položku</button>
+              </NativeSelect>
+              <Button variant="outline" type="button" onClick={addEntry} disabled={!newItemId}>+ Přidat položku</Button>
             </div>
           )}
 
@@ -593,16 +597,16 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
                 {surcharges.map((surcharge) => (
                   <tr key={surcharge.key}>
                     <td>
-                      <select value={surcharge.target} onChange={(event) => patchSurcharge(surcharge.key, { target: event.target.value })} disabled={!editable}>
+                      <NativeSelect value={surcharge.target} onChange={(event) => patchSurcharge(surcharge.key, { target: event.target.value })} disabled={!editable}>
                         {!surchargeTargets.some((target) => target.value === surcharge.target) && <option value={surcharge.target}>(položka už v katalogu nemá toto pravidlo)</option>}
                         {surchargeTargets.map((target) => <option key={target.value} value={target.value}>{target.label}</option>)}
-                      </select>
+                      </NativeSelect>
                     </td>
-                    <td className="priceTrackCell"><input value={surcharge.amountCzk} onChange={(event) => patchSurcharge(surcharge.key, { amountCzk: event.target.value })} disabled={!editable} inputMode="decimal" /></td>
+                    <td className="priceTrackCell"><Input value={surcharge.amountCzk} onChange={(event) => patchSurcharge(surcharge.key, { amountCzk: event.target.value })} disabled={!editable} inputMode="decimal" /></td>
                     <td className="priceTrackCell"><EurSkCell czk={surcharge.amountCzk} mode={surcharge.eurMode} eur={surcharge.amountEur} rule={rule} disabled={!editable} onMode={(mode) => patchSurcharge(surcharge.key, { eurMode: mode })} onEur={(value) => patchSurcharge(surcharge.key, { amountEur: value })} /></td>
-                    <td className="priceTrackCell"><input value={surcharge.amountEurWorld} onChange={(event) => patchSurcharge(surcharge.key, { amountEurWorld: event.target.value })} disabled={!editable} inputMode="decimal" placeholder="povinné" /></td>
-                    <td><input value={surcharge.note} onChange={(event) => patchSurcharge(surcharge.key, { note: event.target.value })} disabled={!editable} /></td>
-                    {editable && <td><button type="button" className="linkButton" onClick={() => { setSurcharges((current) => current.filter((candidate) => candidate.key !== surcharge.key)); setDirty(true); }}>Odebrat</button></td>}
+                    <td className="priceTrackCell"><Input value={surcharge.amountEurWorld} onChange={(event) => patchSurcharge(surcharge.key, { amountEurWorld: event.target.value })} disabled={!editable} inputMode="decimal" placeholder="povinné" /></td>
+                    <td><Input value={surcharge.note} onChange={(event) => patchSurcharge(surcharge.key, { note: event.target.value })} disabled={!editable} /></td>
+                    {editable && <td><Button variant="link" type="button" onClick={() => { setSurcharges((current) => current.filter((candidate) => candidate.key !== surcharge.key)); setDirty(true); }}>Odebrat</Button></td>}
                   </tr>
                 ))}
               </tbody>
@@ -610,9 +614,8 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
           )}
           {editable && (
             <div className="priceVersionAddRow">
-              <button
+              <Button variant="outline"
                 type="button"
-                className="secondaryButton"
                 disabled={surchargeTargets.length === 0}
                 onClick={() => {
                   const free = surchargeTargets.find((target) => !surcharges.some((surcharge) => surcharge.target === target.value));
@@ -620,7 +623,7 @@ function SaleVersionEditor({ version, register, api, onChanged, onDirtyChange, i
                   setSurcharges((current) => [...current, { key: nextKey(), target: free.value, amountCzk: "", eurMode: "derived", amountEur: "", amountEurWorld: "", note: "" }]);
                   setDirty(true);
                 }}
-              >+ Přidat doplatek</button>
+              >+ Přidat doplatek</Button>
               {surchargeTargets.length === 0 && <span className="fieldHint">V katalogu není varianta ani náhrada s pevným doplatkem nebo doplatkem za jednotku.</span>}
             </div>
           )}
@@ -679,7 +682,7 @@ function EventAssignmentsTab({ register, api, onChanged }: { register: SalePrice
       <div className="eventForm">
         <p className="fieldHint">Každý veletrh má výslovně přiřazenou verzi základního ceníku a případně ceníku elektřiny. Lze přiřadit jen publikovanou verzi, a to bez ohledu na její evidenční platnost (např. zářijovému veletrhu verzi platnou do června). Publikace nové verze přiřazení nemění.</p>
         {message && <p className="saveOk">{message}</p>}
-        {error && <p className="uploadError">{error}</p>}
+        {error && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{error}</p>}
         <table className="priceVersionTable">
           <thead><tr><th>Veletrh</th><th>Termín</th><th>Základní ceník</th><th>Ceník elektřiny</th><th /></tr></thead>
           <tbody>
@@ -692,16 +695,16 @@ function EventAssignmentsTab({ register, api, onChanged }: { register: SalePrice
                   const options = assignable(kind);
                   return (
                     <td key={kind}>
-                      <select value={current?.priceListVersionId ?? ""} disabled={busy} onChange={(change) => void assign(event.id, kind, change.target.value)}>
+                      <NativeSelect value={current?.priceListVersionId ?? ""} disabled={busy} onChange={(change) => void assign(event.id, kind, change.target.value)}>
                         <option value="">— nepřiřazeno —</option>
                         {current && !options.some((version) => version.id === current.priceListVersionId) && <option value={current.priceListVersionId}>{versionLabel(current.priceListVersionId)}</option>}
                         {options.map((version) => <option key={version.id} value={version.id}>{versionLabel(version.id)}{uncoveredTracks(register.coverage[version.id]).length ? ` ⚠ neúplné: ${uncoveredTracks(register.coverage[version.id]).join(", ")}` : ""}</option>)}
-                      </select>
+                      </NativeSelect>
                       {current && coverageWarning(current.priceListVersionId) && <small className="dangerText priceVersionCoverage">⚠ {coverageWarning(current.priceListVersionId)}</small>}
                     </td>
                   );
                 })}
-                <td><button type="button" className="linkButton" onClick={() => setHistoryFor(historyFor === event.id ? undefined : event.id)}>Historie</button></td>
+                <td><Button variant="link" type="button" onClick={() => setHistoryFor(historyFor === event.id ? undefined : event.id)}>Historie</Button></td>
               </tr>
             ))}
           </tbody>
@@ -758,7 +761,7 @@ function ElectricityCategoryTab({ register, api, onChanged }: { register: SalePr
       <div className="eventForm">
         <p className="fieldHint">Služby elektřiny se rozlišují kategorií, ne prefixem ABF kódu. Položka kategorie Elektřina se na veletrhu cení z jeho ceníku elektřiny; když v něm chybí, ze základního ceníku. Při zavedení byly jednorázově označeny služby s ABF kódem L + 2 znaky.</p>
         <label className="checkLabel"><input type="checkbox" checked={showAll} onChange={(event) => setShowAll(event.target.checked)} /> Zobrazit všechny karty, nejen služby</label>
-        {error && <p className="uploadError">{error}</p>}
+        {error && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{error}</p>}
         <table className="priceVersionTable">
           <thead><tr><th>Položka</th><th>Typ</th><th>Kategorie ceny</th></tr></thead>
           <tbody>
@@ -767,9 +770,9 @@ function ElectricityCategoryTab({ register, api, onChanged }: { register: SalePr
                 <td>{itemLabel(item)}</td>
                 <td>{item.itemType}</td>
                 <td>
-                  <select value={item.priceCategory} disabled={busyId === item.id} onChange={(event) => void setCategory(item.id, event.target.value as PriceCategory)}>
+                  <NativeSelect value={item.priceCategory} disabled={busyId === item.id} onChange={(event) => void setCategory(item.id, event.target.value as PriceCategory)}>
                     {(Object.keys(PRICE_CATEGORY_LABELS_CS) as PriceCategory[]).map((category) => <option key={category} value={category}>{PRICE_CATEGORY_LABELS_CS[category]}</option>)}
-                  </select>
+                  </NativeSelect>
                 </td>
               </tr>
             ))}
@@ -848,55 +851,55 @@ function TestResolveTab({ register, api }: { register: SalePriceRegister; api: S
     <section className="adminDetail">
       <div className="eventForm">
         <p className="fieldHint">Ukáže, jakou cenu by systém vrátil. Podle veletrhu se použije jen jeho aktuální přiřazení (nikdy datum). Výběrem verzí lze vyzkoušet i koncept před publikací. Nic se neukládá.</p>
-        <div className="twoColumns">
+        <div className="twoColumns grid-cols-1 sm:grid-cols-2">
           <label><span>Zdroj cen</span>
-            <select value={source} onChange={(event) => setSource(event.target.value as "event" | "versions")}>
+            <NativeSelect value={source} onChange={(event) => setSource(event.target.value as "event" | "versions")}>
               <option value="event">Přiřazení veletrhu</option>
               <option value="versions">Vybrané verze (i koncept)</option>
-            </select>
+            </NativeSelect>
           </label>
           <label><span>Cenový režim (volí se výslovně)</span>
-            <select value={track} onChange={(event) => setTrack(event.target.value as PriceTrack)}>{PRICE_TRACKS.map((option) => <option key={option} value={option}>{PRICE_TRACK_LABELS_CS[option]}</option>)}</select>
+            <NativeSelect value={track} onChange={(event) => setTrack(event.target.value as PriceTrack)}>{PRICE_TRACKS.map((option) => <option key={option} value={option}>{PRICE_TRACK_LABELS_CS[option]}</option>)}</NativeSelect>
           </label>
         </div>
         {source === "event" ? (
           <label><span>Veletrh</span>
-            <select value={eventId} onChange={(event) => setEventId(event.target.value)}>
+            <NativeSelect value={eventId} onChange={(event) => setEventId(event.target.value)}>
               {register.events.map((event) => <option key={event.id} value={event.id}>{event.name} ({event.id})</option>)}
-            </select>
+            </NativeSelect>
           </label>
         ) : (
-          <div className="twoColumns">
+          <div className="twoColumns grid-cols-1 sm:grid-cols-2">
             <label><span>Základní ceník</span>
-              <select value={baseVersionId} onChange={(event) => setBaseVersionId(event.target.value)}>
+              <NativeSelect value={baseVersionId} onChange={(event) => setBaseVersionId(event.target.value)}>
                 <option value="">— žádný —</option>
                 {versionsOf("base").map((version) => <option key={version.id} value={version.id}>{listById.get(version.priceListId)?.name} · {versionTitle(version)} ({version.status === "draft" ? "koncept" : "publikováno"})</option>)}
-              </select>
+              </NativeSelect>
             </label>
             <label><span>Ceník elektřiny</span>
-              <select value={electricityVersionId} onChange={(event) => setElectricityVersionId(event.target.value)}>
+              <NativeSelect value={electricityVersionId} onChange={(event) => setElectricityVersionId(event.target.value)}>
                 <option value="">— žádný —</option>
                 {versionsOf("electricity").map((version) => <option key={version.id} value={version.id}>{listById.get(version.priceListId)?.name} · {versionTitle(version)} ({version.status === "draft" ? "koncept" : "publikováno"})</option>)}
-              </select>
+              </NativeSelect>
             </label>
           </div>
         )}
         <div className="priceVersionAddRow">
-          <select value={itemId} onChange={(event) => { setItemId(event.target.value); setVariantId(""); }}>
+          <NativeSelect value={itemId} onChange={(event) => { setItemId(event.target.value); setVariantId(""); }}>
             <option value="">— položka —</option>
             {register.items.map((item) => <option key={item.id} value={item.id}>{itemLabel(item)}</option>)}
-          </select>
-          <select value={variantId} onChange={(event) => setVariantId(event.target.value)} disabled={!allVariants.some((variant) => variant.priceItemId === itemId)}>
+          </NativeSelect>
+          <NativeSelect value={variantId} onChange={(event) => setVariantId(event.target.value)} disabled={!allVariants.some((variant) => variant.priceItemId === itemId)}>
             <option value="">bez varianty</option>
             {allVariants.filter((variant) => variant.priceItemId === itemId).map((variant) => <option key={variant.id} value={variant.id}>{variant.setName} · {variant.name}</option>)}
-          </select>
-          <button type="button" className="secondaryButton" disabled={!itemId} onClick={() => { setRequested([...requested, { catalogItemId: itemId, ...(variantId ? { variantId } : {}) }]); setItemId(""); setVariantId(""); }}>+ Přidat</button>
+          </NativeSelect>
+          <Button variant="outline" type="button" disabled={!itemId} onClick={() => { setRequested([...requested, { catalogItemId: itemId, ...(variantId ? { variantId } : {}) }]); setItemId(""); setVariantId(""); }}>+ Přidat</Button>
         </div>
         <label><span>Komplet / stánek (volitelně)</span>
-          <select value={kitItemId} onChange={(event) => { setKitItemId(event.target.value); setSelections({}); }}>
+          <NativeSelect value={kitItemId} onChange={(event) => { setKitItemId(event.target.value); setSelections({}); }}>
             <option value="">— bez kompletu —</option>
             {kits.map((kit) => <option key={kit.id} value={kit.id}>{itemLabel(kit)}</option>)}
-          </select>
+          </NativeSelect>
         </label>
         {kitLines.filter((line) => line.lineKind === "item" && ((line.substitutes ?? []).length > 0 || line.variantSetId)).map((line) => {
           const setVariants = register.variantSets.find((set) => set.id === line.variantSetId)?.variants ?? [];
@@ -904,7 +907,7 @@ function TestResolveTab({ register, api }: { register: SalePriceRegister; api: S
           const value = selection?.substituteItemId ? `sub|${selection.substituteItemId}|${selection.substituteVariantId ?? ""}` : selection?.variantId ? `var|${selection.variantId}` : "";
           return (
             <label key={line.lineKey}><span>Řádek {line.lineKey}: {itemLabel(itemById.get(line.childItemId ?? ""))}</span>
-              <select value={value} onChange={(event) => {
+              <NativeSelect value={value} onChange={(event) => {
                 const [kind, first, second] = event.target.value.split("|");
                 const next = { ...selections };
                 if (!kind) delete next[line.lineKey];
@@ -914,25 +917,25 @@ function TestResolveTab({ register, api }: { register: SalePriceRegister; api: S
                 <option value="">výchozí</option>
                 {setVariants.filter((variant) => variant.isActive && variant.id !== line.defaultVariantId).map((variant) => <option key={variant.id} value={`var|${variant.id}`}>Barva: {variant.name}</option>)}
                 {(line.substitutes ?? []).filter((substitute) => substitute.isActive !== false).map((substitute) => <option key={`${substitute.substituteItemId}-${substitute.substituteVariantId ?? ""}`} value={`sub|${substitute.substituteItemId}|${substitute.substituteVariantId ?? ""}`}>Náhrada: {itemLabel(itemById.get(substitute.substituteItemId))}</option>)}
-              </select>
+              </NativeSelect>
               {/* A substitute without a fixed colour (e.g. M04) takes any colour of the line swatch book; an agreement-only card needs a reason. */}
               {selection?.substituteItemId && !(line.substitutes ?? []).some((substitute) => substitute.substituteItemId === selection.substituteItemId && substitute.substituteVariantId) && setVariants.length > 0 && (
-                <select aria-label="Barva náhrady" value={selection.substituteVariantId ?? ""} onChange={(event) => setSelections({ ...selections, [line.lineKey]: { ...selection, substituteVariantId: event.target.value || undefined } })}>
+                <NativeSelect aria-label="Barva náhrady" value={selection.substituteVariantId ?? ""} onChange={(event) => setSelections({ ...selections, [line.lineKey]: { ...selection, substituteVariantId: event.target.value || undefined } })}>
                   <option value="">— barva —</option>
                   {setVariants.filter((variant) => variant.isActive).map((variant) => <option key={variant.id} value={variant.id}>Barva: {variant.name}</option>)}
-                </select>
+                </NativeSelect>
               )}
               {selection?.substituteItemId && (
-                <input aria-label="Důvod náhrady" value={selection.reason ?? ""} onChange={(event) => setSelections({ ...selections, [line.lineKey]: { ...selection, reason: event.target.value } })} placeholder="Důvod / dohoda (povinné u položek jen na dohodu, např. M04)" />
+                <Input aria-label="Důvod náhrady" value={selection.reason ?? ""} onChange={(event) => setSelections({ ...selections, [line.lineKey]: { ...selection, reason: event.target.value } })} placeholder="Důvod / dohoda (povinné u položek jen na dohodu, např. M04)" />
               )}
             </label>
           );
         })}
         <div className="assetActions">
-          <button type="button" className="primaryButton" disabled={busy || (requested.length === 0 && !kitItemId)} onClick={calculate}>{busy ? "Počítám…" : "Spočítat"}</button>
-          {requested.length > 0 && <button type="button" className="secondaryButton" onClick={() => { setRequested([]); setResponse(null); }}>Vyčistit položky</button>}
+          <Button variant="default" type="button" disabled={busy || (requested.length === 0 && !kitItemId)} onClick={calculate}>{busy ? "Počítám…" : "Spočítat"}</Button>
+          {requested.length > 0 && <Button variant="outline" type="button" onClick={() => { setRequested([]); setResponse(null); }}>Vyčistit položky</Button>}
         </div>
-        {error && <p className="uploadError">{error}</p>}
+        {error && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{error}</p>}
         {requested.length > 0 && (
           <table className="priceVersionTable">
             <thead><tr><th>Položka</th><th>Varianta</th><th>Cena bez DPH</th><th>Původ ceny</th></tr></thead>

@@ -1,6 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
 
 /**
  * Administrace → Katalog → Importovat Excel (V1-IMPORT-UI-01). The workbook of the catalog
@@ -165,8 +167,8 @@ export function CatalogExcelImportPanel({ onClose, onApplied }: Readonly<{ onClo
   const unsupported = preview?.sheets.filter((sheet) => sheet.status === "unsupported_with_data" || sheet.status === "unknown_with_data") ?? [];
 
   return (
-    <div className="catalogDetailSection adminDetail catalogImportPanel excelImportPanel">
-      <h3>Importovat Excel</h3>
+    <div className="catalogDetailSection adminDetail catalogImportPanel excelImportPanel rounded-xl border bg-card p-5">
+      <h3 className="text-lg font-semibold tracking-normal normal-case text-foreground">Importovat Excel</h3>
       <p className="fieldHint">
         <strong>Nyní podporuje listy Produkty a Sluzby.</strong> Šablona katalogu (catalog-template/1). Pomocné listy Navod, Vzory, Ciselniky a _meta se ignorují; jiné listy s daty se ohlásí jako nepodporované a import zablokují. Prázdná buňka = beze změny, 0 / NE / FALSE jsou skutečné hodnoty, mazání jen značkou #SMAZAT. Položky, které v souboru nejsou, se nemažou ani nearchivují. Nové karty vznikají jako „K doplnění“.
       </p>
@@ -190,7 +192,7 @@ export function CatalogExcelImportPanel({ onClose, onApplied }: Readonly<{ onClo
           />
         </label>
         {file && <span className="fieldHint">{file.name}</span>}
-        <button type="button" className="secondaryButton" onClick={onClose} disabled={phase === "confirming"}>Zavřít</button>
+        <Button variant="outline" type="button" onClick={onClose} disabled={phase === "confirming"}>Zavřít</Button>
       </div>
 
       {phase === "previewing" && <p className="workspaceEmpty" role="status">Kontroluji soubor a připravuji náhled (nic se nezapisuje)…</p>}
@@ -237,7 +239,7 @@ export function CatalogExcelImportPanel({ onClose, onApplied }: Readonly<{ onClo
               <div className="adminFilters excelImportFilters">
                 <label>
                   <span>Zobrazit</span>
-                  <select value={actionFilter} onChange={(event) => setActionFilter(event.target.value as typeof actionFilter)}>
+                  <NativeSelect value={actionFilter} onChange={(event) => setActionFilter(event.target.value as typeof actionFilter)}>
                     <option value="changes">Změny, konflikty a upozornění</option>
                     <option value="all">Všechny řádky</option>
                     <option value="create">Vytvořit</option>
@@ -245,14 +247,14 @@ export function CatalogExcelImportPanel({ onClose, onApplied }: Readonly<{ onClo
                     <option value="unchanged">Beze změny</option>
                     <option value="conflict">Konflikty</option>
                     <option value="warnings">S upozorněním</option>
-                  </select>
+                  </NativeSelect>
                 </label>
                 <label>
                   <span>List</span>
-                  <select value={sheetFilter} onChange={(event) => setSheetFilter(event.target.value)}>
+                  <NativeSelect value={sheetFilter} onChange={(event) => setSheetFilter(event.target.value)}>
                     <option value="all">Všechny listy</option>
                     {Object.keys(preview.bySheet).map((sheet) => <option key={sheet} value={sheet}>{sheet}</option>)}
-                  </select>
+                  </NativeSelect>
                 </label>
                 <span className="fieldHint">{rows.length} z {preview.rows.length} řádků</span>
               </div>
@@ -294,9 +296,9 @@ export function CatalogExcelImportPanel({ onClose, onApplied }: Readonly<{ onClo
                       <input type="checkbox" checked={acknowledged} disabled={phase === "confirming"} onChange={(event) => setAcknowledged(event.target.checked)} />
                       Rozumím; zapsat {preview.summary.create} nových a {preview.summary.update} aktualizovaných karet do DEV.
                     </label>
-                    <button type="button" className="primaryButton" onClick={() => void confirm()} disabled={!preview.canConfirm || !acknowledged || phase === "confirming"}>
+                    <Button variant="default" type="button" onClick={() => void confirm()} disabled={!preview.canConfirm || !acknowledged || phase === "confirming"}>
                       {phase === "confirming" ? "Zapisuji… (nezavírejte stránku)" : `Potvrdit import (${changes} změn)`}
-                    </button>
+                    </Button>
                   </div>
                 )
               )}

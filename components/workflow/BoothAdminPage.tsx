@@ -20,6 +20,10 @@ import { ComponentAdminDetail, ComponentAdminList, type SavedKitContents } from 
 import type { PriceVersionsPreselect } from "./priceVersions/PriceVersionsPage";
 import { categoriesForGroup } from "../../domain/catalogClassification";
 import { useCatalogCategories } from "../../lib/db/catalogCategories.remoteApi.client";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
+import { NativeSelect } from "@/components/ui/native-select";
+import { PageHeader } from "@/components/ui/workspace";
 
 const BOOTH_ADMIN_TABS: readonly Readonly<{ kind: CatalogItemKind; label: string; hint: string }>[] = [
   { kind: "booth", label: "Typové stánky", hint: "Kompletní typové stánky (P86 a další) — vlastní master 2D/3D model, vlastní rozměry." },
@@ -125,20 +129,14 @@ export function BoothAdminPage({
   const activeTab = BOOTH_ADMIN_TABS.find((tab) => tab.kind === activeKind) ?? BOOTH_ADMIN_TABS[0]!;
 
   return (
-    <div className="workspacePage adminPage">
-      <div className="workspacePageHeader">
-        <div>
-          <span className="eyebrow">ADMINISTRACE</span>
-          <h1>Stánky</h1>
-        </div>
-        {items && <span className="catalogAdminCount">{filteredEntries.length} / {tabItems.length} položek</span>}
-      </div>
+    <div className="adminPage">
+      <PageHeader title="Stánky" description={items ? `Zobrazeno ${filteredEntries.length} z ${tabItems.length} položek` : undefined} />
 
-      <div className="adminCategoryTabs">
+      <div className="adminCategoryTabs mb-3 flex flex-wrap gap-2" role="group" aria-label="Druh stánků">
         {BOOTH_ADMIN_TABS.map((tab) => (
-          <button key={tab.kind} type="button" className={tab.kind === activeKind ? "active" : ""} onClick={() => selectTab(tab.kind)}>
+          <Button key={tab.kind} type="button" variant={tab.kind === activeKind ? "default" : "outline"} aria-pressed={tab.kind === activeKind} onClick={() => selectTab(tab.kind)}>
             {tab.label}
-          </button>
+          </Button>
         ))}
       </div>
       <p className="fieldHint">{activeTab.hint}</p>
@@ -149,15 +147,15 @@ export function BoothAdminPage({
       {items && (
         <>
           <div className="adminFilters">
-            <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat interní kód nebo název…" />
+            <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat interní kód nebo název…" />
             <label className="checkboxRow adminFiltersArchivedToggle">
               <input type="checkbox" checked={showArchived} onChange={(event) => setShowArchived(event.target.checked)} />
               Zobrazit archivované
             </label>
             {activeKind === "booth_component" && (
-              <button type="button" className="primaryButton" onClick={() => { setShowCreateForm(true); setSelectedId(undefined); }}>
+              <Button variant="default" type="button" onClick={() => { setShowCreateForm(true); setSelectedId(undefined); }}>
                 + Nová komponenta stánku
-              </button>
+              </Button>
             )}
           </div>
           {showCreateForm && activeKind === "booth_component" && (
@@ -170,7 +168,7 @@ export function BoothAdminPage({
           {!selected && <ComponentAdminList entries={filteredEntries} selectedId={selectedId} onSelect={(id) => { setSelectedId(id); setShowCreateForm(false); }} />}
           {selected && (
             <div className="catalogDetailView">
-              <button type="button" className="adminButton adminButtonGhost catalogBackButton" onClick={() => setSelectedId(undefined)}>← Zpět na seznam</button>
+              <Button variant="ghost" className="catalogBackButton -ml-2 justify-self-start" type="button" onClick={() => setSelectedId(undefined)}>← Zpět na seznam</Button>
               <ComponentAdminDetail
                 key={selected.id}
                 item={selected}
@@ -258,41 +256,41 @@ function BoothComponentCreateForm({
       <dl>
         <div className="catalogAdminEditRow">
           <dt>Název *</dt>
-          <dd><input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Např. Sloupek" /></dd>
+          <dd><Input value={displayName} onChange={(event) => setDisplayName(event.target.value)} placeholder="Např. Sloupek" /></dd>
         </div>
         <div className="catalogAdminEditRow">
           <dt>Interní / generátorový kód *</dt>
           <dd>
-            <input value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder="Vlastní unikátní kód komponenty" />
+            <Input value={internalCode} onChange={(event) => setInternalCode(event.target.value)} placeholder="Vlastní unikátní kód komponenty" />
             {!internalCode.trim() && <small className="fieldWarning">Interní komponenta musí mít vlastní generátorový kód (ABF kód nemá).</small>}
           </dd>
         </div>
         <div className="catalogAdminEditRow">
           <dt>Kategorie *</dt>
           <dd>
-            <select value={category} onChange={(event) => setCategory(event.target.value)}>
+            <NativeSelect value={category} onChange={(event) => setCategory(event.target.value)}>
               <option value="">— vyberte —</option>
               {componentCategories.map((option) => (
                 <option key={option.id} value={option.id}>{option.name}</option>
               ))}
-            </select>
+            </NativeSelect>
           </dd>
         </div>
         <div className="catalogAdminEditRow">
           <dt>Jednotka</dt>
-          <dd><input value={unit} onChange={(event) => setUnit(event.target.value)} /></dd>
+          <dd><Input value={unit} onChange={(event) => setUnit(event.target.value)} /></dd>
         </div>
         <div className="catalogAdminEditRow">
           <dt>Šířka (mm)</dt>
-          <dd><input type="number" value={widthMm} onChange={(event) => setWidthMm(event.target.value)} placeholder="Neznámo" /></dd>
+          <dd><Input type="number" value={widthMm} onChange={(event) => setWidthMm(event.target.value)} placeholder="Neznámo" /></dd>
         </div>
         <div className="catalogAdminEditRow">
           <dt>Hloubka (mm)</dt>
-          <dd><input type="number" value={depthMm} onChange={(event) => setDepthMm(event.target.value)} placeholder="Neznámo" /></dd>
+          <dd><Input type="number" value={depthMm} onChange={(event) => setDepthMm(event.target.value)} placeholder="Neznámo" /></dd>
         </div>
         <div className="catalogAdminEditRow">
           <dt>Výška (mm)</dt>
-          <dd><input type="number" value={heightMm} onChange={(event) => setHeightMm(event.target.value)} placeholder="Neznámo" /></dd>
+          <dd><Input type="number" value={heightMm} onChange={(event) => setHeightMm(event.target.value)} placeholder="Neznámo" /></dd>
         </div>
       </dl>
       <p className="fieldHint">Použití:</p>
@@ -305,10 +303,10 @@ function BoothComponentCreateForm({
         3D
       </label>
       <div className="catalogAdminReviewActions">
-        <button type="button" className="secondaryButton" onClick={onCancel} disabled={busy}>Zrušit</button>
-        <button type="button" className="primaryButton" onClick={handleSubmit} disabled={!canSubmit}>
+        <Button variant="outline" type="button" onClick={onCancel} disabled={busy}>Zrušit</Button>
+        <Button variant="default" type="button" onClick={handleSubmit} disabled={!canSubmit}>
           {busy ? "Vytvářím…" : "Vytvořit"}
-        </button>
+        </Button>
       </div>
       {error && <small className="uploadError">{error}</small>}
     </div>

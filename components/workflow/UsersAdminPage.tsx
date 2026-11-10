@@ -2,6 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { APP_ROLE_LABELS_CS, APP_ROLES, type AppRole } from "../../domain/accessControl";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { PageHeader } from "@/components/ui/workspace";
 
 /**
  * Administrace → Uživatelé (V1-AUTH-01): účty, role, stav, pozvánky a přiřazení projektů.
@@ -154,15 +158,12 @@ export function UsersAdminPage({ currentUserId }: Readonly<{ currentUserId?: str
   });
 
   return (
-    <div className="workspacePage">
-      <div className="workspacePageHeader">
-        <div><span className="eyebrow">ADMINISTRACE</span><h1>Uživatelé</h1></div>
-        <button className="primaryButton" onClick={startNew}>+ Nový uživatel</button>
-      </div>
-      <p className="temporaryNotice">Účty zakládá jen správce; veřejná registrace není. Role a stav účtu platí okamžitě i pro už přihlášené uživatele. Poslední aktivní správce nejde deaktivovat ani převést na jinou roli. Pozvánky a nová hesla se předávají odkazem — aplikace sama nic neposílá.</p>
-      {loadError && <p className="uploadError" role="alert">{loadError}</p>}
+    <div className="adminPage">
+      <PageHeader title="Uživatelé" actions={<Button variant="default" onClick={startNew}>+ Nový uživatel</Button>} />
+      <p className="mb-4 max-w-5xl text-sm text-muted-foreground">Účty zakládá jen správce; veřejná registrace není. Role a stav účtu platí okamžitě i pro už přihlášené uživatele. Poslední aktivní správce nejde deaktivovat ani převést na jinou roli. Pozvánky a nová hesla se předávají odkazem — aplikace sama nic neposílá.</p>
+      {loadError && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{loadError}</p>}
       <div className="adminFilters">
-        <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat podle e-mailu nebo jména…" />
+        <Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat podle e-mailu nebo jména…" />
         <span className="fieldHint">{loading ? "Načítám…" : `${users.length} účtů · aktivní správci: ${activeAdmins}`}</span>
       </div>
       <div className="adminSplit">
@@ -180,17 +181,17 @@ export function UsersAdminPage({ currentUserId }: Readonly<{ currentUserId?: str
           <section className="adminDetail">
             <h2>Nový uživatel</h2>
             <div className="eventForm">
-              <label><span>E-mail *</span><input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} autoComplete="off" /></label>
-              <label><span>Jméno</span><input value={newUser.displayName} onChange={(event) => setNewUser({ ...newUser, displayName: event.target.value })} /></label>
+              <label><span>E-mail *</span><Input type="email" value={newUser.email} onChange={(event) => setNewUser({ ...newUser, email: event.target.value })} autoComplete="off" /></label>
+              <label><span>Jméno</span><Input value={newUser.displayName} onChange={(event) => setNewUser({ ...newUser, displayName: event.target.value })} /></label>
               <label><span>Role *</span>
-                <select value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value as AppRole })}>
+                <NativeSelect value={newUser.role} onChange={(event) => setNewUser({ ...newUser, role: event.target.value as AppRole })}>
                   {APP_ROLES.map((role) => <option key={role} value={role}>{APP_ROLE_LABELS_CS[role]}</option>)}
-                </select>
+                </NativeSelect>
               </label>
               <p className="fieldHint">{ROLE_HINTS[newUser.role]}</p>
-              {error && <p className="uploadError" role="alert">{error}</p>}
+              {error && <p className="mb-3 text-sm font-medium text-destructive" role="alert">{error}</p>}
               {notice && <p className="fieldHint" role="status">{notice}</p>}
-              <div><button type="button" className="primaryButton" onClick={create} disabled={busy !== "" || !newUser.email.trim()}>{busy === "create" ? "Zakládám…" : "Založit účet a vytvořit pozvánku"}</button></div>
+              <div><Button variant="default" type="button" onClick={create} disabled={busy !== "" || !newUser.email.trim()}>{busy === "create" ? "Zakládám…" : "Založit účet a vytvořit pozvánku"}</Button></div>
             </div>
           </section>
         )}
@@ -203,29 +204,29 @@ export function UsersAdminPage({ currentUserId }: Readonly<{ currentUserId?: str
                 {error && <small className="uploadError">{error}</small>}
                 {notice && <small>{notice}</small>}
               </span>
-              <button type="button" className="primaryButton" onClick={save} disabled={busy !== "" || !dirty}>Uložit změny</button>
+              <Button variant="default" type="button" onClick={save} disabled={busy !== "" || !dirty}>Uložit změny</Button>
             </div>
             <div className="eventForm">
-              <div className="twoColumns">
-                <label><span>E-mail</span><input value={selected.email} readOnly disabled /></label>
-                <label><span>Stav pozvánky / přihlášení</span><input value={inviteState(selected)} readOnly disabled /></label>
+              <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+                <label><span>E-mail</span><Input value={selected.email} readOnly disabled /></label>
+                <label><span>Stav pozvánky / přihlášení</span><Input value={inviteState(selected)} readOnly disabled /></label>
               </div>
-              <label><span>Jméno</span><input value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
+              <label><span>Jméno</span><Input value={draft.displayName} onChange={(event) => setDraft({ ...draft, displayName: event.target.value })} /></label>
               <label><span>Role</span>
-                <select value={draft.role} disabled={isSelf} onChange={(event) => setDraft({ ...draft, role: event.target.value as AppRole })}>
+                <NativeSelect value={draft.role} disabled={isSelf} onChange={(event) => setDraft({ ...draft, role: event.target.value as AppRole })}>
                   {APP_ROLES.map((role) => <option key={role} value={role}>{APP_ROLE_LABELS_CS[role]}</option>)}
-                </select>
+                </NativeSelect>
               </label>
               <p className="fieldHint">{isSelf ? "Vlastní roli a stav účtu může změnit jen jiný správce." : ROLE_HINTS[draft.role]}</p>
               <label className="checkLabel"><input type="checkbox" checked={draft.isActive} disabled={isSelf} onChange={(event) => setDraft({ ...draft, isActive: event.target.checked })} /> Aktivní účet (deaktivace okamžitě ukončí všechna přihlášení)</label>
               {selected.deactivatedAt && <p className="fieldHint">Deaktivováno {formatDate(selected.deactivatedAt)}.</p>}
 
               <section className="deadlineEditor">
-                <div><strong>Odkaz pozvánky / nového hesla</strong><button type="button" onClick={newLink} disabled={busy !== "" || !selected.isActive}>{busy === "link" ? "Připravuji…" : "Vytvořit odkaz"}</button></div>
+                <div><strong>Odkaz pozvánky / nového hesla</strong><Button variant="outline" size="sm" type="button" onClick={newLink} disabled={busy !== "" || !selected.isActive}>{busy === "link" ? "Připravuji…" : "Vytvořit odkaz"}</Button></div>
                 {link ? (
                   <div className="userLinkBox">
-                    <input value={link.url} readOnly onFocus={(event) => event.currentTarget.select()} aria-label="Jednorázový odkaz" />
-                    <button type="button" onClick={() => void navigator.clipboard?.writeText(link.url).then(() => setNotice("Odkaz zkopírován do schránky."), () => setError("Odkaz se nepodařilo zkopírovat — označte ho a zkopírujte ručně."))}>Kopírovat</button>
+                    <Input value={link.url} readOnly onFocus={(event) => event.currentTarget.select()} aria-label="Jednorázový odkaz" />
+                    <Button variant="outline" size="sm" type="button" onClick={() => void navigator.clipboard?.writeText(link.url).then(() => setNotice("Odkaz zkopírován do schránky."), () => setError("Odkaz se nepodařilo zkopírovat — označte ho a zkopírujte ručně."))}>Kopírovat</Button>
                     <p className="fieldHint">{link.note}</p>
                   </div>
                 ) : (
@@ -236,14 +237,14 @@ export function UsersAdminPage({ currentUserId }: Readonly<{ currentUserId?: str
               <section className="deadlineEditor">
                 <div>
                   <strong>Přiřazené projekty ({assigned.length})</strong>
-                  <button type="button" onClick={saveProjects} disabled={busy !== "" || !assignmentDirty}>{busy === "projects" ? "Ukládám…" : "Uložit přiřazení"}</button>
+                  <Button variant="outline" size="sm" type="button" onClick={saveProjects} disabled={busy !== "" || !assignmentDirty}>{busy === "projects" ? "Ukládám…" : "Uložit přiřazení"}</Button>
                 </div>
                 {selected.role === "admin" ? (
                   <p className="fieldHint">Správce vidí všechny projekty — přiřazení se u něj neuplatňuje.</p>
                 ) : (
                   <>
                     <p className="fieldHint">{selected.role === "external" ? "Externí účet uvidí jen tyto projekty a jejich výstupy (exporty, vizualizace, půdorysy) — jen pro čtení." : "Běžný účet pracuje jen s těmito projekty (a s projekty, které sám založí)."}</p>
-                    <input value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} placeholder="Filtrovat projekty…" />
+                    <Input value={projectQuery} onChange={(event) => setProjectQuery(event.target.value)} placeholder="Filtrovat projekty…" />
                     {projects.length === 0 && <p className="fieldHint">V databázi zatím nejsou žádné projekty.</p>}
                     <div className="userProjectList">
                       {visibleProjects.map((project) => (

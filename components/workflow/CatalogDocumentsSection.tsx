@@ -4,6 +4,7 @@ import { useState } from "react";
 import type { SourceAssetEntry, StoredAsset } from "../../domain/assets";
 import type { CatalogItemAdminEdit } from "../../domain/catalogItemsAdmin";
 import { getAssetDownloadUrl, uploadAsset, type UploadProgress } from "../../lib/storage/assetClient";
+import { Button } from "@/components/ui/button";
 
 async function openAsset(asset: StoredAsset, onError: (message: string) => void) {
   try {
@@ -63,12 +64,12 @@ export function CatalogDocumentsSection({ entries, ownerId, onSave }: { entries:
             <li key={entry.id} className="sourceAssetListItem">
               <span className="sourceAssetKindBadge">PDF</span>
               <span>{entry.label || entry.asset.originalFileName}</span>
-              <button type="button" className="linkButton" onClick={() => void openAsset(entry.asset, setError)}>Otevřít</button>
+              <Button variant="link" type="button" onClick={() => void openAsset(entry.asset, setError)}>Otevřít</Button>
               <label className="smallUploadButton">
                 {busyId === entry.id ? "Nahrávám…" : "Nahradit"}
                 <input type="file" accept="application/pdf,.pdf" disabled={Boolean(busyId)} onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ""; if (file) void upload(file, entry); }} />
               </label>
-              <button type="button" className="dangerText" disabled={Boolean(busyId)} onClick={() => void remove(entry)}>Odebrat referenci</button>
+              <Button variant="destructive" type="button" disabled={Boolean(busyId)} onClick={() => void remove(entry)}>Odebrat referenci</Button>
             </li>
           ))}
         </ul>
@@ -107,14 +108,14 @@ export function CatalogHiddenAttachments({ model, sources }: { model?: Readonly<
           <li className="sourceAssetListItem">
             <span className="sourceAssetKindBadge">GLB</span>
             <span>{model.fileName}</span>
-            {model.asset && <button type="button" className="linkButton" onClick={() => void openAsset(model.asset!, setError)}>Otevřít</button>}
+            {model.asset && <Button variant="link" type="button" onClick={() => void openAsset(model.asset!, setError)}>Otevřít</Button>}
           </li>
         )}
         {sources.map((entry) => (
           <li key={entry.id} className="sourceAssetListItem">
             <span className="sourceAssetKindBadge">{entry.kind.toUpperCase()}</span>
             <span>{entry.label || entry.asset.originalFileName}</span>
-            <button type="button" className="linkButton" onClick={() => void openAsset(entry.asset, setError)}>Otevřít</button>
+            <Button variant="link" type="button" onClick={() => void openAsset(entry.asset, setError)}>Otevřít</Button>
           </li>
         ))}
       </ul>

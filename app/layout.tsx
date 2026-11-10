@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { resolveAppEnvironment, supabaseProjectRef } from "../lib/env/supabaseEnvironment";
-import "./globals.css";
+import "./app.css";
 
 // Production (NEXT_PUBLIC_APP_ENV unset or "production") renders exactly as before: no badge, same title.
 const appEnvironment = resolveAppEnvironment({ NEXT_PUBLIC_APP_ENV: process.env.NEXT_PUBLIC_APP_ENV, NODE_ENV: process.env.NODE_ENV });

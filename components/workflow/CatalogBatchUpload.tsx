@@ -14,6 +14,8 @@ import {
 } from "../../domain/catalogBatchUpload";
 import type { StoredAsset } from "../../domain/assets";
 import { uploadAsset } from "../../lib/storage/assetClient";
+import { NativeSelect } from "@/components/ui/native-select";
+import { Button } from "@/components/ui/button";
 
 const BATCH_ACCEPT = ".jpg,.jpeg,.png,.webp,.glb,.skp,.dwg,.dxf,.pdf";
 
@@ -149,9 +151,9 @@ export function CatalogBatchUpload({
                     <td><strong>{row.fileName}</strong><small> {formatSize(row.size)}</small></td>
                     <td>
                       {row.options.length > 0 ? (
-                        <select value={row.target} disabled={busy || finished} onChange={(event) => setRows((current) => changeBatchTarget(current, index, event.target.value as BatchPlanRow["target"]))}>
+                        <NativeSelect value={row.target} disabled={busy || finished} onChange={(event) => setRows((current) => changeBatchTarget(current, index, event.target.value as BatchPlanRow["target"]))}>
                           {row.options.map((option) => <option key={option} value={option}>{BATCH_TARGET_LABELS_CS[option]}</option>)}
-                        </select>
+                        </NativeSelect>
                       ) : <span className="uploadError">{row.error}</span>}
                       {row.note && <small className="fieldHint">{row.note}</small>}
                     </td>
@@ -171,8 +173,8 @@ export function CatalogBatchUpload({
           {replacesModel && !finished && <p className="fieldHint">Vybraný GLB nahradí aktivní 3D model generátoru (původní soubor zůstane v úložišti).</p>}
           {formDirty && !finished && <p className="fieldHint">Rozpracované změny polí karty se nahráním neuloží ani neztratí — uložte je potom tlačítkem Uložit.</p>}
           <div className="assetActions">
-            {!finished && <button type="button" className="primaryButton" disabled={busy || toUpload === 0} onClick={() => void confirm()}>{busy ? "Nahrávám…" : `Nahrát ${toUpload} ${toUpload === 1 ? "soubor" : toUpload < 5 ? "soubory" : "souborů"}`}</button>}
-            <button type="button" className="secondaryButton" disabled={busy} onClick={reset}>{finished ? "Zavřít přehled" : "Zrušit"}</button>
+            {!finished && <Button variant="default" type="button" disabled={busy || toUpload === 0} onClick={() => void confirm()}>{busy ? "Nahrávám…" : `Nahrát ${toUpload} ${toUpload === 1 ? "soubor" : toUpload < 5 ? "soubory" : "souborů"}`}</Button>}
+            <Button variant="outline" type="button" disabled={busy} onClick={reset}>{finished ? "Zavřít přehled" : "Zrušit"}</Button>
           </div>
         </>
       )}

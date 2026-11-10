@@ -18,6 +18,10 @@ import {
   type PricingPreviewRow,
 } from "../../domain/pricingAdmin";
 import type { DuplicatePriceListResponse, RemoteApiPricingAdminRepository } from "../../lib/db/pricingAdmin.remoteApi.client";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { NativeSelect } from "@/components/ui/native-select";
+import { PageHeader } from "@/components/ui/workspace";
 
 const PRICE_MODE_LABELS: Record<PricingEntryMode, string> = {
   fixed: "Fixed",
@@ -130,8 +134,8 @@ export function PriceListPricingTable({
       <div className="pricingSaveBar">
         <SaveSummaryBanner summary={summary} saving={saving} />
         <div style={{ display: "flex", gap: 10 }}>
-          <button type="button" onClick={onOpenDuplicate}>Duplikovat ceník</button>
-          <button type="button" className="primaryButton" onClick={() => void saveChanges()} disabled={dirtyEntries.length === 0 || saving}>Uložit změny{dirtyEntries.length > 0 ? ` (${dirtyEntries.length})` : ""}</button>
+          <Button variant="outline" size="sm" type="button" onClick={onOpenDuplicate}>Duplikovat ceník</Button>
+          <Button variant="default" type="button" onClick={() => void saveChanges()} disabled={dirtyEntries.length === 0 || saving}>Uložit změny{dirtyEntries.length > 0 ? ` (${dirtyEntries.length})` : ""}</Button>
         </div>
       </div>
       {loading ? (
@@ -157,18 +161,18 @@ export function PriceListPricingTable({
                   <td>
                     {draft.priceMode === "fixed" ? (
                       <div className={`pricingCell ${dirty ? "pricingCellDirty" : ""}`}>
-                        <input type="number" value={draft.salePrice ?? ""} onChange={(event) => updateDraft(entry, { salePrice: event.target.value === "" ? undefined : Number(event.target.value) })} placeholder="Cena není nastavena" />
+                        <Input type="number" value={draft.salePrice ?? ""} onChange={(event) => updateDraft(entry, { salePrice: event.target.value === "" ? undefined : Number(event.target.value) })} placeholder="Cena není nastavena" />
                       </div>
                     ) : (
                       <span className="pricingCellStatic">{draft.priceMode === "included" ? "V ceně" : "Individuální"}</span>
                     )}
                   </td>
                   <td>
-                    <select value={draft.priceMode} onChange={(event) => updateDraft(entry, { priceMode: event.target.value as PricingEntryMode })}>
+                    <NativeSelect value={draft.priceMode} onChange={(event) => updateDraft(entry, { priceMode: event.target.value as PricingEntryMode })}>
                       <option value="fixed">Fixed</option>
                       <option value="individual">Individual</option>
                       <option value="included">Included</option>
-                    </select>
+                    </NativeSelect>
                   </td>
                   <td><SourceBadge source={dirty ? "manual" : entry.source} /></td>
                   <td>{entry.updatedAt ? new Date(entry.updatedAt).toLocaleDateString("cs-CZ") : entry.createdAt ? new Date(entry.createdAt).toLocaleDateString("cs-CZ") : "—"}</td>
@@ -178,7 +182,7 @@ export function PriceListPricingTable({
           </tbody>
         </table>
       )}
-      <p className="pricingAdminNotice">Katalogové položky, které v tomto ceníku ještě nemají cenu, se zde nezobrazují jako prázdné řádky — pro přidání nové ceny použijte Správa cen → Pricing Matrix pro danou položku a ceník {priceList.code}.</p>
+      <p className="mb-4 max-w-5xl text-sm text-muted-foreground">Katalogové položky, které v tomto ceníku ještě nemají cenu, se zde nezobrazují jako prázdné řádky — pro přidání nové ceny použijte Správa cen → Pricing Matrix pro danou položku a ceník {priceList.code}.</p>
     </section>
   );
 }
@@ -254,34 +258,34 @@ export function DuplicatePriceListDialog({
             <p>Zkopírováno {result.copiedCount} cenových položek{result.skippedCount > 0 ? `, ${result.skippedCount} přeskočeno (jiná měna, fixní cenu nelze bezpečně zkopírovat)` : ""}.</p>
             {result.entriesError && <div className="adminModalError">{result.entriesError}</div>}
             {result.linkWarning && <div className="adminModalError">{result.linkWarning}</div>}
-            <div className="adminModalActions"><button type="button" className="primaryButton" onClick={onClose}>Zavřít</button></div>
+            <div className="adminModalActions"><Button variant="default" type="button" onClick={onClose}>Zavřít</Button></div>
           </>
         ) : (
           <>
             <h2>Duplikovat ceník</h2>
             <p>Zdroj: {sourcePriceList.name} ({sourcePriceList.code}) — {sourceEntries.length} cenových položek.</p>
-            <label><span>Nový název</span><input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
-            <div className="threeColumns">
-              <label><span>Nový kód</span><input value={draft.code} onChange={(event) => setDraft({ ...draft, code: event.target.value })} /></label>
-              <label><span>Rok</span><input type="number" value={draft.year} onChange={(event) => setDraft({ ...draft, year: Number(event.target.value) })} /></label>
-              <label><span>Edice</span><input value={draft.edition ?? ""} onChange={(event) => setDraft({ ...draft, edition: event.target.value || undefined })} /></label>
+            <label><span>Nový název</span><Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
+            <div className="threeColumns grid-cols-1 sm:grid-cols-3">
+              <label><span>Nový kód</span><Input value={draft.code} onChange={(event) => setDraft({ ...draft, code: event.target.value })} /></label>
+              <label><span>Rok</span><Input type="number" value={draft.year} onChange={(event) => setDraft({ ...draft, year: Number(event.target.value) })} /></label>
+              <label><span>Edice</span><Input value={draft.edition ?? ""} onChange={(event) => setDraft({ ...draft, edition: event.target.value || undefined })} /></label>
             </div>
-            <div className="twoColumns">
-              <label><span>Event</span><select value={draft.eventId ?? ""} onChange={(event) => setDraft({ ...draft, eventId: event.target.value || undefined })}><option value="">Bez eventu</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select></label>
-              <label><span>Měna</span><select value={draft.currency} onChange={(event) => setDraft({ ...draft, currency: event.target.value as Currency })}><option value="CZK">CZK</option><option value="EUR">EUR</option></select></label>
+            <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+              <label><span>Event</span><NativeSelect value={draft.eventId ?? ""} onChange={(event) => setDraft({ ...draft, eventId: event.target.value || undefined })}><option value="">Bez eventu</option>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</NativeSelect></label>
+              <label><span>Měna</span><NativeSelect value={draft.currency} onChange={(event) => setDraft({ ...draft, currency: event.target.value as Currency })}><option value="CZK">CZK</option><option value="EUR">EUR</option></NativeSelect></label>
             </div>
-            <div className="twoColumns">
-              <label><span>Platnost od</span><input type="date" value={draft.validFrom ?? ""} onChange={(event) => setDraft({ ...draft, validFrom: event.target.value || undefined })} /></label>
-              <label><span>Platnost do</span><input type="date" value={draft.validTo ?? ""} onChange={(event) => setDraft({ ...draft, validTo: event.target.value || undefined })} /></label>
+            <div className="twoColumns grid-cols-1 sm:grid-cols-2">
+              <label><span>Platnost od</span><Input type="date" value={draft.validFrom ?? ""} onChange={(event) => setDraft({ ...draft, validFrom: event.target.value || undefined })} /></label>
+              <label><span>Platnost do</span><Input type="date" value={draft.validTo ?? ""} onChange={(event) => setDraft({ ...draft, validTo: event.target.value || undefined })} /></label>
             </div>
-            <label><span>Realizační společnost</span><select value={draft.realizationCompanyId ?? ""} onChange={(event) => setDraft({ ...draft, realizationCompanyId: event.target.value || undefined })}><option value="">Všechny</option>{realizationCompanies.filter((company) => company.active).map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select></label>
+            <label><span>Realizační společnost</span><NativeSelect value={draft.realizationCompanyId ?? ""} onChange={(event) => setDraft({ ...draft, realizationCompanyId: event.target.value || undefined })}><option value="">Všechny</option>{realizationCompanies.filter((company) => company.active).map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</NativeSelect></label>
             <label className="checkLabel"><input type="checkbox" checked={draft.active} onChange={(event) => setDraft({ ...draft, active: event.target.checked })} /> Aktivní</label>
             <p><strong>Zkopíruje se {willCopyCount} cenových položek.</strong>{willSkipCount > 0 ? ` ${willSkipCount} se přeskočí (fixní cena v jiné měně by byla fabrikovaná).` : ""}</p>
             {!codeIsValid && <div className="adminModalError">{codeErrorReason}</div>}
             {error && <div className="adminModalError">{error}</div>}
             <div className="adminModalActions">
-              <button type="button" onClick={onClose} disabled={submitting}>Zrušit</button>
-              <button type="button" className="primaryButton" onClick={() => void submit()} disabled={submitting || !codeIsValid}>{submitting ? "Duplikuji…" : "Duplikovat ceník"}</button>
+              <Button variant="outline" size="sm" type="button" onClick={onClose} disabled={submitting}>Zrušit</Button>
+              <Button variant="default" type="button" onClick={() => void submit()} disabled={submitting || !codeIsValid}>{submitting ? "Duplikuji…" : "Duplikovat ceník"}</Button>
             </div>
           </>
         )}
@@ -300,11 +304,11 @@ function PricingFiltersBar({ filters, onChange, priceLists, events }: { filters:
   const years = [...new Set(priceLists.map((list) => list.year))].sort((a, b) => b - a);
   return (
     <div className="pricingFilters">
-      <label><span>Rok</span><select value={filters.year} onChange={(event) => onChange({ ...filters, year: event.target.value })}><option value="">Vše</option>{years.map((year) => <option key={year} value={year}>{year}</option>)}</select></label>
+      <label><span>Rok</span><NativeSelect value={filters.year} onChange={(event) => onChange({ ...filters, year: event.target.value })}><option value="">Vše</option>{years.map((year) => <option key={year} value={year}>{year}</option>)}</NativeSelect></label>
       <label><span>Event</span><select multiple value={filters.eventIds} onChange={(event) => onChange({ ...filters, eventIds: [...event.target.selectedOptions].map((option) => option.value) })}>{events.map((event) => <option key={event.id} value={event.id}>{event.name}</option>)}</select></label>
-      <label><span>Měna</span><select value={filters.currency} onChange={(event) => onChange({ ...filters, currency: event.target.value as PricingFilters["currency"] })}><option value="">Vše</option><option value="CZK">CZK</option><option value="EUR">EUR</option></select></label>
+      <label><span>Měna</span><NativeSelect value={filters.currency} onChange={(event) => onChange({ ...filters, currency: event.target.value as PricingFilters["currency"] })}><option value="">Vše</option><option value="CZK">CZK</option><option value="EUR">EUR</option></NativeSelect></label>
       <label><span>Ceník</span><select multiple value={filters.priceListIds} onChange={(event) => onChange({ ...filters, priceListIds: [...event.target.selectedOptions].map((option) => option.value) })}>{priceLists.map((list) => <option key={list.id} value={list.id}>{list.name}</option>)}</select></label>
-      <label><span>Price mode</span><select value={filters.priceMode} onChange={(event) => onChange({ ...filters, priceMode: event.target.value as PricingFilters["priceMode"] })}><option value="">Vše</option><option value="fixed">Fixed</option><option value="individual">Individual</option><option value="included">Included</option></select></label>
+      <label><span>Price mode</span><NativeSelect value={filters.priceMode} onChange={(event) => onChange({ ...filters, priceMode: event.target.value as PricingFilters["priceMode"] })}><option value="">Vše</option><option value="fixed">Fixed</option><option value="individual">Individual</option><option value="included">Included</option></NativeSelect></label>
     </div>
   );
 }
@@ -359,15 +363,15 @@ function BulkEditDialog({
       <div className="adminModalCard" onClick={(event) => event.stopPropagation()}>
         <h2>Hromadná úprava cen</h2>
         <p>{catalogItemIds.length} komponent × {priceLists.length} ceníků vybraných v tabulce.</p>
-        <label><span>Price mode</span><select value={priceMode} onChange={(event) => { setPriceMode(event.target.value as PricingEntryMode); setPreview(null); }}><option value="fixed">Fixed — nastavit cenu</option><option value="individual">Individual — bez pevné ceny</option><option value="included">Included — v ceně</option></select></label>
+        <label><span>Price mode</span><NativeSelect value={priceMode} onChange={(event) => { setPriceMode(event.target.value as PricingEntryMode); setPreview(null); }}><option value="fixed">Fixed — nastavit cenu</option><option value="individual">Individual — bez pevné ceny</option><option value="included">Included — v ceně</option></NativeSelect></label>
         {priceMode === "fixed" && (
-          <div className="twoColumns">
+          <div className="twoColumns grid-cols-1 sm:grid-cols-2">
             {currencies.map((currency) => (
-              <label key={currency}><span>Cena {currency}</span><input type="number" value={salePriceByCurrency[currency] ?? ""} onChange={(event) => { setSalePriceByCurrency({ ...salePriceByCurrency, [currency]: event.target.value === "" ? undefined : Number(event.target.value) }); setPreview(null); }} placeholder={`Cena v ${currency} (ponechte prázdné pro přeskočení)`} /></label>
+              <label key={currency}><span>Cena {currency}</span><Input type="number" value={salePriceByCurrency[currency] ?? ""} onChange={(event) => { setSalePriceByCurrency({ ...salePriceByCurrency, [currency]: event.target.value === "" ? undefined : Number(event.target.value) }); setPreview(null); }} placeholder={`Cena v ${currency} (ponechte prázdné pro přeskočení)`} /></label>
             ))}
           </div>
         )}
-        {!summary && <div className="adminModalActions"><button type="button" onClick={onClose}>Zrušit</button><button type="button" onClick={showPreview}>Zobrazit náhled</button></div>}
+        {!summary && <div className="adminModalActions"><Button variant="outline" size="sm" type="button" onClick={onClose}>Zrušit</Button><Button variant="outline" size="sm" type="button" onClick={showPreview}>Zobrazit náhled</Button></div>}
         {preview && !summary && (
           <>
             <table className="pricingPreviewTable">
@@ -387,13 +391,13 @@ function BulkEditDialog({
               </tbody>
             </table>
             {preview.length === 0 && <p className="workspaceEmpty">Žádná buňka k úpravě — u Fixed zadejte alespoň jednu měnu.</p>}
-            <div className="adminModalActions"><button type="button" onClick={onClose} disabled={applying}>Zrušit</button><button type="button" className="primaryButton" onClick={() => void confirm()} disabled={applying || preview.length === 0}>{applying ? "Ukládám…" : "Potvrdit a uložit"}</button></div>
+            <div className="adminModalActions"><Button variant="outline" size="sm" type="button" onClick={onClose} disabled={applying}>Zrušit</Button><Button variant="default" type="button" onClick={() => void confirm()} disabled={applying || preview.length === 0}>{applying ? "Ukládám…" : "Potvrdit a uložit"}</Button></div>
           </>
         )}
         {summary && (
           <>
             <p><SaveSummaryBanner summary={summary} saving={false} /></p>
-            <div className="adminModalActions"><button type="button" className="primaryButton" onClick={onClose}>Zavřít</button></div>
+            <div className="adminModalActions"><Button variant="default" type="button" onClick={onClose}>Zavřít</Button></div>
           </>
         )}
       </div>
@@ -481,13 +485,13 @@ function PricingMatrix({
 
   return (
     <section className="pricingMatrixSection">
-      <div className="workspacePageHeader"><div><span className="eyebrow">SPRÁVA CEN</span><h1>Pricing Matrix</h1></div><button type="button" onClick={onClose}>← Zpět na výběr komponent</button></div>
+      <PageHeader title="Pricing Matrix" eyebrow="SPRÁVA CEN" actions={<><Button type="button" variant="ghost" onClick={onClose}>← Zpět na výběr komponent</Button></>} />
       <PricingFiltersBar filters={filters} onChange={setFilters} priceLists={priceLists} events={events} />
       <div className="pricingSaveBar">
         <SaveSummaryBanner summary={summary} saving={saving} />
         <div style={{ display: "flex", gap: 10 }}>
-          <button type="button" onClick={() => setBulkOpen(true)} disabled={columns.length === 0}>Hromadná úprava…</button>
-          <button type="button" className="primaryButton" onClick={() => void saveChanges()} disabled={edited.size === 0 || saving}>Uložit změny{edited.size > 0 ? ` (${edited.size})` : ""}</button>
+          <Button variant="outline" size="sm" type="button" onClick={() => setBulkOpen(true)} disabled={columns.length === 0}>Hromadná úprava…</Button>
+          <Button variant="default" type="button" onClick={() => void saveChanges()} disabled={edited.size === 0 || saving}>Uložit změny{edited.size > 0 ? ` (${edited.size})` : ""}</Button>
         </div>
       </div>
       {loading ? (
@@ -523,13 +527,13 @@ function PricingMatrix({
                               <>
                                 {cell.source && <span className={`pricingSourceDot ${cell.source}`} aria-hidden="true" />}
                                 <div className="pricingCellInputs">
-                                  <select value={cell.priceMode ?? "fixed"} onChange={(event) => updateCell(catalogItemId, priceList, { priceMode: event.target.value as PricingEntryMode })}>
+                                  <NativeSelect value={cell.priceMode ?? "fixed"} onChange={(event) => updateCell(catalogItemId, priceList, { priceMode: event.target.value as PricingEntryMode })}>
                                     <option value="fixed">Fixed</option>
                                     <option value="individual">Individual</option>
                                     <option value="included">Included</option>
-                                  </select>
+                                  </NativeSelect>
                                   {(cell.priceMode ?? "fixed") === "fixed" && (
-                                    <input type="number" value={cell.salePrice ?? ""} onChange={(event) => updateCell(catalogItemId, priceList, { salePrice: event.target.value === "" ? undefined : Number(event.target.value) })} placeholder="—" />
+                                    <Input type="number" value={cell.salePrice ?? ""} onChange={(event) => updateCell(catalogItemId, priceList, { salePrice: event.target.value === "" ? undefined : Number(event.target.value) })} placeholder="—" />
                                   )}
                                   {cell.dirty && <small className="pricingCellBefore">bylo: {beforeLabel}</small>}
                                 </div>
@@ -613,7 +617,7 @@ export function PricingAdminPage({
 
   if (matrixItemIds) {
     return (
-      <div className="workspacePage">
+      <div className="adminPage">
         <PricingMatrix
           catalogItemIds={matrixItemIds}
           catalogItems={catalogItems}
@@ -629,10 +633,10 @@ export function PricingAdminPage({
   }
 
   return (
-    <div className="workspacePage">
-      <div className="workspacePageHeader"><div><span className="eyebrow">POKROČILÁ ADMINISTRACE</span><h1>Správa cen</h1></div></div>
-      <p className="pricingAdminNotice">Toto je pokročilá administrace cen napříč ceníky — odděleně od běžného generátoru projektu, aby se omezilo riziko nechtěné hromadné změny cen.</p>
-      <div className="adminFilters"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat kód, název nebo kategorii…" /></div>
+    <div className="adminPage">
+      <PageHeader title="Správa cen" eyebrow="POKROČILÁ ADMINISTRACE" />
+      <p className="mb-4 max-w-5xl text-sm text-muted-foreground">Toto je pokročilá administrace cen napříč ceníky — odděleně od běžného generátoru projektu, aby se omezilo riziko nechtěné hromadné změny cen.</p>
+      <div className="adminFilters"><Input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Hledat kód, název nebo kategorii…" /></div>
       <div className="pricingCatalogList">
         {filteredItems.map((item) => (
           <div className="pricingCatalogRow" key={item.id}>
@@ -640,7 +644,7 @@ export function PricingAdminPage({
             <div><strong>{item.internalCode ?? "—"}</strong> {item.displayName}</div>
             <span>{item.kind}</span>
             <span>{item.lifecycleStatus}</span>
-            <button type="button" onClick={() => void openMatrix([item.id])}>Upravit ceny</button>
+            <Button variant="outline" size="sm" type="button" onClick={() => void openMatrix([item.id])}>Upravit ceny</Button>
           </div>
         ))}
         {filteredItems.length === 0 && <p className="workspaceEmpty">Hledání neodpovídá žádná katalogová položka.</p>}
@@ -648,7 +652,7 @@ export function PricingAdminPage({
       {selectedIds.length > 0 && (
         <div className="pricingSelectionBar">
           <span>{selectedIds.length} vybraných položek</span>
-          <button type="button" className="primaryButton" onClick={() => void openMatrix(selectedIds)}>Upravit ceny vybraných</button>
+          <Button variant="default" type="button" onClick={() => void openMatrix(selectedIds)}>Upravit ceny vybraných</Button>
         </div>
       )}
     </div>
