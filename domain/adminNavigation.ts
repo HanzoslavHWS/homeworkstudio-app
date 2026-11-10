@@ -90,7 +90,21 @@ const SECTION_SLUGS: Readonly<Partial<Record<WorkspaceSection, string>>> = {
   settlementChecks: "kontrola-vyuctovani",
 };
 
-export type WorkspaceLocation = Readonly<{ section: "project" }> | Readonly<{ section: Exclude<WorkspaceSection, "project">; admin?: undefined }> | Readonly<{ section: "admin"; admin: AdminRoute }>;
+export type WorkspaceLocation =
+  | Readonly<{ section: "project" }>
+  | Readonly<{ section: Exclude<WorkspaceSection, "project" | "support">; admin?: undefined }>
+  | Readonly<{ section: "admin"; admin: AdminRoute }>
+  /** Nápověda a podpora (V1-SUPPORT-01): route inside it, e.g. "navody/<id>", "hlaseni/<id>", "sprava/hlaseni". */
+  | Readonly<{ section: "support"; support: string }>;
+
+const SUPPORT_SLUG = "podpora";
+const SUPPORT_SEGMENT = /^[a-z0-9-]{1,64}$/u;
+
+/** Support route → safe segments only (ids and fixed words); anything else falls back to the overview. */
+export function normalizeSupportRoute(route: string): string {
+  const parts = route.split("/").filter(Boolean).slice(0, 3);
+  return parts.length && parts.every((part) => SUPPORT_SEGMENT.test(part)) ? parts.join("/") : "navody";
+}
 
 export function workspaceHash(location: WorkspaceLocation): string {
   if (location.section === "project") return "";
@@ -100,6 +114,7 @@ export function workspaceHash(location: WorkspaceLocation): string {
     const tab = (area.tabs as readonly { id: string; slug: string }[]).find((candidate) => candidate.id === route.tab);
     return `#/administrace/${area.slug}${tab ? `/${tab.slug}` : ""}${route.itemId ? `/${encodeURIComponent(route.itemId)}` : ""}`;
   }
+  if (location.section === "support") return `#/${SUPPORT_SLUG}/${normalizeSupportRoute(location.support)}`;
   const legacy = LEGACY_ADMIN_SECTIONS[location.section];
   if (legacy) return workspaceHash({ section: "admin", admin: legacy });
   const slug = SECTION_SLUGS[location.section];
@@ -121,6 +136,7 @@ export function parseWorkspaceHash(hash: string): WorkspaceLocation {
     const tab = (area.tabs as readonly { id: string; slug: string }[]).find((candidate) => candidate.slug === parts[2]);
     return { section: "admin", admin: normalizeAdminRoute({ area: area.id, ...(tab ? { tab: tab.id } : {}), ...(parts[3] ? { itemId: parts[3] } : {}) }) };
   }
+  if (parts[0] === SUPPORT_SLUG) return { section: "support", support: normalizeSupportRoute(parts.slice(1).join("/")) };
   const section = (Object.entries(SECTION_SLUGS) as [WorkspaceSection, string][]).find(([, slug]) => slug === parts[0])?.[0];
-  return section && section !== "project" ? { section } : { section: "project" };
+  return section && section !== "project" && section !== "support" ? { section } : { section: "project" };
 }

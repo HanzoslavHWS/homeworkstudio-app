@@ -20,6 +20,8 @@ const PUBLIC_PATHS = new Set([
   "/api/auth/callback",
   "/api/auth/password/forgot",
   "/api/auth/password/set",
+  // cron sender of support e-mails (V1-SUPPORT-02): no session — the route checks CRON_SECRET itself
+  "/api/support/notifications/dispatch",
 ]);
 
 export async function proxy(request: NextRequest) {

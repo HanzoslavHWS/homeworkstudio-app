@@ -215,7 +215,7 @@ export function createStorageKey(input: Readonly<{ category: AssetCategory; owne
 }
 
 export function isValidStorageKey(value: string): boolean {
-  return value.length <= 512 && /^(events|catalog|projects|print-surfaces|technical-rasters|temporary)\/[A-Za-z0-9_./-]+$/u.test(value) && !value.includes("..") && !value.includes("//");
+  return value.length <= 512 && /^(events|catalog|projects|print-surfaces|technical-rasters|temporary|support)\/[A-Za-z0-9_./-]+$/u.test(value) && !value.includes("..") && !value.includes("//");
 }
 
 export function assertValidStorageKey(value: string): void {

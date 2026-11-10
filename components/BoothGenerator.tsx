@@ -170,6 +170,11 @@ import { quickRotation, rotationForMode } from "../geometry/rotation";
 import { useBoothViewport } from "../hooks/useBoothViewport";
 import { AppSidebar } from "./AppSidebar";
 import { StepHeader } from "./StepHeader";
+import { ContextHelpSheet } from "./support/ContextHelpSheet";
+import { ReportDialog } from "./support/ReportDialog";
+import { SupportCenter } from "./support/SupportCenter";
+import { useSupportSummary } from "./support/useSupportSummary";
+import { abfAreaFor, supportRoleOf } from "../domain/support";
 import { ComponentLibrary } from "./configurator/ComponentLibrary";
 import { BoothComponentLibrary } from "./configurator/BoothComponentLibrary";
 import { PlotSizeInput } from "./configurator/PlotSizeInput";
@@ -245,7 +250,7 @@ import type { TaskLookups } from "./workflow/tasks/TaskRow";
 import { UsersAdminPage } from "./workflow/UsersAdminPage";
 import { AdminShell } from "./workflow/AdminShell";
 import type { CatalogAdminView } from "./workflow/ComponentAdminPage";
-import { LEGACY_ADMIN_SECTIONS, canOpenAdmin, defaultAdminRoute, normalizeAdminRoute, parseWorkspaceHash, workspaceHash, type AdminRoute, type WorkspaceLocation } from "../domain/adminNavigation";
+import { LEGACY_ADMIN_SECTIONS, canOpenAdmin, defaultAdminRoute, normalizeAdminRoute, normalizeSupportRoute, parseWorkspaceHash, workspaceHash, type AdminRoute, type WorkspaceLocation } from "../domain/adminNavigation";
 import { canOpenSection } from "../domain/accessControl";
 import type { CurrentUser } from "../lib/auth/pageAuth.server";
 
@@ -364,8 +369,16 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
     navigateWorkspace("printSurfaces", { printSurfaceProjectId: projectId });
   }
   const [workspaceSection, setWorkspaceSection] = useState<
-    "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies" | "priceVersions" | "users"
+    "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies" | "priceVersions" | "users" | "support"
   >("project");
+  // Nápověda a podpora (V1-SUPPORT-01): its own route (#/podpora/…); help and reporting open as
+  // overlays over the current section, so an open project or a half-filled form is never closed.
+  const [supportRoute, setSupportRoute] = useState("navody");
+  const [supportHelpOpen, setSupportHelpOpen] = useState(false);
+  const [supportReportOpen, setSupportReportOpen] = useState(false);
+  const [supportReloadKey, setSupportReloadKey] = useState(0);
+  const supportRole = supportRoleOf("abf", currentUser?.role);
+  const { summary: supportSummary, refresh: refreshSupportSummary } = useSupportSummary("abf", supportRole !== undefined);
   const [adminEvents, setAdminEvents] = useState<Exhibition[]>([...exhibitions]);
   const [eventsHydrated, setEventsHydrated] = useState(false);
   const [eventDirty, setEventDirty] = useState(false);
@@ -780,7 +793,11 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
       if (!canOpenAdmin(currentUser?.role)) return;
       navigateAdmin(location.admin);
     } else if (location.section === "project") {
-      if (workspaceSection !== "project") setWorkspaceSection("project");
+      // unconditionally: the popstate listener keeps the first render's closure, where the section was still "project"
+      setWorkspaceSection("project");
+    } else if (location.section === "support") {
+      setSupportRoute(location.support);
+      navigateWorkspace("support");
     } else {
       navigateWorkspace(location.section);
     }
@@ -802,12 +819,21 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
       ? { section: "admin", admin: currentAdminRoute }
       : workspaceSection === "project"
         ? { section: "project" }
-        : { section: workspaceSection };
+        : workspaceSection === "support"
+          ? { section: "support", support: supportRoute }
+          : { section: workspaceSection };
     const hash = workspaceHash(location);
     if (hash !== window.location.hash && !(hash === "" && window.location.hash === "")) {
       window.history.pushState(null, "", `${window.location.pathname}${window.location.search}${hash}`);
     }
-  }, [workspaceSection, catalogView, catalogItemId, currentAdminRoute?.area, currentAdminRoute?.tab]);
+  }, [workspaceSection, catalogView, catalogItemId, currentAdminRoute?.area, currentAdminRoute?.tab, supportRoute]);
+
+  function openSupport(route = "navody") {
+    setSupportHelpOpen(false);
+    setSupportRoute(normalizeSupportRoute(route));
+    navigateWorkspace("support");
+  }
+  const supportArea = abfAreaFor(currentAdminRoute ? { section: "admin", admin: currentAdminRoute } : { section: workspaceSection });
 
   /* ================================================= */
   /* DERIVED                                          */
@@ -2850,8 +2876,9 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
         }
         onStartNewProject={startNewProject}
         activeSection={currentAdminRoute ? "admin" : workspaceSection}
-        onNavigate={(section) => (section === "admin" ? openAdministration() : navigateWorkspace(section))}
+        onNavigate={(section) => (section === "admin" ? openAdministration() : section === "support" ? openSupport() : navigateWorkspace(section))}
         taskBadge={taskStore.tasks ? computeTaskCounts(taskStore.tasks, localIsoDate()).attention : undefined}
+        supportBadge={supportSummary ? (supportSummary.role === "manager" ? { count: supportSummary.newTickets + supportSummary.waitingForMe, label: `${supportSummary.newTickets} nových hlášení${supportSummary.waitingForMe ? `, ${supportSummary.waitingForMe} čeká na vás` : ""}` } : { count: supportSummary.waitingForMe, label: `${supportSummary.waitingForMe} hlášení čeká na vaše doplnění` }) : undefined}
         user={currentUser}
       />
 
@@ -2872,6 +2899,8 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
           saveError={saveError}
           showStepper={workspaceSection === "project"}
           onCreateTask={() => openTaskCreate(workspaceSection === "project" ? boothProjectTaskContext() : undefined)}
+          onHelp={supportRole ? () => setSupportHelpOpen(true) : undefined}
+          onReport={supportRole ? () => setSupportReportOpen(true) : undefined}
         />
 
         {persistenceMode === "local-fallback" && (
@@ -3039,6 +3068,35 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
 
         {workspaceSection === "settlementChecks" && (
           <SettlementChecksPage events={adminEvents} actorName={taskStore.actorName} />
+        )}
+
+        {workspaceSection === "support" && supportRole && (
+          <SupportCenter
+            appKey="abf"
+            role={supportRole}
+            route={supportRoute}
+            onNavigate={(route) => setSupportRoute(normalizeSupportRoute(route))}
+            onReport={() => setSupportReportOpen(true)}
+            reloadKey={supportReloadKey}
+            counts={{ newTickets: supportSummary?.newTickets ?? 0, waitingForMe: supportSummary?.waitingForMe ?? 0 }}
+            onChanged={refreshSupportSummary}
+            notifications={supportSummary?.notifications}
+          />
+        )}
+
+        {supportRole && (
+          <>
+            <ContextHelpSheet open={supportHelpOpen} onOpenChange={setSupportHelpOpen} appKey="abf" area={supportArea} onOpenSupport={openSupport} onReport={() => { setSupportHelpOpen(false); setSupportReportOpen(true); }} />
+            <ReportDialog
+              open={supportReportOpen}
+              onOpenChange={setSupportReportOpen}
+              appKey="abf"
+              area={supportArea}
+              author={currentUser?.displayName || currentUser?.email || ""}
+              project={workspaceSection === "project" && projectId ? { id: projectId, name: projectName } : undefined}
+              onCreated={() => { setSupportReloadKey((key) => key + 1); refreshSupportSummary(); }}
+            />
+          </>
         )}
 
         {taskDetail && (

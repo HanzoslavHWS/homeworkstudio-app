@@ -93,7 +93,8 @@ Nové odkazy už server nevydá.
 | `APP_BASE_URL` | server | adresa aplikace pro odkazy z pozvánek a obnovy hesla. **Mimo vývoj povinná a https.** V DEV musí mířit na `localhost` (bez ní se použije lokální adresa požadavku). Odkaz z DEV tak nikdy nevede do produkce. |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | server | jako dosud; Supabase Auth používá stejný projekt (DEV / PROD podle prostředí) |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_FROM`, `SMTP_SECURE` | server, volitelné | odesílání pozvánek e-mailem (kap. 9.4). Bez nich se pozvánka předává odkazem. |
-| `SMTP_DEV_ALLOWED_RECIPIENTS` | jen DEV | e-maily nebo `@domény`, kam smí DEV poslat pozvánku; jiné adresy DEV odmítne |
+| `SMTP_DEV_ALLOWED_RECIPIENTS` | jen DEV | e-maily nebo `@domény`, kam smí DEV poslat pozvánku nebo upozornění podpory; jiné adresy DEV odmítne |
+| `CRON_SECRET` | server, volitelné | opakované odesílání upozornění podpory plánovačem (Vercel Cron), viz [SUPPORT.md](SUPPORT.md) kap. 6 |
 | `E2E_LOGIN_EMAIL`, `E2E_LOGIN_PASSWORD` | jen DEV `.env.local` | účet (Správce) pro skripty `eventAdminE2E`, `priceVersionsE2E`, `seedPricingB1TestProject` |
 | ~~`APP_LOGIN_PASSWORD`~~ | — | zrušeno |
 
@@ -244,3 +245,7 @@ Kód a databáze se vracejí spolu: starý kód čte `app_users.role`, nový ho 
 4. Kontrola: `npm run db:dev:list` (poslední verze `20261109120000`) a přihlášení správce.
 
 Produkce se tím nemění, migrace v ní není.
+
+## 10. Nápověda a podpora (V1-SUPPORT-01)
+
+Podpora uvnitř aplikace používá stejná členství a role jako výše (role v ABF při každém požadavku). Popis, oprávnění, přílohy a návrat zpět: [SUPPORT.md](SUPPORT.md).

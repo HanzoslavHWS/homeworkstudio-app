@@ -8,11 +8,15 @@ type StepHeaderProps = {
   showStepper?: boolean;
   /** Global "+ Úkol" — opens the task dialog pre-filled from whatever the user is looking at (see BoothGenerator currentTaskContext). */
   onCreateTask?: () => void;
+  /** Nápověda k této stránce (V1-SUPPORT-01) — a side panel; nothing underneath is closed. */
+  onHelp?: () => void;
+  /** Nahlásit chybu (V1-SUPPORT-01) — a dialog over the current screen; an open project or form stays as it is. */
+  onReport?: () => void;
 };
 
 const steps = ["Projekt", "Konfigurátor", "Vizualizace", "Souhrn", "Export"];
 
-export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus, saveError, showStepper = true, onCreateTask }: StepHeaderProps) {
+export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus, saveError, showStepper = true, onCreateTask, onHelp, onReport }: StepHeaderProps) {
   return (
     <header className="topbar">
       <div>
@@ -53,6 +57,18 @@ export function StepHeader({ currentStep, onStepSelect, onSave, saveStatus, save
         {onCreateTask && (
           <button type="button" className="topbarTaskButton" onClick={onCreateTask} title="Vytvořit úkol">
             + Úkol
+          </button>
+        )}
+
+        {onHelp && (
+          <button type="button" className="topbarTaskButton" onClick={onHelp} title="Nápověda k této stránce">
+            ? Nápověda
+          </button>
+        )}
+
+        {onReport && (
+          <button type="button" className="topbarTaskButton" onClick={onReport} title="Nahlásit chybu, návrh nebo dotaz">
+            Nahlásit chybu
           </button>
         )}
 

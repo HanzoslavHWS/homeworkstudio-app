@@ -153,9 +153,9 @@ export function projectFileAccess(role: AppRole | undefined, action: FileAction,
 // ---------------------------------------------------------------------------------------------
 // Navigation (UX only — the server enforces the same permissions)
 // ---------------------------------------------------------------------------------------------
-export type WorkspaceSection = "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies" | "priceVersions" | "users" | "admin";
+export type WorkspaceSection = "project" | "projects" | "tasks" | "booths" | "components" | "customerCatalog" | "events" | "priceLists" | "pricingAdmin" | "emails" | "printSurfaces" | "technicalRasters" | "settlementChecks" | "realizationCompanies" | "priceVersions" | "users" | "admin" | "support";
 
-export const SECTION_PERMISSION: Readonly<Record<WorkspaceSection, Permission>> = {
+export const SECTION_PERMISSION: Readonly<Record<Exclude<WorkspaceSection, "support">, Permission>> = {
   project: "projects.create",
   projects: "projects.create",
   tasks: "tasks.use",
@@ -181,6 +181,8 @@ export const ADMIN_PERMISSIONS: readonly Permission[] = ["catalog.manage", "pric
 
 export function canOpenSection(role: AppRole | undefined, section: WorkspaceSection): boolean {
   if (section === "admin") return ADMIN_PERMISSIONS.some((permission) => can(role, permission));
+  // Nápověda a podpora (V1-SUPPORT-01): every role of the application; the support API decides the rest (domain/support.ts)
+  if (section === "support") return role !== undefined;
   return can(role, SECTION_PERMISSION[section]);
 }
 

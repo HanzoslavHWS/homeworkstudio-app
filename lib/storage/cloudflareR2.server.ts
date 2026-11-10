@@ -84,6 +84,19 @@ export class CloudflareR2StorageProvider implements AssetStorageProvider {
     await this.client.send(new DeleteObjectCommand({ Bucket: this.config.bucketName, Key: storageKey }));
   }
 
+  /** First `length` bytes of a stored object (Range request) — for checking the real file type. */
+  async readObjectPrefix(storageKey: string, length = 64): Promise<Uint8Array | undefined> {
+    assertValidStorageKey(storageKey);
+    try {
+      const result = await this.client.send(new GetObjectCommand({ Bucket: this.config.bucketName, Key: storageKey, Range: `bytes=0-${Math.max(1, length) - 1}` }));
+      const bytes = await (result.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined)?.transformToByteArray?.();
+      return bytes ? bytes.slice(0, length) : undefined;
+    } catch (error) {
+      if (isNotFound(error)) return undefined;
+      throw error;
+    }
+  }
+
   async objectExists(storageKey: string): Promise<boolean> {
     return Boolean(await this.getMetadata(storageKey));
   }

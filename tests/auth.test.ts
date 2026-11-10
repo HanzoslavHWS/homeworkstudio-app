@@ -346,9 +346,15 @@ test("adresa pro odkazy: v DEV jen lokální aplikace, jinde povinně https — 
 // =============================================================================================
 // Every API route: no session → 401, external → 403, user → 403 on global administration
 // =============================================================================================
-const PUBLIC_ROUTES = new Set(["auth/login", "auth/logout", "auth/session", "auth/callback", "auth/password/forgot", "auth/password/set"]);
+// support/notifications/dispatch: the cron sender — no session, it checks CRON_SECRET itself (tests/support.test.ts)
+const PUBLIC_ROUTES = new Set(["auth/login", "auth/logout", "auth/session", "auth/callback", "auth/password/forgot", "auth/password/set", "support/notifications/dispatch"]);
 // Routes an EXTERNAL user may call at all (each checks the concrete project / file itself).
-const EXTERNAL_ROUTES = new Set(["projects/list", "assets/download", "assets/presign", "assets/delete", "projects/save", "projects/delete"]);
+const EXTERNAL_ROUTES = new Set([
+  "projects/list", "assets/download", "assets/presign", "assets/delete", "projects/save", "projects/delete",
+  // Nápověda a podpora (V1-SUPPORT-01): every role of the application; content is filtered per role and owner
+  "support/summary", "support/articles", "support/articles/get", "support/articles/comments", "support/tickets", "support/tickets/get",
+  "support/tickets/create", "support/tickets/reply", "support/attachments/presign", "support/attachments/verify", "support/attachments/discard", "support/attachments/url",
+]);
 // Global administration: a BĚŽNÝ user gets 403 (method-specific).
 const ADMIN_ONLY: ReadonlySet<string> = new Set([
   "GET admin/users", "POST admin/users/projects",
@@ -359,6 +365,8 @@ const ADMIN_ONLY: ReadonlySet<string> = new Set([
   "POST events/save", "POST events/config", "POST price-lists/save", "POST pricing-admin/entries/save", "POST pricing-admin/price-lists/duplicate",
   "POST price-versions", "POST price-versions/rows", "POST purchase-prices", "POST purchase-prices/rows", "POST realization-companies", "POST realization-companies/update", "POST print-surfaces/catalog/sync",
   "GET catalog-admin/excel-import", "POST catalog-admin/excel-import/preview", "POST catalog-admin/excel-import/confirm", "GET catalog-admin/excel-import/runs",
+  // Správa podpory: managers (ABF admins) of the application only
+  "POST support/articles/save", "GET support/articles/versions", "POST support/articles/restore", "POST support/articles/comments/moderate", "POST support/tickets/update", "POST support/notifications/requeue",
 ]);
 
 function routeFiles(directory: string, prefix = ""): string[] {
@@ -384,7 +392,9 @@ test("každá API routa: bez přihlášení 401, externí účet 403 (mimo vlast
     for (const method of ["GET", "POST", "DELETE"] as const) {
       const handler = module[method] as ((request: NextRequest) => Promise<Response>) | undefined;
       if (!handler) continue;
-      const make = (token?: string) => request(`/api/${route}`, { method, token, ...(method === "GET" ? {} : { body: {} }) });
+      // support routes name their application (?app= / body.app) — without it they answer 404 support_unavailable
+      const support = route.startsWith("support/");
+      const make = (token?: string) => request(`/api/${route}${support && method === "GET" ? "?app=abf" : ""}`, { method, token, ...(method === "GET" ? {} : { body: support ? { app: "abf" } : {} }) });
       assert.equal((await handler(make())).status, 401, `${method} ${route} without session`);
       if (!EXTERNAL_ROUTES.has(route)) assert.equal((await handler(make(external.token))).status, 403, `${method} ${route} as external`);
       const asUser = (await handler(make(user.token))).status;

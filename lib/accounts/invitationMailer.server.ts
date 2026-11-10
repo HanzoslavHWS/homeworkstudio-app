@@ -52,9 +52,10 @@ const env = (): SmtpEnvironment => ({
   NODE_ENV: process.env.NODE_ENV,
 });
 
-export function smtpState(environment: SmtpEnvironment = env()): MailerState {
+/** `hint` = what the administrator does instead (invitations: hand the link over). */
+export function smtpState(environment: SmtpEnvironment = env(), hint = " Pozvánku předejte odkazem."): MailerState {
   const missing = (["SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM"] as const).filter((name) => !environment[name]?.trim());
-  if (missing.length) return { configured: false, reason: `Odesílání e-mailů není nastavené (chybí ${missing.join(", ")}). Pozvánku předejte odkazem.` };
+  if (missing.length) return { configured: false, reason: `Odesílání e-mailů není nastavené (chybí ${missing.join(", ")}).${hint}` };
   const port = Number(environment.SMTP_PORT);
   if (!Number.isInteger(port) || port <= 0 || port > 65535) return { configured: false, reason: "SMTP_PORT není platné číslo portu." };
   return { configured: true };
@@ -83,6 +84,40 @@ export function invitationText(message: InvitationMessage): Readonly<{ subject: 
 
 type Transport = { sendMail(options: Record<string, unknown>): Promise<unknown> };
 
+export type MailContent = Readonly<{ to: string; subject: string; text: string; html: string }>;
+
+/**
+ * One message through the company SMTP (shared by invitations and support notifications). Throws
+ * InvitationSendError with a short, non-secret reason; never logs the content or the credentials.
+ */
+export async function sendSmtpMail(mail: MailContent, environment: SmtpEnvironment = env()): Promise<void> {
+  const state = smtpState(environment, "");
+  if (state.configured === false) throw new InvitationSendError(state.reason);
+  if (!recipientAllowedIn(mail.to, environment)) throw new InvitationSendError("Ve vývoji (DEV) lze posílat jen na adresy ze SMTP_DEV_ALLOWED_RECIPIENTS.");
+  const port = Number(environment.SMTP_PORT);
+  let transport: Transport;
+  try {
+    const nodemailer = (await import("nodemailer")) as unknown as { default: { createTransport(options: Record<string, unknown>): Transport } };
+    transport = nodemailer.default.createTransport({
+      host: environment.SMTP_HOST!.trim(),
+      port,
+      secure: environment.SMTP_SECURE?.trim() === "true" || port === 465,
+      auth: { user: environment.SMTP_USER!.trim(), pass: environment.SMTP_PASSWORD },
+      // never log message contents (the link) or credentials
+      logger: false,
+      debug: false,
+    });
+  } catch {
+    throw new InvitationSendError("Odesílání e-mailů se nepodařilo připravit.");
+  }
+  try {
+    await transport.sendMail({ from: environment.SMTP_FROM!.trim(), to: mail.to, subject: mail.subject, text: mail.text, html: mail.html });
+  } catch (error) {
+    const code = (error as { code?: string; responseCode?: number } | null) ?? {};
+    throw new InvitationSendError(`E-mail se nepodařilo odeslat (${code.code ?? code.responseCode ?? "SMTP"}).`);
+  }
+}
+
 export const smtpInvitationMailer: InvitationMailer = {
   state: () => smtpState(),
   recipientAllowed: (email) => recipientAllowedIn(email),
@@ -90,30 +125,7 @@ export const smtpInvitationMailer: InvitationMailer = {
     const environment = env();
     const state = smtpState(environment);
     if (state.configured === false) throw new InvitationSendError(state.reason);
-    if (!recipientAllowedIn(message.to, environment)) throw new InvitationSendError("Ve vývoji (DEV) lze posílat jen na adresy ze SMTP_DEV_ALLOWED_RECIPIENTS.");
-    const port = Number(environment.SMTP_PORT);
-    let transport: Transport;
-    try {
-      const nodemailer = (await import("nodemailer")) as unknown as { default: { createTransport(options: Record<string, unknown>): Transport } };
-      transport = nodemailer.default.createTransport({
-        host: environment.SMTP_HOST!.trim(),
-        port,
-        secure: environment.SMTP_SECURE?.trim() === "true" || port === 465,
-        auth: { user: environment.SMTP_USER!.trim(), pass: environment.SMTP_PASSWORD },
-        // never log message contents (the link) or credentials
-        logger: false,
-        debug: false,
-      });
-    } catch {
-      throw new InvitationSendError("Odesílání e-mailů se nepodařilo připravit.");
-    }
-    const content = invitationText(message);
-    try {
-      await transport.sendMail({ from: environment.SMTP_FROM!.trim(), to: message.to, subject: content.subject, text: content.text, html: content.html });
-    } catch (error) {
-      const code = (error as { code?: string; responseCode?: number } | null) ?? {};
-      throw new InvitationSendError(`E-mail se nepodařilo odeslat (${code.code ?? code.responseCode ?? "SMTP"}).`);
-    }
+    await sendSmtpMail({ to: message.to, ...invitationText(message) }, environment);
   },
 };
 

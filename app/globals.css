@@ -7604,6 +7604,10 @@ select:where(:not([data-ui] *, [data-slot], [data-slot] *)):focus {
 .externalHeader { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; max-width: 900px; margin: 0 auto 20px; }
 .externalHeader h1 { font-size: 26px; letter-spacing: -0.5px; }
 .externalHeader .userMenu { margin-bottom: 0; }
+.externalHeaderActions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; }
+.externalHeaderActions .secondaryButton { display: inline-flex; align-items: center; gap: 6px; }
+.externalHeaderActions .navBadge { position: static; }
+.externalPage [data-ui="support"] { padding-top: 0; }
 .externalList { display: grid; gap: 14px; max-width: 900px; margin: 0 auto; }
 .externalCard { padding: 18px 20px; border: 1px solid #dfe1e2; border-radius: 12px; background: #fff; }
 .externalCard h2 { font-size: 17px; margin-bottom: 4px; }
