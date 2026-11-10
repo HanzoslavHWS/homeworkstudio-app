@@ -507,19 +507,20 @@ textarea {
   color: #7c7f84;
 }
 
+/* Only the cards actually rendered take part: one card sits in the middle, two side by side in the middle. */
 .launcherGrid {
   width: min(100%, 820px);
 
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
 
   gap: 24px;
 }
 
-@media (max-width: 720px) {
-  .launcherGrid {
-    grid-template-columns: 1fr;
-  }
+.launcherGrid > .launcherCard {
+  flex: 0 1 398px;
+  min-width: 0;
 }
 
 .launcherCard {
@@ -7721,4 +7722,17 @@ select:where(:not([data-ui] *, [data-slot], [data-slot] *)):focus {
 @media (max-width: 720px) {
 
   .adminShell .adminSplit { grid-template-columns: 1fr; }
+}
+
+/* ================================================= */
+/* V1-AUTH-02: launcher top bar (shared administration link) */
+/* ================================================= */
+.launcherTopBar { position: absolute; top: 18px; right: 24px; display: flex; align-items: center; gap: 16px; }
+.launcherTopBar .userMenu--dark { position: static; margin-bottom: 0; }
+.launcherAdminLink { display: inline-flex; align-items: center; min-height: 36px; padding: 0 14px; border: 1px solid #3a3c40; border-radius: 8px; color: #f2f2f2; font-size: 13px; font-weight: 700; text-decoration: none; }
+.launcherAdminLink:hover { border-color: #f2f2f2; }
+.launcherAdminLink:focus-visible { outline: 2px solid #93b4ff; outline-offset: 2px; }
+.launcherEmpty { max-width: 520px; color: #b7bbbf; font-size: 15px; line-height: 1.6; text-align: center; }
+@media (max-width: 720px) {
+  .launcherTopBar { position: static; align-self: stretch; flex-wrap: wrap; justify-content: flex-end; }
 }

@@ -1,38 +1,13 @@
-export type LauncherAppStatus = "ready" | "coming-soon";
+import type { HwsAppKey } from "../domain/hwsApps";
 
 /**
- * Data-driven launcher entries. Adding a future HomeworkStudio app is just adding an entry
- * here — no permission system yet (enabled is a static flag for now), but the shape already
- * has what a later per-user permission check would need to decide visibility.
+ * Presentation of the launcher cards (logo, version, call to action) per application key. Which
+ * cards an account sees, their names, addresses and availability come from the application registry
+ * and the account's memberships (domain/hwsApps.ts launcherEntries, V1-AUTH-02) — never from here.
  */
-export type LauncherApp = Readonly<{
-  id: string;
-  title: string;
-  version?: string;
-  logo: string;
-  route: string;
-  status: LauncherAppStatus;
-  enabled: boolean;
-  cta?: string;
-}>;
+export type LauncherPresentation = Readonly<{ logo: string; version?: string; cta?: string }>;
 
-export const launcherApps: readonly LauncherApp[] = [
-  {
-    id: "hws-easy",
-    title: "HWS Easy",
-    version: "v1.0",
-    logo: "/logo/hws_easy_logo.png",
-    route: "",
-    status: "coming-soon",
-    enabled: false,
-  },
-  {
-    id: "abf-generator",
-    title: "ABF Generator",
-    logo: "/logo/abf_generator_logo.png",
-    route: "/abf",
-    status: "ready",
-    enabled: true,
-    cta: "Vstoupit do generátoru",
-  },
-];
+export const launcherPresentation: Readonly<Record<HwsAppKey, LauncherPresentation>> = {
+  "hws-easy": { logo: "/logo/hws_easy_logo.png", version: "v1.0" },
+  abf: { logo: "/logo/abf_generator_logo.png", cta: "Vstoupit do generátoru" },
+};

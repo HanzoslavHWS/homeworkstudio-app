@@ -1,51 +1,69 @@
 import Link from "next/link";
-import { launcherApps, type LauncherApp } from "../data/launcherApps";
-import { APP_ROLE_LABELS_CS } from "../domain/accessControl";
+import { launcherPresentation } from "../data/launcherApps";
+import { launcherEntries, type LauncherEntry } from "../domain/hwsApps";
 import type { CurrentUser } from "../lib/auth/pageAuth.server";
 import { UserMenu } from "./auth/UserMenu";
 
-function LauncherCardContent({ app }: { app: LauncherApp }) {
+function LauncherCardContent({ entry }: { entry: LauncherEntry }) {
+  const presentation = launcherPresentation[entry.app.key];
   return (
     <>
       <div className="launcherCardLogo">
-        <img src={app.logo} alt={app.title} />
+        <img src={presentation.logo} alt={entry.app.name} />
       </div>
       <div className="launcherCardBody">
         <strong className="launcherCardTitle">
-          {app.title}
-          {app.version ? ` ${app.version}` : ""}
+          {entry.app.name}
+          {presentation.version ? ` ${presentation.version}` : ""}
         </strong>
-        {app.status === "coming-soon" ? (
-          <span className="launcherBadge">Připravujeme</span>
+        {entry.opens ? (
+          <span className="launcherCardCta">{presentation.cta ?? "Vstoupit"}</span>
         ) : (
-          <span className="launcherCardCta">{app.cta ?? "Vstoupit"}</span>
+          <span className="launcherBadge">Připravujeme</span>
         )}
       </div>
     </>
   );
 }
 
-export function Launcher({ user }: Readonly<{ user?: CurrentUser }>) {
+/**
+ * Rozcestník HomeworkStudio (V1-AUTH-02): only the applications this account has a membership in.
+ * A permitted application that is still being prepared shows "Připravujeme" and opens nothing. The
+ * shared administration is offered to its administrators only — the page itself checks again.
+ */
+export function Launcher({ user }: Readonly<{ user: CurrentUser }>) {
+  const entries = launcherEntries({ isActive: true, isHwsAdmin: user.isHwsAdmin, apps: user.apps });
   return (
     <main className="launcherPage">
-      {user && <UserMenu user={user} roleLabel={APP_ROLE_LABELS_CS[user.role]} variant="dark" />}
+      <div className="launcherTopBar">
+        {user.isHwsAdmin && (
+          <Link href="/sprava-uzivatelu" className="launcherAdminLink">Správa uživatelů</Link>
+        )}
+        <UserMenu user={user} roleLabel={user.isHwsAdmin ? "Správce HomeworkStudia" : "Účet HomeworkStudio"} variant="dark" />
+      </div>
       <header className="launcherHeader">
         <h1>HOMEWORKSTUDIO</h1>
-        <p>Vyberte aplikaci</p>
+        <p>{entries.length ? "Vyberte aplikaci" : "Zatím nemáte přístup do žádné aplikace"}</p>
       </header>
-      <div className="launcherGrid">
-        {launcherApps.map((app) =>
-          app.enabled && app.status === "ready" ? (
-            <Link key={app.id} href={app.route} className="launcherCard launcherCardActive">
-              <LauncherCardContent app={app} />
-            </Link>
-          ) : (
-            <div key={app.id} className="launcherCard launcherCardDisabled" aria-disabled="true">
-              <LauncherCardContent app={app} />
-            </div>
-          ),
-        )}
-      </div>
+      {entries.length === 0 ? (
+        <p className="launcherEmpty" role="status">
+          Váš účet je aktivní, ale správce HomeworkStudia vám zatím nepovolil žádnou aplikaci. Obraťte se na něj{user.isHwsAdmin ? " — nebo si přístup nastavte ve Správě uživatelů" : ""}. Odhlásit se můžete vpravo nahoře.
+        </p>
+      ) : (
+        <div className="launcherGrid">
+          {entries.map((entry) =>
+            entry.opens ? (
+              <Link key={entry.app.key} href={entry.app.url!} className="launcherCard launcherCardActive">
+                <LauncherCardContent entry={entry} />
+              </Link>
+            ) : (
+              <div key={entry.app.key} className="launcherCard launcherCardDisabled" aria-disabled="true">
+                <LauncherCardContent entry={entry} />
+              </div>
+            ),
+          )}
+        </div>
+      )}
     </main>
   );
 }

@@ -22,8 +22,8 @@ import { AuthSchemaNotMigratedError, setAuthStoreForTesting } from "../lib/auth/
 import { authorizeFile, authorizeProject, resolveSessionToken } from "../lib/auth/requestAuth.ts";
 import { handleConfirmLink, handleForgotPassword, handleLogin, handleLogout, handleSession, handleSetPassword, resetLoginLimiterForTesting } from "../lib/auth/authApi.server.ts";
 import { appBaseUrl, setAuthGatewayForTesting, type AuthGateway } from "../lib/auth/supabaseAuth.server.ts";
-import { handleUserCreate, handleUserProjects, handleUsersList, handleUserUpdate } from "../lib/auth/usersAdminApi.server.ts";
-import { LastActiveAdminError, setUsersAdminStoreForTesting, type AdminUserRecord, type UsersAdminStore } from "../lib/auth/usersAdmin.supabase.ts";
+import { handleUserProjects, handleUsersList } from "../lib/auth/usersAdminApi.server.ts";
+import { setUsersAdminStoreForTesting, type AdminUserRecord, type UsersAdminStore } from "../lib/auth/usersAdmin.supabase.ts";
 import { handleProjectsList } from "../app/api/projects/list/route.ts";
 import { handleProjectsSave } from "../app/api/projects/save/route.ts";
 import { handleProjectsDelete } from "../app/api/projects/delete/route.ts";
@@ -286,7 +286,7 @@ test("obnovení session: po polovině nečinné doby se prodlouží (nejvýš do
   const response = await handleSession(request("/api/auth/session", { token: session.token }));
   assert.equal(response.status, 200);
   const body = await json(response);
-  assert.deepEqual(body.user, { id: session.user.id, email: session.user.email, displayName: null, role: "user" });
+  assert.deepEqual(body.user, { id: session.user.id, email: session.user.email, displayName: null, role: "user", isHwsAdmin: false, apps: { abf: "user" } });
   assert.ok(!(body.permissions as string[]).includes("users.manage"));
   const renewed = setCookie(response, AUTH_COOKIE_NAME)!;
   assert.ok((await readSessionToken(renewed, SECRET))!.expiresAt > now + SESSION_TTL_SECONDS * 1000 * 0.9);
@@ -351,7 +351,9 @@ const PUBLIC_ROUTES = new Set(["auth/login", "auth/logout", "auth/session", "aut
 const EXTERNAL_ROUTES = new Set(["projects/list", "assets/download", "assets/presign", "assets/delete", "projects/save", "projects/delete"]);
 // Global administration: a BĚŽNÝ user gets 403 (method-specific).
 const ADMIN_ONLY: ReadonlySet<string> = new Set([
-  "POST admin/users", "GET admin/users", "POST admin/users/update", "POST admin/users/link", "POST admin/users/projects",
+  "GET admin/users", "POST admin/users/projects",
+  // shared HomeworkStudio administration: its own permission, not an ABF role (V1-AUTH-02)
+  "GET hws/accounts", "POST hws/accounts/invite", "POST hws/accounts/update", "POST hws/accounts/link",
   "POST catalog-admin/categories", "POST catalog-admin/items/aliases", "POST catalog-admin/items/create", "POST catalog-admin/items/duplicate",
   "POST catalog-admin/items/lifecycle", "POST catalog-admin/items/package", "POST catalog-admin/items/save", "POST catalog-admin/variant-sets",
   "POST events/save", "POST events/config", "POST price-lists/save", "POST pricing-admin/entries/save", "POST pricing-admin/price-lists/duplicate",
@@ -367,9 +369,12 @@ function routeFiles(directory: string, prefix = ""): string[] {
   });
 }
 
-test("každá API routa: bez přihlášení 401, externí účet 403 (mimo vlastní projekty/soubory), běžný účet 403 na globální administraci", async () => {
+test("každá API routa: bez přihlášení 401, externí účet 403 (mimo vlastní projekty/soubory), běžný účet 403 na globální administraci, účet bez ABF 403 všude", async () => {
   const external = await createTestSession(SECRET, { role: "external" });
   const user = await createTestSession(SECRET, { role: "user" });
+  // V1-AUTH-02: an active account WITHOUT an ABF membership (but with another application and an old project assignment)
+  const noAbf = await createTestSession(SECRET, { role: null, apps: { "hws-easy": "user" } });
+  store.assign(noAbf.user.id, "p-1");
   const routes = routeFiles(path.resolve("app/api"));
   assert.ok(routes.length >= 80, `${routes.length} routes`);
   let checked = 0;
@@ -386,6 +391,7 @@ test("každá API routa: bez přihlášení 401, externí účet 403 (mimo vlast
       if (ADMIN_ONLY.has(`${method} ${route}`)) assert.equal(asUser, 403, `${method} ${route} as user`);
       else assert.notEqual(asUser, 403, `${method} ${route} as user must not be forbidden`);
       assert.notEqual(asUser, 401, `${method} ${route} as user`);
+      assert.equal((await handler(make(noAbf.token))).status, 403, `${method} ${route} without ABF membership`);
       checked += 1;
     }
   }
@@ -495,67 +501,48 @@ test("deaktivace: dříve vydaná session přestane číst i zapisovat hned (403
 });
 
 // =============================================================================================
-// Users administration
+// ABF → Uživatelé a přiřazení (V1-AUTH-02: ABF members only, assignments only)
 // =============================================================================================
-function memoryUsersStore(initial: AdminUserRecord[]): UsersAdminStore & { rows: AdminUserRecord[] } {
+function memoryUsersStore(initial: AdminUserRecord[]): UsersAdminStore & { rows: AdminUserRecord[]; assigned: Map<string, string[]> } {
   const rows = [...initial];
+  const assigned = new Map<string, string[]>();
   return {
     rows,
-    async list() { return rows; },
+    assigned,
+    async list() { return rows.filter((row) => row.role !== undefined); },
     async get(id) { return rows.find((row) => row.id === id); },
-    async insert(input) {
-      const row: AdminUserRecord = { id: input.id, email: input.email, displayName: input.displayName, role: input.role, isActive: true, createdAt: "t", updatedAt: "t0", deactivatedAt: null, projectIds: [] };
-      rows.push(row);
-      return row;
-    },
-    async update(id, patch, expected) {
-      const index = rows.findIndex((row) => row.id === id);
-      const row = rows[index]!;
-      if (row.updatedAt !== expected) throw new Error("conflict");
-      const next = { ...row, ...(patch.role ? { role: patch.role } : {}), ...(patch.isActive !== undefined ? { isActive: patch.isActive } : {}), updatedAt: `${row.updatedAt}+` };
-      // The database trigger's rule (verified against DEV separately).
-      const admins = rows.filter((candidate, at) => (at === index ? next : candidate).role === "admin" && (at === index ? next : candidate).isActive);
-      if (row.role === "admin" && row.isActive && admins.length === 0) throw new LastActiveAdminError();
-      rows[index] = next;
-      return next;
-    },
-    async setProjects(_id, ids) { return [...ids].sort(); },
+    async setProjects(id, ids) { assigned.set(id, [...ids].sort()); return [...ids].sort(); },
     async assignableProjects() { return []; },
   };
 }
 
-test("správa uživatelů: jen správce (i při přímém volání API); nelze měnit vlastní roli; poslední aktivní správce chráněn; pozvánka bez e-mailu", async () => {
+test("ABF uživatelé: jen správce ABF; seznam jen členů ABF; nové přiřazení jen aktivnímu členovi, odebrání vždy; zakládání účtů tu není", async () => {
   const admin = await createTestSession(SECRET, { role: "admin" });
   const user = await createTestSession(SECRET, { role: "user" });
   const external = await createTestSession(SECRET, { role: "external" });
-  const record = (id: string, role: AppRole, updatedAt = "t0"): AdminUserRecord => ({ id, email: `${id.slice(0, 6)}@test.invalid`, displayName: null, role, isActive: true, createdAt: "t", updatedAt, deactivatedAt: null, projectIds: [] });
-  const users = memoryUsersStore([record(admin.user.id, "admin"), record(user.user.id, "user")]);
+  const record = (id: string, role: AppRole | undefined, isActive = true, projectIds: string[] = []): AdminUserRecord => ({ id, email: `${id.slice(0, 6)}@test.invalid`, displayName: null, ...(role ? { role } : {}), isActive, isHwsAdmin: false, apps: role ? { abf: role } : {}, createdAt: "t", updatedAt: "t0", deactivatedAt: null, projectIds });
+  const outsider = crypto.randomUUID();
+  const sleeper = crypto.randomUUID();
+  const users = memoryUsersStore([record(admin.user.id, "admin"), record(user.user.id, "user"), record(outsider, undefined, true, ["p-old"]), record(sleeper, "user", false, ["p-old"])]);
   setUsersAdminStoreForTesting(users);
-  const gateway = fakeGateway({});
-  setAuthGatewayForTesting(gateway);
   try {
     for (const token of [user.token, external.token]) {
       assert.equal((await handleUsersList(request("/api/admin/users", { token }))).status, 403);
-      assert.equal((await handleUserUpdate(request("/api/admin/users/update", { token, body: { userId: user.user.id, expectedUpdatedAt: "t0", role: "admin" } }))).status, 403, "no self-promotion");
       assert.equal((await handleUserProjects(request("/api/admin/users/projects", { token, body: { userId: user.user.id, projectIds: ["p"] } }))).status, 403);
     }
-    const created = await handleUserCreate(request("/api/admin/users", { token: admin.token, body: { email: "Novy@Test.invalid", role: "external", displayName: "Nový" } }));
-    assert.equal(created.status, 201);
-    const body = await json(created);
-    assert.match(String(body.link), /^http:\/\/localhost:3000\/auth\/confirm\?token_hash=.+&type=invite$/u);
-    assert.deepEqual(gateway.log.recoveryEmails, [], "nothing e-mailed");
-    assert.equal(gateway.log.links[0]!.redirectTo, "http://localhost:3000/auth/callback");
-    assert.equal((await handleUserCreate(request("/api/admin/users", { token: admin.token, body: { email: "novy@test.invalid", role: "user" } }))).status, 409, "duplicate e-mail");
-
-    const self = await handleUserUpdate(request("/api/admin/users/update", { token: admin.token, body: { userId: admin.user.id, expectedUpdatedAt: "t0", role: "user" } }));
-    assert.deepEqual([self.status, (await json(self)).code], [403, "self_change"]);
-    // Another admin demotes the only active admin → the database rule answers 409.
-    const second = await createTestSession(SECRET, { role: "admin" });
-    const demote = await handleUserUpdate(request("/api/admin/users/update", { token: second.token, body: { userId: admin.user.id, expectedUpdatedAt: "t0", role: "user" } }));
-    assert.deepEqual([demote.status, (await json(demote)).code], [409, "last_active_admin"]);
-    const promoted = await handleUserUpdate(request("/api/admin/users/update", { token: admin.token, body: { userId: user.user.id, expectedUpdatedAt: "t0", role: "admin" } }));
-    assert.equal(promoted.status, 200);
-    assert.equal((await handleUserUpdate(request("/api/admin/users/update", { token: admin.token, body: { userId: user.user.id, expectedUpdatedAt: "t0", isActive: false } }))).status, 502, "stale updated_at refused (no silent overwrite)");
+    const listed = ((await json(await handleUsersList(request("/api/admin/users", { token: admin.token })))).users as { id: string }[]).map((entry) => entry.id);
+    assert.ok(listed.includes(user.user.id) && listed.includes(sleeper));
+    assert.equal(listed.includes(outsider), false, "an account without ABF is not offered");
+    assert.equal((await handleUserProjects(request("/api/admin/users/projects", { token: admin.token, body: { userId: user.user.id, projectIds: ["p-1"] } }))).status, 200);
+    const refused = await handleUserProjects(request("/api/admin/users/projects", { token: admin.token, body: { userId: outsider, projectIds: ["p-old", "p-new"] } }));
+    assert.deepEqual([refused.status, (await json(refused)).code], [409, "no_app_access"], "no new assignment without ABF");
+    assert.equal((await handleUserProjects(request("/api/admin/users/projects", { token: admin.token, body: { userId: sleeper, projectIds: ["p-old", "p-new"] } }))).status, 409, "no new assignment for a deactivated account");
+    assert.equal((await handleUserProjects(request("/api/admin/users/projects", { token: admin.token, body: { userId: sleeper, projectIds: [] } }))).status, 200, "removing is always possible");
+    // creating accounts / roles moved to the shared administration
+    const routes = routeFiles(path.resolve("app/api"));
+    assert.equal(routes.includes("admin/users/update") || routes.includes("admin/users/link"), false);
+    const adminUsersRoute = (await import(pathToFileURL(path.resolve("app/api/admin/users/route.ts")).href)) as Record<string, unknown>;
+    assert.equal(adminUsersRoute.POST, undefined, "ABF does not create shared accounts");
   } finally {
     setUsersAdminStoreForTesting(undefined);
   }

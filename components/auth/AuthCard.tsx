@@ -19,11 +19,12 @@ export function AuthCard({ title, lead, children }: Readonly<{ title: string; le
 }
 
 /** Signed in, but no access to this page (inactive account, missing configuration, …) — with a way out. */
-export function AuthStatePage({ title, message, showLogout = true }: Readonly<{ title: string; message: string; showLogout?: boolean }>) {
+export function AuthStatePage({ title, message, showLogout = true, backHref }: Readonly<{ title: string; message: string; showLogout?: boolean; backHref?: string }>) {
   return (
     <AuthCard title={title}>
       <div className="loginForm">
         <div className="loginMessage" role="alert">{message}</div>
+        {backHref && <a className="loginSecondary" href={backHref}>Zpět na rozcestník</a>}
         {showLogout && (
           <form action="/api/auth/logout" method="post">
             <button type="submit" className="loginSecondary">Odhlásit se</button>

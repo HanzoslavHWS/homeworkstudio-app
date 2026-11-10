@@ -20,7 +20,9 @@ import { AppBaseUrlError, appBaseUrl, authGateway, normalizeEmail, passwordProbl
 
 /**
  * Login, logout, session, password reset and invitation acceptance (V1-AUTH-01). No public sign-up:
- * an account exists only when an admin created it (app_users + Supabase Auth). Errors are reported
+ * an account exists only when an administrator created it (app_users + Supabase Auth). Signing in
+ * needs an active shared account only (V1-AUTH-02): what it may open is decided per application by
+ * its memberships — an account without any application gets the launcher's explanation, not a login error. Errors are reported
  * by kind — wrong credentials, deactivated account, no access, rate limit, missing configuration or
  * migration — never a configuration problem disguised as a wrong password. Passwords and tokens are
  * never logged.
@@ -140,7 +142,8 @@ export async function handleSession(request: NextRequest): Promise<NextResponse>
     return state.status === "unavailable" ? response : clearCookie(response, AUTH_COOKIE_NAME);
   }
   const { user, session } = state;
-  const response = NextResponse.json({ user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role }, permissions: permissionsOf(user.role), expiresAt: new Date(state.renewTo ?? session.expiresAt).toISOString() });
+  // role / permissions = ABF (this application); apps and isHwsAdmin = the shared account (V1-AUTH-02)
+  const response = NextResponse.json({ user: { id: user.id, email: user.email, displayName: user.displayName, role: user.role ?? null, isHwsAdmin: user.isHwsAdmin, apps: user.apps }, permissions: permissionsOf(user.role), expiresAt: new Date(state.renewTo ?? session.expiresAt).toISOString() });
   if (state.renewTo) {
     await authStore().extendSession(session.id, state.renewTo);
     response.cookies.set(AUTH_COOKIE_NAME, await createSessionToken(secret()!, { sessionId: session.id, userId: user.id, expiresAt: state.renewTo }), sessionCookieOptions(Math.max(60, Math.round((state.renewTo - Date.now()) / 1000))));

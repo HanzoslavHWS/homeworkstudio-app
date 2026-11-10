@@ -1,11 +1,12 @@
 /**
- * Test support for V1-AUTH-01: an in-memory AuthStore with the same contract as the database one
+ * Test support for V1-AUTH-01 / V1-AUTH-02: an in-memory AuthStore with the same contract as the database one
  * (lib/auth/authStore.server.ts). A test session is a REAL signed cookie (createSessionToken with the
  * test secret) backed by a session row and an app user in this store — nothing is skipped: a wrong
  * signature, an expired / revoked session or a deactivated user is refused exactly as in production.
  */
 import { randomUUID } from "node:crypto";
 import type { AppRole } from "../../domain/accessControl.ts";
+import type { AppMemberships, HwsAppKey } from "../../domain/hwsApps.ts";
 import { setAuthStoreForTesting, type AuthStore, type AuthUser, type StoredSession } from "../../lib/auth/authStore.server.ts";
 import { createSessionToken, SESSION_ABSOLUTE_TTL_SECONDS, SESSION_TTL_SECONDS } from "../../lib/auth/session.ts";
 
@@ -18,9 +19,12 @@ export class MemoryAuthStore implements AuthStore {
   readonly members = new Set<string>();
   readonly projects = new Set<string>();
 
-  addUser(input: Partial<AuthUser> & Readonly<{ role: AppRole }>): AuthUser {
+  /** `role` = the ABF membership (as before V1-AUTH-02); `role: null` = an account without ABF; `apps` = other memberships. */
+  addUser(input: Partial<Omit<AuthUser, "role">> & Readonly<{ role: AppRole | null }>): AuthUser {
     const id = input.id ?? randomUUID();
-    const user: MutableUser = { id, email: input.email ?? `${input.role}-${id.slice(0, 8)}@test.invalid`, displayName: input.displayName ?? null, role: input.role, isActive: input.isActive ?? true };
+    const apps: Partial<Record<HwsAppKey, string>> = { ...(input.apps ?? {}) };
+    if (input.role) apps.abf = input.role;
+    const user: MutableUser = { id, email: input.email ?? `${input.role ?? "none"}-${id.slice(0, 8)}@test.invalid`, displayName: input.displayName ?? null, ...(input.role ? { role: input.role } : {}), isActive: input.isActive ?? true, isHwsAdmin: input.isHwsAdmin ?? false, apps: apps as AppMemberships };
     this.users.set(id, user);
     return user;
   }
@@ -29,7 +33,22 @@ export class MemoryAuthStore implements AuthStore {
     if (!isActive) for (const session of this.sessions.values()) if (session.userId === userId && session.revokedAt === null) session.revokedAt = Date.now();
   }
   setRole(userId: string, role: AppRole): void {
-    this.users.get(userId)!.role = role;
+    this.setMembership(userId, "abf", role);
+  }
+  /** Grants (role) or removes (undefined) one application membership — like the database row. */
+  setMembership(userId: string, appKey: HwsAppKey, role: string | undefined): void {
+    const user = this.users.get(userId)!;
+    const apps: Partial<Record<HwsAppKey, string>> = { ...user.apps };
+    if (role === undefined) delete apps[appKey];
+    else apps[appKey] = role;
+    user.apps = apps as AppMemberships;
+    if (appKey === "abf") {
+      if (role === undefined) delete user.role;
+      else user.role = role as AppRole;
+    }
+  }
+  setHwsAdmin(userId: string, isHwsAdmin: boolean): void {
+    this.users.get(userId)!.isHwsAdmin = isHwsAdmin;
   }
   assign(userId: string, projectId: string): void {
     this.projects.add(projectId);
@@ -42,7 +61,7 @@ export class MemoryAuthStore implements AuthStore {
   async loadSession(sessionId: string) {
     const session = this.sessions.get(sessionId);
     const user = session ? this.users.get(session.userId) : undefined;
-    return session && user ? { session: { ...session }, user: { ...user } } : undefined;
+    return session && user ? { session: { ...session }, user: { ...user, apps: { ...user.apps } } } : undefined;
   }
   async createSession(userId: string, expiresAt: number, absoluteExpiresAt: number) {
     const session: MutableSession = { id: randomUUID(), userId, createdAt: Date.now(), expiresAt, absoluteExpiresAt, revokedAt: null };
@@ -98,10 +117,10 @@ export async function createTestSessionToken(secret: string, nowMs = Date.now(),
   return (await createTestSession(secret, { role, nowMs })).token;
 }
 
-export async function createTestSession(secret: string, options: Readonly<{ role?: AppRole; nowMs?: number; user?: AuthUser }> = {}): Promise<Readonly<{ token: string; user: AuthUser; sessionId: string }>> {
+export async function createTestSession(secret: string, options: Readonly<{ role?: AppRole | null; nowMs?: number; user?: AuthUser; isHwsAdmin?: boolean; apps?: AppMemberships }> = {}): Promise<Readonly<{ token: string; user: AuthUser; sessionId: string }>> {
   const store = testAuthStore();
   const nowMs = options.nowMs ?? Date.now();
-  const user = options.user ?? store.addUser({ role: options.role ?? "admin" });
+  const user = options.user ?? store.addUser({ role: options.role === undefined ? "admin" : options.role, isHwsAdmin: options.isHwsAdmin, apps: options.apps });
   const expiresAt = nowMs + SESSION_TTL_SECONDS * 1000;
   const session = await store.createSession(user.id, expiresAt, nowMs + SESSION_ABSOLUTE_TTL_SECONDS * 1000);
   return { token: await createSessionToken(secret, { sessionId: session.id, userId: user.id, expiresAt }), user, sessionId: session.id };

@@ -1,19 +1,27 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { isAppRole, type AppRole } from "../../domain/accessControl.ts";
+import { isHwsAppKey, type AppMemberships } from "../../domain/hwsApps.ts";
 import { createSupabaseServerClient } from "../db/supabase.server.ts";
 
 /**
- * Server-side store of the auth state (V1-AUTH-01): app_users (role, active), app_sessions
- * (revocable logins) and project_members (project assignments). Always the service-role server
+ * Server-side store of the auth state (V1-AUTH-01, V1-AUTH-02): app_users (shared account: active,
+ * shared-admin flag), app_memberships (application access + role), app_sessions (revocable logins)
+ * and project_members (project assignments). Always the service-role server
  * client — every caller has already decided WHAT it may do (lib/auth/requestAuth.ts); this module
  * only reads and writes the rows.
  */
-export type AuthUser = Readonly<{ id: string; email: string; displayName: string | null; role: AppRole; isActive: boolean }>;
+
+/**
+ * The signed-in account. `role` is the role in ABF (this application) — absent without an ABF
+ * membership; `apps` holds every membership, `isHwsAdmin` the shared-administration flag. All of it
+ * is read from the database on every request, so a change applies to an already open session too.
+ */
+export type AuthUser = Readonly<{ id: string; email: string; displayName: string | null; role?: AppRole; isActive: boolean; isHwsAdmin: boolean; apps: AppMemberships }>;
 export type StoredSession = Readonly<{ id: string; userId: string; createdAt: number; expiresAt: number; absoluteExpiresAt: number; revokedAt: number | null }>;
 
 export class AuthSchemaNotMigratedError extends Error {
   constructor() {
-    super("Databáze nemá tabulky přihlášení (migrace 20261106120000_app_users_sessions_project_members). Přihlášení je do aplikace migrace vypnuté.");
+    super("Databáze nemá tabulky přihlášení a přístupů (migrace 20261106120000_app_users_sessions_project_members a 20261110120000_hws_accounts_app_memberships). Přihlášení je do aplikace migrace vypnuté.");
     this.name = "AuthSchemaNotMigratedError";
   }
 }
@@ -32,7 +40,8 @@ export interface AuthStore {
   addProjectMember(projectId: string, userId: string, createdBy: string | null): Promise<void>;
 }
 
-type UserRow = { id: string; email: string; display_name: string | null; role: string; is_active: boolean };
+type MembershipRow = { app_key: string; role: string };
+type UserRow = { id: string; email: string; display_name: string | null; is_active: boolean; is_hws_admin: boolean; app_memberships?: MembershipRow[] | null };
 type SessionRow = { id: string; user_id: string; created_at: string; expires_at: string; absolute_expires_at: string; revoked_at: string | null };
 
 const isMissingSchema = (error: unknown) => {
@@ -40,9 +49,20 @@ const isMissingSchema = (error: unknown) => {
   return code === "42P01" || code === "PGRST205" || code === "PGRST200" || code === "42703";
 };
 
-export function rowToAuthUser(row: UserRow): AuthUser | undefined {
-  if (!isAppRole(row.role)) return undefined;
-  return { id: row.id, email: row.email, displayName: row.display_name, role: row.role, isActive: row.is_active === true };
+/** Unknown applications are ignored; an ABF role outside the matrix grants nothing (never guessed). */
+export function rowToAuthUser(row: UserRow): AuthUser {
+  const apps: Partial<Record<string, string>> = {};
+  for (const membership of row.app_memberships ?? []) if (isHwsAppKey(membership.app_key)) apps[membership.app_key] = membership.role;
+  const abfRole = apps.abf;
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.display_name,
+    ...(isAppRole(abfRole) ? { role: abfRole } : {}),
+    isActive: row.is_active === true,
+    isHwsAdmin: row.is_hws_admin === true,
+    apps: apps as AppMemberships,
+  };
 }
 
 const rowToSession = (row: SessionRow): StoredSession => ({
@@ -54,7 +74,7 @@ const rowToSession = (row: SessionRow): StoredSession => ({
   revokedAt: row.revoked_at ? Date.parse(row.revoked_at) : null,
 });
 
-const USER_COLUMNS = "id, email, display_name, role, is_active";
+const USER_COLUMNS = "id, email, display_name, is_active, is_hws_admin, app_memberships!app_memberships_user_id_fkey (app_key, role)";
 
 export class SupabaseAuthStore implements AuthStore {
   private readonly client: SupabaseClient;

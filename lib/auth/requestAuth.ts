@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server.js";
 import { can, fileScope, projectAccess, projectFileAccess, type FileAction, type Permission, type ProjectAction } from "../../domain/accessControl.ts";
+import { canManageAccounts, hasAppAccess } from "../../domain/hwsApps.ts";
 import { SupabaseConfigurationError } from "../db/supabase.server.ts";
 import { AuthSchemaNotMigratedError, authStore, type AuthUser, type StoredSession } from "./authStore.server.ts";
 import { AUTH_COOKIE_NAME, readSessionToken, SESSION_TTL_SECONDS, isSessionSecretConfigured } from "./session.ts";
@@ -12,7 +13,14 @@ import { AUTH_COOKIE_NAME, readSessionToken, SESSION_TTL_SECONDS, isSessionSecre
  *   unavailable    — missing configuration or migration, database error (→ 503 — never presented
  *                    as a wrong password, and never an open door)
  * Then `authorize(request, permission)` / `authorizeProject` / `authorizeFile` apply the shared
- * matrix of domain/accessControl.ts. The role always comes from app_users — never from the client.
+ * matrix of domain/accessControl.ts.
+ *
+ * V1-AUTH-02: every ABF entry (`authenticate` and everything built on it — all ABF API routes, files,
+ * imports) additionally requires the account's ABF membership; without it → 403 "no_app_access",
+ * whatever project assignments remain. `authenticateAccount` is the account-level check (session,
+ * launcher, shared administration) and `authorizeAccounts` the shared administration's own
+ * permission (app_users.is_hws_admin), independent of any ABF role. Roles and memberships come from
+ * the database on every request — never from the client or the cookie.
  */
 export type AuthEnvironment = Readonly<{ APP_SESSION_SECRET?: string }>;
 
@@ -80,10 +88,26 @@ export function authFailureResponse(state: Exclude<AuthState, AuthenticatedState
 
 export const forbiddenResponse = (message = "K této akci nemáte oprávnění.") => NextResponse.json({ error: message, code: "forbidden" }, { status: 403 });
 
-/** Signed in with an active account (any role) — e.g. "who am I". */
-export async function authenticate(request: NextRequest): Promise<AuthDecision> {
+/** Signed in with an active account, whatever its applications — e.g. "who am I", the launcher. */
+export async function authenticateAccount(request: NextRequest): Promise<AuthDecision> {
   const state = await resolveRequestAuth(request);
   return state.status === "authenticated" ? { ok: true, auth: state } : { ok: false, response: authFailureResponse(state) };
+}
+
+export const noAppAccessResponse = () => NextResponse.json({ error: "K aplikaci ABF Generator nemáte přístup. Obraťte se na správce HomeworkStudia.", code: "no_app_access" }, { status: 403 });
+
+/** Signed in with an active account that is a member of ABF (any ABF role) — the base of every ABF check. */
+export async function authenticate(request: NextRequest): Promise<AuthDecision> {
+  const decision = await authenticateAccount(request);
+  if (decision.ok === false) return decision;
+  return hasAppAccess(decision.auth.user, "abf") && decision.auth.user.role !== undefined ? decision : { ok: false, response: noAppAccessResponse() };
+}
+
+/** Shared HomeworkStudio account administration — its own permission, not an ABF role. */
+export async function authorizeAccounts(request: NextRequest): Promise<AuthDecision> {
+  const decision = await authenticateAccount(request);
+  if (decision.ok === false) return decision;
+  return canManageAccounts(decision.auth.user) ? decision : { ok: false, response: forbiddenResponse("Správu uživatelů HomeworkStudia smí otevřít jen její správce.") };
 }
 
 /** Signed in AND the role has the permission. */
@@ -103,6 +127,7 @@ export async function authorizeProject(request: NextRequest, projectId: string, 
 }
 
 async function projectAllowed(user: AuthUser, projectId: string, action: ProjectAction, folder?: string): Promise<boolean | "error"> {
+  if (user.role === undefined) return false;
   if (user.role === "admin") return true;
   try {
     const store = authStore();
@@ -129,6 +154,7 @@ export async function authorizeFile(request: NextRequest, storageKey: string, ac
 
 /** Project ids the user may list: undefined = all (admin), else the assigned ones. */
 export async function visibleProjectIds(user: AuthUser): Promise<ReadonlySet<string> | undefined> {
+  if (user.role === undefined) return new Set();
   if (user.role === "admin") return undefined;
   return authStore().memberProjectIds(user.id);
 }

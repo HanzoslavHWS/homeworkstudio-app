@@ -1,9 +1,11 @@
 /**
- * V1-AUTH-01 — roles and permissions, the ONE matrix every check uses (API routes, pages,
- * navigation). Pure: no I/O. The server resolves the signed-in user's role from app_users (never
- * from the client) and asks `can(role, permission)`; project-scoped access additionally needs an
- * assignment (`projectAccess`). Hiding a menu item is only navigation — the API checks the same
- * permission again.
+ * V1-AUTH-01 — roles and permissions of ABF, the ONE matrix every check uses (API routes, pages,
+ * navigation). Pure: no I/O. The server resolves the signed-in user's ABF role from the account's
+ * ABF membership (app_memberships, V1-AUTH-02 — never from the client) and asks `can(role,
+ * permission)`; an account without an ABF membership has no role and no ABF access at all.
+ * Project-scoped access additionally needs an assignment (`projectAccess`). Hiding a menu item is
+ * only navigation — the API checks the same permission again. Shared account administration is a
+ * separate permission (domain/hwsApps.ts canManageAccounts), not part of this matrix.
  *
  *   SPRÁVCE (admin)    everything, incl. users, roles, project assignments and global administration
  *   BĚŽNÝ (user)       operational modules + assigned (or self-created) projects; reads the operational
@@ -84,8 +86,8 @@ export function can(role: AppRole | undefined, permission: Permission): boolean 
   return role !== undefined && ROLE_PERMISSIONS[role].has(permission);
 }
 
-export function permissionsOf(role: AppRole): readonly Permission[] {
-  return PERMISSIONS.filter((permission) => ROLE_PERMISSIONS[role].has(permission));
+export function permissionsOf(role: AppRole | undefined): readonly Permission[] {
+  return role === undefined ? [] : PERMISSIONS.filter((permission) => ROLE_PERMISSIONS[role].has(permission));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -98,7 +100,9 @@ export type ProjectAction = "read" | "write" | "delete";
  * does not exist yet (first save / first upload of a new project) may be created by anyone with
  * projects.create; the creator is assigned automatically.
  */
-export function projectAccess(role: AppRole, action: ProjectAction, context: Readonly<{ isMember: boolean; exists: boolean }>): boolean {
+export function projectAccess(role: AppRole | undefined, action: ProjectAction, context: Readonly<{ isMember: boolean; exists: boolean }>): boolean {
+  // No ABF role (no membership): a remaining project assignment never opens the project (V1-AUTH-02).
+  if (role === undefined) return false;
   if (role === "admin") return true;
   if (!context.exists) return action !== "read" && can(role, "projects.create");
   if (!context.isMember) return false;
@@ -141,7 +145,7 @@ export function fileScope(storageKey: string, action: FileAction): FileScope {
 }
 
 /** Project-file rule on top of projectAccess: externals read only the output folders. */
-export function projectFileAccess(role: AppRole, action: FileAction, folder: string, context: Readonly<{ isMember: boolean; exists: boolean }>): boolean {
+export function projectFileAccess(role: AppRole | undefined, action: FileAction, folder: string, context: Readonly<{ isMember: boolean; exists: boolean }>): boolean {
   if (!projectAccess(role, action === "read" ? "read" : "write", context)) return false;
   return role !== "external" || EXTERNAL_PROJECT_OUTPUT_FOLDERS.includes(folder);
 }
