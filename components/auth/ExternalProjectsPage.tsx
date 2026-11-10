@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import type { CurrentUser } from "../../lib/auth/pageAuth.server";
 import type { ExternalProjectView } from "../../domain/externalProjectView";
 import { normalizeSupportRoute, parseWorkspaceHash, workspaceHash } from "../../domain/adminNavigation";
-import { ReportDialog } from "../support/ReportDialog";
+import { onReportCreatedElsewhere, openReportTab } from "../../lib/support/reportHandoff";
+import { currentClientContext } from "../../lib/support/supportClient";
 import { SupportCenter } from "../support/SupportCenter";
 import { useSupportSummary } from "../support/useSupportSummary";
 import { UserMenu } from "./UserMenu";
@@ -22,9 +23,16 @@ export function ExternalProjectsPage({ user }: Readonly<{ user: CurrentUser }>) 
   const [downloading, setDownloading] = useState("");
   // Nápověda a podpora (V1-SUPPORT-01): only articles marked for externals and the user's own reports — the API decides
   const [supportRoute, setSupportRoute] = useState<string | null>(null);
-  const [reportOpen, setReportOpen] = useState(false);
   const [supportReloadKey, setSupportReloadKey] = useState(0);
   const { summary, refresh } = useSupportSummary("abf", true);
+  useEffect(() => onReportCreatedElsewhere(() => { setSupportReloadKey((key) => key + 1); refresh(); }), [refresh]);
+
+  /** Nahlásit chybu in a new tab (V1-SUPPORT-03); this page stays as it is. */
+  function openReport() {
+    if (!openReportTab("abf", { context: currentClientContext(supportRoute === null ? "abf.projects" : "abf.support") })) {
+      window.alert("Prohlížeč zablokoval otevření nové karty. Povolte pro tuto stránku vyskakovací okna a klikněte znovu.");
+    }
+  }
 
   useEffect(() => {
     const apply = () => {
@@ -83,13 +91,12 @@ export function ExternalProjectsPage({ user }: Readonly<{ user: CurrentUser }>) 
             {supportRoute === null ? "Nápověda a podpora" : "Přidělené projekty"}
             {supportRoute === null && summary?.waitingForMe ? <span className="navBadge" aria-label={`${summary.waitingForMe} hlášení čeká na vaše doplnění`}>{summary.waitingForMe}</span> : null}
           </button>
-          <button type="button" className="secondaryButton" onClick={() => setReportOpen(true)}>Nahlásit chybu</button>
+          <button type="button" className="secondaryButton" onClick={openReport}>Nahlásit chybu</button>
           <UserMenu user={user} roleLabel="Externí" />
         </div>
       </header>
-      <ReportDialog open={reportOpen} onOpenChange={setReportOpen} appKey="abf" area={supportRoute === null ? "abf.projects" : "abf.support"} author={user.displayName || user.email} onCreated={() => { setSupportReloadKey((key) => key + 1); refresh(); }} />
       {supportRoute !== null ? (
-        <SupportCenter appKey="abf" role="external" route={supportRoute} onNavigate={showSupport} onReport={() => setReportOpen(true)} reloadKey={supportReloadKey} counts={{ newTickets: 0, waitingForMe: summary?.waitingForMe ?? 0 }} onChanged={refresh} />
+        <SupportCenter appKey="abf" role="external" route={supportRoute} onNavigate={showSupport} onReport={openReport} reloadKey={supportReloadKey} counts={{ newTickets: 0, waitingForMe: summary?.waitingForMe ?? 0 }} onChanged={refresh} />
       ) : (<>
       {error && <p className="uploadError" role="alert">{error}</p>}
       {projects === undefined && !error && <p className="fieldHint">Načítám…</p>}

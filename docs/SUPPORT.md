@@ -10,7 +10,7 @@ v `domain/support.ts`), HWS Easy ji zatím nemá. Na rozcestníku není samostat
 |---|---|
 | ABF, boční menu **Nápověda a podpora** (`/abf#/podpora/…`) | Záložky **Návody a FAQ**, **Moje hlášení** a pro správce ABF **Správa podpory** (články, hlášení). Odznak: nová hlášení pro správce, hlášení čekající na doplnění pro autora. |
 | ABF, horní lišta **? Nápověda** | Panel *Nápověda k této stránce* nad aktuální obrazovkou: publikované články, které jsou připojené k části aplikace, kde uživatel právě je. Když žádný není, panel nabídne přehled návodů a nahlášení problému. |
-| ABF, horní lišta **Nahlásit chybu** | Formulář nad aktuální obrazovkou. Nic se nezavře ani nepřenačte, takže rozpracovaný projekt i formulář zůstanou. Rozepsané hlášení zůstane i po zavření formuláře, smaže ho až tlačítko *Zahodit*. |
+| ABF, horní lišta **Nahlásit chybu** | Formulář se otevře v **nové kartě** (`/abf/nahlasit`). Původní karta zůstane beze změny, včetně rozpracovaného projektu a formulářů. Hlášení nese kontext původní stránky, nikdy adresu formuláře (viz níže). Text rozepsaného hlášení přežije opětovné načtení karty, smaže ho až *Zahodit*. Po odeslání se počítadla v původní kartě obnoví sama. Když prohlížeč novou kartu zablokuje, aplikace to oznámí a původní stránku nechá být. |
 | Externí účet, `/abf` | V hlavičce stránky *Přidělené projekty* jsou tlačítka **Nápověda a podpora** a **Nahlásit chybu**. |
 
 Adresa `#/podpora/navody/<id>`, `#/podpora/hlaseni/<id>` nebo `#/podpora/sprava/…` přežije obnovení
@@ -88,10 +88,19 @@ na GitHub podpora nemá.
   aktivní obsah se odmítá podle názvu i deklarovaného typu. Po nahrání server ověří **skutečný obsah**
   (magické bajty) a velikost uloženého souboru. Co nesouhlasí, smaže.
 - Tři způsoby: **Přiložit soubor** (na telefonu fotka nebo snímek z galerie), **Vložit ze schránky**
-  nebo Ctrl+V kdekoli ve formuláři a **Snímek obrazovky** (`getDisplayMedia`). U snímku obrazovky
-  zdroj vždy vybírá uživatel, žádá se jen video bez zvuku a po jednom snímku se všechny stopy hned
-  zastaví (žádné nahrávání). Zrušený výběr není chybou formuláře. Když prohlížeč funkci nemá,
-  tlačítko se nezobrazí.
+  nebo Ctrl+V kdekoli ve formuláři a **Snímek původní karty** (`getDisplayMedia`). Výběr prohlížeče
+  se otevře na kartách (`displaySurface: "browser"`) a samotnou kartu s formulářem vynechá
+  (`selfBrowserSurface: "exclude"`), takže se nabízí karta s aplikací, kde problém vznikl.
+  Zdroj vždy vybírá uživatel. Žádá se jen video bez zvuku a po jednom snímku se všechny stopy hned
+  zastaví (žádné nahrávání). Když vybraná karta nepošle obraz do 10 s, stopy se zastaví a formulář
+  nabídne Ctrl+V. Zrušený výběr není chybou formuláře. Když prohlížeč funkci nemá, tlačítko se
+  nezobrazí.
+- **Předání kontextu do nové karty:** v adrese formuláře je jen náhodný jednorázový klíč za `#`
+  (`/abf/nahlasit#k=<uuid>`). Část za `#` se neposílá na server ani do logů. Kontext původní stránky
+  (oblast, cesta bez parametrů, prohlížeč, okno, případně uložená zakázka) se předá přes
+  `localStorage` téže domény a platí 2 hodiny. Po odeslání se smaže a staré klíče se uklízejí.
+  Obsah formulářů ani tokeny se nepředávají. Formulář otevřený bez klíče upozorní, že kontext chybí,
+  a cestu uloží prázdnou.
 - Před odesláním je u každé přílohy náhled s možností **Upravit** (obdélník, kresba, **Zakrýt**
   neprůhledným černým obdélníkem) a **Odebrat**. Úpravy se zapečou do pixelů nového PNG a odešle se
   jen upravený obrázek, originál zůstane jen v prohlížeči.

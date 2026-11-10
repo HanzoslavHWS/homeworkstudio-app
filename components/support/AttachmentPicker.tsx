@@ -9,13 +9,38 @@ import { ImageEditor } from "./ImageEditor";
 
 const ACCEPT = "image/png,image/jpeg,image/webp,video/mp4,video/webm";
 
-/** One frame of a screen / window / tab the user picked; every track is stopped right after. */
+/**
+ * One frame of a screen / window / tab the user picked; every track is stopped right after. The picker
+ * opens on browser tabs (the original tab of the application) and leaves out the tab that asks — the
+ * report form itself (V1-SUPPORT-03). Browsers without these hints simply show their usual picker.
+ */
+export const DISPLAY_MEDIA_OPTIONS = {
+  video: { displaySurface: "browser" },
+  audio: false,
+  preferCurrentTab: false,
+  selfBrowserSurface: "exclude",
+  surfaceSwitching: "exclude",
+  systemAudio: "exclude",
+  monitorTypeSurfaces: "include",
+} as const;
+
+const CAPTURE_TIMEOUT_MS = 10_000;
+
 export async function captureScreenFrame(): Promise<File | null> {
   const media = typeof navigator !== "undefined" ? navigator.mediaDevices : undefined;
   if (!media?.getDisplayMedia) throw new Error("unsupported");
   let stream: MediaStream;
+  // Keep the user in the form: by default the browser switches to the captured tab, which hides this
+  // one (its timers slow down and the user loses the form). Browsers without CaptureController ignore it.
+  const ControllerClass = (globalThis as { CaptureController?: new () => { setFocusBehavior?: (behavior: string) => void } }).CaptureController;
+  const controller = ControllerClass ? new ControllerClass() : undefined;
   try {
-    stream = await media.getDisplayMedia({ video: true, audio: false });
+    stream = await media.getDisplayMedia({ ...DISPLAY_MEDIA_OPTIONS, ...(controller ? { controller } : {}) } as DisplayMediaStreamOptions);
+    try {
+      controller?.setFocusBehavior?.("focus-capturing-application"); // must run right after the picker resolves
+    } catch {
+      // too late or not supported — the capture still works
+    }
   } catch (error) {
     // the user closed the browser's picker — not an error of the form
     if (error instanceof DOMException && (error.name === "NotAllowedError" || error.name === "AbortError")) return null;
@@ -26,8 +51,15 @@ export async function captureScreenFrame(): Promise<File | null> {
     video.muted = true;
     video.playsInline = true;
     video.srcObject = stream;
-    await video.play();
-    await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    // the first frame of another (background) tab can take a moment — but never wait forever
+    const firstFrame = (async () => {
+      await video.play();
+      while (!video.videoWidth) await new Promise((resolve) => setTimeout(resolve, 50));
+      // a short pause for a complete frame — timers, not requestAnimationFrame (it never fires in a hidden tab)
+      await new Promise((resolve) => setTimeout(resolve, 150));
+    })();
+    const timedOut = await Promise.race([firstFrame.then(() => false), new Promise<boolean>((resolve) => setTimeout(() => resolve(true), CAPTURE_TIMEOUT_MS))]);
+    if (timedOut) throw new Error("timeout");
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
@@ -47,13 +79,17 @@ export const screenCaptureSupported = () => typeof navigator !== "undefined" && 
  * until the content is sent. Accepts a file (on a phone also a photo / screenshot from the gallery),
  * an image pasted with Ctrl+V (handled by the form via addPasted) and a screen capture.
  */
-export function AttachmentPicker({ files, onChange, max, disabled, allowCapture = true, idPrefix }: Readonly<{ files: readonly LocalFile[]; onChange: (files: readonly LocalFile[]) => void; max: number; disabled?: boolean; allowCapture?: boolean; idPrefix: string }>) {
+export function AttachmentPicker({ files, onChange, max, disabled, allowCapture = true, idPrefix, captureLabel = "Snímek obrazovky", captureHint }: Readonly<{ files: readonly LocalFile[]; onChange: (files: readonly LocalFile[]) => void; max: number; disabled?: boolean; allowCapture?: boolean; idPrefix: string; captureLabel?: string; captureHint?: string }>) {
   const inputRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState("");
   const [editing, setEditing] = useState<LocalFile | null>(null);
   const [capturing, setCapturing] = useState(false);
   const [captureAvailable, setCaptureAvailable] = useState(false);
   useEffect(() => setCaptureAvailable(allowCapture && screenCaptureSupported()), [allowCapture]);
+  // a capture or a clipboard read finishes later — it must add to the CURRENT list, not to the one at
+  // the time of the click (images pasted or files attached meanwhile would be lost)
+  const filesRef = useRef(files);
+  filesRef.current = files;
 
   function add(incoming: readonly File[]) {
     const accepted: LocalFile[] = [];
@@ -63,9 +99,12 @@ export function AttachmentPicker({ files, onChange, max, disabled, allowCapture 
       if (problem) problems.push(`${file.name || "Obrázek"}: ${problem}`);
       else accepted.push(localFile(file));
     }
-    const room = Math.max(0, max - files.length);
+    const current = filesRef.current;
+    const room = Math.max(0, max - current.length);
     if (accepted.length > room) problems.push(`Nejvýš ${max} příloh.`);
-    onChange([...files, ...accepted.slice(0, room)]);
+    const next = [...current, ...accepted.slice(0, room)];
+    filesRef.current = next;
+    onChange(next);
     setNotice(problems.join(" "));
   }
 
@@ -92,8 +131,10 @@ export function AttachmentPicker({ files, onChange, max, disabled, allowCapture 
       const frame = await captureScreenFrame();
       if (frame) add([frame]);
       else setNotice("Zachycení obrazovky bylo zrušeno — nic se nestalo.");
-    } catch {
-      setNotice("Zachycení obrazovky tu není dostupné. Přiložte soubor nebo vložte obrázek ze schránky (Ctrl+V).");
+    } catch (error) {
+      setNotice(error instanceof Error && error.message === "timeout"
+        ? "Vybraná karta neposlala obraz včas — zkuste to znovu, nebo vložte snímek přes Ctrl+V."
+        : "Zachycení obrazovky tu není dostupné. Přiložte soubor nebo vložte obrázek ze schránky (Ctrl+V).");
     } finally {
       setCapturing(false);
     }
@@ -109,9 +150,10 @@ export function AttachmentPicker({ files, onChange, max, disabled, allowCapture 
       <ActionBar>
         <Button type="button" variant="outline" size="sm" disabled={disabled || files.length >= max} onClick={() => inputRef.current?.click()}>Přiložit soubor</Button>
         <Button type="button" variant="outline" size="sm" disabled={disabled || files.length >= max} onClick={() => void paste()}>Vložit ze schránky</Button>
-        {captureAvailable && <Button type="button" variant="outline" size="sm" disabled={disabled || capturing || files.length >= max} onClick={() => void capture()}>{capturing ? "Vyberte obrazovku…" : "Snímek obrazovky"}</Button>}
+        {captureAvailable && <Button type="button" variant="outline" size="sm" disabled={disabled || capturing || files.length >= max} onClick={() => void capture()}>{capturing ? "Vyberte kartu…" : captureLabel}</Button>}
         <input id={`${idPrefix}-file`} ref={inputRef} type="file" accept={ACCEPT} multiple className="sr-only" tabIndex={-1} onChange={(event) => { add([...(event.target.files ?? [])]); event.target.value = ""; }} />
       </ActionBar>
+      {captureAvailable && captureHint && <p className="text-xs text-muted-foreground">{captureHint}</p>}
       <p className="text-xs text-muted-foreground">{LIMITS_TEXT_CS} Obrázek lze vložit i klávesami Ctrl+V. Soubory zůstávají jen ve vašem prohlížeči, dokud formulář neodešlete.</p>
       {notice && <p role="status" className="text-sm text-warning">{notice}</p>}
       {files.length > 0 && (

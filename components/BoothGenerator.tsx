@@ -171,7 +171,8 @@ import { useBoothViewport } from "../hooks/useBoothViewport";
 import { AppSidebar } from "./AppSidebar";
 import { StepHeader } from "./StepHeader";
 import { ContextHelpSheet } from "./support/ContextHelpSheet";
-import { ReportDialog } from "./support/ReportDialog";
+import { onReportCreatedElsewhere, openReportTab } from "../lib/support/reportHandoff";
+import { currentClientContext } from "../lib/support/supportClient";
 import { SupportCenter } from "./support/SupportCenter";
 import { useSupportSummary } from "./support/useSupportSummary";
 import { abfAreaFor, supportRoleOf } from "../domain/support";
@@ -375,7 +376,6 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
   // overlays over the current section, so an open project or a half-filled form is never closed.
   const [supportRoute, setSupportRoute] = useState("navody");
   const [supportHelpOpen, setSupportHelpOpen] = useState(false);
-  const [supportReportOpen, setSupportReportOpen] = useState(false);
   const [supportReloadKey, setSupportReloadKey] = useState(0);
   const supportRole = supportRoleOf("abf", currentUser?.role);
   const { summary: supportSummary, refresh: refreshSupportSummary } = useSupportSummary("abf", supportRole !== undefined);
@@ -834,6 +834,21 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
     navigateWorkspace("support");
   }
   const supportArea = abfAreaFor(currentAdminRoute ? { section: "admin", admin: currentAdminRoute } : { section: workspaceSection });
+
+  /**
+   * Nahlásit chybu (V1-SUPPORT-03): the form opens in a NEW tab — this page, an open project and any
+   * half-filled form stay exactly as they are. Only the context of this page goes along (reportHandoff).
+   */
+  function openReport() {
+    setSupportHelpOpen(false);
+    const opened = openReportTab("abf", {
+      context: currentClientContext(supportArea),
+      ...(workspaceSection === "project" && projectId ? { project: { id: projectId, name: projectName } } : {}),
+    });
+    if (!opened) window.alert("Prohlížeč zablokoval otevření nové karty. Povolte pro tuto stránku vyskakovací okna a klikněte znovu — rozpracovaná práce zůstala beze změny.");
+  }
+  // a report sent from the other tab refreshes the counters and lists here
+  useEffect(() => onReportCreatedElsewhere(() => { setSupportReloadKey((key) => key + 1); refreshSupportSummary(); }), [refreshSupportSummary]);
 
   /* ================================================= */
   /* DERIVED                                          */
@@ -2900,7 +2915,7 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
           showStepper={workspaceSection === "project"}
           onCreateTask={() => openTaskCreate(workspaceSection === "project" ? boothProjectTaskContext() : undefined)}
           onHelp={supportRole ? () => setSupportHelpOpen(true) : undefined}
-          onReport={supportRole ? () => setSupportReportOpen(true) : undefined}
+          onReport={supportRole ? openReport : undefined}
         />
 
         {persistenceMode === "local-fallback" && (
@@ -3076,7 +3091,7 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
             role={supportRole}
             route={supportRoute}
             onNavigate={(route) => setSupportRoute(normalizeSupportRoute(route))}
-            onReport={() => setSupportReportOpen(true)}
+            onReport={openReport}
             reloadKey={supportReloadKey}
             counts={{ newTickets: supportSummary?.newTickets ?? 0, waitingForMe: supportSummary?.waitingForMe ?? 0 }}
             onChanged={refreshSupportSummary}
@@ -3086,16 +3101,7 @@ export default function BoothGenerator({ currentUser }: Readonly<{ currentUser?:
 
         {supportRole && (
           <>
-            <ContextHelpSheet open={supportHelpOpen} onOpenChange={setSupportHelpOpen} appKey="abf" area={supportArea} onOpenSupport={openSupport} onReport={() => { setSupportHelpOpen(false); setSupportReportOpen(true); }} />
-            <ReportDialog
-              open={supportReportOpen}
-              onOpenChange={setSupportReportOpen}
-              appKey="abf"
-              area={supportArea}
-              author={currentUser?.displayName || currentUser?.email || ""}
-              project={workspaceSection === "project" && projectId ? { id: projectId, name: projectName } : undefined}
-              onCreated={() => { setSupportReloadKey((key) => key + 1); refreshSupportSummary(); }}
-            />
+            <ContextHelpSheet open={supportHelpOpen} onOpenChange={setSupportHelpOpen} appKey="abf" area={supportArea} onOpenSupport={openSupport} onReport={openReport} />
           </>
         )}
 

@@ -355,7 +355,8 @@ export function sanitizeClientContext(value: unknown): ClientContext {
   const viewport = /^\d{2,5}×\d{2,5}$/u.test(text("viewport", 20)) ? text("viewport", 20) : "";
   return {
     area: isSupportAreaKey(input.area) ? (input.area as string) : "abf.general",
-    path: safeContextPath(text("path", 300).split("#")[0]!, text("path", 300).includes("#") ? `#${text("path", 300).split("#").slice(1).join("")}` : ""),
+    // empty = the original page is unknown (a report form opened without its context) — never "/"
+    path: !text("path", 300) ? "" : safeContextPath(text("path", 300).split("#")[0]!, text("path", 300).includes("#") ? `#${text("path", 300).split("#").slice(1).join("")}` : ""),
     browser: text("browser", 80).replace(/[^\w .·/-]/gu, ""),
     viewport,
   };

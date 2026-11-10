@@ -41,6 +41,7 @@ import {
   handleTicketsList,
   handleTicketUpdate,
 } from "../lib/support/supportApi.server.ts";
+import { clearReportHandoff, handleFromHash, parseReportHandoff, readReportHandoff, reportTabUrl, storeReportHandoff } from "../lib/support/reportHandoff.ts";
 import { setSupportFilesForTesting, type SupportFiles } from "../lib/support/supportFiles.server.ts";
 import {
   SupportConflictError,
@@ -668,21 +669,65 @@ test("adresa podpory: #/podpora/… přežije obnovení stránky, cizí znaky se
   assert.deepEqual(parseWorkspaceHash("#/podpora"), { section: "support", support: "navody" });
 });
 
-test("UI: Nahlásit chybu a Nápověda jsou překryvy — rozpracovaný projekt se nezavírá; snímek obrazovky hned zastaví stopy", () => {
+test("UI: Nahlásit chybu otevírá novou kartu (původní stránka se nemění), Nápověda je překryv; snímek původní karty hned zastaví stopy", () => {
   const generator = readFileSync("components/BoothGenerator.tsx", "utf8");
-  assert.match(generator, /onReport=\{supportRole \? \(\) => setSupportReportOpen\(true\) : undefined\}/u);
+  assert.match(generator, /onReport=\{supportRole \? openReport : undefined\}/u);
+  assert.match(generator, /openReportTab\("abf", \{\s*context: currentClientContext\(supportArea\)/u, "the context of THIS page goes along");
+  assert.doesNotMatch(generator, /ReportDialog|window\.location\.(href|assign)\s*=/u, "the original page is never navigated away");
   assert.match(generator, /onHelp=\{supportRole \? \(\) => setSupportHelpOpen\(true\) : undefined\}/u);
+  const external = readFileSync("components/auth/ExternalProjectsPage.tsx", "utf8");
+  assert.match(external, /openReportTab\("abf"/u);
   const picker = readFileSync("components/support/AttachmentPicker.tsx", "utf8");
-  assert.match(picker, /getDisplayMedia\(\{ video: true, audio: false \}\)/u);
+  assert.match(picker, /getDisplayMedia\(\{ \.\.\.DISPLAY_MEDIA_OPTIONS/u);
+  assert.match(picker, /setFocusBehavior\?\.\("focus-capturing-application"\)/u, "the user stays in the form after picking the original tab");
+  assert.doesNotMatch(picker, /requestAnimationFrame\(/u, "no frame wait that stalls in a hidden tab");
+  assert.match(picker, /audio: false/u);
+  assert.match(picker, /selfBrowserSurface: "exclude"/u, "the form tab itself is not offered");
+  assert.match(picker, /displaySurface: "browser"/u, "the picker opens on browser tabs");
   assert.match(picker, /finally \{\s*for \(const track of stream\.getTracks\(\)\) track\.stop\(\);/u);
   assert.match(picker, /NotAllowedError/u);
-  const dialog = readFileSync("components/support/ReportDialog.tsx", "utf8");
-  assert.match(dialog, /requestId = useRef/u, "one submission id per report");
-  assert.doesNotMatch(dialog, /dangerouslySetInnerHTML=/u);
+  const form = readFileSync("components/support/ReportPage.tsx", "utf8");
+  assert.match(form, /requestId = useRef/u, "one submission id per report");
+  assert.match(form, /document\.addEventListener\("paste"/u, "Ctrl+V anywhere on the page");
+  assert.doesNotMatch(form, /dangerouslySetInnerHTML=/u);
+  assert.doesNotMatch(form, /window\.location\.(pathname|search)/u, "the form never reports its own address");
   assert.doesNotMatch(readFileSync("components/support/ArticleContent.tsx", "utf8"), /dangerouslySetInnerHTML=/u);
   const sidebar = readFileSync("components/AppSidebar.tsx", "utf8");
   assert.match(sidebar, /label: "Nápověda a podpora"/u);
   void sessionToken;
+});
+
+test("Nahlásit chybu v nové kartě: v URL jen náhodný klíč za #, kontext původní stránky přes úložiště, očištěný a časově omezený", () => {
+  const memory = new Map<string, string>();
+  const storage = { getItem: (key: string) => memory.get(key) ?? null, setItem: (key: string, value: string) => { memory.set(key, value); }, removeItem: (key: string) => { memory.delete(key); }, key: (index: number) => [...memory.keys()][index] ?? null, get length() { return memory.size; } };
+  const now = Date.parse("2026-11-10T12:00:00Z");
+  const handle = "6b22b294-2a6d-436b-8211-80320b02a2e8";
+  const original = { area: "abf.prices", path: "/abf#/administrace/ceniky/verze", browser: "Edge 156 · Windows", viewport: "1440×950" };
+  assert.equal(storeReportHandoff(storage, { appKey: "abf", context: { ...original, password: "tajne", formData: "obsah" } as never, project: { id: "p-1", name: "Zakázka" } }, now, handle), handle);
+  const url = reportTabUrl("abf", handle);
+  assert.equal(url, `/abf/nahlasit#k=${handle}`);
+  assert.doesNotMatch(url, /\?|abf\.prices|ceniky|Edge|1440|p-1/u, "nothing but the random handle in the URL — and only in the fragment");
+  const stored = memory.get(`hws-support-report:${handle}`)!;
+  assert.doesNotMatch(stored, /tajne|obsah|password|formData/u, "no form content in storage");
+  assert.equal(handleFromHash(`#k=${handle}`), handle);
+  assert.equal(handleFromHash("#k=../../etc"), null);
+  const read = readReportHandoff(storage, handle, "abf", now + 60_000)!;
+  assert.deepEqual(read.context, original, "the report carries the ORIGINAL page, not /abf/nahlasit");
+  assert.deepEqual(read.project, { id: "p-1", name: "Zakázka" });
+  assert.equal(readReportHandoff(storage, handle, "abf", now + 60_000)?.context.path, original.path, "a reload of the form keeps the context");
+  assert.equal(readReportHandoff(storage, handle, "hws-easy", now), undefined, "another application never reads it");
+  assert.equal(readReportHandoff(storage, handle, "abf", now + 3 * 3600_000), undefined, "expires after 2 hours");
+  // a query string or a secret-looking part of the original address never survives
+  storeReportHandoff(storage, { appKey: "abf", context: { ...original, path: "/abf?token=abc#/podpora?heslo=1" } }, now, "11111111-2222-4333-8444-555555555555");
+  assert.equal(readReportHandoff(storage, "11111111-2222-4333-8444-555555555555", "abf", now)?.context.path, "/abf#/podpora");
+  // a later handoff removes expired ones; sending removes its own
+  storeReportHandoff(storage, { appKey: "abf", context: original }, now + 3 * 3600_000, "22222222-2222-4333-8444-555555555555");
+  assert.equal(memory.has(`hws-support-report:${handle}`), false);
+  clearReportHandoff(storage, "22222222-2222-4333-8444-555555555555");
+  assert.equal(memory.has("hws-support-report:22222222-2222-4333-8444-555555555555"), false);
+  assert.equal(parseReportHandoff("{not json", now), undefined);
+  // without a handoff the server keeps an empty path — never "/" or the form address
+  assert.equal(sanitizeClientContext({ area: "abf.general", path: "" }).path, "");
 });
 
 // =============================================================================================
