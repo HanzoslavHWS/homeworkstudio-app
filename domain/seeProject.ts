@@ -6,6 +6,7 @@
  * "Všechny modely" or to chosen scenes. A project has at most one publication, and a publication
  * has EXACTLY TWO sharing modes: `public` (anyone with the link) or `pin` (server-verified PIN).
  */
+import { normalizeInfoPanelContent, type SeeInfoPanelContent, type SeeProjectInfoPanel } from "./seeContent.ts";
 import type { SeeEmbedPolicy } from "./seeEmbed.ts";
 import type { SeeModelInfo } from "./seeFiles.ts";
 
@@ -30,8 +31,12 @@ export const SEE_PUBLICATION_MODE_LABELS_CS: Readonly<Record<SeePublicationMode,
   pin: "Chráněná prezentace (PIN)",
 };
 
-/** MVP: up to three independent GLB scenes per project; the data model itself has no such limit. */
-export const SEE_MAX_SCENES = 3;
+/**
+ * Scenes are added one by one (1, 2, 5 …). There is no product limit of three; this is only a
+ * technical safety ceiling against abuse. Per-file and per-project size limits apply as well
+ * (domain/seeFiles.ts).
+ */
+export const SEE_MAX_SCENES = 60;
 export const SEE_MAX_DOCUMENTS = 50;
 export const SEE_MAX_ANNOTATIONS_PER_SCENE = 200;
 
@@ -63,6 +68,8 @@ export type SeeSceneSettings = Readonly<{
   lighting: SeeLighting;
   exposure: number;
   showAnnotations: boolean;
+  /** Own information-panel content of this model (overrides the project content when non-empty). */
+  infoPanel?: SeeInfoPanelContent;
 }>;
 
 export const DEFAULT_SEE_SCENE_SETTINGS: SeeSceneSettings = {
@@ -85,6 +92,8 @@ export type SeeProject = Readonly<{
   updatedAt: string;
   updatedBy?: SeeActorStamp;
   deletedAt?: string;
+  /** Optional right-hand information panel shared by all models (domain/seeContent.ts). */
+  infoPanel?: SeeProjectInfoPanel;
 }>;
 
 export type SeeScene = Readonly<{
@@ -108,11 +117,16 @@ export type SeeAnnotation = Readonly<{
   normal?: SeeVec3;
   visible: boolean;
   sortOrder: number;
+  /** Optional picture (file of kind "image") and safe https:// link shown in the annotation card. */
+  imageFileId?: string;
+  linkUrl?: string;
+  linkLabel?: string;
   createdAt: string;
   updatedAt: string;
 }>;
 
-export type SeeFileKind = "model" | "document";
+/** model = GLB scene, document = downloadable PDF/JPG/PNG, image = picture used in annotations / info panel. */
+export type SeeFileKind = "model" | "document" | "image";
 export type SeeFileStatus = "pending" | "ready" | "rejected";
 
 export type SeeFile = Readonly<{
@@ -145,7 +159,7 @@ export type SeeSnapshotScene = Readonly<{
   description: string;
   modelFileId: string;
   settings: SeeSceneSettings;
-  annotations: readonly Readonly<{ id: string; title: string; body: string; position: SeeVec3; normal?: SeeVec3 }>[];
+  annotations: readonly Readonly<{ id: string; title: string; body: string; position: SeeVec3; normal?: SeeVec3; imageFileId?: string; linkUrl?: string; linkLabel?: string }>[];
 }>;
 
 export type SeeSnapshotDocument = Readonly<{
@@ -164,6 +178,8 @@ export type SeeSnapshot = Readonly<{
   projectDescription: string;
   scenes: readonly SeeSnapshotScene[];
   documents: readonly SeeSnapshotDocument[];
+  /** Present only when the project panel is switched on (resolved per scene by resolveInfoPanel). */
+  infoPanel?: SeeProjectInfoPanel;
 }>;
 
 export type SeePublication = Readonly<{
@@ -278,6 +294,8 @@ export function normalizeSceneSettings(value: unknown): SeeSceneSettings {
   const fov = finiteNumber(cameraInput?.fov);
   const camera = position && target ? { position, target, fov: fov && fov >= 10 && fov <= 100 ? fov : 45 } : undefined;
   const exposure = finiteNumber(input.exposure);
+  // Stored content is normalized leniently (links already validated strictly when saved).
+  const infoPanel = normalizeInfoPanelContent(input.infoPanel, { allowLocalHttp: true });
   return {
     ...(camera ? { camera } : {}),
     background: (SEE_BACKGROUNDS as readonly string[]).includes(input.background as string) ? input.background as SeeBackground : DEFAULT_SEE_SCENE_SETTINGS.background,
@@ -285,6 +303,7 @@ export function normalizeSceneSettings(value: unknown): SeeSceneSettings {
     lighting: (SEE_LIGHTINGS as readonly string[]).includes(input.lighting as string) ? input.lighting as SeeLighting : DEFAULT_SEE_SCENE_SETTINGS.lighting,
     exposure: exposure !== undefined ? Math.min(3, Math.max(0.2, exposure)) : DEFAULT_SEE_SCENE_SETTINGS.exposure,
     showAnnotations: typeof input.showAnnotations === "boolean" ? input.showAnnotations : DEFAULT_SEE_SCENE_SETTINGS.showAnnotations,
+    ...(infoPanel ? { infoPanel } : {}),
   };
 }
 
@@ -334,6 +353,13 @@ export function publicGate(publication: SeePublication | undefined, project: See
 /** Takes the publishable content of the current draft. Throws when there is nothing to show. */
 export function buildSnapshot(aggregate: SeeProjectAggregate, revision: number, publishedAt: string): SeeSnapshot {
   const readyModels = new Set(aggregate.files.filter((file) => file.kind === "model" && file.status === "ready" && !file.deletedAt).map((file) => file.id));
+  const readyImages = new Set(aggregate.files.filter((file) => file.kind === "image" && file.status === "ready" && !file.deletedAt).map((file) => file.id));
+  // A picture is published only if it is a verified, non-deleted image of this project.
+  const withImage = <T extends { imageFileId?: string }>(value: T): T => {
+    if (!value.imageFileId || readyImages.has(value.imageFileId)) return value;
+    const { imageFileId: _dropped, ...rest } = value;
+    return rest as T;
+  };
   const scenes = [...aggregate.scenes]
     .sort((left, right) => left.sortOrder - right.sortOrder)
     .filter((scene) => scene.modelFileId && readyModels.has(scene.modelFileId))
@@ -342,11 +368,19 @@ export function buildSnapshot(aggregate: SeeProjectAggregate, revision: number, 
       name: scene.name,
       description: scene.description,
       modelFileId: scene.modelFileId!,
-      settings: scene.settings,
+      settings: scene.settings.infoPanel ? { ...scene.settings, infoPanel: withImage(scene.settings.infoPanel) } : scene.settings,
       annotations: aggregate.annotations
         .filter((annotation) => annotation.sceneId === scene.id && annotation.visible)
         .sort((left, right) => left.sortOrder - right.sortOrder)
-        .map((annotation) => ({ id: annotation.id, title: annotation.title, body: annotation.body, position: annotation.position, ...(annotation.normal ? { normal: annotation.normal } : {}) })),
+        .map((annotation) => withImage({
+          id: annotation.id,
+          title: annotation.title,
+          body: annotation.body,
+          position: annotation.position,
+          ...(annotation.normal ? { normal: annotation.normal } : {}),
+          ...(annotation.imageFileId ? { imageFileId: annotation.imageFileId } : {}),
+          ...(annotation.linkUrl ? { linkUrl: annotation.linkUrl, linkLabel: annotation.linkLabel } : {}),
+        })),
     }));
   if (!scenes.length) throw new SeeValidationError("Publikovat lze až projekt s alespoň jedním nahraným 3D modelem.", 409);
   const sceneIds = new Set(scenes.map((scene) => scene.id));
@@ -369,6 +403,7 @@ export function buildSnapshot(aggregate: SeeProjectAggregate, revision: number, 
     projectDescription: aggregate.project.description,
     scenes,
     documents,
+    ...(aggregate.project.infoPanel?.enabled ? { infoPanel: withImage(aggregate.project.infoPanel) } : {}),
   };
 }
 
@@ -378,10 +413,14 @@ export function documentsForScene<T extends Readonly<{ appliesToAll: boolean; sc
 }
 
 /** Is this file id something the published snapshot actually exposes? */
-export function snapshotReferencesFile(snapshot: SeeSnapshot, fileId: string): "model" | "document" | undefined {
+export function snapshotReferencesFile(snapshot: SeeSnapshot, fileId: string): "model" | "document" | "image" | undefined {
   if (snapshot.scenes.some((scene) => scene.modelFileId === fileId)) return "model";
   if (snapshot.documents.some((document) => document.id === fileId)) return "document";
-  return undefined;
+  const images = [
+    snapshot.infoPanel?.imageFileId,
+    ...snapshot.scenes.flatMap((scene) => [scene.settings.infoPanel?.imageFileId, ...scene.annotations.map((annotation) => annotation.imageFileId)]),
+  ];
+  return images.includes(fileId) ? "image" : undefined;
 }
 
 /** Is the draft different from what visitors currently see? (for the "neuložené do publikace" hint) */
@@ -397,8 +436,8 @@ export function hasUnpublishedChanges(aggregate: SeeProjectAggregate): boolean {
 }
 
 export function fileDownloadName(file: Readonly<{ displayName: string; mimeType: string }>): string {
-  const extension = ({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "model/gltf-binary": "glb" } as Record<string, string>)[file.mimeType] ?? "bin";
-  const base = file.displayName.replace(/\.(pdf|jpe?g|png|glb)$/iu, "").trim() || "soubor";
+  const extension = ({ "application/pdf": "pdf", "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "model/gltf-binary": "glb" } as Record<string, string>)[file.mimeType] ?? "bin";
+  const base = file.displayName.replace(/\.(pdf|jpe?g|png|webp|glb)$/iu, "").trim() || "soubor";
   return `${base}.${extension}`;
 }
 

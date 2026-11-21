@@ -121,6 +121,31 @@ await check("see_record_view: první otevření se počítá, refresh v okně ne
   const count = (await db.query(`select view_count from see_publications where id = '${publication}'`)).rows[0].view_count;
   if (first !== true || second !== false || count !== 1) throw new Error(`first=${first} second=${second} count=${count}`);
 });
+// UI úpravy: libovolný počet modelů, informační panel, obrázek + odkaz u popisku.
+const image = "55555555-5555-4555-8555-555555555555";
+const annotation = "66666666-6666-4666-8666-666666666666";
+await check("info_panel má výchozí hodnotu {} (panel vypnutý)", async () => {
+  const row = (await db.query(`select info_panel from see_projects where id = '${project}'`)).rows[0];
+  if (JSON.stringify(row.info_panel) !== "{}") throw new Error(`info_panel = ${JSON.stringify(row.info_panel)}`);
+});
+await check("libovolný počet modelů: projekt s 8 scénami", async () => {
+  await db.exec(`insert into see_scenes (project_id, name, sort_order) select '${project}', 'Model ' || g, g from generate_series(1, 7) g`);
+  const n = (await db.query(`select count(*)::int as n from see_scenes where project_id = '${project}'`)).rows[0].n;
+  if (n !== 8) throw new Error(`scén: ${n}`);
+});
+await check("soubor druhu image (WebP) je povolený", () => db.exec(`
+  insert into see_files (id, project_id, kind, display_name, original_file_name, mime_type, size_bytes, storage_key, status)
+    values ('${image}', '${project}', 'image', 'detail', 'detail.webp', 'image/webp', 100, 'hws-see/o/${image}.webp', 'ready')`));
+await check("popisek s obrázkem a https odkazem", () => db.exec(`
+  insert into see_annotations (id, scene_id, title, position, image_file_id, link_url, link_label)
+    values ('${annotation}', '${scene}', 'Zámek', '[0,0,0]', '${image}', 'https://homeworkstudio.cz/', 'Více informací')`));
+await check("CHECK: odkaz javascript: v popisku odmítnut", () => expectFailure(`update see_annotations set link_url = 'javascript:alert(1)' where id = '${annotation}'`, /check/iu));
+await check("CHECK: příliš dlouhý text odkazu odmítnut", () => expectFailure(`update see_annotations set link_label = repeat('x', 81) where id = '${annotation}'`, /check/iu));
+await check("smazání obrázku nezruší popisek (image_file_id → null)", async () => {
+  await db.exec(`delete from see_files where id = '${image}'`);
+  const row = (await db.query(`select image_file_id from see_annotations where id = '${annotation}'`)).rows[0];
+  if (!row || row.image_file_id !== null) throw new Error(`popisek: ${JSON.stringify(row)}`);
+});
 await check("kaskáda: smazání projektu odstraní scény, soubory, publikaci i události", async () => {
   await db.exec(`delete from see_projects where id = '${project}'`);
   for (const table of ["see_scenes", "see_files", "see_publications", "see_events", "see_file_scene_links"]) {

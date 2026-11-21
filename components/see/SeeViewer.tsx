@@ -8,10 +8,11 @@ import { DRACOLoader } from "three/addons/loaders/DRACOLoader.js";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { KTX2Loader } from "three/addons/loaders/KTX2Loader.js";
 import { MeshoptDecoder } from "three/addons/libs/meshopt_decoder.module.js";
-import { adaptSavedViewDistanceFactor, clippingFor, fitView } from "../../domain/seeCameraFit";
+import { adaptSavedViewDistanceFactor, clippingFor, easeInOutCubic, fitView, presetView, type SeeViewPreset } from "../../domain/seeCameraFit";
 import { formatFileSize, resolveBackgroundColor, type SeeCameraView, type SeeSceneSettings, type SeeVec3 } from "../../domain/seeProject";
-import { seeRenderProfile, type SeeRenderProfile } from "../../domain/seeViewerProfile";
+import { seePrefetchOrder, seeRenderProfile, type SeeRenderProfile } from "../../domain/seeViewerProfile";
 import { enterFullscreen, exitFullscreen, isFullscreen, nativeFullscreenElement } from "../../lib/see/fullscreen";
+import { SeeExternalLink, SeeImage } from "./SeeMedia";
 
 /**
  * HWS SEE WebGL viewer (plain three.js — the renderer this repo already uses for the ABF CAD view).
@@ -29,7 +30,7 @@ import { enterFullscreen, exitFullscreen, isFullscreen, nativeFullscreenElement 
  * in the background and caches up to three parsed scenes. Material quality is never reduced.
  */
 
-export type SeeViewerAnnotation = Readonly<{ id: string; title: string; body: string; position: SeeVec3 }>;
+export type SeeViewerAnnotation = Readonly<{ id: string; title: string; body: string; position: SeeVec3; imageFileId?: string; linkUrl?: string; linkLabel?: string }>;
 
 export type SeeViewerScene = Readonly<{
   id: string;
@@ -42,12 +43,16 @@ export type SeeViewerHandle = Readonly<{
   getCamera: () => SeeCameraView | undefined;
   resetCamera: () => void;
   fitModel: () => void;
+  /** Smoothly moves the camera to a quick view of the current model. */
+  setView: (preset: SeeViewPreset) => void;
   toggleFullscreen: () => void;
 }>;
 
 type Props = Readonly<{
   scene?: SeeViewerScene;
   resolveModelUrl: (fileId: string) => Promise<string>;
+  /** Short-lived URL of a picture used in an annotation card (same authorization as models). */
+  resolveImageUrl?: (fileId: string) => Promise<string>;
   /** Models of the other scenes — loaded in the background so switching is instant. */
   prefetchModelFileIds?: readonly string[];
   showAnnotations: boolean;
@@ -100,6 +105,8 @@ type Runtime = {
   disposed: boolean;
   /** Request one new frame (render-on-demand). */
   invalidate: () => void;
+  /** Running quick-view camera transition (cancelled as soon as the user grabs the view). */
+  tween?: { fromPosition: THREE.Vector3; toPosition: THREE.Vector3; fromTarget: THREE.Vector3; toTarget: THREE.Vector3; start: number; duration: number };
 };
 
 const round = (value: number) => Math.round(value * 10_000) / 10_000;
@@ -342,6 +349,7 @@ export const SeeViewer = forwardRef<SeeViewerHandle, Props>(function SeeViewer(p
 
     // Lower resolution only while a phone is being dragged; full quality as soon as it rests.
     const onStart = () => {
+      runtime.tween = undefined;
       if (profile.interactionPixelRatio < profile.pixelRatio) renderer.setPixelRatio(profile.interactionPixelRatio);
     };
     const onEnd = () => {
@@ -370,7 +378,12 @@ export const SeeViewer = forwardRef<SeeViewerHandle, Props>(function SeeViewer(p
         projected.set(position[0], position[1], position[2]).project(camera);
         const visible = projected.z > -1 && projected.z < 1;
         element.style.display = visible ? "" : "none";
-        element.style.transform = `translate(${(projected.x * 0.5 + 0.5) * width}px, ${(-projected.y * 0.5 + 0.5) * height}px)`;
+        const x = (projected.x * 0.5 + 0.5) * width;
+        const y = (-projected.y * 0.5 + 0.5) * height;
+        element.style.transform = `translate(${x}px, ${y}px)`;
+        // The card opens towards the free side, so a picture or link never ends up off-screen.
+        element.dataset.side = y > height * 0.5 ? "above" : "below";
+        element.dataset.align = x < 160 ? "start" : x > width - 160 ? "end" : "center";
         if (checkOcclusion && visible && runtime.current) {
           toPoint.set(position[0], position[1], position[2]);
           const distance = camera.position.distanceTo(toPoint);
@@ -384,6 +397,15 @@ export const SeeViewer = forwardRef<SeeViewerHandle, Props>(function SeeViewer(p
     const animate = (time: number) => {
       if (runtime.disposed) return;
       runtime.frame = requestAnimationFrame(animate);
+      const tween = runtime.tween;
+      if (tween) {
+        const progress = tween.duration > 0 ? Math.min(1, (performance.now() - tween.start) / tween.duration) : 1;
+        const eased = easeInOutCubic(progress);
+        camera.position.lerpVectors(tween.fromPosition, tween.toPosition, eased);
+        controls.target.lerpVectors(tween.fromTarget, tween.toTarget, eased);
+        if (progress >= 1) runtime.tween = undefined;
+        needsRender = true;
+      }
       const moving = controls.update();
       if (moving || needsRender) {
         needsRender = false;
@@ -554,7 +576,7 @@ export const SeeViewer = forwardRef<SeeViewerHandle, Props>(function SeeViewer(p
   }, [sceneId, modelFileId, loadModel, reloadNonce]);
 
   // ── background prefetch of the other scenes (after the visible one is ready) ──
-  const prefetchKey = (prefetchModelFileIds ?? []).filter((id) => id && id !== modelFileId).join(",");
+  const prefetchKey = seePrefetchOrder(prefetchModelFileIds ?? [], modelFileId).join(",");
   useEffect(() => {
     const runtime = runtimeRef.current;
     if (!runtime || load.state !== "ready" || !prefetchKey || !runtime.profile.prefetchOtherModels) return undefined;
@@ -601,6 +623,29 @@ export const SeeViewer = forwardRef<SeeViewerHandle, Props>(function SeeViewer(p
       const runtime = runtimeRef.current;
       if (runtime) fitCamera(runtime);
     },
+    setView: (preset: SeeViewPreset) => {
+      const runtime = runtimeRef.current;
+      if (!runtime?.current) return;
+      const { camera, controls } = runtime;
+      const saved = sceneRef.current?.settings.camera;
+      let toPosition: THREE.Vector3;
+      let toTarget: THREE.Vector3;
+      if (preset === "default" && saved) {
+        // "Výchozí / 3D" = the view the editor saved for this model (or the automatic framing).
+        toTarget = new THREE.Vector3(...saved.target);
+        toPosition = new THREE.Vector3(...saved.position).sub(toTarget).multiplyScalar(adaptSavedViewDistanceFactor(camera.aspect)).add(toTarget);
+        camera.fov = saved.fov;
+        camera.updateProjectionMatrix();
+      } else {
+        const { sphere, radius } = modelBounds(runtime.current);
+        const view = presetView(preset, { center: [sphere.center.x, sphere.center.y, sphere.center.z], radius, fov: camera.fov, aspect: camera.aspect });
+        toPosition = new THREE.Vector3(...view.position);
+        toTarget = new THREE.Vector3(...view.target);
+      }
+      const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+      runtime.tween = { fromPosition: camera.position.clone(), toPosition, fromTarget: controls.target.clone(), toTarget, start: performance.now(), duration: reducedMotion ? 0 : 650 };
+      runtime.invalidate();
+    },
     toggleFullscreen: () => {
       const target = fullscreenRef.current.fullscreenRoot?.current ?? hostRef.current;
       if (!target) return;
@@ -632,9 +677,11 @@ export const SeeViewer = forwardRef<SeeViewerHandle, Props>(function SeeViewer(p
               {index + 1}
             </button>
             {annotation.id === selectedAnnotationId && (
-              <div className="seeMarkerCard" role="dialog">
+              <div className="seeMarkerCard" role="dialog" aria-label={annotation.title}>
                 <strong>{annotation.title}</strong>
+                {annotation.imageFileId && props.resolveImageUrl && <SeeImage fileId={annotation.imageFileId} resolve={props.resolveImageUrl} alt={annotation.title} className="seeMarkerImage" />}
                 {annotation.body && <p>{annotation.body}</p>}
+                {annotation.linkUrl && <SeeExternalLink link={{ url: annotation.linkUrl, label: annotation.linkLabel ?? "" }} className="seeMarkerLink" />}
               </div>
             )}
           </div>

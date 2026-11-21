@@ -2,6 +2,16 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  EMPTY_PROJECT_INFO_PANEL,
+  isPanelContentEmpty,
+  linkProblem,
+  resolveInfoPanel,
+  SEE_DEFAULT_LINK_LABEL,
+  SEE_PANEL_MAX_LINKS,
+  type SeeInfoPanelContent,
+  type SeeProjectInfoPanel,
+} from "../../domain/seeContent";
 import { SEE_EMBED_POLICIES, SEE_EMBED_POLICY_LABELS_CS, type SeeEmbedPolicy } from "../../domain/seeEmbed";
 import { modelOptimizationHints, SEE_ACCEPT_ATTRIBUTE } from "../../domain/seeFiles";
 import {
@@ -32,31 +42,46 @@ import {
   uploadSeeFile,
   type SeeUploadProgress,
 } from "../../lib/see/client";
+import { prepareImageForUpload } from "../../lib/see/imageResize";
+import { SeeImage } from "./SeeMedia";
 import { SeeNotice } from "./SeeNotice";
+import { SeeInfoPanelBody, SeeSceneSwitcher, SeeViewPresets } from "./SeeViewControls";
 import { SeeViewer, type SeeViewerHandle } from "./SeeViewer";
 import { clearDraftBackup, readDraftBackup, useUnsavedChangesGuard, writeDraftBackup, type StoredDraft } from "./useUnsavedChangesGuard";
 
 type DraftFile = SeeEditorFile & { deleted?: boolean };
-type Draft = { name: string; description: string; scenes: SeeScene[]; annotations: SeeAnnotation[]; files: DraftFile[] };
-type Tab = "model" | "view" | "labels" | "docs" | "publish";
+type Draft = { name: string; description: string; infoPanel: SeeProjectInfoPanel; scenes: SeeScene[]; annotations: SeeAnnotation[]; files: DraftFile[] };
+type Tab = "model" | "view" | "labels" | "docs" | "panel" | "publish";
 
-const TABS: readonly [Tab, string][] = [["model", "Model"], ["view", "Zobrazení"], ["labels", "Popisky"], ["docs", "Dokumentace"], ["publish", "Publikace"]];
+const TABS: readonly [Tab, string][] = [["model", "Model"], ["view", "Zobrazení"], ["labels", "Popisky"], ["docs", "Dokumentace"], ["panel", "Panel"], ["publish", "Publikace"]];
 
 function draftFromView(view: SeeEditorView): Draft {
   return {
     name: view.project.name,
     description: view.project.description,
+    infoPanel: view.project.infoPanel ?? EMPTY_PROJECT_INFO_PANEL,
     scenes: [...view.scenes],
     annotations: [...view.annotations],
     files: view.files.map((file) => ({ ...file })),
   };
 }
 
+/** Link rows the user added but left completely empty are skipped instead of blocking the save. */
+function withoutBlankLinks<T extends SeeInfoPanelContent>(content: T): T {
+  return { ...content, links: content.links.filter((link) => link.url.trim() || link.label.trim()) };
+}
+
 function draftBody(draft: Draft) {
   return {
-    project: { name: draft.name, description: draft.description },
-    scenes: draft.scenes.map((scene) => ({ id: scene.id, name: scene.name, description: scene.description, modelFileId: scene.modelFileId ?? null, settings: scene.settings })),
-    annotations: draft.annotations.map((annotation) => ({ id: annotation.id, sceneId: annotation.sceneId, title: annotation.title, body: annotation.body, position: annotation.position, normal: annotation.normal, visible: annotation.visible })),
+    project: { name: draft.name, description: draft.description, infoPanel: withoutBlankLinks(draft.infoPanel ?? EMPTY_PROJECT_INFO_PANEL) },
+    scenes: draft.scenes.map((scene) => ({
+      id: scene.id, name: scene.name, description: scene.description, modelFileId: scene.modelFileId ?? null,
+      settings: scene.settings.infoPanel ? { ...scene.settings, infoPanel: withoutBlankLinks(scene.settings.infoPanel) } : scene.settings,
+    })),
+    annotations: draft.annotations.map((annotation) => ({
+      id: annotation.id, sceneId: annotation.sceneId, title: annotation.title, body: annotation.body, position: annotation.position, normal: annotation.normal, visible: annotation.visible,
+      imageFileId: annotation.imageFileId ?? null, linkUrl: annotation.linkUrl ?? "", linkLabel: annotation.linkLabel ?? "",
+    })),
     files: draft.files.map((file, index) => ({ id: file.id, displayName: file.displayName, appliesToAll: file.appliesToAll, sceneIds: file.sceneIds, sortOrder: index, deleted: file.deleted === true })),
   };
 }
@@ -160,7 +185,8 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
 
   const restoreBackup = () => {
     if (!recoverable) return;
-    setDraft(recoverable.draft);
+    // Backups written before the information panel existed have no infoPanel field.
+    setDraft({ ...recoverable.draft, infoPanel: recoverable.draft.infoPanel ?? EMPTY_PROJECT_INFO_PANEL });
     setDirty(true);
     setActiveSceneId(recoverable.draft.scenes[0]?.id);
     setRecoverable(undefined);
@@ -181,7 +207,22 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
 
   const removeScene = (sceneId: string) => {
     const scene = draft.scenes.find((entry) => entry.id === sceneId);
-    if (!scene || !window.confirm(`Odstranit model „${scene.name}“ včetně jeho popisků? Změna se projeví po uložení.`)) return;
+    if (!scene) return;
+    if (draft.scenes.length <= 1) {
+      setMessage({ kind: "warn", text: "Projekt musí mít alespoň jeden model. Místo smazání můžete vyměnit jeho GLB soubor nebo model přejmenovat." });
+      return;
+    }
+    // Explicit, safe handling of links to the removed scene (files are never deleted here).
+    const annotationCount = draft.annotations.filter((annotation) => annotation.sceneId === sceneId).length;
+    const orphaned = draft.files.filter((entry) => entry.kind === "document" && !entry.deleted && !entry.appliesToAll && entry.sceneIds.length === 1 && entry.sceneIds[0] === sceneId);
+    const lines = [
+      `Odstranit model „${scene.name}“?`,
+      annotationCount ? `• Smaže se ${annotationCount} ${annotationCount === 1 ? "popisek" : "popisků"} tohoto modelu.` : "",
+      orphaned.length ? `• Tyto dokumenty byly přiřazené jen k tomuto modelu a zůstanou bez přiřazení (nebudou se zobrazovat, dokud je nepřiřadíte): ${orphaned.map((entry) => entry.displayName).join(", ")}.` : "",
+      "• Soubory (GLB, dokumenty, obrázky) se nemažou a vazby ostatních modelů zůstávají.",
+      "Změna se projeví po uložení.",
+    ].filter(Boolean);
+    if (!window.confirm(lines.join("\n"))) return;
     change((current) => ({
       ...current,
       scenes: current.scenes.filter((entry) => entry.id !== sceneId),
@@ -242,6 +283,25 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
     link.remove();
   });
 
+  /**
+   * Picture for an annotation or the information panel: resized in the browser, uploaded through
+   * the verified upload flow, then attached to the draft (the user saves as usual).
+   */
+  const uploadImage = (picked: File | undefined, attach: (current: Draft, fileId: string) => Draft) => {
+    if (!picked) return;
+    void perform("Nahrávám obrázek…", async () => {
+      await ensureSaved();
+      const prepared = await prepareImageForUpload(picked);
+      const key = `image-${prepared.name}`;
+      const result = await uploadSeeFile(projectId, prepared, { kind: "image" }, (progress) => setUploads((current) => ({ ...current, [key]: { ...progress, name: prepared.name } })));
+      applyView(result.project);
+      change((current) => attach(current, result.file.id));
+      setMessage({ kind: "warn", text: "Obrázek nahrán — uložte změny, aby se připojil." });
+    });
+  };
+  const resolveImage = useCallback((fileId: string) => seeEditorFileUrl(projectId, fileId), [projectId]);
+  const urlOptions = { allowLocalHttp: view.backend === "local" };
+
   const onPick = (position: SeeVec3, normal?: SeeVec3) => {
     if (!activeScene) return;
     const annotation: SeeAnnotation = {
@@ -290,6 +350,14 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
     settings: activeScene.settings,
     annotations: activeAnnotations.filter((annotation) => annotation.visible),
   } : undefined;
+  const sceneHasOwnPanel = Boolean(activeScene?.settings.infoPanel);
+  const updateProjectPanel = (changes: Partial<SeeProjectInfoPanel>) => change((current) => ({ ...current, infoPanel: { ...(current.infoPanel ?? EMPTY_PROJECT_INFO_PANEL), ...changes } }));
+  const updateScenePanel = (content: SeeInfoPanelContent | undefined) => {
+    if (!activeScene) return;
+    const { infoPanel: _previous, ...rest } = activeScene.settings;
+    updateScene(activeScene.id, { settings: content ? { ...rest, infoPanel: content } : rest });
+  };
+  const resolvedPanel = activeScene ? resolveInfoPanel(draft.infoPanel, activeScene.settings.infoPanel) : undefined;
 
   const modelFile = activeScene?.modelFileId ? filesById.get(activeScene.modelFileId) : undefined;
 
@@ -325,21 +393,22 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
 
       <div className="seeWorkspace">
         <div className="seeStage" ref={stageRef}>
-          <div className="seeSceneTabs" role="tablist" aria-label="Modely">
-            {draft.scenes.map((scene) => (
-              <button key={scene.id} type="button" role="tab" aria-selected={scene.id === activeSceneId} className={scene.id === activeSceneId ? "seeSceneTab seeSceneTabActive" : "seeSceneTab"} onClick={() => { setActiveSceneId(scene.id); setSelectedAnnotationId(undefined); setPickMode(false); }}>
-                {scene.name}
-                {!scene.modelFileId && <span className="seeDot" title="Chybí GLB" />}
-              </button>
-            ))}
-            {draft.scenes.length < SEE_MAX_SCENES && !readOnly && <button type="button" className="seeSceneTab seeSceneTabAdd" onClick={addScene}>+ Model</button>}
-          </div>
+          <SeeSceneSwitcher
+            scenes={draft.scenes.map((scene) => ({ id: scene.id, name: scene.name || "Bez názvu", missingModel: !scene.modelFileId }))}
+            activeId={activeSceneId}
+            onSelect={(id) => { setActiveSceneId(id); setSelectedAnnotationId(undefined); setPickMode(false); }}
+            className="seeSceneTabs"
+            tabClassName="seeSceneTab"
+            activeTabClassName="seeSceneTabActive"
+            trailing={draft.scenes.length < SEE_MAX_SCENES && !readOnly ? <button type="button" className="seeSceneTab seeSceneTabAdd" onClick={addScene}>+ Přidat další model</button> : undefined}
+          />
           <SeeViewer
             ref={viewerRef}
             fullscreenRoot={stageRef}
             onFullscreenChange={setFullscreen}
             scene={viewerScene?.modelFileId ? viewerScene : undefined}
             resolveModelUrl={(fileId) => seeEditorFileUrl(projectId, fileId)}
+            resolveImageUrl={resolveImage}
             prefetchModelFileIds={draft.scenes.map((scene) => scene.modelFileId ?? "").filter(Boolean)}
             showAnnotations={showAnnotations}
             selectedAnnotationId={selectedAnnotationId}
@@ -348,6 +417,7 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
             onPick={onPick}
             emptyMessage={activeScene ? "K tomuto modelu zatím není nahraný GLB — nahrajte jej v záložce Model." : "Projekt zatím nemá žádný model. Přidejte jej tlačítkem „+ Model“."}
           />
+          {viewerScene?.modelFileId && <SeeViewPresets className="seeStageViews" onSelect={(preset) => viewerRef.current?.setView(preset)} />}
           <div className="seeStageTools">
             <button type="button" onClick={() => viewerRef.current?.resetCamera()} title="Vrátit uložený pohled">Výchozí pohled</button>
             <button type="button" onClick={() => viewerRef.current?.fitModel()}>Přizpůsobit</button>
@@ -374,8 +444,9 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
                     <label className="seeField"><span>Název modelu (scény)</span><input value={activeScene.name} maxLength={120} onChange={(event) => updateScene(activeScene.id, { name: event.target.value })} disabled={readOnly} /></label>
                     <label className="seeField"><span>Popis modelu</span><textarea rows={2} value={activeScene.description} maxLength={2000} onChange={(event) => updateScene(activeScene.id, { description: event.target.value })} disabled={readOnly} /></label>
                     <div className="seeInline">
-                      <button type="button" className="seeSmallButton" onClick={() => moveScene(activeScene.id, -1)} disabled={readOnly}>↑ Posunout dřív</button>
-                      <button type="button" className="seeSmallButton" onClick={() => moveScene(activeScene.id, 1)} disabled={readOnly}>↓ Posunout později</button>
+                      <span className="seeMuted">Pořadí {draft.scenes.findIndex((scene) => scene.id === activeScene.id) + 1} z {draft.scenes.length}</span>
+                      <button type="button" className="seeSmallButton" onClick={() => moveScene(activeScene.id, -1)} disabled={readOnly || draft.scenes[0]?.id === activeScene.id}>↑ Posunout dřív</button>
+                      <button type="button" className="seeSmallButton" onClick={() => moveScene(activeScene.id, 1)} disabled={readOnly || draft.scenes[draft.scenes.length - 1]?.id === activeScene.id}>↓ Posunout později</button>
                     </div>
                     <div className="seeFileBox">
                       <span className="seeMuted">GLB soubor</span>
@@ -390,9 +461,19 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
                       <span className="seeMuted">Max. {Math.round(view.limits.maxModelBytes / 1_000_000)} MB. Výměna se návštěvníkům projeví až po novém publikování.</span>
                       {modelFile?.modelInfo && <ModelInfoPanel file={modelFile} />}
                     </div>
-                    {!readOnly && <button type="button" className="seeSmallButton seeDanger" onClick={() => removeScene(activeScene.id)}>Odstranit tento model</button>}
+                    {!readOnly && (
+                      <button type="button" className="seeSmallButton seeDanger" onClick={() => removeScene(activeScene.id)} disabled={draft.scenes.length <= 1} title={draft.scenes.length <= 1 ? "Projekt musí mít alespoň jeden model." : undefined}>
+                        Odstranit tento model
+                      </button>
+                    )}
+                    {!readOnly && draft.scenes.length < SEE_MAX_SCENES && <button type="button" className="seeSmallButton" onClick={addScene}>+ Přidat další model</button>}
                   </>
-                ) : <p className="seeMuted">Přidejte model tlačítkem „+ Model“ nad prohlížečem.</p>}
+                ) : (
+                  <>
+                    <p className="seeMuted">Projekt zatím nemá žádný model.</p>
+                    {!readOnly && <button type="button" className="seeSmallButton" onClick={addScene}>+ Přidat model</button>}
+                  </>
+                )}
               </>
             )}
 
@@ -449,6 +530,25 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
                         <input value={annotation.title} maxLength={160} onChange={(event) => updateAnnotation(annotation.id, { title: event.target.value })} onFocus={() => setSelectedAnnotationId(annotation.id)} disabled={readOnly} aria-label="Název popisku" />
                       </div>
                       <textarea rows={2} value={annotation.body} maxLength={4000} placeholder="Text popisku" onChange={(event) => updateAnnotation(annotation.id, { body: event.target.value })} onFocus={() => setSelectedAnnotationId(annotation.id)} disabled={readOnly} />
+                      <div className="seeAnnotationMedia">
+                        {annotation.imageFileId ? (
+                          <SeeImage fileId={annotation.imageFileId} resolve={resolveImage} alt={annotation.title} className="seeThumb" />
+                        ) : <span className="seeMuted">Bez obrázku</span>}
+                        {!readOnly && (
+                          <span className="seeInline">
+                            <label className="seeFilePick seeFilePickSmall">
+                              <input type="file" accept={SEE_ACCEPT_ATTRIBUTE.image} disabled={Boolean(busy)} onChange={(event) => { const picked = event.target.files?.[0]; event.target.value = ""; uploadImage(picked, (current, fileId) => ({ ...current, annotations: current.annotations.map((entry) => (entry.id === annotation.id ? { ...entry, imageFileId: fileId } : entry)) })); }} />
+                              <span>{annotation.imageFileId ? "Vyměnit obrázek" : "Přidat obrázek"}</span>
+                            </label>
+                            {annotation.imageFileId && <button type="button" className="seeLinkButton seeDanger" onClick={() => updateAnnotation(annotation.id, { imageFileId: undefined })}>Odebrat obrázek</button>}
+                          </span>
+                        )}
+                      </div>
+                      <div className="seeLinkFields">
+                        <input value={annotation.linkUrl ?? ""} placeholder="Odkaz https://… (nepovinné)" inputMode="url" onChange={(event) => updateAnnotation(annotation.id, { linkUrl: event.target.value || undefined })} disabled={readOnly} aria-label="Odkaz popisku" />
+                        <input value={annotation.linkLabel ?? ""} placeholder={SEE_DEFAULT_LINK_LABEL} maxLength={80} onChange={(event) => updateAnnotation(annotation.id, { linkLabel: event.target.value || undefined })} disabled={readOnly || !annotation.linkUrl} aria-label="Text tlačítka odkazu" />
+                      </div>
+                      {annotation.linkUrl && linkProblem(annotation.linkUrl, urlOptions) && <span className="seeErrorText">{linkProblem(annotation.linkUrl, urlOptions)}</span>}
                       <div className="seeInline">
                         <label className="seeCheck"><input type="checkbox" checked={annotation.visible} onChange={(event) => updateAnnotation(annotation.id, { visible: event.target.checked })} disabled={readOnly} /> Aktivní</label>
                         <span className="seeMuted seeCoords">[{annotation.position.map((value) => value.toFixed(3)).join("; ")}]</span>
@@ -460,7 +560,35 @@ export function SeeEditor({ initial }: Readonly<{ initial: SeeEditorView }>) {
               </>
             )}
 
-            {(tab === "view" || tab === "labels") && !activeScene && <p className="seeMuted">Nejdřív přidejte model.</p>}
+            {(tab === "view" || tab === "labels" || tab === "panel") && !activeScene && <p className="seeMuted">Nejdřív přidejte model.</p>}
+
+            {tab === "panel" && activeScene && (
+              <>
+                <label className="seeCheck">
+                  <input type="checkbox" checked={draft.infoPanel.enabled} onChange={(event) => updateProjectPanel({ enabled: event.target.checked })} disabled={readOnly} />
+                  Zobrazit ve veřejné prezentaci informační panel (vysouvací, vpravo)
+                </label>
+                <p className="seeMuted">Návštěvník panel otevře šipkou u pravého okraje; po otevření prezentace je vždy zavřený. Pravidlo: vlastní obsah modelu má přednost; je-li prázdný, použije se společný obsah projektu; bez obsahu se šipka nezobrazí.</p>
+                <div className={draft.infoPanel.enabled ? "seeFieldGroup" : "seeFieldGroup seeDisabledGroup"}>
+                  <span className="seeFieldLabel">Společný obsah projektu</span>
+                  <InfoPanelFields value={draft.infoPanel} onChange={(content) => updateProjectPanel(content)} readOnly={readOnly} busy={Boolean(busy)} urlOptions={urlOptions} resolveImage={resolveImage} onUpload={(picked) => uploadImage(picked, (current, fileId) => ({ ...current, infoPanel: { ...current.infoPanel, imageFileId: fileId } }))} />
+                </div>
+                <div className={draft.infoPanel.enabled ? "seeFieldGroup" : "seeFieldGroup seeDisabledGroup"}>
+                  <span className="seeFieldLabel">Model „{activeScene.name}“</span>
+                  <label className="seeCheck"><input type="radio" name="see-scene-panel" checked={!sceneHasOwnPanel} onChange={() => updateScenePanel(undefined)} disabled={readOnly} /> Použít společný obsah projektu</label>
+                  <label className="seeCheck"><input type="radio" name="see-scene-panel" checked={sceneHasOwnPanel} onChange={() => updateScenePanel({ title: "", body: "", links: [] })} disabled={readOnly} /> Vlastní obsah pro tento model</label>
+                  {sceneHasOwnPanel && activeScene.settings.infoPanel && (
+                    <InfoPanelFields value={activeScene.settings.infoPanel} onChange={(content) => updateScenePanel({ ...activeScene.settings.infoPanel!, ...content })} readOnly={readOnly} busy={Boolean(busy)} urlOptions={urlOptions} resolveImage={resolveImage} onUpload={(picked) => uploadImage(picked, (current, fileId) => ({ ...current, scenes: current.scenes.map((scene) => (scene.id === activeScene.id ? { ...scene, settings: { ...scene.settings, infoPanel: { ...(scene.settings.infoPanel ?? { title: "", body: "", links: [] }), imageFileId: fileId } } } : scene)) }))} />
+                  )}
+                </div>
+                <div className="seeFieldGroup">
+                  <span className="seeFieldLabel">Náhled panelu pro tento model</span>
+                  {resolvedPanel ? (
+                    <div className="seeInfoPreview"><SeeInfoPanelBody content={resolvedPanel} resolveImage={resolveImage} /></div>
+                  ) : <p className="seeMuted">{draft.infoPanel.enabled ? "Panel je prázdný — návštěvník šipku neuvidí." : "Panel je vypnutý."}</p>}
+                </div>
+              </>
+            )}
 
             {tab === "docs" && (
               <>
@@ -662,6 +790,53 @@ function ModelInfoPanel({ file }: Readonly<{ file: SeeEditorFile }>) {
       </span>
       <span className="seeMuted">Komprese: {compression.length ? compression.join(", ") : "žádná"}{info.generator ? ` · ${info.generator}` : ""}</span>
       {hints.map((hint) => <span key={hint} className="seeWarnText">{hint}</span>)}
+    </div>
+  );
+}
+
+/** Title, formatted text, picture and links of one information-panel content. */
+function InfoPanelFields({ value, onChange, readOnly, busy, urlOptions, resolveImage, onUpload }: Readonly<{
+  value: SeeInfoPanelContent;
+  onChange: (changes: Partial<SeeInfoPanelContent>) => void;
+  readOnly: boolean;
+  busy: boolean;
+  urlOptions: Readonly<{ allowLocalHttp: boolean }>;
+  resolveImage: (fileId: string) => Promise<string>;
+  onUpload: (file: File | undefined) => void;
+}>) {
+  const setLink = (index: number, changes: Partial<{ label: string; url: string }>) => onChange({ links: value.links.map((link, position) => (position === index ? { ...link, ...changes } : link)) });
+  return (
+    <div className="seePanelFields">
+      <label className="seeField"><span>Nadpis</span><input value={value.title} maxLength={160} onChange={(event) => onChange({ title: event.target.value })} disabled={readOnly} /></label>
+      <label className="seeField">
+        <span>Text (prázdný řádek = nový odstavec, „- “ = odrážka, **tučně**)</span>
+        <textarea rows={6} value={value.body} maxLength={6000} onChange={(event) => onChange({ body: event.target.value })} disabled={readOnly} />
+      </label>
+      <div className="seeAnnotationMedia">
+        {value.imageFileId ? <SeeImage fileId={value.imageFileId} resolve={resolveImage} alt={value.title || "Obrázek panelu"} className="seeThumb" /> : <span className="seeMuted">Bez obrázku</span>}
+        {!readOnly && (
+          <span className="seeInline">
+            <label className="seeFilePick seeFilePickSmall">
+              <input type="file" accept={SEE_ACCEPT_ATTRIBUTE.image} disabled={busy} onChange={(event) => { const picked = event.target.files?.[0]; event.target.value = ""; onUpload(picked); }} />
+              <span>{value.imageFileId ? "Vyměnit obrázek" : "Přidat obrázek"}</span>
+            </label>
+            {value.imageFileId && <button type="button" className="seeLinkButton seeDanger" onClick={() => onChange({ imageFileId: undefined })}>Odebrat obrázek</button>}
+          </span>
+        )}
+      </div>
+      <span className="seeFieldLabel">Odkazy</span>
+      {value.links.map((link, index) => (
+        <div key={index} className="seeLinkRow">
+          <div className="seeLinkFields">
+            <input value={link.label} placeholder={SEE_DEFAULT_LINK_LABEL} maxLength={80} onChange={(event) => setLink(index, { label: event.target.value })} disabled={readOnly} aria-label="Text odkazu" />
+            <input value={link.url} placeholder="https://…" inputMode="url" onChange={(event) => setLink(index, { url: event.target.value })} disabled={readOnly} aria-label="Adresa odkazu" />
+          </div>
+          {linkProblem(link.url, urlOptions) && <span className="seeErrorText">{linkProblem(link.url, urlOptions)}</span>}
+          {!readOnly && <button type="button" className="seeLinkButton seeDanger" onClick={() => onChange({ links: value.links.filter((_, position) => position !== index) })}>Odebrat odkaz</button>}
+        </div>
+      ))}
+      {!readOnly && value.links.length < SEE_PANEL_MAX_LINKS && <button type="button" className="seeSmallButton" onClick={() => onChange({ links: [...value.links, { label: "", url: "" }] })}>+ Přidat odkaz</button>}
+      {isPanelContentEmpty(value) && <span className="seeMuted">Zatím prázdné.</span>}
     </div>
   );
 }

@@ -4,9 +4,11 @@
 --
 -- Data model:
 --   see_projects            one project (název, popis, provozní stav active/paused/archived/deleted)
---   see_scenes              alternative 3D scenes of one project (max 3 GLB in the MVP), own settings
+--   see_scenes              alternative 3D scenes of one project (any number, added one by one; the
+--                           only ceiling is an application safety limit), own settings incl. an
+--                           optional per-model information panel
 --   see_annotations         3D popisky, ALWAYS scene-specific, position in the scene's model space
---   see_files               metadata of every uploaded object (GLB / PDF / JPG / PNG); bytes live in
+--   see_files               metadata of every uploaded object (GLB / PDF / JPG / PNG / WebP); bytes live in
 --                           Cloudflare R2 under an opaque key, never in Postgres
 --   see_file_scene_links    which scenes a document belongs to (applies_to_all = "Všechny modely")
 --   see_publications        exactly one per project; mode is ONLY 'public' or 'pin' (no password
@@ -27,6 +29,8 @@ create table see_projects (
   name text not null check (char_length(name) between 1 and 200),
   description text not null default '',
   status text not null default 'active' check (status in ('active', 'paused', 'archived', 'deleted')),
+  -- Optional right-hand information panel shared by all models: {enabled, title, body, imageFileId, links[]}.
+  info_panel jsonb not null default '{}'::jsonb,
   created_by text,
   created_by_label text,
   updated_by text,
@@ -45,10 +49,10 @@ create trigger see_projects_set_updated_at before update on see_projects for eac
 create table see_files (
   id uuid primary key default gen_random_uuid(),
   project_id uuid not null references see_projects (id) on delete cascade,
-  kind text not null check (kind in ('model', 'document')),
+  kind text not null check (kind in ('model', 'document', 'image')),
   display_name text not null,
   original_file_name text not null,
-  mime_type text not null check (mime_type in ('model/gltf-binary', 'application/pdf', 'image/jpeg', 'image/png')),
+  mime_type text not null check (mime_type in ('model/gltf-binary', 'application/pdf', 'image/jpeg', 'image/png', 'image/webp')),
   size_bytes bigint not null check (size_bytes > 0),
   storage_key text not null unique,
   status text not null default 'pending' check (status in ('pending', 'ready', 'rejected')),
@@ -91,6 +95,11 @@ create table see_annotations (
   body text not null default '',
   position jsonb not null,
   normal jsonb,
+  -- Optional picture and safe link shown in the annotation card (stored links are https:// only;
+  -- http:// is accepted by the application solely for localhost during local development).
+  image_file_id uuid references see_files (id) on delete set null,
+  link_url text check (link_url is null or (char_length(link_url) <= 2000 and link_url ~ '^https?://')),
+  link_label text check (link_label is null or char_length(link_label) <= 80),
   visible boolean not null default true,
   sort_order integer not null default 0,
   created_at timestamptz not null default now(),

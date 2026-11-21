@@ -49,3 +49,25 @@ export function seeRenderProfile(hints: SeeDeviceHints): SeeRenderProfile {
     maxCachedModels: lowMemory ? 1 : 3,
   };
 }
+
+/**
+ * Order in which the other models of a project are prefetched: nearest neighbours of the model on
+ * screen first (next, previous, next+1, …), so with many models the cache holds the ones a visitor
+ * is most likely to switch to. Empty and duplicate ids are skipped.
+ */
+export function seePrefetchOrder(modelFileIds: readonly string[], currentFileId: string | undefined): readonly string[] {
+  const index = currentFileId ? modelFileIds.indexOf(currentFileId) : -1;
+  const ordered: string[] = [];
+  const add = (id: string | undefined) => {
+    if (id && id !== currentFileId && !ordered.includes(id)) ordered.push(id);
+  };
+  if (index < 0) {
+    modelFileIds.forEach(add);
+    return ordered;
+  }
+  for (let step = 1; step < modelFileIds.length; step += 1) {
+    add(modelFileIds[index + step]);
+    add(modelFileIds[index - step]);
+  }
+  return ordered;
+}

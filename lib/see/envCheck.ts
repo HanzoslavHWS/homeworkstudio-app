@@ -100,6 +100,8 @@ export function checkSeeEnvironment(env: Env, target: SeeEnvTarget): readonly Se
   // ── HWS SEE tuning ──
   if (!numberInRange(env.SEE_MAX_MODEL_MB, 1, 1000)) error("SEE_MAX_MODEL_MB", "číslo 1–1000");
   if (!numberInRange(env.SEE_MAX_DOCUMENT_MB, 1, 500)) error("SEE_MAX_DOCUMENT_MB", "číslo 1–500");
+  if (!numberInRange(env.SEE_MAX_IMAGE_MB, 1, 20)) error("SEE_MAX_IMAGE_MB", "číslo 1–20");
+  if (!numberInRange(env.SEE_MAX_PROJECT_MB, 1, 50000)) error("SEE_MAX_PROJECT_MB", "číslo 1–50000");
   if (!numberInRange(env.SEE_FILE_URL_TTL_SECONDS, 30, 300)) error("SEE_FILE_URL_TTL_SECONDS", "číslo 30–300 (s)");
   if (!numberInRange(env.SEE_PIN_GRANT_TTL_MINUTES, 5, 720)) error("SEE_PIN_GRANT_TTL_MINUTES", "číslo 5–720 (min)");
   if (present(env.SEE_FILE_DELIVERY) && !["signed-url", "stream", "hybrid"].includes(env.SEE_FILE_DELIVERY)) error("SEE_FILE_DELIVERY", "signed-url | stream | hybrid");

@@ -53,6 +53,9 @@ export function makeGlb(json: Record<string, unknown> = { asset: { version: "2.0
 export const GLB = makeGlb();
 export const PDF = new TextEncoder().encode("%PDF-1.7\nfake test document body");
 export const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0, 16, 74, 70, 73, 70, 0, 1]);
+export const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13]);
+/** RIFF container with the "WEBP" form type at bytes 8–11. */
+export const WEBP = new Uint8Array([0x52, 0x49, 0x46, 0x46, 26, 0, 0, 0, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x4c]);
 
 /** In-memory stand-in for R2: presigned URLs are opaque strings, objects are byte arrays. */
 export class FakeStorage implements SeeObjectStorage {
@@ -201,7 +204,7 @@ export async function json<T = Record<string, unknown>>(response: Response): Pro
   return await response.json() as T;
 }
 
-export async function uploadFile(w: World, projectId: string, input: Readonly<{ kind: "model" | "document"; fileName: string; mimeType: string; bytes: Uint8Array; sceneId?: string; appliesToAll?: boolean; sceneIds?: string[] }>) {
+export async function uploadFile(w: World, projectId: string, input: Readonly<{ kind: "model" | "document" | "image"; fileName: string; mimeType: string; bytes: Uint8Array; sceneId?: string; appliesToAll?: boolean; sceneIds?: string[] }>) {
   const prepared = await handleSeeUploadPrepare(await req(`/api/see/projects/${projectId}/uploads`, { method: "POST", body: { kind: input.kind, fileName: input.fileName, mimeType: input.mimeType, sizeBytes: input.bytes.byteLength, appliesToAll: input.appliesToAll, sceneIds: input.sceneIds } }), { id: projectId }, () => w.deps);
   assert.equal(prepared.status, 201, JSON.stringify(await prepared.clone().json()));
   const { file, upload } = await json<{ file: { id: string; storageKey?: string }; upload: { uploadUrl: string } }>(prepared);

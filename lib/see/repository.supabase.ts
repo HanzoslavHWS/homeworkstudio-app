@@ -12,6 +12,7 @@ import {
   type SeeScene,
   type SeeSnapshot,
 } from "../../domain/seeProject.ts";
+import { normalizeProjectInfoPanel } from "../../domain/seeContent.ts";
 import type { SeeAccessGrant, SeeRepository, SeeViewInput } from "./repository.ts";
 
 type Row = Record<string, unknown>;
@@ -38,6 +39,7 @@ export function rowToProject(row: Row): SeeProject {
     updatedAt: row.updated_at as string,
     updatedBy: stamp(row.updated_by, row.updated_by_label),
     deletedAt: optional(row.deleted_at as string | null),
+    infoPanel: normalizeProjectInfoPanel(row.info_panel, { allowLocalHttp: true }),
   };
 }
 
@@ -52,6 +54,7 @@ function projectToRow(project: SeeProject) {
     updated_by: project.updatedBy?.id ?? null,
     updated_by_label: project.updatedBy?.label ?? null,
     deleted_at: project.deletedAt ?? null,
+    info_panel: project.infoPanel ?? {},
     created_at: project.createdAt,
     updated_at: project.updatedAt,
   };
@@ -91,6 +94,9 @@ function rowToAnnotation(row: Row): SeeAnnotation {
     body: (row.body as string) ?? "",
     position: parseVec3(row.position) ?? [0, 0, 0],
     normal: parseVec3(row.normal),
+    imageFileId: optional(row.image_file_id as string | null),
+    linkUrl: optional(row.link_url as string | null),
+    linkLabel: optional(row.link_label as string | null),
     visible: row.visible as boolean,
     sortOrder: row.sort_order as number,
     createdAt: row.created_at as string,
@@ -106,6 +112,9 @@ function annotationToRow(annotation: SeeAnnotation) {
     body: annotation.body,
     position: annotation.position,
     normal: annotation.normal ?? null,
+    image_file_id: annotation.imageFileId ?? null,
+    link_url: annotation.linkUrl ?? null,
+    link_label: annotation.linkUrl ? annotation.linkLabel ?? null : null,
     visible: annotation.visible,
     sort_order: annotation.sortOrder,
   };

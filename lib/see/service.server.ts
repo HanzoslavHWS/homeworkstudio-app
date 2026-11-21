@@ -1,3 +1,4 @@
+import { linkProblem, normalizeInfoPanelContent, SEE_DEFAULT_LINK_LABEL, SEE_LINK_LABEL_MAX, SEE_PANEL_MAX_LINKS, type SeeInfoPanelContent, type SeeProjectInfoPanel } from "../../domain/seeContent.ts";
 import { isSeeEmbedPolicy, parseEmbedOrigins } from "../../domain/seeEmbed.ts";
 import { createSeeStorageKey, glbJsonChunkEnd, inspectGlb, magicBytesMatch, SEE_GLB_JSON_INSPECT_LIMIT, validateSeeUpload, type SeeModelInfo } from "../../domain/seeFiles.ts";
 import {
@@ -52,6 +53,7 @@ export const SEE_PIN_WINDOW_MINUTES = 15;
 export const SEE_PIN_CLIENT_MAX_FAILURES = 5;
 export const SEE_PIN_PUBLICATION_MAX_FAILURES = 50;
 const VIEW_DEDUPE_SECONDS = 30 * 60;
+const SEE_MAX_IMAGES = 300;
 
 const nowIso = (deps: SeeDeps) => deps.now().toISOString();
 
@@ -107,7 +109,7 @@ export async function createProject(deps: SeeDeps, actor: SeeActor, body: unknow
   const name = requireName(input.name, "Název projektu", 200);
   const description = cleanText(input.description, 4000);
   const sceneInputs = Array.isArray(input.scenes) ? input.scenes : [];
-  if (sceneInputs.length > SEE_MAX_SCENES) throw new SeeValidationError(`Projekt může mít nejvýše ${SEE_MAX_SCENES} modely.`);
+  if (sceneInputs.length > SEE_MAX_SCENES) throw new SeeValidationError(`Projekt může mít nejvýše ${SEE_MAX_SCENES} modelů.`);
   const at = nowIso(deps);
   const stampValue = { id: actor.id, label: actor.label };
   const project: SeeProject = { id: crypto.randomUUID(), name, description, status: "active", createdAt: at, createdBy: stampValue, updatedAt: at, updatedBy: stampValue };
@@ -133,7 +135,7 @@ export async function getEditorProject(deps: SeeDeps, projectId: string) {
 }
 
 type IncomingScene = { id?: unknown; name?: unknown; description?: unknown; sortOrder?: unknown; modelFileId?: unknown; settings?: unknown };
-type IncomingAnnotation = { id?: unknown; sceneId?: unknown; title?: unknown; body?: unknown; position?: unknown; normal?: unknown; visible?: unknown; sortOrder?: unknown };
+type IncomingAnnotation = { id?: unknown; sceneId?: unknown; title?: unknown; body?: unknown; position?: unknown; normal?: unknown; visible?: unknown; sortOrder?: unknown; imageFileId?: unknown; linkUrl?: unknown; linkLabel?: unknown };
 type IncomingFile = { id?: unknown; displayName?: unknown; appliesToAll?: unknown; sceneIds?: unknown; sortOrder?: unknown; deleted?: unknown };
 
 /**
@@ -145,11 +147,12 @@ type IncomingFile = { id?: unknown; displayName?: unknown; appliesToAll?: unknow
  */
 export async function saveEditorState(deps: SeeDeps, actor: SeeActor, projectId: string, body: unknown): Promise<SeeEditorView> {
   const aggregate = await loadAggregate(deps, projectId);
-  const input = (body && typeof body === "object" ? body : {}) as { project?: { name?: unknown; description?: unknown }; scenes?: unknown; annotations?: unknown; files?: unknown };
+  const input = (body && typeof body === "object" ? body : {}) as { project?: { name?: unknown; description?: unknown; infoPanel?: unknown }; scenes?: unknown; annotations?: unknown; files?: unknown };
   if (!Array.isArray(input.scenes) || !Array.isArray(input.annotations) || !Array.isArray(input.files)) {
     throw new SeeValidationError("Chybí kompletní stav editoru.");
   }
-  if (input.scenes.length > SEE_MAX_SCENES) throw new SeeValidationError(`Projekt může mít nejvýše ${SEE_MAX_SCENES} modely.`);
+  if (input.scenes.length > SEE_MAX_SCENES) throw new SeeValidationError(`Projekt může mít nejvýše ${SEE_MAX_SCENES} modelů.`);
+  const urlOptions = { allowLocalHttp: deps.allowLocalHttpLinks === true };
   const at = nowIso(deps);
 
   const existingScenes = new Map(aggregate.scenes.map((scene) => [scene.id, scene]));
@@ -171,6 +174,26 @@ export async function saveEditorState(deps: SeeDeps, actor: SeeActor, projectId:
     const file = fileUpdates.get(fileId) ?? filesById.get(fileId);
     return Boolean(file && file.kind === "model" && file.status === "ready" && !file.deletedAt);
   };
+  const usableImage = (fileId: unknown): fileId is string => {
+    const file = isSeeUuid(fileId) ? fileUpdates.get(fileId) ?? filesById.get(fileId) : undefined;
+    return Boolean(file && file.kind === "image" && file.status === "ready" && !file.deletedAt);
+  };
+  /** Strict validation of editor input (links, picture), then the same normalization as stored data. */
+  const checkedPanel = (value: unknown, where: string): SeeInfoPanelContent | undefined => {
+    if (value === undefined || value === null) return undefined;
+    if (typeof value !== "object") throw new SeeValidationError(`${where}: neplatný obsah panelu.`);
+    const raw = value as { imageFileId?: unknown; links?: unknown };
+    if (raw.imageFileId !== undefined && raw.imageFileId !== null && raw.imageFileId !== "" && !usableImage(raw.imageFileId)) {
+      throw new SeeValidationError(`${where}: obrázek není nahraný nebo byl odstraněn.`);
+    }
+    const links = Array.isArray(raw.links) ? raw.links : [];
+    if (links.length > SEE_PANEL_MAX_LINKS) throw new SeeValidationError(`${where}: nejvýše ${SEE_PANEL_MAX_LINKS} odkazů.`);
+    for (const link of links) {
+      const problem = linkProblem((link as { url?: unknown } | null)?.url, urlOptions);
+      if (problem) throw new SeeValidationError(`${where}: ${problem}`);
+    }
+    return normalizeInfoPanelContent(value, urlOptions);
+  };
 
   const scenes: SeeScene[] = [];
   const seenScenes = new Set<string>();
@@ -182,14 +205,17 @@ export async function saveEditorState(deps: SeeDeps, actor: SeeActor, projectId:
       throw new SeeValidationError("Model odkazuje na soubor, který není nahraný nebo byl odstraněn.");
     }
     const existing = existingScenes.get(raw.id);
+    const name = requireName(raw.name, "Název modelu", 120);
+    const { infoPanel: _unchecked, ...baseSettings } = normalizeSceneSettings(raw.settings);
+    const sceneInfoPanel = checkedPanel((raw.settings as { infoPanel?: unknown } | undefined)?.infoPanel, `Panel modelu „${name}“`);
     scenes.push({
       id: raw.id,
       projectId,
-      name: requireName(raw.name, "Název modelu", 120),
+      name,
       description: cleanText(raw.description, 2000),
       sortOrder: index,
       modelFileId,
-      settings: normalizeSceneSettings(raw.settings),
+      settings: sceneInfoPanel ? { ...baseSettings, infoPanel: sceneInfoPanel } : baseSettings,
       createdAt: existing?.createdAt ?? at,
       updatedAt: at,
     });
@@ -210,13 +236,23 @@ export async function saveEditorState(deps: SeeDeps, actor: SeeActor, projectId:
     perScene.set(raw.sceneId, count);
     const existing = existingAnnotations.get(raw.id);
     if (existing && existing.sceneId !== raw.sceneId) throw new SeeValidationError("Popisek nelze přesunout k jinému modelu.");
+    const title = requireName(raw.title, "Název popisku", 160);
+    const hasImage = raw.imageFileId !== undefined && raw.imageFileId !== null && raw.imageFileId !== "";
+    if (hasImage && !usableImage(raw.imageFileId)) throw new SeeValidationError(`Popisek „${title}“: obrázek není nahraný nebo byl odstraněn.`);
+    const linkUrl = typeof raw.linkUrl === "string" && raw.linkUrl.trim() ? raw.linkUrl.trim() : undefined;
+    if (linkUrl) {
+      const problem = linkProblem(linkUrl, urlOptions);
+      if (problem) throw new SeeValidationError(`Popisek „${title}“: ${problem}`);
+    }
     annotations.push({
       id: raw.id,
       sceneId: raw.sceneId,
-      title: requireName(raw.title, "Název popisku", 160),
+      title,
       body: cleanText(raw.body, 4000),
       position,
       normal: parseVec3(raw.normal),
+      ...(hasImage ? { imageFileId: raw.imageFileId as string } : {}),
+      ...(linkUrl ? { linkUrl: new URL(linkUrl).href, linkLabel: cleanText(raw.linkLabel, SEE_LINK_LABEL_MAX) || SEE_DEFAULT_LINK_LABEL } : {}),
       visible: raw.visible !== false,
       sortOrder: count - 1,
       createdAt: existing?.createdAt ?? at,
@@ -225,9 +261,15 @@ export async function saveEditorState(deps: SeeDeps, actor: SeeActor, projectId:
   }
 
   const projectInput = input.project ?? {};
+  let infoPanel: SeeProjectInfoPanel | undefined = aggregate.project.infoPanel;
+  if (projectInput.infoPanel !== undefined) {
+    const content = checkedPanel(projectInput.infoPanel, "Informační panel projektu") ?? { title: "", body: "", links: [] };
+    infoPanel = { ...content, enabled: (projectInput.infoPanel as { enabled?: unknown } | null)?.enabled === true };
+  }
   await deps.repository.updateProject(touch(aggregate.project, actor, deps, {
     name: requireName(projectInput.name ?? aggregate.project.name, "Název projektu", 200),
     description: projectInput.description === undefined ? aggregate.project.description : cleanText(projectInput.description, 4000),
+    ...(infoPanel ? { infoPanel } : {}),
   }));
   for (const annotation of aggregate.annotations) {
     if (!seenAnnotations.has(annotation.id) || !seenScenes.has(annotation.sceneId)) await deps.repository.deleteAnnotation(annotation.id);
@@ -264,8 +306,16 @@ export async function prepareUpload(deps: SeeDeps, actor: SeeActor, projectId: s
   if (upload.kind === "document" && live.filter((file) => file.kind === "document").length >= SEE_MAX_DOCUMENTS) {
     throw new SeeValidationError(`Projekt může mít nejvýše ${SEE_MAX_DOCUMENTS} dokumentů.`);
   }
-  if (upload.kind === "model" && live.filter((file) => file.kind === "model").length >= SEE_MAX_SCENES * 4) {
+  // No fixed number of scenes: model versions scale with the scenes, plus a total size quota.
+  if (upload.kind === "model" && live.filter((file) => file.kind === "model").length >= Math.max(12, aggregate.scenes.length * 3)) {
     throw new SeeValidationError("Příliš mnoho nahraných verzí modelů — odstraňte nepoužité.");
+  }
+  if (upload.kind === "image" && live.filter((file) => file.kind === "image").length >= SEE_MAX_IMAGES) {
+    throw new SeeValidationError(`Projekt může mít nejvýše ${SEE_MAX_IMAGES} obrázků.`);
+  }
+  const usedBytes = live.reduce((sum, file) => sum + file.sizeBytes, 0);
+  if (usedBytes + upload.sizeBytes > deps.limits.maxProjectBytes) {
+    throw new SeeValidationError(`Projekt by překročil celkový limit ${Math.round(deps.limits.maxProjectBytes / 1_000_000)} MB. Odstraňte nepoužívané soubory.`, 413);
   }
   const sceneIds = new Set(aggregate.scenes.map((scene) => scene.id));
   const at = nowIso(deps);
@@ -645,10 +695,20 @@ export async function publicManifest(deps: SeeDeps, slug: string, grantTokens: r
   // Files soft-deleted after publishing disappear immediately (deletion is never delayed until the
   // next "Publikovat").
   const liveIds = new Set<string>();
-  for (const id of [...snapshot.scenes.map((scene) => scene.modelFileId), ...snapshot.documents.map((document) => document.id)]) {
+  const imageIds = [
+    snapshot.infoPanel?.imageFileId,
+    ...snapshot.scenes.flatMap((scene) => [scene.settings.infoPanel?.imageFileId, ...scene.annotations.map((annotation) => annotation.imageFileId)]),
+  ].filter((id): id is string => Boolean(id));
+  for (const id of new Set([...snapshot.scenes.map((scene) => scene.modelFileId), ...snapshot.documents.map((document) => document.id), ...imageIds])) {
     const file = await deps.repository.getFile(id);
     if (file && file.projectId === publication.projectId && file.status === "ready" && !file.deletedAt) liveIds.add(id);
   }
+  // Pictures deleted after publishing disappear from the published content immediately as well.
+  const liveImage = <T extends { imageFileId?: string }>(value: T): T => {
+    if (!value.imageFileId || liveIds.has(value.imageFileId)) return value;
+    const { imageFileId: _dropped, ...rest } = value;
+    return rest as T;
+  };
   return {
     status: 200,
     manifest: {
@@ -657,8 +717,15 @@ export async function publicManifest(deps: SeeDeps, slug: string, grantTokens: r
       title: snapshot.projectName,
       description: snapshot.projectDescription,
       revision: snapshot.revision,
-      scenes: snapshot.scenes.filter((scene) => liveIds.has(scene.modelFileId)),
+      scenes: snapshot.scenes
+        .filter((scene) => liveIds.has(scene.modelFileId))
+        .map((scene) => ({
+          ...scene,
+          settings: scene.settings.infoPanel ? { ...scene.settings, infoPanel: liveImage(scene.settings.infoPanel) } : scene.settings,
+          annotations: scene.annotations.map(liveImage),
+        })),
       documents: snapshot.documents.filter((document) => liveIds.has(document.id)),
+      ...(snapshot.infoPanel?.enabled ? { infoPanel: liveImage(snapshot.infoPanel) } : {}),
     },
   };
 }

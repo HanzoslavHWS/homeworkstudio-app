@@ -7,10 +7,12 @@ import { formatFileSize, SEE_MAX_SCENES } from "../../domain/seeProject";
 import { createSeeProject, uploadSeeFile, type SeeUploadProgress } from "../../lib/see/client";
 import { useUnsavedChangesGuard } from "./useUnsavedChangesGuard";
 
-type ModelSlot = { name: string; file?: File };
-type DocumentDraft = { key: string; file: File; target: "all" | number[] };
+/** One model of the wizard. `key` is stable, so reordering/removing never mixes up document links. */
+type ModelSlot = { key: string; name: string; file?: File };
+type DocumentDraft = { key: string; file: File; target: "all" | string[] };
 
-const DEFAULT_SLOT_NAMES = ["Zavřená bedna", "Otevřená bedna", "Pohled dovnitř"];
+const newSlot = (): ModelSlot => ({ key: crypto.randomUUID(), name: "" });
+const slotLabel = (slot: ModelSlot, index: number) => slot.name.trim() || `Model ${index + 1}`;
 
 function clientCheck(file: File, kind: "model" | "document", limits: SeeUploadLimits): string | undefined {
   const mime = seeMimeTypeFor(file.name, file.type);
@@ -22,29 +24,50 @@ function clientCheck(file: File, kind: "model" | "document", limits: SeeUploadLi
 }
 
 /**
- * "Nový projekt": name + description, up to three independent GLB scenes, any number of documents
- * assigned to "Všechny modely" or chosen models, then "Uložit a otevřít pracovní náhled".
- * The browser checks are only convenience — the server validates every file again.
+ * "Nový projekt": name + description, models added one by one (starts with ONE; "+ Přidat další
+ * model" for more — no fixed limit of three), any number of documents assigned to "Všechny modely"
+ * or chosen models, then "Uložit a otevřít pracovní náhled". Browser checks are a convenience;
+ * the server validates every file again.
  */
 export function SeeNewProject({ limits }: Readonly<{ limits: SeeUploadLimits }>) {
   const router = useRouter();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [slots, setSlots] = useState<ModelSlot[]>(DEFAULT_SLOT_NAMES.map(() => ({ name: "" })));
+  const [slots, setSlots] = useState<ModelSlot[]>(() => [newSlot()]);
   const [documents, setDocuments] = useState<DocumentDraft[]>([]);
   const [progress, setProgress] = useState<Record<string, SeeUploadProgress>>({});
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const [createdId, setCreatedId] = useState<string | undefined>();
-  const [sceneIdBySlot, setSceneIdBySlot] = useState<Record<number, string>>({});
+  const [sceneIdBySlot, setSceneIdBySlot] = useState<Record<string, string>>({});
 
   // Typed texts and picked files are lost when leaving before "Uložit" — ask first.
-  useUnsavedChangesGuard(!createdId && Boolean(name.trim() || description.trim() || slots.some((slot) => slot.file) || documents.length), "Rozpracovaný projekt ještě není uložený. Opravdu chcete stránku opustit?");
+  useUnsavedChangesGuard(!createdId && Boolean(name.trim() || description.trim() || slots.some((slot) => slot.file || slot.name.trim()) || documents.length), "Rozpracovaný projekt ještě není uložený. Opravdu chcete stránku opustit?");
 
-  const updateSlot = (index: number, change: Partial<ModelSlot>) => setSlots((current) => current.map((slot, position) => (position === index ? { ...slot, ...change } : slot)));
-  const usedSlots = slots.map((slot, index) => ({ ...slot, index })).filter((slot) => slot.file);
+  const updateSlot = (key: string, change: Partial<ModelSlot>) => setSlots((current) => current.map((slot) => (slot.key === key ? { ...slot, ...change } : slot)));
+  const addSlot = () => setSlots((current) => (current.length >= SEE_MAX_SCENES ? current : [...current, newSlot()]));
+  const removeSlot = (key: string) => {
+    setSlots((current) => (current.length <= 1 ? current : current.filter((slot) => slot.key !== key)));
+    // A document linked only to the removed model falls back to "Všechny modely" — visible and explicit.
+    setDocuments((current) => current.map((document) => {
+      if (document.target === "all" || !document.target.includes(key)) return document;
+      const remaining = document.target.filter((entry) => entry !== key);
+      return { ...document, target: remaining.length ? remaining : "all" };
+    }));
+  };
+  const moveSlot = (key: string, offset: -1 | 1) => setSlots((current) => {
+    const index = current.findIndex((slot) => slot.key === key);
+    const target = index + offset;
+    if (index < 0 || target < 0 || target >= current.length) return current;
+    const next = [...current];
+    [next[index], next[target]] = [next[target], next[index]];
+    return next;
+  });
+
+  // A model is created when it has a GLB or at least a name; an empty project still gets one model.
+  const usedSlots = slots.map((slot, index) => ({ ...slot, index })).filter((slot) => slot.file || slot.name.trim());
   const fileErrors = [
-    ...usedSlots.map((slot) => clientCheck(slot.file!, "model", limits)),
+    ...usedSlots.filter((slot) => slot.file).map((slot) => clientCheck(slot.file!, "model", limits)),
     ...documents.map((document) => clientCheck(document.file, "document", limits)),
   ].filter(Boolean);
 
@@ -56,10 +79,10 @@ export function SeeNewProject({ limits }: Readonly<{ limits: SeeUploadLimits }>)
     setDocuments((current) => [...current, ...picked.map((file) => ({ key: `${file.name}-${file.size}-${crypto.randomUUID()}`, file, target: "all" as const }))]);
   };
 
-  const toggleDocumentSlot = (key: string, slotIndex: number) => setDocuments((current) => current.map((document) => {
-    if (document.key !== key) return document;
+  const toggleDocumentSlot = (documentKey: string, slotKey: string) => setDocuments((current) => current.map((document) => {
+    if (document.key !== documentKey) return document;
     const selected = document.target === "all" ? [] : document.target;
-    const next = selected.includes(slotIndex) ? selected.filter((entry) => entry !== slotIndex) : [...selected, slotIndex];
+    const next = selected.includes(slotKey) ? selected.filter((entry) => entry !== slotKey) : [...selected, slotKey];
     return { ...document, target: next };
   }));
 
@@ -74,27 +97,29 @@ export function SeeNewProject({ limits }: Readonly<{ limits: SeeUploadLimits }>)
       setError("Některé soubory nevyhovují — opravte je, prosím.");
       return;
     }
-    if (documents.some((document) => document.target !== "all" && (document.target.length === 0 || document.target.some((slot) => !slots[slot]?.file)))) {
-      setError("U každého dokumentu zvolte „Všechny modely“ nebo alespoň jeden nahrávaný model.");
+    const usedKeys = new Set(usedSlots.map((slot) => slot.key));
+    if (documents.some((document) => document.target !== "all" && (document.target.length === 0 || document.target.some((key) => !usedKeys.has(key))))) {
+      setError("U každého dokumentu zvolte „Všechny modely“ nebo alespoň jeden model, který má název nebo soubor.");
       return;
     }
     setBusy(true);
     try {
+      const sceneSlots = usedSlots.length ? usedSlots : [{ ...slots[0], index: 0 }];
       const project = createdId ? undefined : await createSeeProject({
         name: name.trim(),
         description: description.trim(),
-        scenes: usedSlots.map((slot) => ({ name: slot.name.trim() || DEFAULT_SLOT_NAMES[slot.index] || `Model ${slot.index + 1}` })),
+        scenes: sceneSlots.map((slot) => ({ name: slotLabel(slot, slot.index) })),
       });
       const projectId = createdId ?? project!.project.id;
       setCreatedId(projectId);
-      const sceneIds: Record<number, string> = project ? Object.fromEntries(usedSlots.map((slot, position) => [slot.index, project.scenes[position].id])) : sceneIdBySlot;
+      const sceneIds: Record<string, string> = project ? Object.fromEntries(sceneSlots.map((slot, position) => [slot.key, project.scenes[position].id])) : sceneIdBySlot;
       setSceneIdBySlot(sceneIds);
       let failures = 0;
-      for (const slot of usedSlots) {
-        const key = `model-${slot.index}`;
+      for (const slot of usedSlots.filter((entry) => entry.file)) {
+        const key = `model-${slot.key}`;
         if (progress[key]?.state === "done") continue;
         try {
-          await uploadSeeFile(projectId, slot.file!, { kind: "model", sceneId: sceneIds[slot.index] }, (value) => setProgress((current) => ({ ...current, [key]: value })));
+          await uploadSeeFile(projectId, slot.file!, { kind: "model", sceneId: sceneIds[slot.key] }, (value) => setProgress((current) => ({ ...current, [key]: value })));
         } catch {
           failures += 1;
         }
@@ -105,7 +130,7 @@ export function SeeNewProject({ limits }: Readonly<{ limits: SeeUploadLimits }>)
           await uploadSeeFile(projectId, document.file, {
             kind: "document",
             appliesToAll: document.target === "all",
-            sceneIds: document.target === "all" ? [] : document.target.map((slot) => sceneIds[slot]).filter((id): id is string => Boolean(id)),
+            sceneIds: document.target === "all" ? [] : document.target.map((key) => sceneIds[key]).filter((id): id is string => Boolean(id)),
           }, (value) => setProgress((current) => ({ ...current, [document.key]: value })));
         } catch {
           failures += 1;
@@ -132,39 +157,51 @@ export function SeeNewProject({ limits }: Readonly<{ limits: SeeUploadLimits }>)
     return <span className="seeErrorText">{value.message}</span>;
   };
 
+  const locked = Boolean(createdId);
   return (
     <form className="seeForm" onSubmit={submit}>
       <h1>Nový projekt</h1>
       <section className="seeCard">
         <label className="seeField">
           <span>Název projektu *</span>
-          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} required placeholder="např. ZARGES 40863" disabled={Boolean(createdId)} />
+          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} required placeholder="např. ZARGES 40863" disabled={locked} />
         </label>
         <label className="seeField">
           <span>Popis</span>
-          <textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={4000} rows={3} disabled={Boolean(createdId)} />
+          <textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={4000} rows={3} disabled={locked} />
         </label>
       </section>
 
       <section className="seeCard">
-        <h2>3D modely (až {SEE_MAX_SCENES} × GLB)</h2>
-        <p className="seeMuted">Každý model je samostatná scéna se svým pohledem, světlem a popisky. Limit {Math.round(limits.maxModelBytes / 1_000_000)} MB na soubor; podporované jsou vestavěné textury, Draco i Meshopt komprese.</p>
-        <div className="seeSlotGrid">
+        <h2>3D modely</h2>
+        <p className="seeMuted">Každý model je samostatná scéna se svým pohledem, světlem a popisky; návštěvník mezi nimi přepíná. Začněte jedním modelem a další přidejte tlačítkem níže. Limit {Math.round(limits.maxModelBytes / 1_000_000)} MB na soubor; podporované jsou vestavěné textury, KTX2, Draco i Meshopt komprese.</p>
+        <ol className="seeSlotList">
           {slots.map((slot, index) => (
-            <div key={index} className="seeSlot">
-              <label className="seeField">
-                <span>Název modelu {index + 1}</span>
-                <input value={slot.name} placeholder={DEFAULT_SLOT_NAMES[index]} maxLength={120} onChange={(event) => updateSlot(index, { name: event.target.value })} disabled={Boolean(createdId)} />
-              </label>
+            <li key={slot.key} className="seeSlot">
+              <div className="seeSlotHead">
+                <span className="seeSlotIndex" aria-hidden="true">{index + 1}</span>
+                <label className="seeField seeSlotName">
+                  <span>Název modelu</span>
+                  <input value={slot.name} placeholder={`Model ${index + 1}`} maxLength={120} onChange={(event) => updateSlot(slot.key, { name: event.target.value })} disabled={locked} aria-label={`Název modelu ${index + 1}`} />
+                </label>
+                {!locked && (
+                  <span className="seeSlotActions">
+                    <button type="button" className="seeSmallButton" onClick={() => moveSlot(slot.key, -1)} disabled={index === 0} aria-label={`Posunout model ${index + 1} výš`}>↑</button>
+                    <button type="button" className="seeSmallButton" onClick={() => moveSlot(slot.key, 1)} disabled={index === slots.length - 1} aria-label={`Posunout model ${index + 1} níž`}>↓</button>
+                    <button type="button" className="seeSmallButton seeDanger" onClick={() => removeSlot(slot.key)} disabled={slots.length <= 1} title={slots.length <= 1 ? "Projekt musí mít alespoň jeden model." : undefined} aria-label={`Odebrat model ${index + 1}`}>Odebrat</button>
+                  </span>
+                )}
+              </div>
               <label className="seeFilePick">
-                <input type="file" accept={SEE_ACCEPT_ATTRIBUTE.model} onChange={(event) => updateSlot(index, { file: event.target.files?.[0] })} disabled={Boolean(createdId)} />
+                <input type="file" accept={SEE_ACCEPT_ATTRIBUTE.model} onChange={(event) => updateSlot(slot.key, { file: event.target.files?.[0] })} disabled={locked} />
                 <span>{slot.file ? `${slot.file.name} (${formatFileSize(slot.file.size)})` : "Vybrat .glb"}</span>
               </label>
               {slot.file && clientCheck(slot.file, "model", limits) && <span className="seeErrorText">{clientCheck(slot.file, "model", limits)}</span>}
-              {progressLabel(`model-${index}`)}
-            </div>
+              {progressLabel(`model-${slot.key}`)}
+            </li>
           ))}
-        </div>
+        </ol>
+        {!locked && slots.length < SEE_MAX_SCENES && <button type="button" className="seeButton" onClick={addSlot}>+ Přidat další model</button>}
       </section>
 
       <section className="seeCard">
@@ -185,10 +222,10 @@ export function SeeNewProject({ limits }: Readonly<{ limits: SeeUploadLimits }>)
                 </div>
                 <div className="seeTargets">
                   <label><input type="radio" checked={document.target === "all"} onChange={() => setDocuments((current) => current.map((entry) => (entry.key === document.key ? { ...entry, target: "all" } : entry)))} /> Všechny modely</label>
-                  {slots.map((slot, index) => slot.file && (
-                    <label key={index}>
-                      <input type="checkbox" checked={document.target !== "all" && document.target.includes(index)} onChange={() => toggleDocumentSlot(document.key, index)} />
-                      {slot.name.trim() || DEFAULT_SLOT_NAMES[index]}
+                  {slots.map((slot, index) => (
+                    <label key={slot.key}>
+                      <input type="checkbox" checked={document.target !== "all" && document.target.includes(slot.key)} onChange={() => toggleDocumentSlot(document.key, slot.key)} />
+                      {slotLabel(slot, index)}
                     </label>
                   ))}
                 </div>

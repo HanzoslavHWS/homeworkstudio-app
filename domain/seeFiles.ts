@@ -1,15 +1,23 @@
 /**
- * HWS SEE upload rules. Pure. Only GLB models and PDF/JPG/PNG documents are accepted — the type is
+ * HWS SEE upload rules. Pure. Only GLB models, PDF/JPG/PNG documents and JPG/PNG/WebP pictures (for
+ * annotations and the information panel) are accepted — the type is
  * checked three times: declared MIME + extension at presign, real size via HEAD and the leading
  * magic bytes of the stored object at "complete" (lib/see/service.server.ts).
  */
 import { SeeValidationError, type SeeFileKind } from "./seeProject.ts";
 
-export type SeeUploadLimits = Readonly<{ maxModelBytes: number; maxDocumentBytes: number }>;
+export type SeeUploadLimits = Readonly<{
+  maxModelBytes: number;
+  maxDocumentBytes: number;
+  /** pictures in annotations / information panel */
+  maxImageBytes: number;
+  /** all live files of one project together (abuse / cost protection instead of a scene count) */
+  maxProjectBytes: number;
+}>;
 
-export const DEFAULT_SEE_UPLOAD_LIMITS: SeeUploadLimits = { maxModelBytes: 200_000_000, maxDocumentBytes: 50_000_000 };
+export const DEFAULT_SEE_UPLOAD_LIMITS: SeeUploadLimits = { maxModelBytes: 200_000_000, maxDocumentBytes: 50_000_000, maxImageBytes: 5_000_000, maxProjectBytes: 3_000_000_000 };
 
-/** SEE_MAX_MODEL_MB / SEE_MAX_DOCUMENT_MB (optional, bounded so a typo cannot open the gate wide). */
+/** SEE_MAX_MODEL_MB / SEE_MAX_DOCUMENT_MB / SEE_MAX_IMAGE_MB / SEE_MAX_PROJECT_MB (optional, bounded so a typo cannot open the gate wide). */
 export function readSeeUploadLimits(environment: Readonly<Record<string, string | undefined>>): SeeUploadLimits {
   const megabytes = (value: string | undefined, fallback: number, ceiling: number) => {
     const parsed = Number(value);
@@ -18,23 +26,27 @@ export function readSeeUploadLimits(environment: Readonly<Record<string, string 
   return {
     maxModelBytes: megabytes(environment.SEE_MAX_MODEL_MB, DEFAULT_SEE_UPLOAD_LIMITS.maxModelBytes, 1000),
     maxDocumentBytes: megabytes(environment.SEE_MAX_DOCUMENT_MB, DEFAULT_SEE_UPLOAD_LIMITS.maxDocumentBytes, 500),
+    maxImageBytes: megabytes(environment.SEE_MAX_IMAGE_MB, DEFAULT_SEE_UPLOAD_LIMITS.maxImageBytes, 20),
+    maxProjectBytes: megabytes(environment.SEE_MAX_PROJECT_MB, DEFAULT_SEE_UPLOAD_LIMITS.maxProjectBytes, 50_000),
   };
 }
 
 const KIND_TYPES: Readonly<Record<SeeFileKind, Readonly<Record<string, readonly string[]>>>> = {
   model: { "model/gltf-binary": ["glb"] },
   document: { "application/pdf": ["pdf"], "image/jpeg": ["jpg", "jpeg"], "image/png": ["png"] },
+  image: { "image/jpeg": ["jpg", "jpeg"], "image/png": ["png"], "image/webp": ["webp"] },
 };
 
 export const SEE_ACCEPT_ATTRIBUTE: Readonly<Record<SeeFileKind, string>> = {
   model: ".glb,model/gltf-binary",
   document: ".pdf,.jpg,.jpeg,.png,application/pdf,image/jpeg,image/png",
+  image: ".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp",
 };
 
 /** Browsers often report "" or application/octet-stream for .glb; the extension decides then. */
 export function seeMimeTypeFor(fileName: string, reportedType: string | undefined): string {
   const extension = fileName.toLowerCase().split(".").pop() ?? "";
-  const byExtension = ({ glb: "model/gltf-binary", pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png" } as Record<string, string>)[extension];
+  const byExtension = ({ glb: "model/gltf-binary", pdf: "application/pdf", jpg: "image/jpeg", jpeg: "image/jpeg", png: "image/png", webp: "image/webp" } as Record<string, string>)[extension];
   if (reportedType && reportedType !== "application/octet-stream" && reportedType !== "") return reportedType === "image/jpg" ? "image/jpeg" : reportedType;
   return byExtension ?? reportedType ?? "application/octet-stream";
 }
@@ -42,19 +54,19 @@ export function seeMimeTypeFor(fileName: string, reportedType: string | undefine
 export type SeeUploadRequest = Readonly<{ kind: SeeFileKind; fileName: string; mimeType: string; sizeBytes: number }>;
 
 export function validateSeeUpload(input: Readonly<{ kind?: unknown; fileName?: unknown; mimeType?: unknown; sizeBytes?: unknown }>, limits: SeeUploadLimits): SeeUploadRequest & Readonly<{ extension: string }> {
-  if (input.kind !== "model" && input.kind !== "document") throw new SeeValidationError("Neznámý druh souboru.");
+  if (input.kind !== "model" && input.kind !== "document" && input.kind !== "image") throw new SeeValidationError("Neznámý druh souboru.");
   const kind = input.kind;
   const fileName = typeof input.fileName === "string" ? input.fileName.trim() : "";
   if (!fileName || fileName.length > 255 || /[\\/]/u.test(fileName)) throw new SeeValidationError("Neplatný název souboru.");
   const mimeType = typeof input.mimeType === "string" ? input.mimeType : "";
   const allowedExtensions = KIND_TYPES[kind][mimeType];
   if (!allowedExtensions) {
-    throw new SeeValidationError(kind === "model" ? "3D model musí být soubor .glb." : "Dokumentace může být jen PDF, JPG nebo PNG.");
+    throw new SeeValidationError(kind === "model" ? "3D model musí být soubor .glb." : kind === "image" ? "Obrázek může být jen JPG, PNG nebo WebP." : "Dokumentace může být jen PDF, JPG nebo PNG.");
   }
   const extension = fileName.toLowerCase().match(/\.([a-z0-9]{1,5})$/u)?.[1] ?? "";
   if (!allowedExtensions.includes(extension)) throw new SeeValidationError("Přípona souboru neodpovídá jeho typu.");
   const sizeBytes = input.sizeBytes;
-  const maxBytes = kind === "model" ? limits.maxModelBytes : limits.maxDocumentBytes;
+  const maxBytes = kind === "model" ? limits.maxModelBytes : kind === "image" ? limits.maxImageBytes : limits.maxDocumentBytes;
   if (typeof sizeBytes !== "number" || !Number.isSafeInteger(sizeBytes) || sizeBytes <= 0) throw new SeeValidationError("Soubor je prázdný nebo má neplatnou velikost.");
   if (sizeBytes > maxBytes) throw new SeeValidationError(`Soubor překračuje limit ${Math.round(maxBytes / 1_000_000)} MB.`, 413);
   return { kind, fileName, mimeType, sizeBytes, extension: extension === "jpeg" ? "jpg" : extension };
@@ -78,7 +90,7 @@ export function normalizeSeePrefix(prefix: string | undefined): string {
 }
 
 export function isSeeStorageKey(value: unknown, prefix: string): value is string {
-  return typeof value === "string" && new RegExp(`^${normalizeSeePrefix(prefix)}/o/[0-9a-f-]{36}\\.(glb|pdf|jpg|png)$`, "u").test(value);
+  return typeof value === "string" && new RegExp(`^${normalizeSeePrefix(prefix)}/o/[0-9a-f-]{36}\\.(glb|pdf|jpg|png|webp)$`, "u").test(value);
 }
 
 /** Leading bytes really match the declared type (GLB v2 header, %PDF-, PNG signature, JPEG SOI). */
@@ -94,6 +106,9 @@ export function magicBytesMatch(mimeType: string, head: Uint8Array): boolean {
       return startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
     case "image/jpeg":
       return startsWith([0xff, 0xd8, 0xff]);
+    case "image/webp":
+      // "RIFF" <size> "WEBP"
+      return startsWith([0x52, 0x49, 0x46, 0x46]) && head.length >= 12 && head[8] === 0x57 && head[9] === 0x45 && head[10] === 0x42 && head[11] === 0x50;
     default:
       return false;
   }

@@ -39,6 +39,8 @@ export type SeeDeps = Readonly<{
   failedPinDelayMs: number;
   /** Whether cookies get Secure / SameSite=None; Partitioned (https). */
   secureCookies: boolean;
+  /** http://localhost links in annotations / info panel — only for local development, never in production. */
+  allowLocalHttpLinks?: boolean;
 }>;
 
 type SeeEnvironment = Readonly<Record<string, string | undefined>>;
@@ -73,9 +75,12 @@ export function createSeeDeps(environment: SeeEnvironment = process.env): SeeDep
     rekeyOnRevoke: environment.SEE_REKEY_ON_REVOKE !== "false",
     streamRecheckMs: 3000,
     secureCookies: environment.NODE_ENV === "production",
+    allowLocalHttpLinks: environment.NODE_ENV !== "production",
   };
   if (local) {
-    const root = path.resolve(environment.SEE_LOCAL_DIR || ".see-local");
+    // Local dev data only: excluded from output file tracing, so a deployment never bundles the
+    // project tree (or .see-local/) into the server functions.
+    const root = path.resolve(/* turbopackIgnore: true */ environment.SEE_LOCAL_DIR || ".see-local");
     globalCache.__hwsSeeLocalRepository ??= new MemorySeeRepository({ persistFile: path.join(root, "db.json") });
     return {
       ...common,

@@ -115,8 +115,10 @@ export function verifyTicket(ticket: unknown, secret: string | undefined, nowMs 
   if (typeof ticket !== "string" || ticket.length > 4096) return undefined;
   const [body, signature, extra] = ticket.split(".");
   if (!body || !signature || extra !== undefined) return undefined;
-  const expected = createHmac("sha256", derivedKey(secret, "ticket")).update(body).digest();
-  const given = Buffer.from(signature, "base64url");
+  // Compare the canonical text form: base64url decoding ignores the padding bits of the last
+  // character, so several spellings would otherwise map to one signature (ticket malleability).
+  const expected = Buffer.from(createHmac("sha256", derivedKey(secret, "ticket")).update(body).digest("base64url"));
+  const given = Buffer.from(signature);
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return undefined;
   try {
     const payload = JSON.parse(Buffer.from(body, "base64url").toString("utf8")) as SeeTicketPayload;

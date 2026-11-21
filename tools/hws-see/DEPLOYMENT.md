@@ -57,6 +57,7 @@ Settings → Environment Variables. Stávající proměnné portálu (`APP_LOGIN
 | `SEE_FILE_URL_TTL_SECONDS` | `60` | `60` | 30–300 |
 | `SEE_PIN_GRANT_TTL_MINUTES` | `120` | `120` | 5–720 |
 | `SEE_MAX_MODEL_MB` / `SEE_MAX_DOCUMENT_MB` | `200` / `50` | dle potřeby | |
+| `SEE_MAX_IMAGE_MB` / `SEE_MAX_PROJECT_MB` | `5` / `3000` | `5` / dle kapacity R2 | obrázky popisků a panelu (1–20) / celková kvóta projektu (413 při překročení) |
 | `SEE_EMBED_FRAME_ANCESTORS` | prázdné | prázdné nebo seznam webů | výchozí `'self' https:` |
 | `SEE_BACKEND` | **nenastavovat** | **nenastavovat** | jen lokální vývoj |
 
@@ -71,8 +72,10 @@ Výsledek musí být `bez chyb`.
 
 ## 4. Smoke test na Preview (ručně, anonymní okno pro veřejné části)
 1. Login sdíleným heslem → launcher ukazuje HWS Easy (Připravujeme), HWS SEE, ABF Generator; ABF se otevře.
-2. HWS SEE → Nový projekt → 3 GLB + PDF (ALL) + JPG (jen 3. model) → editor; popisek, uložení kamery, reload.
+2. HWS SEE → Nový projekt (začíná jedním modelem) → „+ Přidat další model“ ×4 (5 modelů) + PDF (ALL) + JPG (jen 3. model) → editor; popisek s obrázkem a https odkazem, uložení kamery, přesun a smazání modelu, reload.
+   - Záložka Panel: zapnout, vyplnit text/obrázek/odkaz, u jednoho modelu vlastní obsah → náhled.
 3. Publikovat veřejně → anonymní okno: model, popisky, download (3. model: PDF + JPG, ostatní jen PDF).
+   - Panel je po otevření **zavřený**; šipka ho otevře, Esc zavře; rychlé pohledy vpravo nahoře (Přední/Zadní/… s plynulým přechodem); karta popisku s obrázkem a odkazem (otevře se v nové kartě).
 4. Přepnout na PIN → anonymní okno: bez PINu nic; špatný PIN → zbývající pokusy; správný PIN → model.
 5. Embed na testovací HTTPS stránce (např. CodePen) s výchozí politikou → zobrazí; nastavit „Jen vybrané weby“ bez této domény → prohlížeč iframe zablokuje.
 6. Pozastavit → odkaz, embed i download hlásí pozastavení; Obnovit → funguje (PIN znovu).

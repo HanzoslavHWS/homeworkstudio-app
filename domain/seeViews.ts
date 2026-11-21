@@ -2,6 +2,7 @@
  * What HWS SEE sends to browsers. Pure. Server-only fields (storageKey, pinHash) are removed here
  * and nowhere else, so every API response goes through these functions.
  */
+import type { SeeProjectInfoPanel } from "./seeContent.ts";
 import type { SeeUploadLimits } from "./seeFiles.ts";
 import {
   hasUnpublishedChanges,
@@ -77,7 +78,7 @@ export function toEditorView(
 export type SeePublicUnavailableReason = "paused" | "archived" | "unpublished";
 
 export type SeePublicManifest =
-  | Readonly<{ state: "ok"; mode: SeePublicationMode; title: string; description: string; revision: number; scenes: readonly SeeSnapshotScene[]; documents: readonly SeeSnapshotDocument[] }>
+  | Readonly<{ state: "ok"; mode: SeePublicationMode; title: string; description: string; revision: number; scenes: readonly SeeSnapshotScene[]; documents: readonly SeeSnapshotDocument[]; infoPanel?: SeeProjectInfoPanel }>
   | Readonly<{ state: "pin-required"; reason?: "expired" }>
   | Readonly<{ state: "not-found" }>
   | Readonly<{ state: "unavailable"; reason: SeePublicUnavailableReason }>;

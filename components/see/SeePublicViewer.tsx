@@ -1,9 +1,11 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { resolveInfoPanel } from "../../domain/seeContent";
 import { documentsForScene, formatFileSize, fileDownloadName } from "../../domain/seeProject";
 import { SEE_PUBLIC_STATE_MESSAGES_CS, type SeePublicManifest } from "../../domain/seeViews";
 import { SeeCubeIcon } from "./SeeShell";
+import { SeeInfoDrawer, SeeSceneSwitcher, SeeViewPresets } from "./SeeViewControls";
 import { SeeViewer, type SeeViewerHandle } from "./SeeViewer";
 
 type LoadedManifest = Extract<SeePublicManifest, { state: "ok" }>;
@@ -32,6 +34,9 @@ export function SeePublicViewer({ slug, embed = false }: Readonly<{ slug: string
   const [pin, setPin] = useState("");
   const [pinError, setPinError] = useState<string | undefined>();
   const [unlocking, setUnlocking] = useState(false);
+  // The information panel is always CLOSED when a presentation is opened; a manual opening is kept
+  // while switching between the models of this presentation only.
+  const [infoOpen, setInfoOpen] = useState(false);
 
   const api = useCallback(async (path: string, init?: RequestInit) => {
     const headers: Record<string, string> = { ...(init?.body ? { "Content-Type": "application/json" } : {}) };
@@ -150,6 +155,8 @@ export function SeePublicViewer({ slug, embed = false }: Readonly<{ slug: string
 
   const scene = activeScene;
   const docs = documentsForScene(loaded!.documents, scene?.id);
+  const panel = resolveInfoPanel(loaded!.infoPanel, scene?.settings.infoPanel);
+  const resolveImage = (fileId: string) => fileUrl(fileId, false);
   return (
     <div className={shellClass} ref={presentationRef}>
       <SeeViewer
@@ -159,6 +166,7 @@ export function SeePublicViewer({ slug, embed = false }: Readonly<{ slug: string
         className="seePublicCanvas"
         scene={scene}
         resolveModelUrl={(fileId) => fileUrl(fileId, false)}
+        resolveImageUrl={resolveImage}
         prefetchModelFileIds={loaded!.scenes.map((entry) => entry.modelFileId)}
         showAnnotations={showAnnotations}
         selectedAnnotationId={selectedAnnotationId}
@@ -171,17 +179,22 @@ export function SeePublicViewer({ slug, embed = false }: Readonly<{ slug: string
           <strong>{loaded!.title}</strong>
         </div>
         {loaded!.scenes.length > 1 && (
-          <div className="seePublicScenes" role="tablist" aria-label="Modely">
-            {loaded!.scenes.map((entry) => (
-              <button key={entry.id} type="button" role="tab" aria-selected={entry.id === scene?.id} className={entry.id === scene?.id ? "seePublicScene seePublicSceneActive" : "seePublicScene"} onClick={() => setActiveSceneId(entry.id)}>{entry.name}</button>
-            ))}
-          </div>
+          <SeeSceneSwitcher
+            scenes={loaded!.scenes}
+            activeId={scene?.id}
+            onSelect={setActiveSceneId}
+            className="seePublicScenes"
+            tabClassName="seePublicScene"
+            activeTabClassName="seePublicSceneActive"
+          />
         )}
       </header>
+      {scene && <SeeViewPresets className="seePublicViews" onSelect={(preset) => viewerRef.current?.setView(preset)} />}
+      <SeeInfoDrawer content={panel} open={infoOpen && Boolean(panel)} onToggle={setInfoOpen} resolveImage={resolveImage} />
       <div className="seePublicTools">
         <button type="button" title="Výchozí pohled" aria-label="Výchozí pohled" onClick={() => viewerRef.current?.resetCamera()}><ToolIcon name="reset" /></button>
         {scene && scene.annotations.length > 0 && (
-          <button type="button" title={showAnnotations ? "Skrýt popisky" : "Zobrazit popisky"} aria-label={showAnnotations ? "Skrýt popisky" : "Zobrazit popisky"} aria-pressed={showAnnotations} onClick={() => setShowAnnotations((value) => !value)}><ToolIcon name="pin" /></button>
+          <button type="button" className={showAnnotations ? "seeToggleOn" : "seeToggleOff"} title={showAnnotations ? "Skrýt 3D popisky" : "Zobrazit 3D popisky"} aria-label={showAnnotations ? "Skrýt 3D popisky" : "Zobrazit 3D popisky"} aria-pressed={showAnnotations} onClick={() => setShowAnnotations((value) => !value)}><ToolIcon name={showAnnotations ? "labels" : "labelsOff"} /></button>
         )}
         <button type="button" title="Informace" aria-label="Informace" aria-expanded={menu === "info"} onClick={() => setMenu((value) => (value === "info" ? undefined : "info"))}><ToolIcon name="info" /></button>
         {docs.length > 0 && (
@@ -226,10 +239,12 @@ function StateScreen({ title, text, action }: Readonly<{ title: string; text?: s
   );
 }
 
-function ToolIcon({ name }: Readonly<{ name: "reset" | "pin" | "info" | "download" | "fullscreen" | "exit" }>) {
+function ToolIcon({ name }: Readonly<{ name: "reset" | "labels" | "labelsOff" | "info" | "download" | "fullscreen" | "exit" }>) {
   const paths: Record<typeof name, string> = {
     reset: "M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4",
-    pin: "M12 21s-6-5.6-6-11a6 6 0 1 1 12 0c0 5.4-6 11-6 11zM12 12.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
+    // "message-square-text": a text label (the annotations), crossed out when they are hidden
+    labels: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM7 8h10M7 12h7",
+    labelsOff: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2zM7 8h10M7 12h7M3 3l18 18",
     info: "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM12 11v5M12 7.5v.5",
     download: "M12 4v11M7 10l5 5 5-5M5 20h14",
     fullscreen: "M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5",

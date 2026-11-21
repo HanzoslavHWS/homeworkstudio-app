@@ -138,3 +138,37 @@ Překlíčování se spouští při každém **zpřísnění**: zrušení publik
 - `tools/hws-see/migration-dry-run.mjs` — všech 19 migrací + HWS SEE + rollback v PGlite (PostgreSQL 17), 35 kontrol.
 - `tools/hws-see/r2-cors.json`, `tools/hws-see/DEPLOYMENT.md` (Supabase, R2, Vercel, smoke test, rollback).
 - Zjištění: Next 16 `proxy` bufferuje těla požadavků jen do 10 MB → lokální upload routa `/api/see/dev-storage` je z matcheru vyjmutá a session kontroluje sama (produkční uploady jdou přímo do R2, proxy je nevidí).
+
+## 7. UI úpravy (21. 11. 2026) — zadání `HWS_SEE_UI_UPRAVY.md`
+
+### A. Libovolný počet modelů
+- Pevný limit 3 odstraněn z domény, služby, editoru, průvodce i SQL komentáře. Zůstal jen technický strop `SEE_MAX_SCENES = 60` (ochrana API), kvóta velikosti projektu `SEE_MAX_PROJECT_MB` (výchozí 3000 MB → 413) a limit verzí GLB `max(12, 3 × počet modelů)`.
+- Průvodce „Nový projekt“ začíná **jedním** modelem, „+ Přidat další model“, přesun ↑/↓ a odebrání; sloty mají stabilní klíč, takže přiřazení dokumentů se při přesunu nepomíchá (dokument přiřazený jen k odebranému slotu přejde na „Všechny modely“).
+- Editor: „+ Přidat další model“ v přepínači i v záložce Model, přejmenování, ↑/↓ s pořadím „N z M“, odstranění (poslední model smazat nelze). Potvrzení vyjmenuje mazané popisky a dokumenty, které zůstanou bez přiřazení; **soubory se nikdy nemažou** a vazby ostatních modelů zůstávají (`saveEditorState` jen odfiltruje ID smazané scény).
+- Identita scény = UUID; přesun mění jen `sort_order`, popisky a vazby dokumentů zůstávají.
+- Přepínač (`SeeSceneSwitcher` v `components/see/SeeViewControls.tsx`): dynamický `tablist`, vodorovné posouvání s automatickým odscrollováním na aktivní model, ←/→/Home/End, roving tabindex; u více než 4 modelů na telefonu kompaktní `<select>`.
+- Viewer přednačítá nejdřív **sousední** modely aktivní scény (`seePrefetchOrder`), cache zůstává omezená profilem zařízení.
+
+### B. Ikona popisků
+`message-square-text` (bublina s řádky textu) místo GPS špendlíku; vypnutý stav = přeškrtnutí + ztlumení, `aria-pressed`, tooltip a `aria-label` „Skrýt / Zobrazit 3D popisky“.
+
+### C. Indikátor Next.js
+`next.config.ts` obsahuje jen `devIndicators: false` (chybové hlášky Next zůstávají; produkce indikátor nikdy nezobrazuje).
+
+### D. Rychlé pohledy
+`SEE_VIEW_PRESETS` (`domain/seeCameraFit.ts`): Výchozí/3D (uložený pohled projektu, jinak výchozí směr), Přední (+Z), Zadní, Levý, Pravý, Horní, Spodní (u pólů malý posun proti převrácení OrbitControls). Vzdálenost z ohraničující koule a FOV/poměru stran → funguje pro 2 mm díl i 400 m halu mimo počátek. Plynulý přechod 650 ms (`easeInOutCubic`), při `prefers-reduced-motion` okamžitě, uchopení modelu přechod zruší. Desktop: lišta vpravo nahoře; ≤ 1100 px jedno tlačítko „Pohled“ s rozbalovacím seznamem. Zobrazeno ve veřejné prezentaci, embedu, celé obrazovce i v editoru.
+
+### E. Informační panel
+- Data: `see_projects.info_panel jsonb` (`{enabled, title, body, imageFileId?, links[]}`), přepsání pro model v `see_scenes.settings.infoPanel`. Pravidlo (`resolveInfoPanel`): panel vypnutý → nic; neprázdný obsah modelu → ten; jinak obsah projektu; prázdné → bez šipky.
+- Snapshot obsahuje panel jen když je zapnutý; manifest i obrázky panelu jsou za PINem stejně jako modely.
+- Veřejně: vždy **zavřený** po vstupu (žádné ukládání stavu); ručně otevřený zůstane při přepnutí modelu. Šipka u pravého okraje, panel 320–420 px se svislým posunem, × / Esc / šipka zavírá, fokus se vrací na spouštěč; ostatní ovládání se při otevření posune, nic nepřekrývá. ≤ 640 px spodní list (bottom sheet) s bezpečnými okraji.
+- Formátování bez HTML (`parseRichText`): odstavce, zalomení, odrážky „- “ / „• “, **tučně**. Editor: záložka „Panel“ (zapnutí, společný obsah, vlastní obsah modelu, náhled).
+
+### F. Obrázek a odkaz u popisku
+- Nový druh souboru `image` (JPG/PNG/WebP, `SEE_MAX_IMAGE_MB` výchozí 5 MB, MIME + signatura včetně RIFF/WEBP, max. 300 na projekt). Prohlížeč před nahráním zmenší velké fotky (delší strana 1600 px, WebP/JPEG — `lib/see/imageResize.ts`), server přesto vše ověřuje.
+- Obrázky se doručují stejnou cestou jako GLB (signed URL / stream, ticket, snapshot, PIN grant, epocha, překlíčování) — ve snapshotu jen ověřené a nesmazané; smazaný obrázek z dalšího snapshotu vypadne, popisek zůstane (`on delete set null`).
+- Odkaz: jen `https://` (v lokálním vývoji i `http://localhost|127.0.0.1`), bez přihlašovacích údajů, max. 2000 znaků, SQL CHECK `^https?://` jako druhá pojistka; normalizace `new URL().href`; vykreslení `target="_blank" rel="noopener noreferrer"` a klient znovu kontroluje (`renderableUrl`). Výchozí text „Více informací“.
+- Karta popisku se otevírá na volnou stranu (nad/pod značkou, u okrajů zarovnaná dovnitř), má omezenou výšku s posunem; zakrytí ztlumí jen značku, ne otevřenou kartu.
+
+### Zjištění během úprav
+- Turbopack hlásil, že `path.resolve(SEE_LOCAL_DIR)` lokálního backendu trasuje do serverového výstupu celý projekt → označeno `/* turbopackIgnore: true */`; trasovací manifest SEE rout obsahuje jen potřebné soubory a nic z `.see-local/`.

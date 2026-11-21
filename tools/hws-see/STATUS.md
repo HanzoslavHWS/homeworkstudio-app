@@ -1,55 +1,57 @@
-# HWS SEE — stav implementace (21. 11. 2026, P3 – připravenost na produkci)
+# HWS SEE — stav implementace (21. 11. 2026, UI úpravy)
 
 Větev: `feature/hws-see-mvp` (z `master` a9ead51) ve worktree `homeworkstudio-app-web` = původní HWS portál (ne HWS APP DEV / `develop`).
-**Necommitováno, nic nepushnuto, nenasazeno. Žádný zápis do produkční ani DEV databáze, žádné změny Cloudflare/R2/DNS/Vercel.** Ruční testy běžely v lokálním režimu `SEE_BACKEND=local` s daty mimo repozitář; migrace v izolovaném PGlite.
+P0–P3 jsou v lokálním commitu `2a533de`; UI úpravy tvoří jeden další lokální commit. **Nic nepushnuto, nenasazeno. Žádný zápis do produkční ani DEV databáze, žádné změny Cloudflare/R2/DNS/Vercel.** Ruční testy běžely v lokálním režimu `SEE_BACKEND=local` s daty mimo repozitář; migrace v izolovaném PGlite.
 
-Dokumentace: architektura `IMPLEMENTATION.md` (§5 iterace 2, **§6 P3**), přesný postup nasazení **`DEPLOYMENT.md`**, CORS šablona `r2-cors.json`, test migrace `migration-dry-run.mjs`.
+Dokumentace: zadání `HWS_SEE_UI_UPRAVY.md` (+ `reference-viewer-markup.png`), architektura `IMPLEMENTATION.md` (§5 iterace 2, §6 P3, **§7 UI úpravy**), postup nasazení **`DEPLOYMENT.md`**, CORS šablona `r2-cors.json`, test migrace `migration-dry-run.mjs`.
 
-## P3 — dokončeno
+## UI úpravy — dokončeno
 
-| Oblast | Výsledek | Ověřeno |
+| Bod zadání | Výsledek | Ověřeno |
 |---|---|---|
-| **1. Robustnost R2** | timeouty + omezené opakování v klientovi HWS SEE; výpadek → 503 + Retry-After s českou zprávou; upload/ověření/kopírování/mazání bez poškození projektu; překlíčování s ověřením kopie a compare-and-set; opuštěné uploady mimo limity (nic se nemaže); opakování v prohlížeči | 15 testů odolnosti vč. 25 kol náhodného vkládání chyb (R2 i DB), výpadek streamu, DB chyba uprostřed uložení |
-| 1. Bezpečnost okamžitého zneplatnění | zrušení přístupu nikdy nezávisí na R2 (epocha + granty), nové klíče neuhodnutelné, R2 silně konzistentní, kopie se použije jen ověřená, souběh nevytvoří neplatný záznam | testy + revize (IMPLEMENTATION §6) |
-| **2. 3D viewer** | indikátor po fázích (přístup → X / Y MB → zpracování); 1 automatické opakování + „Zkusit znovu“; kamera 2 mm – 80 km; užší near/far; fullscreen celé prezentace + náhradní režim (iPhone); dotyk, safe-area, větší popisky; PBR/nasvícení zkontrolováno PBR mapou | headless Chrome: 12 MB model na pomalé síti, 3× přerušené stahování → chyba → „Zkusit znovu“ → načteno, 2mm díl a 400m hala 50 km od počátku zarámované, záložní fullscreen + Escape, tah prstem |
-| **3. Administrace** | potvrzení při odchodu z editoru i z rozpracovaného „Nový projekt“, záloha konceptu (pokrývá i tlačítko Zpět) s „Obnovit / Zahodit“, štítek „Neuložené změny“, samo-mizející potvrzení, trvalé chyby, varování z R2 i v Projektech, kontrola prázdných názvů, stavy „Publikováno – odkaz blokován“ / „Publikace zrušena“, poslední otevření | prohlížeč: zrušený odchod, obnova po navigaci pryč, „✓ Změny uloženy.“, skrytí po 6 s, chybová hláška; testy přiřazení dokumentů (odebraný model → odkaz zmizí, dokument se nepublikuje) a stavů/filtrů/stránkování v Projektech |
-| **4. Nasazení** | `npm run see:env-check` (offline, bez tajných hodnot); `DEPLOYMENT.md` (Supabase DEV → Preview → Production, R2 bucket/token/CORS, Vercel proměnné, smoke test, rollback); bezpečný test migrace; kontrola hlaviček, cookies, CORS, embedu | migrace v PGlite (PostgreSQL 17): **35/35 kontrol** včetně všech 19 migrací repozitáře, CHECK omezení, kaskád, triggeru, `see_record_view`, oprávnění rolí, rollbacku a opětovné aplikace; 11 testů konfigurace nasazení |
-| **5. Testy** | nové sady `seeResilience` (15) a `seeDeployment` (11), rozšířený testovací kit (výpadky R2, chybující DB) | viz níže |
+| **A. Libovolný počet modelů** | průvodce začíná 1 modelem + „+ Přidat další model“, přesun ↑/↓, odebrání; editor: přidat, přejmenovat, přesunout, odstranit (poslední ne); stabilní UUID scény; smazání modelu nemaže soubory a vazby řeší explicitně (potvrzení vyjmenuje dokumenty bez přiřazení); dokumenty pro všechny / libovolnou podmnožinu; dynamický přepínač (posun, klávesy, na telefonu `<select>` u > 4 modelů); limit 3 odstraněn z kódu, SQL i textů — zůstal technický strop 60 + kvóta velikosti projektu | testy 1→2→5 a 7 modelů, přesun se zachováním popisků a vazeb, smazání se zachováním souborů, podmnožina 5 modelů, staré projekty beze změny, kontrola zdrojů na „max 3“; prohlížeč: průvodce 1→2→5 + přesun + odebrání, editor 1→2→5 → uložit → reload, prohození, smazání s potvrzením → reload |
+| **B. Ikona popisků** | `message-square-text` místo GPS špendlíku, vypnuto = přeškrtnutí + ztlumení, `aria-pressed`, tooltip, `aria-label` | test + prohlížeč (aria-label) |
+| **C. Indikátor „N“** | `next.config.ts` jen s `devIndicators: false` | prohlížeč v `next dev`: indikátor se nezobrazuje |
+| **D. Rychlé pohledy** | Výchozí/3D, Přední, Zadní, Levý, Pravý, Horní, Spodní; plynulý přechod podle ohraničující koule (2 mm – 400 m, mimo počátek), respektuje omezený pohyb; lišta vpravo nahoře, na mobilu jedno tlačítko „Pohled“; i v celé obrazovce, embedu a editoru | testy vektorů/vzdáleností/easing; prohlížeč: snímky začátek ≠ průběh ≠ konec, nic nepřekrývá, fullscreen, embed, mobil |
+| **E. Informační panel** | zapnutí na úrovni projektu, obsah projektu + přepsání pro model (jasné pravidlo), nadpis, formátovaný text bez HTML, obrázek, odkazy; **vždy zavřený po vstupu**, ručně otevřený vydrží přepnutí modelu; 320–420 px, posun, × / Esc; mobil = spodní list; editor se záložkou „Panel“ a náhledem; snapshot jen když je zapnutý; za PINem | testy normalizace, pravidla, publikace jen zapnutého, PIN + nový PIN zneplatní obrázek, odmítnutí nebezpečných odkazů a cizích souborů; prohlížeč: zavřeno → otevřít → přepnout model (obsah modelu) → Esc, šířka 402 px, reload = zavřeno, mobilní spodní list, PIN bez obsahu → po odemčení zavřený panel |
+| **F. Obrázek a odkaz u popisku** | JPG/PNG/WebP do 5 MB, MIME + signatura, zmenšení v prohlížeči (1600 px), `object-fit`; doručení stejně jako GLB (local i R2, PIN, zneplatnění, jen soubory snapshotu); odkaz jen `https://` (lokálně i `http://localhost`), nový panel s `noopener noreferrer`; staré popisky platí | testy validace (javascript:, data:, vbscript:, //, http://, přihlašovací údaje, file:), WebP magie, 5 MB, obrázek mimo snapshot = 404, smazaný obrázek vypadne ze snapshotu; prohlížeč: karta s obrázkem a odkazem, celá na obrazovce |
+| **G. Testy** | nová sada `seeUiRefinements` (22 testů), rozšířený testovací kit (obrázky), zkušební migrace s novými sloupci | viz níže |
 
-**Nalezeno a opraveno během P3**
-- Chrome tiše odmítl prefixovaný fullscreen a viewer to považoval za úspěch → nyní se ověřuje skutečný stav a jinak se zapne náhradní režim.
-- Next 16 `proxy` ořezává těla požadavků nad 10 MB → lokální upload velkých GLB selhal (server ho správně odmítl kvůli velikosti). Lokální upload routa je vyjmutá z proxy a session ověřuje sama; produkce se netýká (upload jde přímo do R2).
-- Před přepisem klíče v DB se nekontrolovalo, že kopie v R2 je úplná, a neznámý výsledek zápisu do DB mohl vést ke smazání používané kopie → ověření kopie + compare-and-set + opětovné načtení záznamu.
-- `.gitignore` nechránil `.env.preview.local` apod. (doporučené `vercel env pull`) → přidán vzor `.env*.local`.
+**Nalezeno a opraveno během úprav**
+- Na desktopu otevřený panel posunul lištu pohledů přes záložky modelů → lišta s názvem a modely se při otevření panelu zúží.
+- Karta popisku: zakrytá značka ztlumila i otevřenou kartu a karta s obrázkem přetékala spodní okraj → ztlumí se jen značka, karta se otevře na volnou stranu, s omezenou výškou.
+- Prázdný řádek odkazu v editoru by zablokoval uložení → při ukládání se vynechá.
+- U mnoha modelů by viewer přednačítal první modely seznamu → nejdřív sousední modely aktivní scény.
+- Turbopack: cesta lokálního backendu (`SEE_LOCAL_DIR`) trasovala do serverového výstupu celý projekt (riziko velikosti nasazení) → `turbopackIgnore`; build bez varování, trasování SEE rout bez `.see-local/`.
+- Nestabilní test z P3: změna posledního znaku podpisu lístku se někdy lišila jen ve výplňových bitech base64url, a podpis se tak dekódoval stejně → ověření nyní porovnává kanonický zápis podpisu (žádná alternativní hláskování) a test zkouší všechny varianty posledního znaku.
 
-## Ověření (skutečně spuštěno, P3)
+## Ověření (skutečně spuštěno)
 - `npm run typecheck` — bez chyb.
-- `npm test` — **3177 pass / 0 fail / 2 skipped** (3179; přeskočené jsou starší testy mimo HWS SEE). HWS SEE: `seeModule` 11, `seeSecurity` 12, `seeAudit` 23, `seeResilience` 15, `seeDeployment` 11.
-- `npm run build` — OK bez varování.
-- `node tools/hws-see/migration-dry-run.mjs --pglite <tmp>` — 35/35.
-- `npm run see:env-check` — bez proměnných správně hlásí 9 chyb a exit 1; testy ověřují, že úplná konfigurace projde a žádná tajná hodnota se nevypíše.
-- HTTP průchod v `next dev` (8/8): **stávající login** (stránka, špatné heslo, správné heslo → HttpOnly/Lax cookie, odhlášení), **launcher s HWS Easy „Připravujeme“** (jediná neaktivní karta), **ABF Generator** za loginem a jeho API stále 401 bez session, příprava testovacích projektů, nedokončený upload hlášen.
-- Headless Chrome (SwiftShader): viz tabulka; konzole bez chyb.
+- `npm test` — **3199 pass / 0 fail / 2 skipped** (3201; přeskočené jsou starší testy mimo HWS SEE). HWS SEE: `seeModule` 11, `seeSecurity` 12, `seeAudit` 23, `seeResilience` 15, `seeDeployment` 11, `seeUiRefinements` 22.
+- `npm run build` — OK, bez varování.
+- `node tools/hws-see/migration-dry-run.mjs --pglite <tmp>` — **42/42** (navíc: `info_panel` výchozí `{}`, 8 scén, druh `image` + WebP, popisek s obrázkem a odkazem, CHECK proti `javascript:` a dlouhému textu odkazu, smazání obrázku nezruší popisek).
+- Headless Chrome (SwiftShader) proti lokálnímu `next dev` (`SEE_BACKEND=local`, data jen ve scratchpadu): **42/42 kroků** — průvodce, editor 1→2→5 modelů s reloadem, prohození, smazání, záložka Panel s náhledem, popisek s obrázkem a odkazem, rychlé pohledy s přechodem, panel (výchozí zavřený, otevřít, přepnout model, Esc, reload), karta popisku, celá obrazovka, mobil (pohledy, spodní list), veřejný → PIN → odemčení → zpět veřejný, embed, bez indikátoru „N“.
+  - Uživatelův běžící `npm run dev` (port 3000) zůstal nedotčený; kontrola běžela z dočasné kopie zdrojů ve scratchpadu (bez `.env*`, `.git`, `.see-local`).
 
 ## Co zbývá / blokery (vyžadují externí přístupy nebo fyzické zařízení)
-1. **Supabase:** migrace nikde nespuštěná — postup v `DEPLOYMENT.md` §1 (DEV v transakci s `rollback`, pak ostře, produkce až po Preview).
-2. **Cloudflare R2:** bucket `hws-see-dev/prod` (neveřejný), token jen na bucket s **Put/Get/Head/Copy/Delete**, CORS dle `r2-cors.json` (+ konkrétní Preview doména). Chování proti skutečnému R2 (CopyObject, timeouty, CORS) zatím ověřeno jen s náhradou.
-3. **Vercel:** proměnné pro Preview a Production (`DEPLOYMENT.md` §3), u Preview přesměrovat Supabase na DEV projekt; `see:env-check` musí být bez chyb.
-4. **Na Preview / fyzickém zařízení ověřit:** nativní fullscreen (headless Chrome ho neumí — ověřen jen náhradní režim), iPhone Safari a Android (dotyk, notch, velké modely), `Partitioned` cookie v cizím iframu, `beforeunload` dialog v reálném prohlížeči, při `stream`/`hybrid` limity velikosti odpovědi.
-5. **E-mail** není nakonfigurovaný (jen kopírovatelné texty); **identita** = sdílené heslo (každý přihlášený je editor i správce).
-6. Mimo rozsah P3: uložené pohledy, >3 modely, úklid osiřelých R2 objektů (jen se logují), unikátní návštěvy v UI, Cloudflare Worker pro doručování.
+1. **Supabase:** migrace nikde nespuštěná (je stále jeden soubor a obsahuje i nové sloupce) — postup v `DEPLOYMENT.md` §1.
+2. **Cloudflare R2:** bucket, token (Put/Get/Head/Copy/Delete), CORS dle `r2-cors.json`. Obrázky popisků a panelu jdou stejnou cestou jako GLB, proti skutečnému R2 zatím ověřeno jen s náhradou.
+3. **Vercel:** proměnné pro Preview a Production (`DEPLOYMENT.md` §3; nové volitelné `SEE_MAX_IMAGE_MB`, `SEE_MAX_PROJECT_MB`), `see:env-check` bez chyb.
+4. **Na Preview / fyzickém zařízení ověřit:** nativní fullscreen, iPhone Safari a Android (spodní list panelu, rozbalení pohledů, posun přepínače modelů prstem, zmenšení fotky z telefonu před nahráním), `Partitioned` cookie v cizím iframu, `beforeunload` a potvrzovací dialogy v reálném prohlížeči.
+5. **E-mail** není nakonfigurovaný (jen kopírovatelné texty); **identita** = sdílené heslo.
+6. Mimo rozsah: uložené vlastní pohledy, úklid osiřelých R2 objektů (jen se logují), unikátní návštěvy v UI, Cloudflare Worker pro doručování.
 
 ## Připravenost
-- **Ruční kontrola (code review): ANO.** Kód je kompletní pro P0–P3, typecheck/testy/build zelené, změny mimo modul jsou malé a popsané níže.
-- **Preview nasazení: ANO, po splnění blokerů 1–3** (DEV migrace, R2 bucket+token+CORS, Vercel Preview proměnné) — všechny kroky jsou v `DEPLOYMENT.md`, kontrolu proměnných dělá `npm run see:env-check -- --target=preview`.
-- **Produkce:** až po úspěšném smoke testu na Preview (§4) a schválení migrace do produkční DB.
+- **Ruční kontrola (code review): ANO.** Typecheck, testy, build, zkušební migrace i kontrola v prohlížeči jsou zelené.
+- **Preview nasazení: ANO, po splnění blokerů 1–3.**
+- **Produkce:** až po úspěšném smoke testu na Preview (`DEPLOYMENT.md` §4) a schválení migrace do produkční DB.
 
 ## Jak spustit
 ```bash
 npm run dev                                   # běžný vývoj (.env.local s APP_*, SUPABASE_*, R2_*)
 SEE_BACKEND=local npm run dev                 # HWS SEE bez cloudu (data v .see-local/ nebo SEE_LOCAL_DIR)
 npm test                                      # celá sada
-node --no-warnings --test tests/seeModule.test.ts tests/seeSecurity.test.ts tests/seeAudit.test.ts tests/seeResilience.test.ts tests/seeDeployment.test.ts
+node --no-warnings --test tests/seeModule.test.ts tests/seeSecurity.test.ts tests/seeAudit.test.ts tests/seeResilience.test.ts tests/seeDeployment.test.ts tests/seeUiRefinements.test.ts
 npm run typecheck
 npm run build                                 # přepíše next-env.d.ts → git -c core.autocrlf=false checkout -- next-env.d.ts
 npm run see:env-check -- --target=preview     # kontrola proměnných (offline)
@@ -58,9 +60,10 @@ node tools/hws-see/migration-dry-run.mjs --pglite <složka s @electric-sql/pglit
 Lint skript v repozitáři neexistuje.
 
 ## Rozsah změn mimo nový modul
-`proxy.ts` (veřejné výjimky jen pro share-link routy HWS SEE, hlavičky jen pro `/see*`, z matcheru vyjmuta pouze lokální `api/see/dev-storage`), `data/launcherApps.ts` (karta HWS SEE), `app/globals.css` (mřížka launcheru na 3 karty), `package.json` (registrace testů, skript `see:env-check`), `.env.example`, `.gitignore` (`.see-local/`, `.env*.local`). **Login, HWS EASY ani ABF nebyly změněny** (ověřeno testy `auth`/`launcher` a HTTP průchodem).
+`next.config.ts` (nový, **jen** `devIndicators: false`), `proxy.ts` (veřejné výjimky jen pro share-link routy HWS SEE, hlavičky jen pro `/see*`, z matcheru vyjmuta pouze lokální `api/see/dev-storage`), `data/launcherApps.ts` (karta HWS SEE), `app/globals.css` (mřížka launcheru na 3 karty), `package.json` (registrace testů, skript `see:env-check`), `.env.example`, `.gitignore` (`.see-local/`, `.env*.local`). **Login, HWS EASY ani ABF nebyly změněny** (testy `auth`/`launcher` zelené).
 
 ## Historie iterací
 - **P0–P1 (iterace 1):** modul, launcher, editor, upload, publikace public/PIN, embed, statistiky.
 - **P2 (iterace 2):** KTX2, embed politika per prezentace, bezpečnostní audit (7 oprav), překlíčování, výkon vieweru.
-- **P3 (tato iterace):** robustnost R2, viewer (načítání, opakování, kamera, fullscreen, dotyk), administrace (neuložené změny, zprávy, stavy), příprava nasazení, testy.
+- **P3:** robustnost R2, viewer (načítání, opakování, kamera, fullscreen, dotyk), administrace, příprava nasazení, testy — commit `2a533de`.
+- **UI úpravy (tato iterace):** libovolný počet modelů, ikona popisků, bez indikátoru „N“, rychlé pohledy, informační panel, obrázek a odkaz u popisku, testy.

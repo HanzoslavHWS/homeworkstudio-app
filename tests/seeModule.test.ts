@@ -9,7 +9,8 @@ import { handleSeeProjectStatus } from "../app/api/see/projects/[id]/status/rout
 import { handleSeePublication } from "../app/api/see/projects/[id]/publication/route.ts";
 import { handleSeePublicView } from "../app/api/see/public/[slug]/view/route.ts";
 import { handleSeeContent } from "../app/api/see/content/route.ts";
-import { documentsForScene } from "../domain/seeProject.ts";
+import { DEFAULT_SEE_UPLOAD_LIMITS } from "../domain/seeFiles.ts";
+import { documentsForScene, SEE_MAX_SCENES } from "../domain/seeProject.ts";
 import type { SeeEditorView } from "../domain/seeViews.ts";
 import { createZarges, editorBody, GLB, JPG, json, manifest, PDF, publicFile, publish, req, unlock, uploadFile, world } from "./helpers/seeTestKit.ts";
 
@@ -45,7 +46,7 @@ test("HWS SEE: new project with 3 GLB scenes + documents persists metadata and a
 });
 
 test("HWS SEE: uploads are server-validated (type, extension, size, real content)", async () => {
-  const w = world({ limits: { maxModelBytes: 1000, maxDocumentBytes: 1000 } });
+  const w = world({ limits: { ...DEFAULT_SEE_UPLOAD_LIMITS, maxModelBytes: 1000, maxDocumentBytes: 1000 } });
   const created = await json<{ project: SeeEditorView }>(await handleSeeProjectCreate(await req("/api/see/projects", { method: "POST", body: { name: "Limity", scenes: [{ name: "A" }] } }), () => w.deps));
   const id = created.project.project.id;
   const prepare = (body: Record<string, unknown>) => req(`/api/see/projects/${id}/uploads`, { method: "POST", body });
@@ -251,7 +252,12 @@ test("HWS SEE: tampered or expired content tickets are refused; editor preview n
   const editor = await handleSeeEditorFile(await req(`/api/see/projects/${projectId}/files/${models[0]}`), { id: projectId, fileId: models[0] }, () => w.deps);
   const url = (await json<{ url: string }>(editor)).url;
   assert.equal((await handleSeeContent(await req(url, { auth: false }), () => w.deps)).status, 200);
-  assert.equal((await handleSeeContent(await req(url.replace(/.$/u, (char) => (char === "A" ? "B" : "A")), { auth: false }), () => w.deps)).status, 403);
+  assert.equal((await handleSeeContent(await req(url.replace(/.(.)$/u, (_, last: string) => `${url.at(-2) === "A" ? "B" : "A"}${last}`), { auth: false }), () => w.deps)).status, 403);
+  // Every other spelling of the last character (incl. ones differing only in base64 padding bits) is refused.
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  for (const char of alphabet.replace(url.at(-1)!, "")) {
+    assert.equal((await handleSeeContent(await req(url.slice(0, -1) + char, { auth: false }), () => w.deps)).status, 403, char);
+  }
   w.clock.now = new Date(w.clock.now.getTime() + 61_000);
   assert.equal((await handleSeeContent(await req(url, { auth: false }), () => w.deps)).status, 403);
   assert.equal((await handleSeeEditorFile(await req(`/api/see/projects/${projectId}/files/${models[0]}`, { auth: false }), { id: projectId, fileId: models[0] }, () => w.deps)).status, 401);
@@ -278,5 +284,6 @@ test("HWS SEE: a project without uploaded models cannot be published", async () 
   const result = await publish(w, created.project.project.id, { action: "publish", mode: "public" });
   assert.equal(result.status, 409);
   assert.equal((await handleSeeProjectCreate(await req("/api/see/projects", { method: "POST", body: { name: "  " } }), () => w.deps)).status, 400);
-  assert.equal((await handleSeeProjectCreate(await req("/api/see/projects", { method: "POST", body: { name: "Moc", scenes: [{}, {}, {}, {}] } }), () => w.deps)).status, 400);
+  assert.equal((await handleSeeProjectCreate(await req("/api/see/projects", { method: "POST", body: { name: "Čtyři", scenes: [{}, {}, {}, {}] } }), () => w.deps)).status, 201, "no fixed limit of three scenes");
+  assert.equal((await handleSeeProjectCreate(await req("/api/see/projects", { method: "POST", body: { name: "Moc", scenes: Array.from({ length: SEE_MAX_SCENES + 1 }, () => ({})) } }), () => w.deps)).status, 400, "only a technical safety ceiling");
 });
