@@ -1,0 +1,1351 @@
+/* ================================================= */
+/* HWS SEE — module styles (prefixed .see*, no global */
+/* overrides; builds on the portal tokens in globals) */
+/* ================================================= */
+
+.seeShell {
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--text);
+}
+
+/* The portal styles every input as a 50px full-width field (globals.css). Inside HWS SEE only text
+   fields keep that look; checkboxes, radios, ranges, colors and file pickers get their natural size. */
+.seeShell input,
+.seeShell select,
+.seePublic input {
+  height: auto;
+  min-height: 36px;
+}
+
+.seeShell input[type="checkbox"],
+.seeShell input[type="radio"] {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  box-shadow: none;
+  accent-color: var(--dark);
+}
+
+.seeShell input[type="file"] {
+  height: 100%;
+  min-height: 0;
+  padding: 0;
+}
+
+.seeTopbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  gap: 24px;
+  height: 56px;
+  padding: 0 20px;
+  background: var(--dark);
+  color: #f2f2f2;
+}
+
+.seeBrand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #fff;
+  font-weight: 800;
+  letter-spacing: 2px;
+  text-decoration: none;
+}
+
+.seeNav {
+  display: flex;
+  gap: 4px;
+}
+
+.seeNav a,
+.seeBackToPortal {
+  padding: 8px 14px;
+  border-radius: 999px;
+  color: #c9cbcf;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.seeNav a:hover,
+.seeBackToPortal:hover {
+  color: #fff;
+  background: #2a2c30;
+}
+
+.seeNav a.seeNavActive {
+  color: var(--dark);
+  background: #f2f2f2;
+}
+
+.seeBackToPortal {
+  margin-left: auto;
+}
+
+.seeMain {
+  width: min(100%, 980px);
+  margin: 0 auto;
+  padding: 28px 16px 60px;
+}
+
+.seeMainWide {
+  width: 100%;
+  max-width: none;
+  padding: 16px;
+}
+
+.seeHero {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 12px 0 28px;
+}
+
+.seeHero h1,
+.seeForm h1,
+.seePageHead h1 {
+  font-size: 24px;
+  letter-spacing: 1px;
+}
+
+.seeHero p {
+  max-width: 640px;
+  color: #3c3f44;
+  line-height: 1.5;
+}
+
+.seeMuted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.seeChoiceGrid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 20px;
+}
+
+.seeChoice {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 170px;
+  justify-content: center;
+  padding: 28px;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.15s ease, transform 0.15s ease;
+}
+
+.seeChoice:hover {
+  border-color: #9a9da2;
+  transform: translateY(-2px);
+}
+
+.seeChoice strong {
+  font-size: 20px;
+}
+
+.seeChoice span {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.seeBanner {
+  margin: 0 0 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.seeBannerOk { border-color: #b9dcc4; background: #f0faf3; color: #1f5c33; }
+.seeBannerWarn { border-color: #ead9a6; background: #fff9e8; color: #6b5313; }
+.seeBannerError { border-color: #efc2c2; background: #fff4f4; color: #8a2f2f; }
+
+.seeBanner code {
+  font-size: 12px;
+}
+
+.seeForm {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.seeCard {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+}
+
+.seeCard h2 {
+  font-size: 16px;
+}
+
+.seeField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.seeField > span,
+.seeFieldLabel {
+  color: #4a4d52;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.seeField input,
+.seeField textarea,
+.seeField select,
+.seeFilters input,
+.seeFilters select,
+.seePanelBody input:not([type]),
+.seePanelBody textarea,
+.seeDocList input:not([type]) {
+  width: 100%;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--text);
+  font-size: 13px;
+}
+
+.seeField textarea,
+.seePanelBody textarea {
+  font-family: inherit;
+  resize: vertical;
+}
+
+.seeField input[type="range"],
+.seeField input[type="color"] {
+  padding: 0;
+  height: 32px;
+}
+
+.seeFieldSmall {
+  max-width: 120px;
+}
+
+.seeFieldGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.seeSlotGrid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 14px;
+}
+
+.seeSlot {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px dashed #c9cbcf;
+  border-radius: 12px;
+  background: var(--surface-soft);
+}
+
+.seeFilePick {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 38px;
+  padding: 8px 14px;
+  border: 1px solid #b8bbc0;
+  border-radius: 8px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  overflow: hidden;
+  word-break: break-all;
+  text-align: center;
+}
+
+.seeFilePick input {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.seeFileBox {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-soft);
+  font-size: 13px;
+}
+
+.seeDocList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+}
+
+.seeDocList li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.seeDocHead {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+
+.seeDocDeleted {
+  opacity: 0.55;
+}
+
+.seeDocDeleted input {
+  text-decoration: line-through;
+}
+
+.seeTargets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 13px;
+}
+
+.seeTargets label,
+.seeCheck {
+  display: inline-flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.seeRadio {
+  display: flex;
+  flex-direction: row;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+}
+
+.seeRadio input {
+  margin-top: 3px;
+}
+
+.seeRadio > span,
+.seeFilePick > span {
+  color: inherit;
+  font-size: 13px;
+  font-weight: inherit;
+}
+
+.seeRadio small {
+  display: block;
+  margin-top: 4px;
+}
+
+.seeActions,
+.seeInline {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.seeActions {
+  justify-content: flex-end;
+}
+
+.seeButton,
+.seeSmallButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #b8bbc0;
+  border-radius: 999px;
+  background: #fff;
+  color: var(--text);
+  font-weight: 700;
+  text-decoration: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.seeButton {
+  padding: 10px 18px;
+  font-size: 13px;
+}
+
+.seeSmallButton {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
+.seeButton:hover,
+.seeSmallButton:hover {
+  border-color: var(--dark);
+}
+
+.seeButtonPrimary,
+.seeSmallButtonActive {
+  border-color: var(--dark);
+  background: var(--dark);
+  color: #fff;
+}
+
+.seeButton:disabled,
+.seeSmallButton:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.seeLinkButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #2b5fb3;
+  font-size: 12px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.seeDanger {
+  color: #a33a3a;
+}
+
+.seeSmallButton.seeDanger {
+  border-color: #e3b9b9;
+}
+
+.seeOk { color: #1f7a3d; font-size: 12px; font-weight: 600; }
+.seeErrorText { color: #a33a3a; font-size: 12px; }
+.seeWarnText { color: #8a6a12; font-size: 12px; }
+
+.seeProgress {
+  position: relative;
+  display: block;
+  height: 20px;
+  border-radius: 6px;
+  background: #eceef0;
+  font-size: 11px;
+  line-height: 20px;
+  text-align: center;
+  overflow: hidden;
+}
+
+.seeProgress span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: #c6d6ef;
+  z-index: 0;
+}
+
+.seeProgress {
+  isolation: isolate;
+}
+
+.seeProgress span {
+  z-index: -1;
+}
+
+/* ---------- Projekty ---------- */
+
+.seePageHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+}
+
+.seeFilters {
+  display: grid;
+  grid-template-columns: 1fr 240px 200px;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.seeTableWrap {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow-x: auto;
+}
+
+.seeTable {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.seeTable th,
+.seeTable td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: top;
+}
+
+.seeTable th {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+}
+
+.seeProjectName {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.seeClamp {
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seeRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 360px;
+}
+
+.seeChip {
+  display: inline-block;
+  margin: 0 4px 4px 0;
+  padding: 3px 9px;
+  border-radius: 999px;
+  background: #eceef0;
+  color: #3c3f44;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.seeChip-published, .seeChip-active { background: #e1f3e6; color: #1f5c33; }
+.seeChip-dirty { background: #fde3d6; color: #8a3a12; }
+.seeChip-blocked { background: #f3e1e1; color: #7a2d2d; }
+
+.seeNotice {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.seeNoticeClose {
+  flex: none;
+  border: 0;
+  background: none;
+  color: inherit;
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+.seeChip-paused { background: #fff1cc; color: #6b5313; }
+.seeChip-archived { background: #e7e7ea; color: #55575c; }
+
+.seePager {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+/* ---------- Editor ---------- */
+
+.seeEditor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  height: calc(100vh - 56px - 32px);
+  min-height: 600px;
+}
+
+.seeEditor > .seeBanner {
+  margin: 0;
+}
+
+.seeEditorBar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.seeEditorTitle {
+  font-size: 17px;
+}
+
+.seeSpacer {
+  flex: 1;
+}
+
+.seeWorkspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 400px;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+}
+
+.seeStage {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+  overflow: hidden;
+}
+
+.seeSceneTabs {
+  flex: none;
+  display: flex;
+  scrollbar-width: none;
+  gap: 6px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.seeSceneTab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.seeSceneTabActive {
+  border-color: var(--dark);
+  background: var(--dark);
+  color: #fff;
+}
+
+.seeSceneTabAdd {
+  border-style: dashed;
+  color: var(--muted);
+}
+
+.seeDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #d99a2b;
+}
+
+.seeStageTools {
+  position: absolute;
+  right: 10px;
+  bottom: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.seeStageTools button,
+.seePickHint button {
+  padding: 7px 11px;
+  border: 1px solid rgba(0, 0, 0, 0.12);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.seePickHint {
+  position: absolute;
+  top: 62px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: var(--dark);
+  color: #fff;
+  font-size: 12px;
+}
+
+.seePanel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  overflow: hidden;
+}
+
+.seePanelTabs {
+  flex: none;
+  display: flex;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+}
+
+.seePanelTab {
+  flex: 1 0 auto;
+  padding: 12px 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.seePanelTabActive {
+  border-bottom-color: var(--dark);
+  color: var(--text);
+}
+
+.seePanelBody {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  overflow-y: auto;
+}
+
+.seePanelBody hr {
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
+.seeAnnotationList {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+}
+
+.seeAnnotationList li {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fff;
+}
+
+.seeAnnotationSelected {
+  border-color: var(--dark) !important;
+}
+
+.seeAnnotationHead {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.seeMarkerBadge {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 50%;
+  background: var(--dark);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.seeCoords {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+}
+
+.seeModelInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--border);
+}
+
+.seePinReveal {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px;
+  border: 2px solid #d9b44a;
+  border-radius: 12px;
+  background: #fffbea;
+}
+
+.seePin {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 26px;
+  letter-spacing: 4px;
+}
+
+/* ---------- Viewer ---------- */
+
+.seeViewer {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  background: #e9ebee;
+  user-select: none;
+}
+
+.seeViewerCanvas {
+  position: absolute;
+  inset: 0;
+}
+
+.seeViewerPicking canvas {
+  cursor: crosshair;
+}
+
+/* Fullscreen: native (:fullscreen) or the CSS fallback for browsers without element fullscreen
+   (iPhone Safari). The whole presentation/stage goes fullscreen, so the toolbars stay usable. */
+.seeStage:fullscreen,
+.seePublic:fullscreen {
+  width: 100vw;
+  height: 100vh;
+  border-radius: 0;
+}
+
+.seeFullscreenFallback {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 1000;
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  border-radius: 0 !important;
+}
+
+.seeLoading small {
+  max-width: 280px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.seeLoadingBar {
+  position: relative;
+  width: min(280px, 70%);
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(23, 25, 28, 0.12);
+  overflow: hidden;
+}
+
+.seeLoadingBar span {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: #17191c;
+  transition: width 0.2s ease;
+}
+
+.seeLoadingBar span.seeLoadingIndeterminate {
+  width: 35% !important;
+  animation: seeIndeterminate 1.2s ease-in-out infinite;
+}
+
+@keyframes seeIndeterminate {
+  from { left: -35%; }
+  to { left: 100%; }
+}
+
+.seeRetryButton {
+  padding: 9px 18px;
+  border: 0;
+  border-radius: 999px;
+  background: #17191c;
+  color: #fff;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+/* Touch screens: bigger annotation targets, no text selection / callouts while orbiting. */
+@media (pointer: coarse) {
+  .seeMarkerDot {
+    width: 36px;
+    height: 36px;
+    margin: -18px 0 0 -18px;
+    font-size: 14px;
+  }
+
+  .seeViewer {
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+}
+
+.seeMarkerLayer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+.seeMarker {
+  position: absolute;
+  top: 0;
+  left: 0;
+  will-change: transform;
+}
+
+.seeMarker[data-occluded="true"] {
+  opacity: 0.35;
+}
+
+.seeMarkerDot {
+  position: absolute;
+  width: 26px;
+  height: 26px;
+  margin: -13px 0 0 -13px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #17191c;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 800;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.seeMarker[data-selected="true"] .seeMarkerDot {
+  background: #d94f2b;
+}
+
+.seeMarkerCard {
+  position: absolute;
+  top: 18px;
+  left: 0;
+  width: max-content;
+  max-width: min(280px, 70vw);
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: rgba(23, 25, 28, 0.94);
+  color: #fff;
+  font-size: 13px;
+  line-height: 1.4;
+  pointer-events: auto;
+  transform: translateX(-50%);
+}
+
+.seeMarkerCard p {
+  margin-top: 4px;
+  color: #d7d9dc;
+  white-space: pre-line;
+}
+
+.seeViewerState {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 24px;
+  color: #3c3f44;
+  font-size: 14px;
+  text-align: center;
+  pointer-events: none;
+}
+
+.seeViewerError {
+  color: #8a2f2f;
+}
+
+.seeSpinner {
+  width: 34px;
+  height: 34px;
+  border: 3px solid #c9cbcf;
+  border-top-color: #17191c;
+  border-radius: 50%;
+  animation: seeSpin 0.9s linear infinite;
+}
+
+@keyframes seeSpin {
+  to { transform: rotate(360deg); }
+}
+
+/* ---------- Public viewer ---------- */
+
+.seePublic {
+  position: fixed;
+  inset: 0;
+  overscroll-behavior: none;
+  touch-action: manipulation;
+  display: flex;
+  background: #e9ebee;
+  color: var(--text);
+}
+
+.seePublicCanvas {
+  position: absolute;
+  inset: 0;
+}
+
+.seePublicBar {
+  position: absolute;
+  top: max(12px, env(safe-area-inset-top));
+  left: max(12px, env(safe-area-inset-left));
+  right: max(12px, env(safe-area-inset-right));
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  pointer-events: none;
+}
+
+.seePublicTitle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 8px 14px;
+  border-radius: 999px;
+  background: rgba(23, 25, 28, 0.88);
+  color: #fff;
+  font-size: 14px;
+  pointer-events: auto;
+}
+
+.seePublicTitle strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.seePublicScenes {
+  display: flex;
+  gap: 4px;
+  max-width: 100%;
+  padding: 4px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+  overflow-x: auto;
+  scrollbar-width: none;
+  pointer-events: auto;
+}
+
+.seePublicScene {
+  padding: 7px 14px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  font-size: 13px;
+  font-weight: 700;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.seePublicSceneActive {
+  background: #17191c;
+  color: #fff;
+}
+
+.seePublicTools {
+  position: absolute;
+  right: max(12px, env(safe-area-inset-right));
+  bottom: max(12px, env(safe-area-inset-bottom));
+  display: flex;
+  gap: 6px;
+}
+
+.seePublicTools > button {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.94);
+  color: #17191c;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
+  cursor: pointer;
+}
+
+.seePublicTools > button[aria-pressed="false"] {
+  opacity: 0.6;
+}
+
+.seeBadge {
+  position: absolute;
+  top: -2px;
+  right: -2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: #d94f2b;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 18px;
+}
+
+.seePublicMenu {
+  position: absolute;
+  right: 0;
+  bottom: 54px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: min(320px, calc(100vw - 24px));
+  max-height: 60vh;
+  padding: 12px;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+  font-size: 13px;
+  overflow-y: auto;
+}
+
+.seePublicMenu > button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 8px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.seePublicMenu > button:hover {
+  background: #f1f2f4;
+}
+
+.seePublicMenu small {
+  color: var(--muted);
+}
+
+.seePublicInfo p {
+  line-height: 1.45;
+}
+
+.seeState {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+.seeStateCard,
+.seePinForm {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: min(380px, 100%);
+  padding: 28px 22px;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.12);
+  text-align: center;
+}
+
+.seeStateCard h1,
+.seePinForm h1 {
+  font-size: 20px;
+}
+
+.seeStateCard p,
+.seePinForm p {
+  color: #4a4d52;
+  font-size: 14px;
+  line-height: 1.45;
+}
+
+.seeStateCard button,
+.seePinForm button {
+  width: 100%;
+  padding: 12px;
+  border: 0;
+  border-radius: 999px;
+  background: #17191c;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.seePinForm button:disabled {
+  opacity: 0.45;
+}
+
+.seePinForm input {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #c9cbcf;
+  border-radius: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 22px;
+  letter-spacing: 6px;
+  text-align: center;
+}
+
+.seePinError {
+  color: #a33a3a;
+  font-size: 13px;
+}
+
+/* ---------- Responsive ---------- */
+
+@media (max-width: 960px) {
+  .seeEditor {
+    height: auto;
+    min-height: 0;
+  }
+
+  .seeWorkspace {
+    grid-template-columns: 1fr;
+  }
+
+  .seePanelBody {
+    max-height: none;
+  }
+
+  .seeStage {
+    height: 62vh;
+    min-height: 360px;
+  }
+
+  .seeSlotGrid,
+  .seeChoiceGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .seeFilters {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 720px) {
+  .seeTopbar {
+    gap: 10px;
+    padding: 0 12px;
+  }
+
+  .seeBrand span {
+    display: none;
+  }
+
+  .seeNav a,
+  .seeBackToPortal {
+    padding: 7px 10px;
+    font-size: 12px;
+  }
+
+  .seeTable thead {
+    display: none;
+  }
+
+  .seeTable tr {
+    display: block;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .seeTable td {
+    position: relative;
+    display: block;
+    min-height: 24px;
+    padding: 4px 12px 4px 124px;
+    border: 0;
+  }
+
+  .seeTable td::before {
+    content: attr(data-label);
+    position: absolute;
+    top: 6px;
+    left: 12px;
+    width: 104px;
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .seeClamp {
+    max-width: 200px;
+  }
+
+  .seePublicTools > button {
+    width: 40px;
+    height: 40px;
+  }
+}
+
+.seePublicEmbed .seePublicTitle {
+  font-size: 12px;
+  padding: 6px 12px;
+}

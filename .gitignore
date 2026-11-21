@@ -2,8 +2,10 @@ node_modules
 .next
 .env
 .env.local
+.env*.local
 private-imports/
 _IMPORT/
+.see-local/
 
 supabase/.temp/
 supabase/.branches/

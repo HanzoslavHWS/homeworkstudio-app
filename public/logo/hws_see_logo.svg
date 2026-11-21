@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="150" height="96" viewBox="0 0 150 96" fill="none">
+  <g stroke="#f2f2f2" stroke-width="2.6" stroke-linejoin="round">
+    <path d="M75 4 101 18.5v29L75 62 49 47.5v-29z"/>
+    <path d="M49 18.5 75 33l26-14.5M75 33v29"/>
+  </g>
+  <text x="75" y="88" text-anchor="middle" fill="#f2f2f2" font-family="Arial, Helvetica, sans-serif" font-size="17" font-weight="800" letter-spacing="2">HWS SEE</text>
+</svg>

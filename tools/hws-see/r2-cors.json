@@ -1,0 +1,9 @@
+[
+  {
+    "AllowedOrigins": ["https://app.homeworkstudio.cz"],
+    "AllowedMethods": ["PUT", "GET", "HEAD"],
+    "AllowedHeaders": ["Content-Type"],
+    "ExposeHeaders": ["ETag", "Content-Length", "Content-Type", "Content-Disposition"],
+    "MaxAgeSeconds": 3600
+  }
+]

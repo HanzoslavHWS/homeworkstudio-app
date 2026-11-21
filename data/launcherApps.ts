@@ -14,6 +14,11 @@ export type LauncherApp = Readonly<{
   status: LauncherAppStatus;
   enabled: boolean;
   cta?: string;
+  /**
+   * Portable entitlement key for the future per-account administration (e.g. "hws_see"). Today's
+   * shared-password portal session grants every enabled app; nothing evaluates this per person yet.
+   */
+  entitlement?: string;
 }>;
 
 export const launcherApps: readonly LauncherApp[] = [
@@ -25,6 +30,16 @@ export const launcherApps: readonly LauncherApp[] = [
     route: "",
     status: "coming-soon",
     enabled: false,
+  },
+  {
+    id: "hws-see",
+    title: "HWS SEE",
+    logo: "/logo/hws_see_logo.svg",
+    route: "/see",
+    status: "ready",
+    enabled: true,
+    cta: "Otevřít 3D prezentace",
+    entitlement: "hws_see",
   },
   {
     id: "abf-generator",
